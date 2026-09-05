@@ -94,6 +94,23 @@ import Testing
         #expect(ended)
     }
 
+    /// Cancelling the fill ends the utterance: the stream's iteration returns nil on
+    /// cancellation, so a waiter parked for more speech is woken with the end and
+    /// never waits on a key-up that is not coming.
+    @Test func cancellingTheFillEndsTheUtteranceAndWakesAWaiter() async throws {
+        let utterance = Utterance()
+        // The continuation is held to the end: dropping it would finish the stream.
+        let (never, feed) = AsyncStream<AudioClip>.makeStream()
+        let filling = Task { try await utterance.fill(from: never) }
+        async let heard = utterance.audio(beyond: 100_000)
+        try await Task.sleep(for: .milliseconds(20))
+        filling.cancel()
+        let (samples, ended) = await heard
+        #expect(ended)
+        #expect(samples.count == Utterance.hangover)
+        feed.finish()
+    }
+
     /// An utterance no clip of which reached the gate is refused with its loudest
     /// peak, not heard as nothing said.
     @Test func nothingReachingTheGateIsRefused() async {

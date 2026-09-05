@@ -25,7 +25,7 @@ struct BenchCommand: AsyncParsableCommand {
     @Option(name: .customLong("delivery"), help: "How a hold's audio reaches the engine: batch (the whole clip at key-up) or streamed (a microphone buffer at a time). Repeat for both.")
     var deliveries: [LatencyHarness.Delivery] = LatencyHarness.Delivery.allCases
 
-    @Option(help: "How many times to hold each fixture. The first hold after a load is reported apart from the median.")
+    @Option(help: "How many times to hold each fixture, per delivery. The first hold after a load is reported apart from the median.")
     var runs: Int = 3
 
     @OptionGroup var location: StoreOptions
