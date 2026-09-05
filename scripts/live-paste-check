@@ -3,7 +3,7 @@
 # without AppleScript: Automation prompts cannot be answered by an unattended shell and
 # a timed-out prompt writes a denial. `open -a` brings the app forward, the focused
 # element's text is read through Accessibility, and follow-up chords (save, close) are
-# posted with the same KeyPoster the paste uses. Needs an unlocked screen and a
+# posted through KeyPoster. Needs an unlocked screen and a
 # terminal with Accessibility. Leaves the pasteboard and the frontmost app as found.
 set -euo pipefail
 
@@ -12,8 +12,9 @@ swift build --product lowtalker >/dev/null
 CLI=.build/debug/lowtalker
 
 # A probe for what the check needs and the CLI does not offer: the focused element's
-# text, a chord press, the frontmost app, the lock state, a pasteboard snapshot. It
-# lives under .build so a rerun rebuilds only what changed.
+# text and a wait for it, a wait for an app to be frontmost with a focus, a chord
+# press, the lock state, a pasteboard snapshot. It lives under .build so a rerun
+# rebuilds only what changed.
 PROBE_DIR=.build/live-paste-probe
 mkdir -p "$PROBE_DIR/Sources/probe"
 cat > "$PROBE_DIR/Package.swift" <<EOF
@@ -32,13 +33,29 @@ import LowTalkerCore
 // Asked of the frontmost app, not the system-wide element: a shell outside the GUI
 // session (a launchd Background domain) can reach an app's Accessibility server but
 // not the system-wide one.
-@MainActor func focusedValue() -> String {
-    guard let app = NSWorkspace.shared.frontmostApplication else { return "<no frontmost app>" }
+@MainActor func focusedElement() -> AXUIElement? {
+    guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
     var focused: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(AXUIElementCreateApplication(app.processIdentifier), kAXFocusedUIElementAttribute as CFString, &focused) == .success, let element = focused else { return "<no focused element>" }
+    guard AXUIElementCopyAttributeValue(AXUIElementCreateApplication(app.processIdentifier), kAXFocusedUIElementAttribute as CFString, &focused) == .success, let element = focused else { return nil }
+    return (element as! AXUIElement)
+}
+
+@MainActor func focusedValue() -> String {
+    guard let element = focusedElement() else { return "<no focused element>" }
     var value: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element as! AXUIElement, kAXValueAttribute as CFString, &value) == .success else { return "<no value>" }
+    guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success else { return "<no value>" }
     return String(describing: value!)
+}
+
+/// Polls `condition` until it holds or `seconds` pass; the pty echo and an app's
+/// launch are asynchronous by nature, so the check waits on their state, not a sleep.
+@MainActor func waitUntil(_ seconds: Double, _ condition: () -> Bool) -> Bool {
+    let deadline = Date(timeIntervalSinceNow: seconds)
+    while Date() < deadline {
+        if condition() { return true }
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+    }
+    return condition()
 }
 
 // One line per item: each type it carries with a digest of the bytes behind it.
@@ -52,7 +69,13 @@ let args = Array(CommandLine.arguments.dropFirst())
 MainActor.assumeIsolated {
     switch args[0] {
     case "axread": print(focusedValue())
-    case "front": print(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "<none>")
+    case "axwait":
+        guard waitUntil(Double(args[2])!, { focusedValue().contains(args[1]) }) else { print("focused text never held [\(args[1])]; last: [\(focusedValue())]"); exit(1) }
+    case "ready":
+        guard waitUntil(Double(args[2])!, { NSWorkspace.shared.frontmostApplication?.bundleIdentifier == args[1] && focusedElement() != nil }) else { print("\(args[1]) never came forward with a focus; frontmost: \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "<none>")"); exit(1) }
+    case "front":
+        guard let id = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { print("no app is frontmost"); exit(1) }
+        print(id)
     case "press": SystemKeyPoster().post(KeyChord(key: Key(rawValue: UInt16(args[1])!), modifiers: Set(args.dropFirst(2).map { Modifier(rawValue: $0)! })))
     case "locked": print((CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] ?? 0)
     case "pasteboard": print(pasteboardSnapshot())
@@ -66,30 +89,32 @@ PROBE="$PROBE_DIR/.build/debug/probe"
 [ "$($PROBE locked)" = "0" ] || { echo "screen is locked; nothing can receive a paste" >&2; exit 1; }
 front=$($PROBE front)
 scratch=$(mktemp -d)
-trap 'open -b "$front"; rm -rf "$scratch"' EXIT
+trap 'rm -rf "$scratch"; open -b "$front"' EXIT
 before=$($PROBE pasteboard)
 echo "frontmost before: $front"
 
 # TextEdit: a file-backed .txt document, so Cmd+S writes what landed to disk with no dialog.
 doc="$scratch/live-paste.txt"
 : > "$doc"
-open -a TextEdit "$doc"; sleep 1.5
+open -a TextEdit "$doc"; $PROBE ready com.apple.TextEdit 10
 $CLI paste "hello from low-talker into TextEdit"
-sleep 0.3
-echo "TextEdit focused text: [$($PROBE axread)]"
-$PROBE press 1 leftCommand; sleep 0.7      # kVK_ANSI_S
-$PROBE press 13 leftCommand; sleep 0.5     # kVK_ANSI_W
-grep -q "hello from low-talker into TextEdit" "$doc" && echo "TEXTEDIT OK (saved file holds the text)" || { echo "TEXTEDIT FAILED: $(cat "$doc")"; exit 1; }
+$PROBE axwait "hello from low-talker into TextEdit" 3 || { echo "TEXTEDIT FAILED: text not in the focused element"; exit 1; }
+t0=$SECONDS
+$PROBE press 1 leftCommand      # kVK_ANSI_S
+until grep -q "hello from low-talker into TextEdit" "$doc" || [ $((SECONDS - t0)) -ge 5 ]; do sleep 0.1; done
+$PROBE press 13 leftCommand     # kVK_ANSI_W
+grep -q "hello from low-talker into TextEdit" "$doc" && echo "TEXTEDIT OK (saved file holds the text)" || { echo "TEXTEDIT FAILED: saved file holds [$(cat "$doc")]"; exit 1; }
 
 # Terminal: a directory argument opens a new window running only a login shell, so the
-# paste and the close touch nothing that was open before.
+# paste and the close touch nothing that was open before. The window is closed before
+# a quit so a relaunch does not restore it.
 terminal_was_running=$(pgrep -x Terminal >/dev/null && echo yes || echo no)
-open -a Terminal "$HOME"; sleep 2
+open -a Terminal "$HOME"; $PROBE ready com.apple.Terminal 10
 $CLI paste "echo pasted-into-terminal-ok"
-sleep 0.3
-if $PROBE axread | grep -q "pasted-into-terminal-ok"; then echo "TERMINAL OK"; else echo "TERMINAL FAILED"; exit 1; fi
-if [ "$terminal_was_running" = no ]; then $PROBE press 12 leftCommand; else $PROBE press 13 leftCommand; fi   # Cmd+Q or Cmd+W
-sleep 0.5
+terminal=$($PROBE axwait "pasted-into-terminal-ok" 3 && echo OK || echo FAILED)
+$PROBE press 13 leftCommand     # Cmd+W
+[ "$terminal_was_running" = yes ] || { $PROBE ready com.apple.Terminal 2 >/dev/null; $PROBE press 12 leftCommand; }   # Cmd+Q
+echo "TERMINAL $terminal"; [ "$terminal" = OK ] || exit 1
 
 after=$($PROBE pasteboard)
 [ "$before" = "$after" ] && echo "PASTEBOARD UNCHANGED" || { printf 'PASTEBOARD DIFFERS\nbefore:\n%s\nafter:\n%s\n' "$before" "$after"; exit 1; }
