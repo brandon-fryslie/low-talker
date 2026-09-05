@@ -56,4 +56,26 @@ private struct Boom: Error {}
         }
         #expect(try await queue.run { "still running" } == "still running")
     }
+
+    /// An operation that submits to its own queue would wait on itself forever. It
+    /// is refused instead, and the queue is still usable afterwards.
+    @Test func submittingToOwnQueueIsRefusedNotHung() async throws {
+        let queue = SerialQueue()
+        await #expect(throws: SerialQueueError.self) {
+            try await queue.run {
+                try await queue.run { "never" }
+            }
+        }
+        #expect(try await queue.run { "still running" } == "still running")
+    }
+
+    /// Submitting to a different queue from inside an operation is ordinary nesting.
+    @Test func submittingToAnotherQueueIsAllowed() async throws {
+        let outer = SerialQueue()
+        let inner = SerialQueue()
+        let value = try await outer.run {
+            try await inner.run { "nested" }
+        }
+        #expect(value == "nested")
+    }
 }
