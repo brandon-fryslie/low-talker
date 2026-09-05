@@ -136,6 +136,17 @@ private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
         #expect(keyboard.release(.leftOption, at: 610) == passed)
     }
 
+    /// Any key of the pressed chord coming up ends the press, the modifier included;
+    /// the key it completed on is still swallowed when it comes up later.
+    @Test func releasingTheModifierOfAKeyChordEndsThePress() {
+        var keyboard = Keyboard(chords: [optionSpace])
+        _ = keyboard.press(.leftOption, at: 0)
+        _ = keyboard.press(Key(rawValue: 49), at: 10)
+        #expect(keyboard.release(.leftOption, at: 400) == HotkeyDetector.Verdict(transition: .ended(optionSpace, .hold), delivery: .pass))
+        #expect(keyboard.detector.phase == .idle)
+        #expect(keyboard.release(Key(rawValue: 49), at: 410) == swallowed)
+    }
+
     @Test func aChordWithAKeyIsNotCompletedByItsModifier() {
         var keyboard = Keyboard(chords: [optionSpace])
         #expect(keyboard.press(Key(rawValue: 49), at: 0) == passed)

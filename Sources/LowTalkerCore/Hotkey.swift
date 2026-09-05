@@ -6,7 +6,7 @@
 /// slow handler is what makes the system switch the tap off.
 @MainActor
 public final class Hotkey {
-    public static let defaultTapThreshold: Duration = .milliseconds(250)
+    nonisolated public static let defaultTapThreshold: Duration = .milliseconds(250)
 
     private let tap: any KeyboardTap
     private var detector: HotkeyDetector

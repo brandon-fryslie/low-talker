@@ -26,7 +26,7 @@ public enum KeyboardTapError: Error, CustomStringConvertible {
 
     public var description: String {
         switch self {
-        case .refused: "the session refused an event tap; allow this app under System Settings > Privacy & Security > Input Monitoring and > Accessibility"
+        case .refused: "the session refused an event tap; allow this app under System Settings > Privacy & Security, in both Input Monitoring and Accessibility"
         }
     }
 }
@@ -65,6 +65,8 @@ extension KeyEvent {
     /// event. Nil is an event about a key with no name here (Caps Lock, a media key),
     /// which the frontmost app gets untouched.
     public init?(_ event: CGEvent, type: CGEventType) {
+        // The window server keeps the key code in 16 bits, so this cannot trap on a
+        // code any process posts.
         let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
         let modifiers = Modifier.held(in: event.flags)
         let time = Duration.nanoseconds(event.timestamp)
@@ -134,7 +136,9 @@ public struct SystemKeyboardTap: KeyboardTap {
             userInfo: Unmanaged.passUnretained(installed).toOpaque()
         ) else { throw KeyboardTapError.refused }
         installed.port = port
-        let source = CFMachPortCreateRunLoopSource(nil, port, 0)
+        guard let source = CFMachPortCreateRunLoopSource(nil, port, 0) else {
+            preconditionFailure("CoreFoundation refused a run loop source for the event tap it just created")
+        }
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: port, enable: true)
         return {

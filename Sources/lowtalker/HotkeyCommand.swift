@@ -14,8 +14,8 @@ struct HotkeyCommand: AsyncParsableCommand {
     )
 
     // Whole milliseconds, for the same reason as `mic watch --interval`.
-    @Option(help: "Milliseconds a press may last and still be a tap.")
-    var tapThreshold: Int = 250
+    @Option(help: "Milliseconds a press must stay under to be a tap.")
+    var tapThreshold: Int = Int(Hotkey.defaultTapThreshold / .milliseconds(1))
 
     func validate() throws {
         guard tapThreshold > 0 else { throw ValidationError("--tap-threshold must be positive.") }
