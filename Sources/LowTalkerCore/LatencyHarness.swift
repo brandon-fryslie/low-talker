@@ -27,7 +27,7 @@ public enum LatencyHarness {
         public func chunk(of clip: AudioClip) -> TimeInterval {
             switch self {
             case .batch: clip.duration
-            case .streamed: AudioCapture.bufferDuration
+            case .streamed: SystemAudioHardware.bufferDuration
             }
         }
     }
@@ -76,10 +76,13 @@ public enum LatencyHarness {
         clock: ContinuousClock
     ) async throws -> (LatencyReport.Run, Transcript) {
         let (audio, feed) = AsyncStream<AudioClip>.makeStream()
-        let firstPartial = Mutex<ContinuousClock.Instant?>(nil)
+        let firstText = Mutex<ContinuousClock.Instant?>(nil)
         let start = clock.now
-        async let transcript = transcriber.transcribe(audio) { _ in
-            firstPartial.withLock { $0 = $0 ?? clock.now }
+        async let transcript = transcriber.transcribe(audio) { partial in
+            // A pass over leading quiet reads nothing; the text shown is the first
+            // partial with words in it.
+            let shown: ContinuousClock.Instant? = partial.text.isEmpty ? nil : clock.now
+            firstText.withLock { $0 = $0 ?? shown }
         }
         var captured: TimeInterval = 0
         for chunk in chunks {
@@ -93,8 +96,8 @@ public enum LatencyHarness {
         feed.finish()
         let final = try await transcript
         let shown = clock.now
-        let firstText = firstPartial.withLock { $0 } ?? shown
-        return (LatencyReport.Run(keyUpToTranscript: shown - keyUp, holdToFirstText: firstText - start), final)
+        let first = firstText.withLock { $0 } ?? shown
+        return (LatencyReport.Run(keyUpToTranscript: shown - keyUp, holdToFirstText: first - start), final)
     }
 }
 
@@ -107,7 +110,7 @@ public struct LatencyReport: Sendable {
         /// From the key coming up to the transcript.
         public let keyUpToTranscript: Duration
         /// From the hold beginning to the first text the engine showed: the first
-        /// partial, or the transcript when there was none.
+        /// partial with words in it, or the transcript when there was none.
         public let holdToFirstText: Duration
 
         public init(keyUpToTranscript: Duration, holdToFirstText: Duration) {

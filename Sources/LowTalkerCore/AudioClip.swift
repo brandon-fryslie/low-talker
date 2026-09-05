@@ -15,6 +15,12 @@ public struct AudioClip: Sendable, Equatable {
         Int((duration * sampleRate).rounded())
     }
 
+    /// The seconds `count` samples span at the pipeline rate, the inverse of
+    /// `sampleCount(for:)` up to that rounding.
+    public static func duration(for count: Int) -> TimeInterval {
+        Double(count) / sampleRate
+    }
+
     public let samples: [Float]
 
     public init(samples: [Float]) {
@@ -22,7 +28,7 @@ public struct AudioClip: Sendable, Equatable {
     }
 
     public var duration: TimeInterval {
-        Double(samples.count) / Self.sampleRate
+        Self.duration(for: samples.count)
     }
 
     /// Largest absolute sample value; zero for silence.

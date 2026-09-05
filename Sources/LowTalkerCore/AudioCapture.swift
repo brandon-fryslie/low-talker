@@ -72,11 +72,6 @@ public final class AudioCapture {
 
     nonisolated public static let defaultRetention: TimeInterval = 60
 
-    /// How much audio the microphone delivers at a time: the tap fills a buffer
-    /// this long before the ring hears it, so a session's audio grows in steps of
-    /// this size and the latency harness feeds a simulated hold in the same steps.
-    nonisolated public static let bufferDuration: TimeInterval = 0.1
-
     public init(retaining duration: TimeInterval = defaultRetention, hardware: any AudioHardware = SystemAudioHardware()) {
         self.hardware = hardware
         shared = SharedRing(AudioRing(retaining: duration))

@@ -135,7 +135,7 @@ public final class WhisperKitTranscriber: Transcriber {
         /// start, and the prefix's words come back first, timed over their own audio.
         func hear(_ samples: [Float], from cut: Int, saying prefix: String) async throws -> [Transcript.Word] {
             var options = Self.decodeOptions
-            options.clipTimestamps = [Float(cut) / Float(AudioClip.sampleRate)]
+            options.clipTimestamps = [Float(AudioClip.duration(for: cut))]
             options.prefixTokens = tokenizer.encode(text: prefix)
             let results = try await whisperKit.transcribe(audioArray: samples, decodeOptions: options)
             return try Transcript(whisperKit: results.flatMap(\.segments)).words

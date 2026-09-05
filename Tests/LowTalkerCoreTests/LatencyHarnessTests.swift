@@ -19,9 +19,9 @@ private final class BenchDirectory {
     }
 
     /// `name` may carry a folder, such as `say/greeting`.
-    func add(_ name: String, text: String?, wav: Bool = true) throws {
+    func add(_ name: String, text: String?, wav: Bool = true, clip: AudioClip = tone) throws {
         try FileManager.default.createDirectory(at: url.appending(path: name).deletingLastPathComponent(), withIntermediateDirectories: true)
-        if wav { try Self.tone.write(to: url.appending(path: "\(name).wav")) }
+        if wav { try clip.write(to: url.appending(path: "\(name).wav")) }
         if let text { try text.write(to: url.appending(path: "\(name).txt"), atomically: true, encoding: .utf8) }
     }
 }
@@ -127,6 +127,15 @@ private final class CaseSensitiveVolume {
         }
     }
 
+    /// An empty wav is a legal clip but not a fixture: there is nothing to hold.
+    @Test func aClipWithNoSamplesIsRefused() throws {
+        let bench = try BenchDirectory()
+        try bench.add("hush", text: "Never spoken.", clip: AudioClip(samples: []))
+        #expect(throws: FixtureError.clipIsEmpty(name: "hush")) {
+            try Fixture.load(directory: bench.url)
+        }
+    }
+
     /// A directory the walk cannot list is its own error, not an empty set.
     @Test func aDirectoryThatCannotBeListedIsAnError() throws {
         let gone = FileManager.default.temporaryDirectory.appending(path: "lowtalker-bench-gone-\(UUID().uuidString)")
@@ -146,9 +155,10 @@ private final class CaseSensitiveVolume {
     }
 }
 
-/// An engine that hears the same thing every time and says so after every clip,
-/// so the harness's bookkeeping can be checked without weights. It remembers how
-/// many clips each utterance arrived in.
+/// An engine that hears the same thing every time and says so after every clip
+/// but the first, which it hears as nothing, the way a pass over leading quiet
+/// reads no words; so the harness's bookkeeping can be checked without weights.
+/// It remembers how many clips each utterance arrived in.
 private final class FixedEar: Transcriber {
     let heard: String
     let holds = Mutex<[Int]>([])
@@ -161,7 +171,7 @@ private final class FixedEar: Transcriber {
         var clips = 0
         for await _ in audio {
             clips += 1
-            partial(Partial(confirmed: Transcript(words: []), tentative: Transcript(typed: heard)))
+            partial(Partial(confirmed: Transcript(words: []), tentative: Transcript(typed: clips == 1 ? "" : heard)))
         }
         holds.withLock { $0.append(clips) }
         return Transcript(typed: heard)
@@ -196,8 +206,9 @@ private final class FixedEar: Transcriber {
     }
 
     /// Streamed, the clip reaches the engine a microphone buffer at a time and the
-    /// first text shows during the hold; batched, it arrives whole at key-up and
-    /// the first text can only follow the hold.
+    /// first text shows during the hold, on the first partial with words in it:
+    /// the second buffer's, since the ear hears the first as nothing. Batched, the
+    /// clip arrives whole at key-up and the first text can only follow the hold.
     @Test func streamedDeliveryFeedsABufferAtATime() async throws {
         let clip = AudioClip(samples: Array(repeating: 0.1, count: AudioClip.sampleCount(for: 0.35)))
         let ear = FixedEar(heard: "hi")
@@ -207,7 +218,7 @@ private final class FixedEar: Transcriber {
         let batch = report.fixtures[0].first
         let streamed = report.fixtures[1].first
         #expect(batch.holdToFirstText >= .seconds(0.35))
-        #expect(streamed.holdToFirstText >= .seconds(0.1))
+        #expect(streamed.holdToFirstText >= .seconds(0.2))
         #expect(streamed.holdToFirstText < .seconds(0.35))
         #expect(streamed.keyUpToTranscript < .seconds(0.1))
     }

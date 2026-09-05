@@ -40,6 +40,11 @@ public enum AudioHardwareError: Error, CustomStringConvertible {
 }
 
 public struct SystemAudioHardware: AudioHardware {
+    /// How much audio the microphone delivers at a time: the tap fills a buffer
+    /// this long before `appending` hears it, so a session's audio grows in steps
+    /// of this size and the latency harness feeds a simulated hold in the same steps.
+    nonisolated public static let bufferDuration: TimeInterval = 0.1
+
     public init() {}
 
     public func launch(
@@ -56,7 +61,7 @@ public struct SystemAudioHardware: AudioHardware {
         nonisolated(unsafe) let converter = try AudioClip.Converter(from: source)
         // Explicitly @Sendable: a closure formed here would otherwise inherit main-actor
         // isolation and trap when the tap fires on the audio service queue.
-        input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(source.sampleRate * AudioCapture.bufferDuration), format: source) { @Sendable buffer, _ in
+        input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(source.sampleRate * Self.bufferDuration), format: source) { @Sendable buffer, _ in
             do {
                 appending(try converter.convert(buffer))
             } catch {

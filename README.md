@@ -64,20 +64,20 @@ Batch against streamed, measured on an M2 Max with a warm Neural Engine cache, t
 
 | Fixture | Audio | Key-up to transcript, batch | Key-up to transcript, streamed | Hold to first text, streamed |
 |---|---|---|---|---|
-| librispeech/2277-149896-0000 | 6.6 s | 0.98 s | 0.29 s | 1.34 s |
-| librispeech/251-137823-0018 | 7.5 s | 0.87 s | 0.22 s | 1.30 s |
-| librispeech/2803-154328-0011 | 6.6 s | 0.82 s | 0.53 s | 1.98 s |
-| librispeech/3536-8226-0018 | 9.4 s | 0.91 s | 0.51 s | 1.35 s |
-| librispeech/6313-76958-0018 | 6.2 s | 0.84 s | 0.80 s | 1.32 s |
-| librispeech/777-126732-0070 | 7.3 s | 0.94 s | 0.63 s | 1.34 s |
-| say/app-commands | 4.0 s | 0.71 s | 0.93 s | 1.35 s |
+| librispeech/2277-149896-0000 | 6.6 s | 0.91 s | 0.37 s | 1.33 s |
+| librispeech/251-137823-0018 | 7.5 s | 0.88 s | 0.29 s | 1.30 s |
+| librispeech/2803-154328-0011 | 6.6 s | 0.82 s | 0.64 s | 2.00 s |
+| librispeech/3536-8226-0018 | 9.4 s | 0.92 s | 0.54 s | 1.35 s |
+| librispeech/6313-76958-0018 | 6.2 s | 0.85 s | 3.69 s | 1.32 s |
+| librispeech/777-126732-0070 | 7.3 s | 0.94 s | 0.62 s | 1.33 s |
+| say/app-commands | 4.0 s | 0.71 s | 0.88 s | 1.34 s |
 | say/greeting | 2.0 s | 0.59 s | 0.60 s | 1.52 s |
-| say/jargon | 4.7 s | 0.72 s | 0.86 s | 1.35 s |
-| say/meeting-request | 4.4 s | 0.69 s | 0.93 s | 1.33 s |
+| say/jargon | 4.7 s | 0.72 s | 0.78 s | 1.34 s |
+| say/meeting-request | 4.4 s | 0.67 s | 0.92 s | 1.33 s |
 | say/short-reply | 1.9 s | 0.58 s | 0.78 s | 1.52 s |
-| say/status-update | 8.1 s | 0.91 s | 0.86 s | 1.33 s |
+| say/status-update | 8.1 s | 0.91 s | 0.87 s | 1.33 s |
 
-Where a pass's time goes, from a probe of one pass over the 4.4 s clip: the log-mel spectrogram 0.04 s, the encoder 0.39 s, twenty decoder steps 0.23 s, so 12 ms a token. The encoder always sees a window padded to 30 s, so 0.39 s is the floor of any pass that hears new audio however short the tail is, and a forced prefix token costs a decoder step like a decoded one. A pass over a few words of tail is therefore about 0.5 s, not much under a batch decode of a short clip, and streaming does not win by making the key-up pass small. It wins when the pass in flight at key-up is the last one: key-up then waits only for that pass to finish, anywhere from nothing to one pass, which is the 0.2 to 0.5 s medians on the recordings. When speech runs right up to key-up, key-up waits for the pass in flight and then one more, which is the 0.1 to 0.25 s the `say` clips lose against batch. The first text lands about 1.3 s into the hold: 0.7 s of speech plus the hangover is the first pass's worth of audio, and the pass itself is 0.6 s. Under 300 ms from key-up needs the encoder off the key-up path, a smaller or a genuinely streaming encoder, which is the case the Parakeet engine has to make; a temperature-fallback storm on one pass (up to five retries at 0.6 s each, seen once at 5.4 s in a single run) is the other hazard, filed separately.
+Where a pass's time goes, from a probe of one pass over the 4.4 s clip: the log-mel spectrogram 0.04 s, the encoder 0.39 s, twenty decoder steps 0.23 s, so 12 ms a token. The encoder always sees a window padded to 30 s, so 0.39 s is the floor of any pass that hears new audio however short the tail is, and a forced prefix token costs a decoder step like a decoded one. A pass over a few words of tail is therefore about 0.5 s, not much under a batch decode of a short clip, and streaming does not win by making the key-up pass small. It wins when the pass in flight at key-up is the last one: key-up then waits only for that pass to finish, anywhere from nothing to one pass, which is the 0.29 to 0.64 s medians on five of the six recordings. When speech runs right up to key-up, key-up waits for the pass in flight and then one more, so the `say` clips land between 0.04 s ahead of batch and 0.25 s behind it. The first text lands 1.30 to 1.35 s into the hold on the longer clips: the first pass starts once 0.7 s of speech plus the hangover has arrived and takes about 0.5 s. It is 1.52 s on the two-second `say` clips, and 2.00 s on librispeech/2803, whose first pass, over 0.3 s of speech after half a second of leading quiet, takes 1.0 to 1.2 s where the same cut of another recording takes 0.6 s. Under 300 ms from key-up needs the encoder off the key-up path, a smaller or a genuinely streaming encoder, which is the case the Parakeet engine has to make. Temperature-fallback retries on a pass, up to five, each a full encoder and decode, are the other hazard, filed separately: in this run they hit two of librispeech/6313's three streamed holds, the first at 5.29 s, and are the whole of that row's 3.69 s median.
 
 Word error rate is (substitutions + deletions + insertions) / reference words, by minimum edit distance over words, with reference and hypothesis normalized the same way first: lowercased, a word being a run of letters, digits, and apostrophes, so hyphens and punctuation separate. An apostrophe at a word's edge is a quotation mark and is dropped; inside a word it is a contraction and stays.
 
