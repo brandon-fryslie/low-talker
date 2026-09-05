@@ -15,8 +15,11 @@ set -euo pipefail
 identity=${1:?usage: make-signing-identity <identity-name>}
 
 # [LAW:no-silent-failure] A second identity with the same name would make every build
-# fail as ambiguous, so refuse to import a duplicate.
-if security find-identity -p codesigning | grep -qF "\"$identity\""; then
+# fail as ambiguous, so refuse to import a duplicate. The listing goes through a
+# variable so a failing `security` aborts with its own error instead of reading as
+# "no match".
+existing=$(security find-identity -p codesigning)
+if grep -qF "\"$identity\"" <<<"$existing"; then
   echo "make-signing-identity: an identity named '$identity' already exists;" \
        "delete it in Keychain Access to start over (every permission grant goes with it)" >&2
   exit 1
@@ -43,5 +46,6 @@ trap 'rm -rf "$work"' EXIT
 security import "$work/identity.p12" -P identity -T /usr/bin/codesign
 
 # [LAW:verifiable-goals] Prove the identity is usable before anything builds on it.
-security find-identity -p codesigning | grep -F "\"$identity\"" \
+imported=$(security find-identity -p codesigning)
+grep -F "\"$identity\"" <<<"$imported" \
   || { echo "make-signing-identity: '$identity' not found after import" >&2; exit 1; }

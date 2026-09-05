@@ -1,12 +1,8 @@
 # `make app` is the one command that turns project.yml into a launchable LowTalker.app.
+SHELL := /bin/bash
 DERIVED_DATA := DerivedData
 CONFIGURATION := Debug
 APP := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/LowTalker.app
-
-# [LAW:one-source-of-truth] project.yml owns the signing identity; read it from there
-# rather than spelling the name a second time. Lazy so only the target that needs it
-# pays for the lookup.
-SIGNING_IDENTITY = $(shell xcodegen dump --type json | jq -r '.targets.LowTalker.settings.base.CODE_SIGN_IDENTITY // empty')
 
 .PHONY: app run test clean signing-identity
 
@@ -26,8 +22,12 @@ test:
 	swift test
 
 # Once per Mac. Until it has run, `make app` stops with "No certificate matching".
+# [LAW:one-source-of-truth] project.yml owns the identity name; the lookup runs in the
+# recipe (not $(shell), which discards exit status) so a failing tool aborts loudly.
 signing-identity:
-	scripts/make-signing-identity "$(SIGNING_IDENTITY)"
+	@set -euo pipefail; \
+	identity=$$(xcodegen dump --type json | jq -r '.targets.LowTalker.settings.base.CODE_SIGN_IDENTITY // error("project.yml sets no CODE_SIGN_IDENTITY for target LowTalker")'); \
+	scripts/make-signing-identity "$$identity"
 
 clean:
 	rm -rf LowTalker.xcodeproj $(DERIVED_DATA) .build
