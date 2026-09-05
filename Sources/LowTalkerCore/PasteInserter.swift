@@ -8,14 +8,22 @@ import Carbon.HIToolbox
 /// the moment the frontmost app pulls it. That call is what "the paste has landed"
 /// means here; nothing is timed. The wait is bounded so a focus that never pastes
 /// still gets the user's pasteboard back.
+///
+/// One inserter per pasteboard: inserts that overlap run one after another, so each
+/// finds the pasteboard as the one before it left it.
 @MainActor
 public final class PasteInserter {
     nonisolated public static let defaultLandingTimeout: Duration = .seconds(1)
     nonisolated public static let pasteChord = KeyChord(key: Key(rawValue: UInt16(kVK_ANSI_V)), modifiers: [.leftCommand])
+    /// nspasteboard.org's marker on the pasted item for something clipboard managers
+    /// should not keep. It also keeps the managers that honor it from pulling the text
+    /// themselves, which would look like a landing.
+    nonisolated public static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
 
     private let pasteboard: NSPasteboard
     private let keys: any KeyPoster
     private let landingTimeout: Duration
+    private let oneAtATime = SerialQueue()
 
     public init(pasteboard: NSPasteboard = .general, keys: any KeyPoster = SystemKeyPoster(), landingTimeout: Duration = defaultLandingTimeout) {
         self.pasteboard = pasteboard
@@ -26,11 +34,18 @@ public final class PasteInserter {
     /// Pastes `text` into the frontmost app and puts the prior contents back, unless
     /// something else took the pasteboard meanwhile, in which case that stays.
     public func insert(_ text: String) async throws -> PasteOutcome {
+        try await oneAtATime.run { @MainActor in try await self.paste(text) }
+    }
+
+    private func paste(_ text: String) async throws -> PasteOutcome {
         let prior = PasteboardContents(reading: pasteboard)
         let (landing, onLanding) = AsyncStream.makeStream(of: Void.self)
         let promise = TextPromise(text: text, landing: onLanding)
         pasteboard.clearContents()
-        guard pasteboard.writeObjects([promise.item()]) else { throw PasteboardError.writeRefused }
+        guard pasteboard.writeObjects([promise.item()]) else {
+            try prior.write(to: pasteboard)
+            throw PasteboardError.writeRefused
+        }
         let ours = pasteboard.changeCount
         keys.post(Self.pasteChord)
         let landed = await Self.awaitLanding(landing, within: landingTimeout)
@@ -85,11 +100,6 @@ public struct PasteOutcome: Hashable, Sendable {
 /// Every field is immutable and the callbacks arrive on whatever thread the pasteboard
 /// server chooses, so the class is Sendable in fact though NSObject cannot say so.
 private final class TextPromise: NSObject, NSPasteboardItemDataProvider, @unchecked Sendable {
-    /// nspasteboard.org's marker for an item clipboard managers should not keep. It
-    /// also keeps the managers that honor it from pulling the text themselves, which
-    /// would look like a landing.
-    private static let transient = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
-
     private let text: String
     private let landing: AsyncStream<Void>.Continuation
 
@@ -100,7 +110,7 @@ private final class TextPromise: NSObject, NSPasteboardItemDataProvider, @unchec
 
     func item() -> NSPasteboardItem {
         let item = NSPasteboardItem()
-        item.setData(Data(), forType: Self.transient)
+        item.setData(Data(), forType: PasteInserter.transientType)
         item.setDataProvider(self, forTypes: [.string])
         return item
     }

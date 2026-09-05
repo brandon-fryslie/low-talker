@@ -19,7 +19,6 @@ private final class ReceivingApp: KeyPoster {
     }
 }
 
-private let transient = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
 private let custom = NSPasteboard.PasteboardType("com.example.low-talker.test")
 
 private func onePixelPNG() throws -> Data {
@@ -33,8 +32,8 @@ private func onePixelPNG() throws -> Data {
 private func priorContents() throws -> PasteboardContents {
     let png = try onePixelPNG()
     return PasteboardContents(items: [
-        [.png: png, .tiff: try #require(NSImage(data: png)?.tiffRepresentation)],
-        [.string: Data("kept".utf8), custom: Data([1, 2, 3])],
+        [.init(type: .png, data: png), .init(type: .tiff, data: try #require(NSImage(data: png)?.tiffRepresentation))],
+        [.init(type: .string, data: Data("kept".utf8)), .init(type: custom, data: Data([1, 2, 3]))],
     ])
 }
 
@@ -57,7 +56,7 @@ private func priorContents() throws -> PasteboardContents {
         #expect(outcome == PasteOutcome(landed: true, restored: true))
         #expect(read == "hello there")
         #expect(app.pressed == [PasteInserter.pasteChord])
-        #expect(typesOffered.contains(transient))
+        #expect(typesOffered.contains(PasteInserter.transientType))
         #expect(PasteboardContents(reading: pasteboard) == prior)
     }
 
@@ -77,6 +76,20 @@ private func priorContents() throws -> PasteboardContents {
         let inserter = PasteInserter(pasteboard: pasteboard, keys: ReceivingApp(), landingTimeout: .milliseconds(20))
         let outcome = try await inserter.insert("hello")
         #expect(outcome == PasteOutcome(landed: false, restored: true))
+        #expect(PasteboardContents(reading: pasteboard) == prior)
+    }
+
+    /// The second insert waits for the first, so the first still owns the pasteboard
+    /// when its wait ends and the prior contents come back once, at the end.
+    @Test func overlappingInsertsRunOneAfterAnother() async throws {
+        defer { pasteboard.releaseGlobally() }
+        let prior = try priorContents()
+        try prior.write(to: pasteboard)
+        let inserter = PasteInserter(pasteboard: pasteboard, keys: ReceivingApp(), landingTimeout: .milliseconds(30))
+        let first = Task { @MainActor in try await inserter.insert("one") }
+        let second = Task { @MainActor in try await inserter.insert("two") }
+        #expect(try await first.value == PasteOutcome(landed: false, restored: true))
+        #expect(try await second.value == PasteOutcome(landed: false, restored: true))
         #expect(PasteboardContents(reading: pasteboard) == prior)
     }
 

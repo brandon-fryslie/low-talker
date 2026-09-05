@@ -18,10 +18,10 @@ struct PasteCommand: AsyncParsableCommand {
     var text: String
 
     @Option(help: "Seconds to wait first, to bring the receiving app to the front.")
-    var delay: Double = 0
+    var delay: Int = 0
 
     // Whole milliseconds, for the same reason as `hotkey --tap-threshold`.
-    @Option(help: "Milliseconds to wait for the app to take the text before giving the pasteboard back regardless.")
+    @Option(help: "Milliseconds to wait for the app to take the text before putting the pasteboard back.")
     var landingTimeout: Int = Int(PasteInserter.defaultLandingTimeout / .milliseconds(1))
 
     func validate() throws {
