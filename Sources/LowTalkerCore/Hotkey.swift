@@ -12,7 +12,7 @@ public final class Hotkey {
     private var detector: HotkeyDetector
     private var installed: Disposal?
     /// Times since `start()` that the system switched the tap off and it was switched
-    /// back on. Events in between were lost, so a lapse can leave a press unended.
+    /// back on. Events in between were lost, so a lapse ends any press that was open.
     public private(set) var lapses = 0
 
     public init(chords: Set<KeyChord>, tapThreshold: Duration = defaultTapThreshold, tap: any KeyboardTap = SystemKeyboardTap()) {
@@ -29,7 +29,7 @@ public final class Hotkey {
         lapses = 0
         installed = try tap.install(
             handling: { [weak self] event in self?.handle(event, onTransition) ?? .pass },
-            onLapse: { [weak self] in self?.lapses += 1 }
+            onLapse: { [weak self] in self?.lapse(onTransition) }
         )
     }
 
@@ -47,5 +47,10 @@ public final class Hotkey {
         let verdict = detector.handle(event)
         verdict.transition.map(onTransition)
         return verdict.delivery
+    }
+
+    private func lapse(_ onTransition: @MainActor (HotkeyDetector.Transition) -> Void) {
+        lapses += 1
+        detector.lapse().map(onTransition)
     }
 }

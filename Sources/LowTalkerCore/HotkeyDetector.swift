@@ -98,11 +98,11 @@ public struct HotkeyDetector: Sendable {
     /// A press released before this long is a tap.
     public let tapThreshold: Duration
     public private(set) var phase: Phase = .idle
-    /// The key whose down was swallowed and is still down, so its up is swallowed too
-    /// and the app sees the key move a balanced number of times. Beside the phase
-    /// rather than in it: a chord of several keys can end its press by one key's
-    /// release while the swallowed key is still down.
-    private var swallowing: ChordKey?
+    /// Keys whose down was swallowed and are still down, so their up is swallowed too
+    /// and the app sees each key move a balanced number of times. Beside the phase
+    /// rather than in it: a press can end, and the next begin, while a swallowed key
+    /// is still down.
+    private var swallowing: Set<ChordKey> = []
 
     public init(chords: Set<KeyChord>, tapThreshold: Duration) {
         precondition(tapThreshold > .zero, "a tap is a press shorter than something; zero makes every press a hold")
@@ -126,21 +126,20 @@ public struct HotkeyDetector: Sendable {
         switch (phase, completed) {
         case (.idle, let chord?):
             phase = .held(chord, since: event.time)
-            swallowing = event.key
+            swallowing.insert(event.key)
             return Verdict(transition: .began(chord), delivery: .swallow)
         case (.latched(let chord), .some):
             phase = .idle
-            swallowing = event.key
+            swallowing.insert(event.key)
             return Verdict(transition: .ended(chord, .tap), delivery: .swallow)
         case (.held, _), (_, nil):
             // A key still swallowed repeats while held; the app sees none of the repeats.
-            return Verdict(transition: nil, delivery: event.key == swallowing ? .swallow : .pass)
+            return Verdict(transition: nil, delivery: swallowing.contains(event.key) ? .swallow : .pass)
         }
     }
 
     private mutating func up(of event: KeyEvent) -> Verdict {
-        let delivery: Delivery = event.key == swallowing ? .swallow : .pass
-        swallowing = delivery == .swallow ? nil : swallowing
+        let delivery: Delivery = swallowing.remove(event.key) == nil ? .pass : .swallow
         switch phase {
         case .held(let chord, let since) where chord.contains(event.key):
             let press: PressKind = event.time - since < tapThreshold ? .tap : .hold
@@ -155,5 +154,18 @@ public struct HotkeyDetector: Sendable {
         case .held, .latched, .idle:
             return Verdict(transition: nil, delivery: delivery)
         }
+    }
+
+    /// Events were missed: the open press ends, since its release may have gone by
+    /// unseen, and nothing stays swallowed, since the app saw whatever came up.
+    public mutating func lapse() -> Transition? {
+        let transition: Transition? = switch phase {
+        case .idle: nil
+        case .held(let chord, _): .ended(chord, .hold)
+        case .latched(let chord): .ended(chord, .tap)
+        }
+        phase = .idle
+        swallowing = []
+        return transition
     }
 }

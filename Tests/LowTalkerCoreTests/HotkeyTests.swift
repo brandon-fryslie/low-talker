@@ -67,6 +67,23 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         #expect(tap.installations.count == 2)
     }
 
+    /// A lapse ends the press that was open, so the handler is not left waiting for
+    /// an end the tap never saw, and the next press begins from rest.
+    @Test func aLapseEndsTheOpenPressAtTheHandler() throws {
+        let tap = FakeTap()
+        let hotkey = Hotkey(chords: [rightOption], tap: tap)
+        var transitions: [HotkeyDetector.Transition] = []
+        try hotkey.start { transitions.append($0) }
+        let installation = try #require(tap.installations.first)
+        _ = installation.handle(rightOption(.down, at: 0))
+        installation.onLapse()
+        #expect(hotkey.lapses == 1)
+        #expect(transitions == [.began(rightOption), .ended(rightOption, .hold)])
+        #expect(hotkey.phase == .idle)
+        #expect(installation.handle(rightOption(.down, at: 1000)) == .swallow)
+        #expect(transitions.last == .began(rightOption))
+    }
+
     /// Stopping mid-press forgets the press: a later start begins from rest.
     @Test func stopDisposesTheTapAndReturnsToIdle() throws {
         let tap = FakeTap()

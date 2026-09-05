@@ -125,6 +125,18 @@ private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
         #expect(keyboard.release(.rightOption, at: 410) == swallowed)
     }
 
+    /// The two-key chord released on the key the app saw go down, within the
+    /// threshold, latches like any tap, and that release is passed back as its down was.
+    @Test func releasingTheUnswallowedKeyOfAChordWithinTheThresholdLatches() {
+        var keyboard = Keyboard(chords: [rightOption, command])
+        _ = keyboard.press(.leftShift, at: 0)
+        #expect(keyboard.press(.rightOption, at: 10) == began(command))
+        #expect(keyboard.release(.leftShift, at: 100) == passed)
+        #expect(keyboard.detector.phase == .latched(command))
+        #expect(keyboard.release(.rightOption, at: 110) == swallowed)
+        #expect(keyboard.detector.phase == .latched(command))
+    }
+
     /// A chord with a key completes on the key, with the modifiers already held, and
     /// its repeats while held are swallowed with it.
     @Test func aChordWithAKeyCompletesOnTheKeyAndSwallowsItsRepeats() {
@@ -147,10 +159,37 @@ private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
         #expect(keyboard.release(Key(rawValue: 49), at: 410) == swallowed)
     }
 
+    /// A press can begin while the last one's swallowed key is still down: that key's
+    /// up is swallowed whenever it comes, so the app never sees an up without its down.
+    @Test func aNewPressKeepsSwallowingTheLastOnesKeyUntilItComesUp() {
+        var keyboard = Keyboard(chords: [optionSpace, rightOption])
+        _ = keyboard.press(.leftOption, at: 0)
+        #expect(keyboard.press(Key(rawValue: 49), at: 10) == began(optionSpace))
+        #expect(keyboard.release(.leftOption, at: 400) == HotkeyDetector.Verdict(transition: .ended(optionSpace, .hold), delivery: .pass))
+        #expect(keyboard.press(.rightOption, at: 410) == began(rightOption))
+        #expect(keyboard.release(Key(rawValue: 49), at: 420) == swallowed)
+        #expect(keyboard.release(.rightOption, at: 800) == ended(rightOption, .hold))
+    }
+
     @Test func aChordWithAKeyIsNotCompletedByItsModifier() {
         var keyboard = Keyboard(chords: [optionSpace])
         #expect(keyboard.press(Key(rawValue: 49), at: 0) == passed)
         #expect(keyboard.press(.leftOption, at: 10) == passed)
+        #expect(keyboard.detector.phase == .idle)
+    }
+
+    /// A lapse ends whatever press is open, a hold or a latched tap, and swallows
+    /// nothing further: the key that comes up afterwards reaches the app.
+    @Test func aLapseEndsWhateverPressIsOpen() {
+        var keyboard = Keyboard()
+        #expect(keyboard.detector.lapse() == nil)
+        _ = keyboard.press(.rightOption, at: 0)
+        #expect(keyboard.detector.lapse() == .ended(rightOption, .hold))
+        #expect(keyboard.detector.phase == .idle)
+        #expect(keyboard.release(.rightOption, at: 10) == passed)
+        _ = keyboard.press(.rightOption, at: 100)
+        _ = keyboard.release(.rightOption, at: 150)
+        #expect(keyboard.detector.lapse() == .ended(rightOption, .tap))
         #expect(keyboard.detector.phase == .idle)
     }
 
