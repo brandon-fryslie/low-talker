@@ -34,7 +34,7 @@ public enum AudioClipError: Error, CustomStringConvertible {
     case unconvertibleFormat(sampleRate: Double, channels: UInt32)
     /// The converter accepted the format pair but failed mid-stream; AVFoundation may
     /// or may not attach a reason.
-    case conversionFailed(status: AVAudioConverterOutputStatus, underlying: (any Error)?)
+    case conversionFailed(underlying: (any Error)?)
     case bufferAllocationFailed
 
     public var description: String {
@@ -45,8 +45,8 @@ public enum AudioClipError: Error, CustomStringConvertible {
             "audio file has \(frames) frames; at most \(AVAudioFrameCount.max) can be loaded"
         case .unconvertibleFormat(let sampleRate, let channels):
             "no conversion from \(sampleRate) Hz, \(channels) channel(s) to \(AudioClip.sampleRate) Hz mono"
-        case .conversionFailed(let status, let underlying):
-            "audio conversion failed with status \(status.rawValue): \(underlying.map { "\($0)" } ?? "no detail from AVFoundation")"
+        case .conversionFailed(let underlying):
+            "audio conversion failed: \(underlying.map { "\($0)" } ?? "no detail from AVFoundation")"
         case .bufferAllocationFailed:
             "could not allocate an audio buffer"
         }
@@ -118,9 +118,9 @@ extension AudioClip {
                 samples.append(contentsOf: UnsafeBufferPointer(start: output.floatChannelData![0], count: Int(output.frameLength)))
                 if status == .endOfStream { break drain }
             case .error:
-                throw AudioClipError.conversionFailed(status: status, underlying: conversionError)
+                throw AudioClipError.conversionFailed(underlying: conversionError)
             @unknown default:
-                throw AudioClipError.conversionFailed(status: status, underlying: conversionError)
+                throw AudioClipError.conversionFailed(underlying: conversionError)
             }
         }
         self.init(samples: samples)

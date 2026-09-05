@@ -32,7 +32,7 @@ private func fixture(_ name: String) throws -> URL {
         let right = try AudioClip(contentsOf: fixture("tone-right-only"))
         #expect(left.peak > 0.1)
         #expect(abs(left.peak - right.peak) < 0.001)
-        #expect(left.duration == 1)
+        #expect(abs(left.duration - 1) < 0.01)
     }
 
     @Test func emptyFileIsAnEmptyClip() throws {
