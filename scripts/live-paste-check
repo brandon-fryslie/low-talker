@@ -2,10 +2,9 @@
 # Pastes into TextEdit and Terminal with `lowtalker paste` and checks what landed,
 # without AppleScript: Automation prompts cannot be answered by an unattended shell and
 # a timed-out prompt writes a denial. `open -a` brings the app forward, the focused
-# element's text is read through Accessibility, TextEdit's save and close chords are
-# posted through KeyPoster, and Terminal's window is closed through its own close
-# button. Needs an unlocked screen and a terminal with Accessibility. Leaves the
-# pasteboard and the frontmost app as found.
+# element's text is read through Accessibility, and each window the check opened is
+# closed through its own close button. Needs an unlocked screen and a terminal with
+# Accessibility. Leaves the pasteboard and the frontmost app as found.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -13,9 +12,9 @@ swift build --product lowtalker >/dev/null
 CLI=.build/debug/lowtalker
 
 # A probe for what the check needs and the CLI does not offer: the focused element's
-# text and a wait for it, a wait for an app to be frontmost with a focus, a chord
-# press, a window's close, the lock state, a pasteboard snapshot. It lives under
-# .build so a rerun rebuilds only what changed.
+# text and a wait for it, a wait for an app to be frontmost with a focus, a window's
+# close, the lock state, a pasteboard snapshot. It lives under .build so a rerun
+# rebuilds only what changed.
 PROBE_DIR=.build/live-paste-probe
 mkdir -p "$PROBE_DIR/Sources/probe"
 cat > "$PROBE_DIR/Package.swift" <<EOF
@@ -43,29 +42,29 @@ func children(of element: AXUIElement) -> [AXUIElement] {
     attr(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
 }
 
-/// Every text area under `element`: a Terminal window's text is one, under a split
-/// group and a scroll area.
-func textAreas(under element: AXUIElement) -> [AXUIElement] {
-    attr(element, kAXRoleAttribute) as? String == kAXTextAreaRole as String ? [element] : children(of: element).flatMap(textAreas)
-}
-
-/// Closes the `bundleID` window whose text holds `marker` through the window's own
-/// close button, answering the sheet Terminal raises when it asks before ending the
-/// window's process. A chord would need the app frontmost, and would leave the sheet.
-@MainActor func closeWindow(of bundleID: String, holding marker: String, within seconds: Double) {
-    let app = AXUIElementCreateApplication(NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first!.processIdentifier)
-    let windows = { attr(app, kAXWindowsAttribute) as? [AXUIElement] ?? [] }
-    guard let window = windows().first(where: { textAreas(under: $0).contains { (attr($0, kAXValueAttribute) as? String ?? "").contains(marker) } }) else { fail("no \(bundleID) window holds [\(marker)]") }
-    let gone = { !windows().contains { CFEqual($0, window) } }
-    let sheet = { children(of: window).first { attr($0, kAXRoleAttribute) as? String == kAXSheetRole as String } }
-    _ = AXUIElementPerformAction(attr(window, kAXCloseButtonAttribute) as! AXUIElement, kAXPressAction as CFString)
-    _ = waitUntil(seconds) { gone() || sheet() != nil }
-    // [LAW:dataflow-not-control-flow] exception: whether Terminal asks is its setting, read off the sheet it raised.
-    if let sheet = sheet() {
-        guard let terminate = children(of: sheet).first(where: { attr($0, kAXTitleAttribute) as? String == "Terminate" }) else { fail("the close sheet has no Terminate button") }
-        _ = AXUIElementPerformAction(terminate, kAXPressAction as CFString)
+/// Closes every `bundleID` window whose title holds `marker` through the window's own
+/// close button, pressing the default button of the sheet an app raises first: Terminal
+/// asks before ending the window's process, and its default answer ends it. A chord
+/// would need the app frontmost, and would leave the sheet. With no such window, or
+/// the app not running, there is nothing to close: the exit trap calls this on every
+/// path out of the check.
+@MainActor func closeWindows(of bundleID: String, titled marker: String, within seconds: Double) {
+    for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID) {
+        let windows = { attr(AXUIElementCreateApplication(app.processIdentifier), kAXWindowsAttribute) as? [AXUIElement] ?? [] }
+        for window in windows().filter({ (attr($0, kAXTitleAttribute) as? String ?? "").contains(marker) }) {
+            guard let close = attr(window, kAXCloseButtonAttribute) else { fail("the \(bundleID) window [\(marker)] has no close button") }
+            _ = AXUIElementPerformAction(close as! AXUIElement, kAXPressAction as CFString)
+            let gone = { !windows().contains { CFEqual($0, window) } }
+            let sheet = { children(of: window).first { attr($0, kAXRoleAttribute) as? String == kAXSheetRole as String } }
+            _ = waitUntil(seconds) { gone() || sheet() != nil }
+            // [LAW:dataflow-not-control-flow] exception: whether the app asks is its setting, read off the sheet it raised.
+            if let sheet = sheet() {
+                guard let button = attr(sheet, kAXDefaultButtonAttribute) else { fail("the \(bundleID) close sheet has no default button") }
+                _ = AXUIElementPerformAction(button as! AXUIElement, kAXPressAction as CFString)
+            }
+            guard waitUntil(seconds, gone) else { fail("the \(bundleID) window [\(marker)] did not close") }
+        }
     }
-    guard waitUntil(seconds, gone) else { fail("the \(bundleID) window holding [\(marker)] did not close") }
 }
 
 @MainActor func focusedElement() -> AXUIElement? {
@@ -109,25 +108,27 @@ func fail(_ message: String) -> Never {
 let args = Array(CommandLine.arguments.dropFirst())
 MainActor.assumeIsolated {
     switch args[0] {
-    case "axread": print(focusedValue())
     case "axwait":
-        guard waitUntil(Double(args[2])!, { focusedValue().contains(args[1]) }) else { fail("focused text never held [\(args[1])]; last: [\(focusedValue())]") }
+        guard waitUntil(Double(args[2])!, { focusedValue().contains(args[1]) }) else {
+            let element = focusedElement()
+            let role = element.flatMap { attr($0, kAXRoleAttribute) as? String } ?? "<none>"
+            let window = element.flatMap { attr($0, kAXWindowAttribute) }.flatMap { attr($0 as! AXUIElement, kAXTitleAttribute) as? String } ?? "<none>"
+            fail("focused text never held [\(args[1])]; focused \(role) in window [\(window)] of \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "<none>"); last: [\(focusedValue())]")
+        }
     case "ready":
         guard waitUntil(Double(args[2])!, { NSWorkspace.shared.frontmostApplication?.bundleIdentifier == args[1] && focusedElement() != nil }) else { fail("\(args[1]) never came forward with a focus; frontmost: \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "<none>")") }
-    case "close": closeWindow(of: args[1], holding: args[2], within: Double(args[3])!)
+    case "close": closeWindows(of: args[1], titled: args[2], within: Double(args[3])!)
     case "quit":
         // A quit request, not a chord: nothing to land in the wrong app, no prompt with no window open.
         NSRunningApplication.runningApplications(withBundleIdentifier: args[1]).forEach { _ = $0.terminate() }
     case "front":
-        guard let id = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { print("no app is frontmost"); exit(1) }
+        guard let id = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { fail("no app is frontmost") }
         print(id)
-    case "press":
-        // The chord goes to whatever is frontmost, so it is refused unless that is the
-        // app the check brought forward: a switch by the person at the desk mid-run
-        // must not put a keystroke in their app.
-        guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == args[1] else { fail("\(args[1]) is no longer frontmost; not pressing") }
-        SystemKeyPoster().post(KeyChord(key: Key(rawValue: UInt16(args[2])!), modifiers: Set(args.dropFirst(3).map { Modifier(rawValue: $0)! })))
-    case "locked": print((CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] ?? 0)
+    case "locked":
+        // The session carries the key only while the screen is locked; no session at all
+        // is a shell with no window server, which cannot tell.
+        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { fail("no login session: the lock state is unknown") }
+        print(session["CGSSessionScreenIsLocked"] as? Bool == true ? "locked" : "unlocked")
     case "pasteboard": print(pasteboardSnapshot())
     default: exit(2)
     }
@@ -136,23 +137,35 @@ EOF
 (cd "$PROBE_DIR" && swift build >/dev/null)
 PROBE="$PROBE_DIR/.build/debug/probe"
 
-[ "$($PROBE locked)" = "0" ] || { echo "screen is locked; nothing can receive a paste" >&2; exit 1; }
+[ "$($PROBE locked)" = unlocked ] || { echo "screen is locked; nothing can receive a paste" >&2; exit 1; }
 front=$($PROBE front)
 scratch=$(mktemp -d)
-trap 'rm -rf "$scratch"; open -b "$front"' EXIT
+terminal_was_running=$(pgrep -x Terminal >/dev/null && echo yes || echo no)
+# Every path out closes what the check opened, whichever step it stopped at, and then
+# puts the desk back as found. errexit stays off inside: each step reports its own
+# failure and the rest still run.
+cleanup() {
+    set +e
+    $PROBE close com.apple.TextEdit live-paste.txt 5
+    $PROBE close com.apple.Terminal reader.command 5
+    [ "$terminal_was_running" = yes ] || $PROBE quit com.apple.Terminal
+    rm -rf "$scratch"
+    open -b "$front"
+}
+trap cleanup EXIT
 before=$($PROBE pasteboard)
 echo "frontmost before: $front"
 
-# TextEdit: a file-backed .txt document, so Cmd+S writes what landed to disk with no dialog.
+# TextEdit: a file-backed .txt document, which TextEdit writes when its window closes,
+# so the file is the verdict and no chord is posted.
 doc="$scratch/live-paste.txt"
 : > "$doc"
 open -a TextEdit "$doc"; $PROBE ready com.apple.TextEdit 10
 $CLI paste "hello from low-talker into TextEdit"
 focused=$($PROBE axwait "hello from low-talker into TextEdit" 3 && echo "held the text" || echo "never held the text")
+$PROBE close com.apple.TextEdit live-paste.txt 5
 t0=$SECONDS
-$PROBE press com.apple.TextEdit 1 leftCommand      # kVK_ANSI_S
 until grep -q "hello from low-talker into TextEdit" "$doc" || [ $((SECONDS - t0)) -ge 5 ]; do sleep 0.1; done
-$PROBE press com.apple.TextEdit 13 leftCommand     # kVK_ANSI_W
 grep -q "hello from low-talker into TextEdit" "$doc" && echo "TEXTEDIT OK (saved file holds the text)" || { echo "TEXTEDIT FAILED: focused element $focused; saved file holds [$(cat "$doc")]"; exit 1; }
 
 # Terminal: a script file opens a new window that runs the check's own reader, tr, so
@@ -162,15 +175,11 @@ grep -q "hello from low-talker into TextEdit" "$doc" && echo "TEXTEDIT OK (saved
 # the pty echoes typed text that the shell then drops. The echo of the pasted text
 # is Terminal writing it to the pty, which is the paste landing; tr answers only in
 # uppercase, so lowercase text in the window is that echo and nothing else.
-terminal_was_running=$(pgrep -x Terminal >/dev/null && echo yes || echo no)
 reader="$scratch/reader.command"
 printf '#!/bin/sh\necho lowtalker-reader-up; exec tr a-z A-Z\n' > "$reader"; chmod +x "$reader"
 open -a Terminal "$reader"; $PROBE ready com.apple.Terminal 10; $PROBE axwait lowtalker-reader-up 15
 $CLI paste "pasted-into-terminal-ok"
-terminal=$($PROBE axwait pasted-into-terminal-ok 3 && echo OK || echo FAILED)
-$PROBE close com.apple.Terminal lowtalker-reader-up 5
-[ "$terminal_was_running" = yes ] || $PROBE quit com.apple.Terminal
-echo "TERMINAL $terminal"; [ "$terminal" = OK ] || exit 1
+$PROBE axwait pasted-into-terminal-ok 3 && echo "TERMINAL OK" || { echo "TERMINAL FAILED"; exit 1; }
 
 after=$($PROBE pasteboard)
 [ "$before" = "$after" ] && echo "PASTEBOARD UNCHANGED" || { printf 'PASTEBOARD DIFFERS\nbefore:\n%s\nafter:\n%s\n' "$before" "$after"; exit 1; }

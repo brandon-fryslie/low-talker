@@ -109,7 +109,7 @@ The text goes on the pasteboard as a promise and Cmd+V is posted to the frontmos
 
 Posting a key needs Accessibility, charged to the terminal for this command.
 
-`scripts/live-paste-check` pastes into TextEdit and Terminal, reads back what landed through Accessibility, and compares the pasteboard before and after. It needs an unlocked screen and uses no AppleScript, because an Automation prompt nobody answers becomes a denial.
+`scripts/live-paste-check` pastes into TextEdit and Terminal, checks what landed (the file TextEdit writes when its window is closed, the text Terminal echoes, read through Accessibility), and compares the pasteboard before and after. It needs an unlocked screen and uses no AppleScript, because an Automation prompt nobody answers becomes a denial.
 
 ## One-time setup: signing identity
 
