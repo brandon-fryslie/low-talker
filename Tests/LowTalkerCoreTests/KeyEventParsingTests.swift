@@ -59,12 +59,12 @@ private func event(type: CGEventType, keyCode: CGKeyCode, flags: UInt64, at nano
     }
 
     /// Any process can post an event with a key code beyond 16 bits; the parse must
-    /// not trap on it. (The window server keeps the field to 16 bits, so it reads
-    /// back as a key code.)
-    @Test func aKeyCodePostedBeyondSixteenBitsDoesNotTrap() throws {
+    /// not trap on it. The window server keeps the field to 16 bits: the low ones
+    /// read back, which a rejected write could not produce.
+    @Test func aKeyCodePostedBeyondSixteenBitsIsKeptToSixteen() throws {
         let posted = try event(type: .keyDown, keyCode: 0, flags: 0)
-        posted.setIntegerValueField(.keyboardEventKeycode, value: 1 << 40)
-        #expect(KeyEvent(posted, type: .keyDown)?.key == .key(Key(rawValue: 0)))
+        posted.setIntegerValueField(.keyboardEventKeycode, value: 1 << 16 | 65)
+        #expect(KeyEvent(posted, type: .keyDown)?.key == .key(Key(rawValue: 65)))
     }
 
     /// Caps Lock changes flags too, but is no chord key; the app gets it untouched.

@@ -12,8 +12,8 @@ import IOKit.hidsystem
 public protocol KeyboardTap {
     /// Puts `handle` in front of the session's keyboard events, on the main actor;
     /// what it returns is what the frontmost app gets. `onLapse` reports, also on
-    /// the main actor, that the system had switched the tap off (the handler was too
-    /// slow) and it has been switched back on; the events in between are lost.
+    /// the main actor, that the system had switched the tap off and it has been
+    /// switched back on; the events in between are lost.
     /// Throws when the session refuses a tap, which is a permission matter.
     func install(
         handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery,

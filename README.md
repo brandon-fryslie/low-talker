@@ -66,7 +66,7 @@ To see the first-launch prompt again, forget the app's decision and relaunch:
     swift run lowtalker hotkey                      # print each press of Right Option until interrupted
     swift run lowtalker hotkey --tap-threshold 400  # a press under 400 ms is a tap
 
-Each press prints `began` as the key goes down. A release after the threshold (250 ms by default) prints a line beginning `ended (hold)`; a release before it is a tap, which leaves listening on until the next press of the key prints one beginning `ended (tap)`. Each `ended` line carries `lapses`, how often macOS has switched the tap off for a slow callback and it was switched back on; presses during a lapse are lost. While the command runs, Right Option never reaches the frontmost app: its down and up are swallowed by the event tap, and Left Option is untouched.
+Each press prints `began` as the key goes down. A release after the threshold (250 ms by default) prints a line beginning `ended (hold)`; a release before it is a tap, which leaves listening on until the next press of the key prints one beginning `ended (tap)`. Each `ended` line carries `lapses`, how often macOS has switched the tap off and it was switched back on; a press during a lapse is lost to the frontmost app. While the tap is on, a Right Option pressed on its own never reaches the frontmost app: its down and up are swallowed. Pressed with another modifier already held it is a different chord and passes through, and Left Option is untouched.
 
 The tap needs Input Monitoring and Accessibility. macOS charges a terminal command's tap to the terminal, so the command fails with `the session refused an event tap` until the terminal has both under System Settings > Privacy & Security; the app asks on its own behalf.
 
