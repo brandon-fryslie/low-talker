@@ -5,25 +5,29 @@
 /// actor is reentrant at every `await`, so two calls that each await something can
 /// interleave. This actor owns the order explicitly as a chain of tasks, and it is
 /// the one place that fact lives for anything that wraps a non-reentrant resource.
+///
+/// An operation may not submit to a queue it is running inside, directly or through
+/// other queues, and neither may any task that inherits the operation's context: the
+/// submission would wait on itself forever, so it is refused instead. A task that
+/// must resubmit later without waiting is spawned with `Task.detached`, which
+/// inherits nothing.
 public actor SerialQueue {
     /// The latest submission, whatever its outcome. The next one awaits it.
     private var tail: Task<Void, Never>?
 
-    /// The queue whose operation the current task is running, if any. An operation
-    /// that submits to its own queue would wait on itself forever, so `run` reads
-    /// this and refuses instead.
-    @TaskLocal private static var running: ObjectIdentifier?
+    /// Every queue whose operation encloses the current task.
+    @TaskLocal private static var enclosing: Set<ObjectIdentifier> = []
 
     public init() {}
 
     public func run<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) async throws -> T {
         let id = ObjectIdentifier(self)
         // [LAW:no-silent-failure] The alternative is a hang with no diagnostics.
-        guard Self.running != id else { throw SerialQueueError.reentrantSubmission }
+        guard !Self.enclosing.contains(id) else { throw SerialQueueError.reentrantSubmission }
         let earlier = tail
         let task = Task {
             await earlier?.value
-            return try await Self.$running.withValue(id) { try await operation() }
+            return try await Self.$enclosing.withValue(Self.enclosing.union([id])) { try await operation() }
         }
         // Only the order matters to the next submission; this one's outcome goes to
         // its own caller below.
@@ -33,13 +37,13 @@ public actor SerialQueue {
 }
 
 public enum SerialQueueError: Error, CustomStringConvertible {
-    /// An operation submitted to the queue it is running on.
+    /// An operation submitted to a queue it is running inside.
     case reentrantSubmission
 
     public var description: String {
         switch self {
         case .reentrantSubmission:
-            "an operation submitted to its own SerialQueue, which would wait on itself forever"
+            "an operation submitted to a SerialQueue it is running inside, which would wait on itself forever"
         }
     }
 }

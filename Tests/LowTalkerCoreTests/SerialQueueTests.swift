@@ -78,4 +78,29 @@ private struct Boom: Error {}
         }
         #expect(value == "nested")
     }
+
+    /// Coming back to a queue through another one is the same wait-on-yourself, one
+    /// hop removed, and is refused the same way.
+    @Test func submittingToAnEnclosingQueueThroughAnotherIsRefused() async throws {
+        let outer = SerialQueue()
+        let inner = SerialQueue()
+        await #expect(throws: SerialQueueError.self) {
+            try await outer.run {
+                try await inner.run {
+                    try await outer.run { "never" }
+                }
+            }
+        }
+        #expect(try await outer.run { "still running" } == "still running")
+    }
+
+    /// The escape hatch for resubmitting later: a detached task inherits nothing, so
+    /// its submission is an ordinary one once the operation that spawned it is done.
+    @Test func detachedTaskMayResubmitAfterItsOperationReturns() async throws {
+        let queue = SerialQueue()
+        let later = try await queue.run {
+            Task.detached { try await queue.run { "later" } }
+        }
+        #expect(try await later.value == "later")
+    }
 }
