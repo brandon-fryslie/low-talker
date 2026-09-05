@@ -128,12 +128,12 @@ public struct ModelStore: Sendable {
         /// The manifest is on disk but does not parse, so nothing is known about the
         /// files.
         case manifestUnreadable(manifest: URL, reason: String)
-        /// Files the manifest lists that are gone or the wrong size. Never empty.
+        /// Files the manifest lists that are not there as recorded. Never empty.
         case files(folder: URL, faults: [Manifest.Fault])
 
-        /// A missing file is already what the client must see; only a wrong-sized
-        /// one stands in the way. An unreadable manifest names no files, so no file
-        /// can be trusted and no repair is offered: a manifest recorded over what a
+        /// A missing file is the one fault that needs no eviction: it is already what
+        /// the client must see. An unreadable manifest names no files, so no file can
+        /// be trusted and no repair is offered: a manifest recorded over what a
         /// download left would certify whatever was already there.
         public var evictions: [URL] {
             get throws {
