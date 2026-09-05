@@ -32,16 +32,18 @@ struct TranscribeCommand: AsyncParsableCommand {
         let transcribed = clock.now
 
         var stderr = StandardError()
-        print("model \(model): loaded in \(loaded - loadStart), transcribed \(seconds(clip.duration)) s of audio in \(transcribed - loaded)", to: &stderr)
+        print("model \(model): loaded in \(loaded - loadStart), transcribed \(fixed(clip.duration, places: 3)) s of audio in \(transcribed - loaded)", to: &stderr)
 
         print(transcript.text)
         for word in transcript.words {
-            print("\(seconds(word.time.lowerBound)) \(seconds(word.time.upperBound))  \(word.confidence.value.formatted(.number.precision(.fractionLength(2))))  \(word.text)")
+            print("\(fixed(word.time.lowerBound, places: 3)) \(fixed(word.time.upperBound, places: 3))  \(fixed(word.confidence.value, places: 2))  \(word.text)")
         }
     }
 
-    private func seconds(_ value: TimeInterval) -> String {
-        value.formatted(.number.precision(.fractionLength(3)))
+    /// [LAW:one-source-of-truth] Every number on stdout is written here, pinned to a
+    /// locale no machine setting can change, so the output diffs across machines.
+    private func fixed(_ value: Double, places: Int) -> String {
+        value.formatted(.number.precision(.fractionLength(places)).locale(Locale(identifier: "en_US_POSIX")))
     }
 }
 
