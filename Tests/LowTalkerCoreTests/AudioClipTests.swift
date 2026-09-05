@@ -47,3 +47,10 @@ private func fixture(_ name: String) throws -> URL {
         }
     }
 }
+
+// Temporary: proves CI turns red on a failing test (low-scaffold-yc7.4). Reverted next commit.
+@Suite struct CIRedCheck {
+    @Test func deliberatelyFails() {
+        #expect(1 == 2, "deliberate failure to verify the CI check goes red")
+    }
+}
