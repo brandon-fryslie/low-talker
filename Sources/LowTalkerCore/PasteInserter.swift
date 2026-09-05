@@ -34,10 +34,10 @@ public final class PasteInserter {
     /// Pastes `text` into the frontmost app and puts the prior contents back, unless
     /// something else took the pasteboard meanwhile, in which case that stays.
     public func insert(_ text: String) async throws -> PasteOutcome {
-        try await oneAtATime.run { @MainActor in try await self.paste(text) }
+        try await oneAtATime.run { @MainActor in await self.paste(text) }
     }
 
-    private func paste(_ text: String) async throws -> PasteOutcome {
+    private func paste(_ text: String) async -> PasteOutcome {
         let prior = PasteboardContents(reading: pasteboard)
         let (landing, onLanding) = AsyncStream.makeStream(of: Void.self)
         let promise = TextPromise(text: text, landing: onLanding)
