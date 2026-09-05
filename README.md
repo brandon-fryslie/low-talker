@@ -70,6 +70,15 @@ Each press prints `began` as the key goes down. A release after the threshold (2
 
 The tap needs Input Monitoring and Accessibility. macOS charges a terminal command's tap to the terminal, so the command fails with `the session refused an event tap` until the terminal has both under System Settings > Privacy & Security; the app asks on its own behalf.
 
+## Paste
+
+    swift run lowtalker paste "hello there"            # paste into the frontmost app now
+    swift run lowtalker paste "hello there" --delay 3  # three seconds to bring the receiving app forward
+
+The text goes on the pasteboard as a promise and Cmd+V is posted to the frontmost app. The pasteboard server calls back the moment the app pulls the text, and the prior pasteboard contents go back at that call, every item and every type, images included; nothing is timed. The line printed says whether the app took the text (`landed` or `not taken`, the latter after `--landing-timeout` milliseconds, 1000 by default) and whether the pasteboard was `restored`. When something else takes the pasteboard during the paste, that is left in place and the line says so. The item carries nspasteboard.org's transient marker, so clipboard managers that honor it neither keep the dictated text nor pull it early.
+
+Posting a key needs Accessibility, charged to the terminal for this command.
+
 ## One-time setup: signing identity
 
 Run once after cloning:
