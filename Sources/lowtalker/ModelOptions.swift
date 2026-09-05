@@ -1,0 +1,54 @@
+import ArgumentParser
+import Foundation
+import LowTalkerCore
+import Synchronization
+
+/// Which model and which store, for every command that touches the engine.
+///
+/// [LAW:one-source-of-truth] The default store is the app's; the CLI reads and writes
+/// the same directory so a download from the terminal is a download for the app.
+struct ModelOptions: ParsableArguments {
+    @Option(help: "A model folder name in the whisperkit-coreml repo.")
+    var model: ModelName = .default
+
+    @Option(name: .customLong("models-dir"), help: "Where models are stored. Defaults to the app's directory under Application Support.", transform: URL.init(fileURLWithPath:))
+    var modelsDirectory: URL?
+
+    func store() throws -> ModelStore {
+        try modelsDirectory.map(ModelStore.init(directory:)) ?? ModelStore.applicationSupport()
+    }
+}
+
+/// [LAW:parse-dont-validate] `--model` is parsed into a name at the command line, so a
+/// value that is not one path step is refused before any path is built from it.
+extension ModelName: ExpressibleByArgument {}
+
+/// Narrates a load on stderr: one line per whole percent of download, one line when
+/// loading starts. Stdout stays the command's own.
+final class PhaseReporter: Sendable {
+    private let lastPercent = Mutex(-1)
+
+    func report(_ phase: WhisperKitTranscriber.LoadPhase) {
+        var stderr = StandardError()
+        switch phase {
+        case .downloading(let fraction):
+            let percent = Int(fraction * 100)
+            let changed = lastPercent.withLock { last in
+                defer { last = percent }
+                return percent != last
+            }
+            if changed {
+                print("downloading model: \(percent)%", to: &stderr)
+            }
+        case .loading:
+            print("loading model", to: &stderr)
+        }
+    }
+}
+
+/// `print(_:to:)` wants a TextOutputStream, and FileHandle is not one.
+struct StandardError: TextOutputStream {
+    mutating func write(_ string: String) {
+        FileHandle.standardError.write(Data(string.utf8))
+    }
+}
