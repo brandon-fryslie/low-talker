@@ -28,8 +28,8 @@ public struct ModelStore: Sendable {
     }
 
     /// Where the model stands on disk. Only `.installed` yields the proof a load
-    /// needs; the other two are what `install` repairs. Throws when the store itself
-    /// cannot be examined, such as a folder this process may not search.
+    /// needs; the other two are why `install` is called. Throws when the store itself
+    /// cannot be examined, such as a file or folder this process may not read.
     ///
     /// [LAW:parse-dont-validate] The checkpoint. Everything past it takes an
     /// `InstalledModel` and never asks about files again.
@@ -40,7 +40,7 @@ public struct ModelStore: Sendable {
             manifest = try Manifest(contentsOf: manifestURL)
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
             return .missing
-        } catch {
+        } catch let error where error is DecodingError || error is ManifestError {
             return .damaged(.manifestUnreadable(manifest: manifestURL, reason: "\(error)"))
         }
         let folder = directory.appending(path: manifest.folder)
@@ -54,7 +54,7 @@ public struct ModelStore: Sendable {
     /// The installed model, downloading whatever the store lacks first. Files already
     /// here are not fetched again, so a damaged install costs only the damaged parts,
     /// and an installed one costs nothing. One installer at a time: a second, from
-    /// any process, waits for the first and takes its result.
+    /// any process, waits for the first.
     ///
     /// [LAW:dataflow-not-control-flow] The sequence never changes; whether the
     /// download runs is decided by the store's `Presence` value, the domain's own

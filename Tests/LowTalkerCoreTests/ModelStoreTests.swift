@@ -227,6 +227,19 @@ import Testing
         }
     }
 
+    /// A manifest this process may not read is not a corrupt one: telling the user
+    /// to delete the model would be the wrong instruction, so the trouble is passed up.
+    @Test func storeWhoseManifestCannotBeReadThrowsRatherThanReadingDamaged() throws {
+        let scratch = try Scratch(files: Self.files)
+        let store = ModelStore(directory: scratch.root)
+        try Manifest(recording: scratch.folder, relativeTo: scratch.root).write(to: scratch.manifestURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: scratch.manifestURL.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: scratch.manifestURL.path) }
+        #expect(throws: CocoaError.self) {
+            try store.presence(of: "test")
+        }
+    }
+
     /// A repair over an unreadable manifest would certify whatever is on disk, so
     /// the refusal comes before any download.
     @Test func installRefusesToRepairAnUnreadableManifest() async throws {
