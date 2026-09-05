@@ -13,7 +13,7 @@ private final class ReceivingApp: PasteReceiver {
         self.onPaste = onPaste
     }
 
-    func paste() throws {
+    func paste() async throws {
         pastes += 1
         try onPaste()
     }
@@ -79,6 +79,21 @@ private func priorContents() throws -> PasteboardContents {
         #expect(failed.reason as? PasteError == .noPasteMenuItem(bundleID: "com.example.menuless"))
         #expect(failed.pasteboard == .restored)
         #expect(PasteboardContents(reading: pasteboard) == prior)
+    }
+
+    @Test func aFailedPasteSaysWhenThePasteboardWasTakenMeanwhile() async throws {
+        defer { pasteboard.releaseGlobally() }
+        try priorContents().write(to: pasteboard)
+        let app = ReceivingApp { [pasteboard] in
+            pasteboard.clearContents()
+            pasteboard.setString("theirs", forType: .string)
+            throw PasteError.unanswered(.cannotComplete)
+        }
+        let failed = try await #require(throws: InsertionFailed.self) {
+            try await PasteInserter(pasteboard: pasteboard).insert("hello", into: app)
+        }
+        #expect(failed.pasteboard == .pasteboardTaken)
+        #expect(pasteboard.string(forType: .string) == "theirs")
     }
 
     /// The second insert waits for the first, so each paste reads its own text and the

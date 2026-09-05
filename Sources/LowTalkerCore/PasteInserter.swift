@@ -27,10 +27,10 @@ public final class PasteInserter {
     /// prior contents go back whether or not the receiver managed to paste; when it
     /// did not, the thrown `InsertionFailed` says where the pasteboard was left.
     public func insert(_ text: String, into receiver: some PasteReceiver) async throws -> PasteOutcome {
-        try await oneAtATime.run { @MainActor in try self.paste(text, into: receiver) }
+        try await oneAtATime.run { @MainActor in try await self.paste(text, into: receiver) }
     }
 
-    private func paste(_ text: String, into receiver: some PasteReceiver) throws -> PasteOutcome {
+    private func paste(_ text: String, into receiver: some PasteReceiver) async throws -> PasteOutcome {
         let prior = PasteboardContents(reading: pasteboard)
         let ours = pasteboard.clearContents()
         // AppKit refuses only an item already on another pasteboard, and it raises for
@@ -38,9 +38,10 @@ public final class PasteInserter {
         precondition(pasteboard.writeObjects([Self.item(text)]), "AppKit refused a fresh pasteboard item")
         // [LAW:dataflow-not-control-flow] The restore runs on every path out; a failed
         // paste is reported after the pasteboard is back.
-        let pasted = Result { try receiver.paste() }
+        let failure: (any Error)?
+        do { try await receiver.paste(); failure = nil } catch { failure = error }
         let outcome = restore(prior, unlessTakenSince: ours)
-        if case .failure(let reason) = pasted { throw InsertionFailed(reason: reason, pasteboard: outcome) }
+        if let failure { throw InsertionFailed(reason: failure, pasteboard: outcome) }
         return outcome
     }
 

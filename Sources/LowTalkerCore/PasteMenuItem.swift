@@ -9,14 +9,15 @@ import ApplicationServices
 @MainActor
 public protocol PasteReceiver: Sendable {
     /// Returns once the app has run its paste, so the pasteboard may change after it.
-    func paste() throws
+    func paste() async throws
 }
 
 /// Why an app could not be asked to paste, or did not say that it had.
 public enum PasteError: Error, Hashable, CustomStringConvertible {
     /// No menu item is bound to plain Cmd+V, so the app has no paste to press.
     case noPasteMenuItem(bundleID: String?)
-    /// The app last validated its Paste item as disabled, and a press would do nothing.
+    /// The app validated its Paste item as disabled after the text was on the
+    /// pasteboard, and a press would do nothing.
     case pasteDisabled(bundleID: String?)
     /// Accessibility refused before the press: this process is not trusted, or the app
     /// did not answer.
@@ -57,6 +58,7 @@ public struct PasteMenuItem: PasteReceiver {
     private let app: AXUIElement
     private let item: AXUIElement
     private let bundleID: String?
+    private static let validationPoll: Duration = .milliseconds(50)
 
     /// Finds the item bound to plain Cmd+V in the app's menu bar, breadth first, so the
     /// Edit menu's item is found before any submenu is walked.
@@ -69,16 +71,33 @@ public struct PasteMenuItem: PasteReceiver {
         item = found
     }
 
-    /// [LAW:no-ambient-temporal-coupling] Accessibility owns the wait: each call gives
-    /// up after its messaging timeout (1.5 s by default), so an app that has hung
-    /// costs that much and then fails the call, never longer.
-    public func paste() throws {
-        // The app validates its menu on its own event cycle, and a press keeps to that
-        // last word: pressing an item validated disabled returns success and does nothing.
-        // [LAW:single-enforcer] Only the app says whether its paste can run; an app
-        // that does not say is pressed.
-        guard try read(item, kAXEnabledAttribute) as? Bool != false else {
-            throw PasteError.pasteDisabled(bundleID: bundleID)
+    /// AppKit validates an app's menu bar on a clock of its own, once a second
+    /// (measured on macOS 26 at 1.0 s, active or not). A reading taken within a period
+    /// of a change may predate it.
+    public static let menuValidationPeriod: Duration = .seconds(1)
+
+    /// [LAW:no-ambient-temporal-coupling] Two clocks own the waits here, and both are
+    /// named. Accessibility bounds each call by its messaging timeout (1.5 s by
+    /// default), so an app that has hung costs that much and then fails the call.
+    /// AppKit's validation pass bounds the other: a disabled reading is trusted only
+    /// once a full period has passed without it changing.
+    /// Whether a menu item's key equivalent, as Accessibility reports it, is plain
+    /// Cmd+V: the character is the capital V Accessibility reports whatever case the
+    /// app set, and an empty modifier mask means Cmd alone.
+    nonisolated public static func isPlainCmdV(cmdChar: String?, modifiers: Int?) -> Bool {
+        cmdChar == "V" && modifiers == 0
+    }
+
+    public func paste() async throws {
+        // A press keeps to the app's last validation: pressing an item validated
+        // disabled returns success and does nothing. The text went on the pasteboard
+        // just now, so a disabled reading may be older than it; the next pass settles
+        // that. [LAW:single-enforcer] Only the app says whether its paste can run; an
+        // app that does not say is pressed.
+        let settled = ContinuousClock.now + Self.menuValidationPeriod + Self.validationPoll
+        while try read(item, kAXEnabledAttribute) as? Bool == false {
+            guard ContinuousClock.now < settled else { throw PasteError.pasteDisabled(bundleID: bundleID) }
+            try await Task.sleep(for: Self.validationPoll)
         }
         let sent = AXUIElementPerformAction(item, kAXPressAction as CFString)
         guard sent == .success else { throw PasteError.accessibility(sent) }
@@ -89,10 +108,11 @@ public struct PasteMenuItem: PasteReceiver {
     }
 }
 
-/// Bound to V with an empty modifier mask, which to a menu item means Cmd alone.
 private func isBoundToPlainCmdV(_ element: AXUIElement) throws -> Bool {
-    try read(element, kAXMenuItemCmdCharAttribute) as? String == "V"
-        && read(element, kAXMenuItemCmdModifiersAttribute) as? Int == 0
+    try PasteMenuItem.isPlainCmdV(
+        cmdChar: read(element, kAXMenuItemCmdCharAttribute) as? String,
+        modifiers: read(element, kAXMenuItemCmdModifiersAttribute) as? Int
+    )
 }
 
 /// An attribute's value: nil when the element has none, thrown when Accessibility

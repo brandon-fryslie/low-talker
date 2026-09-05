@@ -22,4 +22,10 @@ private func children(_ n: Int) -> [Int] { [1: [10], 10: [100]][n] ?? [] }
             try breadthFirst(from: [1], children: { _ in throw Unreadable() }, where: { _ in false })
         }
     }
+
+    @Test func aFailedMatchIsThrown() {
+        #expect(throws: Unreadable.self) {
+            try breadthFirst(from: [1], children: children, where: { _ in throw Unreadable() })
+        }
+    }
 }
