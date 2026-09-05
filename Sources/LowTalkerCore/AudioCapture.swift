@@ -76,6 +76,19 @@ public final class AudioCapture {
 
     public func clip(in range: Range<Int>) -> AudioClip { shared.ring.withLock { $0.clip(in: range) } }
 
+    /// Marks where a session begins: the next sample's position, with the pre-roll it
+    /// will reach back over. Costs one read; the microphone keeps running.
+    public func beginSession(preRoll: TimeInterval = AudioSession.defaultPreRoll) -> AudioSession {
+        AudioSession(beginningAt: retained.upperBound, preRoll: preRoll)
+    }
+
+    /// Marks where `session` ends and yields its audio: the pre-roll, then everything
+    /// captured since it began. The end mark and the slice are taken under one lock,
+    /// so a buffer arriving in between cannot separate them.
+    public func endSession(_ session: AudioSession) -> AudioClip {
+        shared.ring.withLock { $0.clip(in: session.range(endingAt: $0.end)) }
+    }
+
     public func start() throws {
         stop()
         deviceChanges = 0

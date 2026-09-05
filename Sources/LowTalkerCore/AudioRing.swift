@@ -20,7 +20,7 @@ public struct AudioRing: Sendable, Equatable {
     }
 
     public init(retaining duration: Double) {
-        self.init(capacity: Int(duration * AudioClip.sampleRate))
+        self.init(capacity: AudioClip.sampleCount(for: duration))
     }
 
     /// The positions still held: at most `capacity` of them, ending at `end`.
