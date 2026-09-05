@@ -39,5 +39,10 @@ let package = Package(
             ],
             resources: [.copy("Fixtures")]
         ),
+        // The CLI's table shape is its contract; this pins column names to fields.
+        .testTarget(
+            name: "lowtalkerTests",
+            dependencies: ["lowtalker", "LowTalkerCore"]
+        ),
     ]
 )
