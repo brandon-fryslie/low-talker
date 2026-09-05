@@ -12,10 +12,10 @@ public struct Transcript: Hashable, Codable, Sendable {
         self.words = words
     }
 
-    /// A transcript nobody spoke: text typed in for a dry run or a test. Each
-    /// whitespace run stays attached to the word after it (the last word keeps any
-    /// trailing whitespace), so `text` gives the string back unchanged. No time
-    /// passed and nothing was recognized, so every word is instantaneous and certain.
+    /// A transcript nobody spoke: text typed in for a dry run or a test. Whitespace
+    /// rides with the word after it (trailing whitespace with the last), so `text`
+    /// reads back verbatim; whitespace alone is nothing said. Every word is
+    /// instantaneous and certain, since no time passed and nothing was recognized.
     public init(typed text: String) {
         self.words = text.matches(of: /\s*\S+(?:\s+$)?/).map { match in
             Word(text: String(match.output), time: 0...0, confidence: 1.0)

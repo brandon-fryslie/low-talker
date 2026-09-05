@@ -47,5 +47,6 @@ import Testing
         #expect(transcript.text == "  Hello,  world. ")
         #expect(transcript.words.allSatisfy { $0.time == 0...0 && $0.confidence == 1.0 })
         #expect(Transcript(typed: "").words.isEmpty)
+        #expect(Transcript(typed: "   ").words.isEmpty)
     }
 }
