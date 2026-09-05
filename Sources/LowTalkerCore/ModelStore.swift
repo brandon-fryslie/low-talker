@@ -20,7 +20,7 @@ public struct ModelStore: Sendable {
     }
 
     /// `~/Library/Application Support/low-talker/hub`. Application Support, not
-    /// Documents where WhisperKit would put it: a 626 MB cache has no business in a
+    /// Documents where WhisperKit would put it: a 630 MB cache has no business in a
     /// folder iCloud Drive may be syncing.
     public static func applicationSupport() throws -> ModelStore {
         let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)

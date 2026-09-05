@@ -1,0 +1,1 @@
+The event tap on right option toggles listening, and a longer hold is push to talk.

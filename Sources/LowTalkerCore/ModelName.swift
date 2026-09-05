@@ -22,10 +22,13 @@ public struct ModelName: RawRepresentable, Hashable, Codable, Sendable, Expressi
 
     public var description: String { rawValue }
 
-    /// Whisper large-v3-turbo: large-v3's encoder with a four-layer decoder, so it
-    /// keeps the accuracy while decoding several times faster. The default until
-    /// the latency harness measures the candidates on real hardware.
-    public static let `default`: ModelName = "large-v3-v20240930_626MB"
+    /// Whisper large-v3-turbo (large-v3's encoder with a four-layer decoder) in the
+    /// variant that ships a prefilled decoder context. Chosen by `lowtalker bench`
+    /// on an M2 Max: it heard every bench fixture exactly as the plain 626 MB
+    /// variant did and finished each decode 10 to 20% sooner, while the distilled
+    /// models misheard proper nouns and the small models misheard whole phrases.
+    /// The numbers are on ticket low-transcribe-8zj.4.
+    public static let `default`: ModelName = "large-v3-v20240930_turbo_632MB"
 }
 
 extension StringProtocol {

@@ -1,0 +1,1 @@
+The build is green again after the signing fix, but the download still stalls halfway on a slow connection, so I am adding a retry before we ship.
