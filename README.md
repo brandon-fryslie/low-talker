@@ -23,6 +23,18 @@ prints the transcript, then one line per word with its start, end, and confidenc
 
 CI has no model cache, so the tests cover the mapping from WhisperKit's results onto `Transcript` with hand-built results; the real engine is only exercised through this command.
 
+## Microphone permission
+
+    swift run lowtalker mic            # print the current authorization
+    swift run lowtalker mic request    # prompt if never asked, then print the answer
+    swift run lowtalker mic watch      # print every change until interrupted
+
+For `mic` and `mic request` the exit status is 0 when access is granted and 1 otherwise; `watch` runs until interrupted. macOS charges a terminal command's microphone use to the terminal, so these answers are the terminal's; the app asks on its own behalf the first time it launches. macOS posts no notification when the switch is flipped in System Settings, so a change is only seen by reading the status again; `watch` reads it once a second.
+
+To see the first-launch prompt again, forget the app's decision and relaunch:
+
+    tccutil reset Microphone ltd.deadgrass.low-talker
+
 ## One-time setup: signing identity
 
 Run once after cloning:

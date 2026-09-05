@@ -1,4 +1,5 @@
 import AppKit
+import LowTalkerCore
 
 /// The menu-bar agent. `LSUIElement` keeps it out of the Dock, so the status item
 /// is the app's only surface; the delegate exists to install it.
@@ -17,6 +18,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem.isVisible = true
+        // A fresh install sees the system prompt here; macOS remembers the answer, so
+        // later launches ask nothing. Showing the answer in the status item is
+        // low-app-3sp.1's work.
+        Task { _ = await MicrophonePermission().request() }
     }
 
     private static func makeMenu() -> NSMenu {
