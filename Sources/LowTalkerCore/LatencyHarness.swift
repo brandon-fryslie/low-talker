@@ -20,7 +20,7 @@ public enum LatencyHarness {
     public enum Delivery: String, CaseIterable, Sendable {
         /// The whole clip, at key-up.
         case batch
-        /// A microphone buffer at a time, as the capture engine delivers it.
+        /// A microphone buffer at a time.
         case streamed
 
         /// How much of `clip` arrives at once.

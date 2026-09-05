@@ -55,6 +55,13 @@ struct Hearing: Equatable {
         String(text.reversed().drop(while: \.isPunctuation).reversed())
     }
 
+    /// [LAW:one-source-of-truth] The one rule for two passes reading the same word:
+    /// trailing punctuation is the later pass's to revise, in a prefix or in a
+    /// tentative word alike.
+    private static func sameWord(_ earlier: Transcript.Word, _ later: Transcript.Word) -> Bool {
+        unpunctuated(earlier.text) == unpunctuated(later.text)
+    }
+
     /// Where the next pass starts: the first prefix word's start, so the pass hears
     /// the words it is told. [LAW:one-source-of-truth] Derived from the confirmed
     /// words, so it moves forward exactly as they settle and never back.
@@ -72,8 +79,8 @@ struct Hearing: Equatable {
     /// words it read for its prefix come first and are dropped; a prefix read
     /// differently stays, visible, rather than vanishing.
     mutating func hear(_ words: [Transcript.Word], through end: Int) {
-        let fresh = words.dropFirst(zip(prefix, words).prefix { Self.unpunctuated($0.text) == Self.unpunctuated($1.text) }.count)
-        let agreed = zip(tentative, fresh).prefix { $0.text == $1.text }.count
+        let fresh = words.dropFirst(zip(prefix, words).prefix { Self.sameWord($0, $1) }.count)
+        let agreed = zip(tentative, fresh).prefix { Self.sameWord($0, $1) }.count
         let settled = fresh.prefix(agreed).prefix { AudioClip.sampleCount(for: $0.time.upperBound) <= end - margin }
         confirmed += settled
         tentative = Array(fresh.dropFirst(settled.count))

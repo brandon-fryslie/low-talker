@@ -51,6 +51,16 @@ import Testing
         #expect(hearing.partial.text == " see you at noon soon")
     }
 
+    /// A word the later pass punctuates differently is still the same word: it
+    /// settles, with the later pass's punctuation, and holds nothing after it back.
+    @Test func aPunctuationRevisionStillAgrees() {
+        var hearing = Self.hearing()
+        hearing.hear([Self.word(" drinking", 0.2, 0.5), Self.word(" blood", 0.6, 0.9), Self.word(" and", 1.0, 1.2)], through: Self.samples(2))
+        hearing.hear([Self.word(" drinking", 0.2, 0.5), Self.word(" blood.", 0.6, 0.9), Self.word(" and", 1.0, 1.2)], through: Self.samples(2.5))
+        #expect(hearing.confirmed.map(\.text) == [" drinking", " blood.", " and"])
+        #expect(hearing.tentative.isEmpty)
+    }
+
     /// The prefix is the last `context` confirmed words, so the cut follows the
     /// confirmed words forward and never reaches back to the utterance's start.
     @Test func thePrefixIsTheLastConfirmedWords() {
