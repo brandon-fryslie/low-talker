@@ -75,11 +75,6 @@ public struct PasteMenuItem: PasteReceiver {
     /// of a change may predate it.
     public static let menuValidationPeriod: Duration = .seconds(1)
 
-    /// [LAW:no-ambient-temporal-coupling] Two clocks own the waits here, and both are
-    /// named. Accessibility bounds each call by its messaging timeout (1.5 s by
-    /// default), so an app that has hung costs that much and then fails the call.
-    /// AppKit's validation pass bounds the other: a disabled reading is trusted only
-    /// once a full period has passed without it changing.
     /// Whether a menu item's key equivalent, as Accessibility reports it, is plain
     /// Cmd+V: the character is the capital V Accessibility reports whatever case the
     /// app set, and an empty modifier mask means Cmd alone.
@@ -87,6 +82,11 @@ public struct PasteMenuItem: PasteReceiver {
         cmdChar == "V" && modifiers == 0
     }
 
+    /// [LAW:no-ambient-temporal-coupling] Two clocks own the waits here, and both are
+    /// named. Accessibility bounds each call by its messaging timeout (1.5 s by
+    /// default), so an app that has hung costs that much and then fails the call.
+    /// AppKit's validation pass bounds the other: a disabled reading is trusted only
+    /// once a full period has passed without it changing.
     public func paste() async throws {
         // A press keeps to the app's last validation: pressing an item validated
         // disabled returns success and does nothing. The text went on the pasteboard

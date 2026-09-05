@@ -17,6 +17,16 @@ import Testing
         #expect(lastAsk - started >= .milliseconds(40))
     }
 
+    /// The last ask falls after the window, so a condition that comes to hold only
+    /// then still counts.
+    @Test func aConditionThatHoldsOnlyOnceTheWindowHasPassedStillCounts() async throws {
+        let started = ContinuousClock.now
+        let held = try await holds(within: .milliseconds(30), askingEvery: .milliseconds(10)) {
+            ContinuousClock.now - started >= .milliseconds(30)
+        }
+        #expect(held)
+    }
+
     struct Unaskable: Error {}
 
     @Test func aFailedAskIsThrown() async {
