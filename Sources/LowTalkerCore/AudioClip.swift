@@ -81,7 +81,11 @@ extension AudioClip {
         // read (fails with no error attached), so the empty file is hemmed here at the
         // foreign edge; an empty file is a legal empty clip, not a failure.
         if file.length > 0 {
-            try file.read(into: input)
+            do {
+                try file.read(into: input)
+            } catch {
+                throw AudioClipError.unreadable(url, underlying: error)
+            }
         }
 
         guard let converter = AVAudioConverter(from: source, to: Self.format) else {
