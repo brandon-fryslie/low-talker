@@ -25,6 +25,16 @@ private func fixture(_ name: String) throws -> URL {
         #expect(clip.peak == 0)
     }
 
+    /// The same tone in the left channel only and in the right channel only. A
+    /// downmix that dropped or favored either channel could not produce equal peaks.
+    @Test func downmixHearsBothChannelsEqually() throws {
+        let left = try AudioClip(contentsOf: fixture("tone-left-only"))
+        let right = try AudioClip(contentsOf: fixture("tone-right-only"))
+        #expect(left.peak > 0.1)
+        #expect(abs(left.peak - right.peak) < 0.001)
+        #expect(left.duration == 1)
+    }
+
     @Test func emptyFileIsAnEmptyClip() throws {
         let clip = try AudioClip(contentsOf: fixture("empty"))
         #expect(clip.samples.isEmpty)

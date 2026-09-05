@@ -28,16 +28,25 @@ public struct AudioClip: Sendable, Equatable {
 public enum AudioClipError: Error, CustomStringConvertible {
     /// AVFoundation could not open the file; the CoreAudio error is attached.
     case unreadable(URL, underlying: any Error)
+    /// More frames than a single AVFoundation buffer can hold.
+    case fileTooLong(frames: Int64)
     /// AVFoundation has no conversion path from the file's format to 16 kHz mono.
     case unconvertibleFormat(sampleRate: Double, channels: UInt32)
+    /// The converter accepted the format pair but failed mid-stream; AVFoundation may
+    /// or may not attach a reason.
+    case conversionFailed(status: AVAudioConverterOutputStatus, underlying: (any Error)?)
     case bufferAllocationFailed
 
     public var description: String {
         switch self {
         case .unreadable(let url, let underlying):
             "cannot read audio file \(url.path): \(underlying)"
+        case .fileTooLong(let frames):
+            "audio file has \(frames) frames; at most \(AVAudioFrameCount.max) can be loaded"
         case .unconvertibleFormat(let sampleRate, let channels):
             "no conversion from \(sampleRate) Hz, \(channels) channel(s) to \(AudioClip.sampleRate) Hz mono"
+        case .conversionFailed(let status, let underlying):
+            "audio conversion failed with status \(status.rawValue): \(underlying.map { "\($0)" } ?? "no detail from AVFoundation")"
         case .bufferAllocationFailed:
             "could not allocate an audio buffer"
         }
@@ -62,7 +71,10 @@ extension AudioClip {
             throw AudioClipError.unreadable(url, underlying: error)
         }
         let source = file.processingFormat
-        guard let input = AVAudioPCMBuffer(pcmFormat: source, frameCapacity: AVAudioFrameCount(file.length)) else {
+        guard let frameCount = AVAudioFrameCount(exactly: file.length) else {
+            throw AudioClipError.fileTooLong(frames: file.length)
+        }
+        guard let input = AVAudioPCMBuffer(pcmFormat: source, frameCapacity: frameCount) else {
             throw AudioClipError.bufferAllocationFailed
         }
         // [LAW:dataflow-not-control-flow] exception: AVAudioFile refuses a zero-frame
@@ -75,6 +87,9 @@ extension AudioClip {
         guard let converter = AVAudioConverter(from: source, to: Self.format) else {
             throw AudioClipError.unconvertibleFormat(sampleRate: source.sampleRate, channels: source.channelCount)
         }
+        // Without this, extra source channels are discarded rather than mixed; the
+        // right-only fixture loads as silence.
+        converter.downmix = true
         guard let output = AVAudioPCMBuffer(pcmFormat: Self.format, frameCapacity: 16_384) else {
             throw AudioClipError.bufferAllocationFailed
         }
@@ -103,10 +118,9 @@ extension AudioClip {
                 samples.append(contentsOf: UnsafeBufferPointer(start: output.floatChannelData![0], count: Int(output.frameLength)))
                 if status == .endOfStream { break drain }
             case .error:
-                // [LAW:no-silent-failure] A conversion error with no NSError attached is still an error.
-                throw conversionError ?? AudioClipError.unconvertibleFormat(sampleRate: source.sampleRate, channels: source.channelCount)
+                throw AudioClipError.conversionFailed(status: status, underlying: conversionError)
             @unknown default:
-                throw AudioClipError.unconvertibleFormat(sampleRate: source.sampleRate, channels: source.channelCount)
+                throw AudioClipError.conversionFailed(status: status, underlying: conversionError)
             }
         }
         self.init(samples: samples)
