@@ -114,6 +114,17 @@ import Testing
         #expect(try manifest.faults(in: scratch.folder) == [.init(path: "AudioEncoder.mlmodelc/weights/weight.bin", kind: .wrongSize(expected: 10, actual: 4))])
     }
 
+    /// A folder standing where a file belongs has no size, so it is wrong-sized and
+    /// the repair removes it rather than leaving the hub client to trust it.
+    @Test func folderInAFilesPlaceIsAWrongSizeFault() throws {
+        let scratch = try Scratch(files: Self.files)
+        let manifest = try Manifest(recording: scratch.folder, relativeTo: scratch.root)
+        let weights = scratch.folder.appending(path: "AudioEncoder.mlmodelc/weights/weight.bin")
+        try FileManager.default.removeItem(at: weights)
+        try FileManager.default.createDirectory(at: weights, withIntermediateDirectories: false)
+        #expect(try manifest.faults(in: scratch.folder) == [.init(path: "AudioEncoder.mlmodelc/weights/weight.bin", kind: .wrongSize(expected: 10, actual: 0))])
+    }
+
     /// A file this process may not reach is not a missing file: a download would
     /// not repair it, so the trouble is reported as itself.
     @Test func unreachableFileIsAnErrorNotAFault() throws {
@@ -160,6 +171,20 @@ import Testing
         }
         #expect(faults == [.init(path: "config.json", kind: .missing)])
         #expect(try presence.evictions.isEmpty, "a file that is already gone needs no eviction")
+    }
+
+    /// A folder this process may not search is not damage a download would repair,
+    /// so the store passes the trouble up instead of folding it into `.damaged`.
+    @Test func storeThatCannotBeSearchedThrowsRatherThanReadingDamaged() throws {
+        let scratch = try Scratch(files: Self.files)
+        let store = ModelStore(directory: scratch.root)
+        try Manifest(recording: scratch.folder, relativeTo: scratch.root).write(to: scratch.manifestURL)
+        let weights = scratch.folder.appending(path: "AudioEncoder.mlmodelc/weights")
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: weights.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: weights.path) }
+        #expect(throws: CocoaError.self) {
+            try store.presence(of: "test")
+        }
     }
 
     /// The hub client never re-fetches a file that exists, so a repair must start by
@@ -233,7 +258,7 @@ import Testing
 
     /// The app's launch load and the CLI's `model download` share one store: the
     /// second installer waits for the first, then finds its work already done.
-    @Test func installWaitsForAnotherInstallerAndTakesItsResult() async throws {
+    @Test(.timeLimit(.minutes(1))) func installWaitsForAnotherInstallerAndTakesItsResult() async throws {
         let scratch = try Scratch(files: Self.files)
         try Manifest(recording: scratch.folder, relativeTo: scratch.root).write(to: scratch.manifestURL)
         let lock = scratch.root.appending(components: "installed", ".lock")
@@ -242,17 +267,22 @@ import Testing
         defer { close(descriptor) }
         try #require(flock(descriptor, LOCK_EX) == 0)
 
-        let phases = Mutex<[ModelStore.InstallPhase]>([])
+        // [LAW:no-ambient-temporal-coupling] The install reports its phases into the
+        // stream and finishes it when it returns, so the test advances on what the
+        // install says, and an install that never reports the wait ends the stream.
+        let (phases, report) = AsyncStream.makeStream(of: ModelStore.InstallPhase.self)
         let store = ModelStore(directory: scratch.root)
-        let installing = Task { try await store.install("test") { phase in phases.withLock { $0.append(phase) } } }
-        while !phases.withLock({ $0.contains(.waitingForAnotherInstall) }) {
-            try await Task.sleep(for: .milliseconds(10))
+        let installing = Task {
+            defer { report.finish() }
+            return try await store.install("test") { report.yield($0) }
         }
+        var reported = phases.makeAsyncIterator()
+        try #require(await reported.next() == .waitingForAnotherInstall, "the second installer reports the wait before anything else")
         try #require(flock(descriptor, LOCK_UN) == 0)
 
         let installed = try await installing.value
         #expect(installed.model == "test")
-        #expect(phases.withLock { $0 } == [.waitingForAnotherInstall], "an installed model is taken as found, with no download")
+        #expect(await reported.next() == nil, "an installed model is taken as found, with no download")
     }
 
     /// An installed model costs nothing to install again.
