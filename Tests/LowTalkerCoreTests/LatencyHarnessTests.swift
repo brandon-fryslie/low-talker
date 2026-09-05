@@ -88,15 +88,17 @@ private final class CaseSensitiveVolume {
 
     @Test func twoSpellingsOfOneClipAreRefused() throws {
         let volume = try CaseSensitiveVolume()
-        let bench = try BenchDirectory(under: volume.mountPoint)
-        try bench.add("echo", text: "Echo.")
-        try BenchDirectory.tone.write(to: bench.url.appending(path: "echo.WAV"))
-        do {
-            _ = try Fixture.load(directory: bench.url)
-            Issue.record("two spellings of one clip loaded as a fixture")
-        } catch FixtureError.twoOfAKind(let name, let first, let second) {
-            #expect(name == "echo")
-            #expect(Set([first.lastPathComponent, second.lastPathComponent]) == ["echo.wav", "echo.WAV"])
+        try withExtendedLifetime(volume) {
+            let bench = try BenchDirectory(under: volume.mountPoint)
+            try bench.add("echo", text: "Echo.")
+            try BenchDirectory.tone.write(to: bench.url.appending(path: "echo.WAV"))
+            do {
+                _ = try Fixture.load(directory: bench.url)
+                Issue.record("two spellings of one clip loaded as a fixture")
+            } catch FixtureError.twoOfAKind(let name, let first, let second) {
+                #expect(name == "echo")
+                #expect(Set([first.lastPathComponent, second.lastPathComponent]) == ["echo.wav", "echo.WAV"])
+            }
         }
     }
 
@@ -121,6 +123,17 @@ private final class CaseSensitiveVolume {
         try bench.add("blank", text: " ... ")
         #expect(throws: FixtureError.referenceSaysNothing(name: "blank")) {
             try Fixture.load(directory: bench.url)
+        }
+    }
+
+    /// A directory the walk cannot list is its own error, not an empty set.
+    @Test func aDirectoryThatCannotBeListedIsAnError() throws {
+        let gone = FileManager.default.temporaryDirectory.appending(path: "lowtalker-bench-gone-\(UUID().uuidString)")
+        do {
+            _ = try Fixture.load(directory: gone)
+            Issue.record("a missing directory loaded as a fixture set")
+        } catch FixtureError.unreadable(let url, _) {
+            #expect(url.standardizedFileURL.path == gone.standardizedFileURL.path)
         }
     }
 
