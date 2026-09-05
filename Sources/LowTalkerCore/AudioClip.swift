@@ -27,9 +27,11 @@ public struct AudioClip: Sendable, Equatable {
 public enum AudioClipError: Error, CustomStringConvertible {
     /// AVFoundation could not open the file; the CoreAudio error is attached.
     case unreadable(URL, underlying: any Error)
+    /// AVFoundation could not create or fill the file; the CoreAudio error is attached.
+    case unwritable(URL, underlying: any Error)
     /// More frames than a single AVFoundation buffer can hold.
-    case fileTooLong(frames: Int64)
-    /// AVFoundation has no conversion path from the file's format to 16 kHz mono.
+    case tooLong(frames: Int64)
+    /// AVFoundation has no conversion path from the source format to 16 kHz mono.
     case unconvertibleFormat(sampleRate: Double, channels: UInt32)
     /// The converter accepted the format pair but failed mid-stream; AVFoundation may
     /// or may not attach a reason.
@@ -40,8 +42,10 @@ public enum AudioClipError: Error, CustomStringConvertible {
         switch self {
         case .unreadable(let url, let underlying):
             "cannot read audio file \(url.path): \(underlying)"
-        case .fileTooLong(let frames):
-            "audio file has \(frames) frames; at most \(AVAudioFrameCount.max) can be loaded"
+        case .unwritable(let url, let underlying):
+            "cannot write audio file \(url.path): \(underlying)"
+        case .tooLong(let frames):
+            "\(frames) frames; a single audio buffer holds at most \(AVAudioFrameCount.max)"
         case .unconvertibleFormat(let sampleRate, let channels):
             "no conversion from \(sampleRate) Hz, \(channels) channel(s) to \(AudioClip.sampleRate) Hz mono"
         case .conversionFailed(let underlying):
@@ -73,7 +77,7 @@ extension AudioClip {
         }
         let source = file.processingFormat
         guard let frameCount = AVAudioFrameCount(exactly: file.length) else {
-            throw AudioClipError.fileTooLong(frames: file.length)
+            throw AudioClipError.tooLong(frames: file.length)
         }
         guard let input = AVAudioPCMBuffer(pcmFormat: source, frameCapacity: frameCount) else {
             throw AudioClipError.bufferAllocationFailed
@@ -88,46 +92,38 @@ extension AudioClip {
                 throw AudioClipError.unreadable(url, underlying: error)
             }
         }
+        let converter = try Converter(from: source)
+        self.init(samples: try converter.convert(input) + converter.drain())
+    }
 
-        guard let converter = AVAudioConverter(from: source, to: Self.format) else {
-            throw AudioClipError.unconvertibleFormat(sampleRate: source.sampleRate, channels: source.channelCount)
+    /// Write as a 16-bit PCM wav at the pipeline rate, the encoding every player and
+    /// engine loader accepts. The inverse of `init(contentsOf:)` up to 16-bit rounding.
+    public func write(to url: URL) throws {
+        guard let frameCount = AVAudioFrameCount(exactly: samples.count) else {
+            throw AudioClipError.tooLong(frames: Int64(samples.count))
         }
-        // Without this, extra source channels are discarded rather than mixed; the
-        // right-only fixture loads as silence.
-        converter.downmix = true
-        guard let output = AVAudioPCMBuffer(pcmFormat: Self.format, frameCapacity: 16_384) else {
+        // A zero-capacity buffer allocates no channel memory and its channel pointer
+        // is NULL; one spare frame keeps the pointer valid when the clip is empty.
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: Self.format, frameCapacity: max(frameCount, 1)) else {
             throw AudioClipError.bufferAllocationFailed
         }
+        // Standard float format guarantees channel data; channel 0 is the only channel.
+        _ = UnsafeMutableBufferPointer(start: buffer.floatChannelData![0], count: samples.count).update(fromContentsOf: samples)
+        buffer.frameLength = frameCount
 
-        var samples: [Float] = []
-        samples.reserveCapacity(Int(Double(input.frameLength) * Self.sampleRate / source.sampleRate) + 1)
-        // The block hands the buffer over exactly once, then reports end of stream while
-        // the converter drains its resampler tail; `.endOfStream` is the only exit.
-        // [LAW:no-shared-mutable-globals] exception: the SDK types the block @Sendable,
-        // but `convert` calls it synchronously on this thread, so nothing is shared. A
-        // Mutex would satisfy the annotation only where AVAudioFormat is Sendable
-        // (macOS 26 SDK); on the macOS 15 SDK the buffer shares a region with the
-        // converter and cannot be sent into one.
-        nonisolated(unsafe) var pending: AVAudioPCMBuffer? = input
-        drain: while true {
-            var conversionError: NSError?
-            let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
-                let next = pending
-                pending = nil
-                inputStatus.pointee = next == nil ? .endOfStream : .haveData
-                return next
-            }
-            switch status {
-            case .haveData, .inputRanDry, .endOfStream:
-                // Standard float format guarantees channel data; channel 0 is the only channel.
-                samples.append(contentsOf: UnsafeBufferPointer(start: output.floatChannelData![0], count: Int(output.frameLength)))
-                if status == .endOfStream { break drain }
-            case .error:
-                throw AudioClipError.conversionFailed(underlying: conversionError)
-            @unknown default:
-                throw AudioClipError.conversionFailed(underlying: conversionError)
-            }
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: Self.sampleRate,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+        ]
+        do {
+            let file = try AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+            try file.write(from: buffer)
+            file.close()
+        } catch {
+            throw AudioClipError.unwritable(url, underlying: error)
         }
-        self.init(samples: samples)
     }
 }
