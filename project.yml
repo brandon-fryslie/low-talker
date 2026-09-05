@@ -1,0 +1,35 @@
+# The Xcode project is generated from this file; LowTalker.xcodeproj is gitignored.
+# [LAW:one-source-of-truth] Every build setting the app needs lives here, including
+# the Info.plist keys, so there is no second file to hand-edit or review.
+name: LowTalker
+
+options:
+  deploymentTarget:
+    macOS: "15.0"
+
+packages:
+  # [LAW:one-way-deps] The app links the SwiftPM package at the repo root; the
+  # package knows nothing of the app.
+  low-talker:
+    path: .
+
+targets:
+  LowTalker:
+    type: application
+    platform: macOS
+    sources:
+      - App/LowTalker
+    dependencies:
+      - package: low-talker
+        product: LowTalkerCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ltd.deadgrass.low-talker
+        SWIFT_VERSION: "6.0"
+        # No checked-in Info.plist: Xcode synthesises one from these keys.
+        GENERATE_INFOPLIST_FILE: true
+        INFOPLIST_KEY_LSUIElement: true
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: low-talker listens to your microphone while you hold the dictation key so it can turn what you say into text. Audio never leaves this Mac.
+        # Ad hoc signing until low-scaffold-yc7.3 settles the stable dev identity.
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
