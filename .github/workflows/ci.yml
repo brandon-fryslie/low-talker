@@ -1,0 +1,64 @@
+# Builds and tests every pull request to master, and master itself after a merge,
+# so the merge rule has a check to gate on.
+#
+# [LAW:one-source-of-truth] The build recipe lives in the Makefile. This file only
+# provisions a runner and calls the same targets a developer runs; if a step here
+# ever spells out swift or xcodebuild directly, it has grown a second recipe.
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+# A new push to a PR supersedes the run for the SHA it replaced.
+concurrency:
+  group: ci-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test
+    # macos-15 ships Xcode 16.4 as its default, which carries the Swift 6 toolchain
+    # Package.swift asks for; jq is preinstalled, xcodegen is not.
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      # SHA-pinned, same pin and same reasoning as code-review.yml: third-party code
+      # fetched on every run, including fork PRs, so a moving tag is not acceptable.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      # `make signing-identity` imports into the default keychain, and xcodebuild finds
+      # the identity through the keychain search list. The runner's login keychain has
+      # a password this job does not know, so it cannot be unlocked or given a key
+      # partition list; a throwaway keychain with a known password can. The password
+      # protects nothing: the keychain holds one self-signed key and dies with the VM.
+      # [LAW:dataflow-not-control-flow] The script is unchanged; only which keychain
+      # is "default" differs between a developer's Mac and this runner.
+      - name: Create an unlocked default keychain
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/ci.keychain-db"
+          security create-keychain -p ci "$keychain"
+          security set-keychain-settings "$keychain"
+          security unlock-keychain -p ci "$keychain"
+          security default-keychain -s "$keychain"
+          security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
+
+      - name: Create the dev signing identity
+        run: make signing-identity
+
+      - name: Build and test the package
+        run: make test
+
+      - name: Build the app
+        run: make app
