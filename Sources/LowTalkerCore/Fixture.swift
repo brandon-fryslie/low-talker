@@ -5,7 +5,8 @@ import Foundation
 /// `<name>.txt`.
 ///
 /// [LAW:parse-dont-validate] The checkpoint for scoring: a fixture in hand has a
-/// reference with at least one word, so every rate computed over it is a number.
+/// reference with at least one word, so every rate computed over it is a number,
+/// and a clip with at least one sample, so every hold of it is a hold of something.
 public struct Fixture: Sendable {
     public let name: String
     public let clip: AudioClip
@@ -14,6 +15,7 @@ public struct Fixture: Sendable {
     public init(name: String, clip: AudioClip, reference text: String) throws {
         let reference = SpokenWords(text)
         guard !reference.words.isEmpty else { throw FixtureError.referenceSaysNothing(name: name) }
+        guard !clip.samples.isEmpty else { throw FixtureError.clipIsEmpty(name: name) }
         self.name = name
         self.clip = clip
         self.reference = reference
@@ -69,6 +71,8 @@ public enum FixtureError: Error, Equatable, CustomStringConvertible {
     case twoOfAKind(name: String, first: URL, second: URL)
     /// The reference text has no words to score against.
     case referenceSaysNothing(name: String)
+    /// The wav decoded to no samples, so there is nothing to hold.
+    case clipIsEmpty(name: String)
 
     public var description: String {
         switch self {
@@ -82,6 +86,8 @@ public enum FixtureError: Error, Equatable, CustomStringConvertible {
             "fixture \(name) has two files for one slot: \(first.lastPathComponent) and \(second.lastPathComponent)"
         case .referenceSaysNothing(let name):
             "fixture \(name)'s reference text has no words"
+        case .clipIsEmpty(let name):
+            "fixture \(name)'s wav has no samples"
         }
     }
 }
