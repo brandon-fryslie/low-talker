@@ -58,7 +58,6 @@ public struct PasteMenuItem: PasteReceiver {
     private let app: AXUIElement
     private let item: AXUIElement
     private let bundleID: String?
-    private static let validationPoll: Duration = .milliseconds(50)
 
     /// Finds the item bound to plain Cmd+V in the app's menu bar, breadth first, so the
     /// Edit menu's item is found before any submenu is walked.
@@ -94,11 +93,10 @@ public struct PasteMenuItem: PasteReceiver {
         // just now, so a disabled reading may be older than it; the next pass settles
         // that. [LAW:single-enforcer] Only the app says whether its paste can run; an
         // app that does not say is pressed.
-        let settled = ContinuousClock.now + Self.menuValidationPeriod + Self.validationPoll
-        while try read(item, kAXEnabledAttribute) as? Bool == false {
-            guard ContinuousClock.now < settled else { throw PasteError.pasteDisabled(bundleID: bundleID) }
-            try await Task.sleep(for: Self.validationPoll)
+        let enabled = try await holds(within: Self.menuValidationPeriod, askingEvery: .milliseconds(50)) {
+            try read(item, kAXEnabledAttribute) as? Bool != false
         }
+        guard enabled else { throw PasteError.pasteDisabled(bundleID: bundleID) }
         let sent = AXUIElementPerformAction(item, kAXPressAction as CFString)
         guard sent == .success else { throw PasteError.accessibility(sent) }
         // The press returns once sent, not once run; this answer comes after the run.

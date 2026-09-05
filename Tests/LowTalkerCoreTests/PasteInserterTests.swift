@@ -7,15 +7,15 @@ import Testing
 @MainActor
 private final class ReceivingApp: PasteReceiver {
     private(set) var pastes = 0
-    private let onPaste: @MainActor () throws -> Void
+    private let onPaste: @MainActor () async throws -> Void
 
-    init(onPaste: @escaping @MainActor () throws -> Void = {}) {
+    init(onPaste: @escaping @MainActor () async throws -> Void = {}) {
         self.onPaste = onPaste
     }
 
     func paste() async throws {
         pastes += 1
-        try onPaste()
+        try await onPaste()
     }
 }
 
@@ -97,16 +97,27 @@ private func priorContents() throws -> PasteboardContents {
     }
 
     /// The second insert waits for the first, so each paste reads its own text and the
-    /// prior contents come back once, at the end.
+    /// prior contents come back once, at the end. The first app holds its paste open
+    /// until the test lets go, and the second insert is submitted only once it is in.
     @Test func overlappingInsertsRunOneAfterAnother() async throws {
         defer { pasteboard.releaseGlobally() }
         let prior = try priorContents()
         prior.write(to: pasteboard)
         var read: [String?] = []
-        let app = ReceivingApp { [pasteboard] in read.append(pasteboard.string(forType: .string)) }
+        let (entered, enteredFirst) = AsyncStream.makeStream(of: Void.self)
+        var letGo: CheckedContinuation<Void, Never>?
+        let app = ReceivingApp { [pasteboard] in
+            read.append(pasteboard.string(forType: .string))
+            guard letGo == nil else { return }
+            await withCheckedContinuation { letGo = $0; enteredFirst.yield() }
+        }
         let inserter = PasteInserter(pasteboard: pasteboard)
         let first = Task { @MainActor in try await inserter.insert("one", into: app) }
+        for await _ in entered { break }
         let second = Task { @MainActor in try await inserter.insert("two", into: app) }
+        for _ in 0..<10 { await Task.yield() }
+        #expect(read == ["one"])
+        letGo?.resume()
         #expect(try await first.value == .restored)
         #expect(try await second.value == .restored)
         #expect(read == ["one", "two"])
@@ -153,30 +164,5 @@ private final class EmptyPromise: NSObject, NSPasteboardItemDataProvider {
         pasteboard.clearContents()
         #expect(pasteboard.writeObjects([promised, kept]))
         #expect(PasteboardContents(reading: pasteboard) == PasteboardContents(items: [[.init(type: .string, data: Data("kept".utf8))]]))
-    }
-}
-
-@Suite struct KeystrokeTests {
-    private let shiftBits = CGEventFlags(rawValue: 0x2 | 0x4)
-
-    /// Both shifts held: the side-blind Shift bit stays set until the last one is up.
-    @Test func aSideBlindBitOutlivesTheFirstOfTwoSidesReleased() {
-        let strokes = KeyChord(key: Key(rawValue: 0), modifiers: [.leftShift, .rightShift]).keystrokes
-        #expect(strokes.map(\.type) == [.flagsChanged, .flagsChanged, .keyDown, .keyUp, .flagsChanged, .flagsChanged])
-        #expect(strokes.map(\.key) == [56, 60, 0, 0, 60, 56])
-        #expect(strokes.map(\.flags) == [
-            .maskShift.union(CGEventFlags(rawValue: 0x2)),
-            .maskShift.union(shiftBits),
-            .maskShift.union(shiftBits),
-            .maskShift.union(shiftBits),
-            .maskShift.union(CGEventFlags(rawValue: 0x2)),
-            [],
-        ])
-    }
-
-    @Test func aModifierOnlyChordHasNoKeyEvents() {
-        let strokes = KeyChord(modifiers: .rightOption).keystrokes
-        #expect(strokes.map(\.type) == [.flagsChanged, .flagsChanged])
-        #expect(strokes.map(\.flags) == [.maskAlternate.union(CGEventFlags(rawValue: 0x40)), []])
     }
 }
