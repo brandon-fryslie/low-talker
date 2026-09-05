@@ -18,6 +18,7 @@ struct TranscribeCommand: AsyncParsableCommand {
     var file: URL
 
     @OptionGroup var options: ModelOptions
+    @OptionGroup var expected: VocabularyOptions
 
     func run() async throws {
         let clip = try AudioClip(contentsOf: file)
@@ -28,7 +29,7 @@ struct TranscribeCommand: AsyncParsableCommand {
         let transcriber = try await WhisperKitTranscriber.load(options.model, from: options.store(), phase: reporter.report)
         let loaded = clock.now
 
-        let transcript = try await transcriber.transcribe(clip)
+        let transcript = try await transcriber.transcribe(clip, expecting: expected.vocabulary)
         let transcribed = clock.now
 
         var stderr = StandardError()

@@ -10,7 +10,9 @@ import Synchronization
 /// engine hears during the hold and key-up finalizes the tail. Each fixture is
 /// held once and then `reruns` more times, so a median shrugs off a stray pause
 /// while the first hold stays apart: after warm-load at launch, the first
-/// dictation of a session pays it.
+/// dictation of a session pays it. Every hold tells the engine the same
+/// vocabulary, so a run measures what a mode's vocabulary does to hearing, on
+/// the fixtures that say its terms and on the ones that do not.
 ///
 /// [LAW:effects-at-boundaries] The clock ticks here and nowhere below; scoring is
 /// `WordErrorRate`, a pure function, and the engine arrives as a closure so this
@@ -36,6 +38,7 @@ public enum LatencyHarness {
         _ fixtures: [Fixture],
         deliveries: [Delivery],
         reruns: UInt,
+        expecting vocabulary: Vocabulary,
         load: () async throws -> any Transcriber
     ) async throws -> LatencyReport {
         let clock = ContinuousClock()
@@ -46,12 +49,12 @@ public enum LatencyHarness {
         for fixture in fixtures {
             for delivery in deliveries {
                 let chunks = fixture.clip.chunks(of: delivery.chunk(of: fixture.clip))
-                let (first, firstTranscript) = try await hold(chunks, with: transcriber, clock: clock)
+                let (first, firstTranscript) = try await hold(chunks, with: transcriber, expecting: vocabulary, clock: clock)
                 var transcript = firstTranscript
                 var later: [LatencyReport.Run] = []
                 for _ in 0..<reruns {
                     let run: LatencyReport.Run
-                    (run, transcript) = try await hold(chunks, with: transcriber, clock: clock)
+                    (run, transcript) = try await hold(chunks, with: transcriber, expecting: vocabulary, clock: clock)
                     later.append(run)
                 }
                 results.append(LatencyReport.FixtureResult(
@@ -73,12 +76,13 @@ public enum LatencyHarness {
     private static func hold(
         _ chunks: [AudioClip],
         with transcriber: any Transcriber,
+        expecting vocabulary: Vocabulary,
         clock: ContinuousClock
     ) async throws -> (LatencyReport.Run, Transcript) {
         let (audio, feed) = AsyncStream<AudioClip>.makeStream()
         let firstText = Mutex<ContinuousClock.Instant?>(nil)
         let start = clock.now
-        async let transcript = transcriber.transcribe(audio) { partial in
+        async let transcript = transcriber.transcribe(audio, expecting: vocabulary) { partial in
             // A pass over leading quiet reads nothing; the text shown is the first
             // partial with words in it.
             let shown: ContinuousClock.Instant? = partial.text.isEmpty ? nil : clock.now
