@@ -29,10 +29,7 @@ struct PasteCommand: AsyncParsableCommand {
         try await Task.sleep(for: .seconds(delay))
         guard let app = NSWorkspace.shared.frontmostApplication else { throw NoFrontmostApp() }
         let outcome = try await PasteInserter().insert(text, into: PasteMenuItem(of: app))
-        switch outcome {
-        case .restored: print("pasted into \(app.bundleIdentifier ?? "the frontmost app"), pasteboard restored")
-        case .pasteboardTaken: print("pasted into \(app.bundleIdentifier ?? "the frontmost app"), pasteboard left to whoever took it")
-        }
+        print("pasted into \(app.bundleIdentifier ?? "the frontmost app"), pasteboard \(outcome)")
     }
 }
 

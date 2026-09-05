@@ -73,9 +73,11 @@ private func priorContents() throws -> PasteboardContents {
         let prior = try priorContents()
         prior.write(to: pasteboard)
         let app = ReceivingApp { throw PasteError.noPasteMenuItem(bundleID: "com.example.menuless") }
-        await #expect(throws: PasteError.noPasteMenuItem(bundleID: "com.example.menuless")) {
+        let failed = try await #require(throws: InsertionFailed.self) {
             try await PasteInserter(pasteboard: pasteboard).insert("hello", into: app)
         }
+        #expect(failed.reason as? PasteError == .noPasteMenuItem(bundleID: "com.example.menuless"))
+        #expect(failed.pasteboard == .restored)
         #expect(PasteboardContents(reading: pasteboard) == prior)
     }
 

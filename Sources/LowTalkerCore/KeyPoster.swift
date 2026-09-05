@@ -4,8 +4,9 @@ import CoreGraphics
 /// it, whatever it is.
 ///
 /// [LAW:effects-at-boundaries] Posting an event is an effect against the window
-/// server and needs Accessibility. It sits behind this seam so a SendKeys action runs
-/// in tests against an app the test plays.
+/// server and needs Accessibility. It sits behind this seam so the SendKeys action
+/// can run in tests against an app the test plays; nothing posts through it until the
+/// pipeline runs actions.
 @MainActor
 public protocol KeyPoster {
     func post(_ chord: KeyChord)

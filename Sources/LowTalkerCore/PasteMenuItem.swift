@@ -12,19 +12,31 @@ public protocol PasteReceiver: Sendable {
     func paste() throws
 }
 
-/// Why an app could not be asked to paste.
+/// Why an app could not be asked to paste, or did not say that it had.
 public enum PasteError: Error, Hashable, CustomStringConvertible {
     /// No menu item is bound to plain Cmd+V, so the app has no paste to press.
     case noPasteMenuItem(bundleID: String?)
-    /// Accessibility refused: this process is not trusted, or the app did not answer.
+    /// The app last validated its Paste item as disabled, and a press would do nothing.
+    case pasteDisabled(bundleID: String?)
+    /// Accessibility refused before the press: this process is not trusted, or the app
+    /// did not answer.
     case accessibility(AXError)
+    /// The app took the press but did not answer afterward, so whether it pasted is
+    /// unknown; the press cannot be taken back.
+    case unanswered(AXError)
 
     public var description: String {
         switch self {
         case .noPasteMenuItem(let bundleID):
             "\(bundleID ?? "the frontmost app") has no menu item bound to Cmd+V, so it cannot be asked to paste"
+        case .pasteDisabled(let bundleID):
+            "\(bundleID ?? "the frontmost app") has its Paste menu item disabled, so pressing it would do nothing"
+        case .accessibility(.apiDisabled):
+            "Accessibility is off for the calling process; grant it in System Settings > Privacy & Security > Accessibility"
         case .accessibility(let error):
-            "Accessibility call failed (AXError \(error.rawValue)); the calling process needs Accessibility in System Settings > Privacy & Security"
+            "Accessibility call failed (AXError \(error.rawValue)) before the paste was pressed"
+        case .unanswered(let error):
+            "the app took the paste but did not answer afterward (AXError \(error.rawValue)); it may or may not have pasted"
         }
     }
 }
@@ -37,41 +49,50 @@ public enum PasteError: Error, Hashable, CustomStringConvertible {
 /// handles in order with every other Accessibility message, so whatever it answers
 /// next, it answers after the paste has run.
 ///
-/// [LAW:parse-dont-validate] Making one is the check that the app can paste; holding
-/// one is the proof.
+/// [LAW:parse-dont-validate] Making one is the check that the app has a paste to
+/// press; holding one is the proof. Whether the app will act on a press is its own
+/// word at press time.
 @MainActor
 public struct PasteMenuItem: PasteReceiver {
     private let app: AXUIElement
     private let item: AXUIElement
+    private let bundleID: String?
 
     /// Finds the item bound to plain Cmd+V in the app's menu bar, breadth first, so the
     /// Edit menu's item is found before any submenu is walked.
     public init(of app: NSRunningApplication) throws {
+        bundleID = app.bundleIdentifier
         self.app = AXUIElementCreateApplication(app.processIdentifier)
-        guard let bar = try read(self.app, kAXMenuBarAttribute) else {
-            throw PasteError.noPasteMenuItem(bundleID: app.bundleIdentifier)
-        }
-        var queue = try children(of: bar as! AXUIElement)
-        var next = queue.startIndex
-        while next < queue.endIndex {
-            let element = queue[next]
-            next += 1
-            if try read(element, kAXMenuItemCmdCharAttribute) as? String == "V",
-               try read(element, kAXMenuItemCmdModifiersAttribute) as? Int == 0 {
-                item = element
-                return
-            }
-            queue += try children(of: element)
-        }
-        throw PasteError.noPasteMenuItem(bundleID: app.bundleIdentifier)
+        guard let bar = element(try read(self.app, kAXMenuBarAttribute)),
+              let found = try breadthFirst(from: children(of: bar), children: children(of:), where: isBoundToPlainCmdV)
+        else { throw PasteError.noPasteMenuItem(bundleID: bundleID) }
+        item = found
     }
 
+    /// [LAW:no-ambient-temporal-coupling] Accessibility owns the wait: each call gives
+    /// up after its messaging timeout (1.5 s by default), so an app that has hung
+    /// costs that much and then fails the call, never longer.
     public func paste() throws {
+        // The app validates its menu on its own event cycle, and a press keeps to that
+        // last word: pressing an item validated disabled returns success and does nothing.
+        // [LAW:single-enforcer] Only the app says whether its paste can run; an app
+        // that does not say is pressed.
+        guard try read(item, kAXEnabledAttribute) as? Bool != false else {
+            throw PasteError.pasteDisabled(bundleID: bundleID)
+        }
         let sent = AXUIElementPerformAction(item, kAXPressAction as CFString)
         guard sent == .success else { throw PasteError.accessibility(sent) }
         // The press returns once sent, not once run; this answer comes after the run.
-        _ = try read(app, kAXRoleAttribute)
+        var role: CFTypeRef?
+        let answered = AXUIElementCopyAttributeValue(app, kAXRoleAttribute as CFString, &role)
+        guard answered == .success else { throw PasteError.unanswered(answered) }
     }
+}
+
+/// Bound to V with an empty modifier mask, which to a menu item means Cmd alone.
+private func isBoundToPlainCmdV(_ element: AXUIElement) throws -> Bool {
+    try read(element, kAXMenuItemCmdCharAttribute) as? String == "V"
+        && read(element, kAXMenuItemCmdModifiersAttribute) as? Int == 0
 }
 
 /// An attribute's value: nil when the element has none, thrown when Accessibility
@@ -87,4 +108,11 @@ private func read(_ element: AXUIElement, _ attribute: String) throws -> CFTypeR
 
 private func children(of element: AXUIElement) throws -> [AXUIElement] {
     try read(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
+}
+
+/// The value as an element, when the app answered with one. A CoreFoundation value
+/// admits no cast check, so its type id is the check.
+private func element(_ value: CFTypeRef?) -> AXUIElement? {
+    guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+    return (value as! AXUIElement)
 }

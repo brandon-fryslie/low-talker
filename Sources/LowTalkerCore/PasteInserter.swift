@@ -24,7 +24,8 @@ public final class PasteInserter {
 
     /// Pastes `text` through `receiver` and puts the prior contents back, unless
     /// something else took the pasteboard meanwhile, in which case that stays. The
-    /// prior contents go back whether or not the receiver managed to paste.
+    /// prior contents go back whether or not the receiver managed to paste; when it
+    /// did not, the thrown `InsertionFailed` says where the pasteboard was left.
     public func insert(_ text: String, into receiver: some PasteReceiver) async throws -> PasteOutcome {
         try await oneAtATime.run { @MainActor in try self.paste(text, into: receiver) }
     }
@@ -39,7 +40,7 @@ public final class PasteInserter {
         // paste is reported after the pasteboard is back.
         let pasted = Result { try receiver.paste() }
         let outcome = restore(prior, unlessTakenSince: ours)
-        try pasted.get()
+        if case .failure(let reason) = pasted { throw InsertionFailed(reason: reason, pasteboard: outcome) }
         return outcome
     }
 
@@ -63,9 +64,28 @@ public final class PasteInserter {
 }
 
 /// Where a paste left the pasteboard.
-public enum PasteOutcome: Hashable, Sendable {
+public enum PasteOutcome: Hashable, Sendable, CustomStringConvertible {
     /// Holding what it held before.
     case restored
     /// Holding what something else put there during the paste; that is left alone.
     case pasteboardTaken
+
+    public var description: String {
+        switch self {
+        case .restored: "restored"
+        case .pasteboardTaken: "left to whoever took it"
+        }
+    }
+}
+
+/// The receiver did not paste, or did not say that it had, and the pasteboard was
+/// dealt with all the same.
+///
+/// [LAW:types-are-the-program] A failed insert still leaves the pasteboard somewhere;
+/// the error carries where, so no caller has to guess.
+public struct InsertionFailed: Error, CustomStringConvertible {
+    public let reason: any Error
+    public let pasteboard: PasteOutcome
+
+    public var description: String { "\(reason); pasteboard \(pasteboard)" }
 }
