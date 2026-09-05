@@ -4,7 +4,7 @@ DERIVED_DATA := DerivedData
 CONFIGURATION := Debug
 APP := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/LowTalker.app
 
-.PHONY: app run test clean signing-identity
+.PHONY: app run test cli clean signing-identity
 
 # Regeneration is unconditional: xcodegen is idempotent and sub-second, and a
 # timestamp rule cannot see removed sources or in-place rewrites of the project.
@@ -20,6 +20,16 @@ run: app
 test:
 	swift build
 	swift test
+
+# The CLI for engine work. The Neural Engine keeps its compiled model per signing
+# identifier, and `swift build` links a fresh identifier into every binary, so a
+# plain `swift run` pays the minutes-long specialization after each rebuild. Signing
+# the built binary with a fixed identifier keeps the cache warm across rebuilds.
+CLI := .build/debug/lowtalker
+cli:
+	swift build --product lowtalker
+	codesign --force --sign - --identifier lowtalker "$(CLI)"
+	@echo "$(CLI)"
 
 # Once per Mac. Until it has run, `make app` stops with "No certificate matching".
 # [LAW:one-source-of-truth] project.yml owns the identity name; the lookup runs in the

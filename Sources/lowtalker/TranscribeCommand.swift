@@ -17,22 +17,22 @@ struct TranscribeCommand: AsyncParsableCommand {
     @Argument(help: "An audio file AVFoundation can read (wav, aiff, m4a, ...).", transform: URL.init(fileURLWithPath:))
     var file: URL
 
-    @Option(help: "A model folder name in the whisperkit-coreml repo, downloaded on first use.", transform: WhisperKitTranscriber.Model.init(rawValue:))
-    var model: WhisperKitTranscriber.Model = .default
+    @OptionGroup var options: ModelOptions
 
     func run() async throws {
         let clip = try AudioClip(contentsOf: file)
         let clock = ContinuousClock()
+        let reporter = PhaseReporter()
 
         let loadStart = clock.now
-        let transcriber = try await WhisperKitTranscriber(model: model)
+        let transcriber = try await WhisperKitTranscriber.load(options.model, from: options.store(), phase: reporter.report)
         let loaded = clock.now
 
         let transcript = try await transcriber.transcribe(clip)
         let transcribed = clock.now
 
         var stderr = StandardError()
-        print("model \(model): loaded in \(loaded - loadStart), transcribed \(fixed(clip.duration, places: 3)) s of audio in \(transcribed - loaded)", to: &stderr)
+        print("model \(options.model): loaded in \(loaded - loadStart), transcribed \(fixed(clip.duration, places: 3)) s of audio in \(transcribed - loaded)", to: &stderr)
 
         print(transcript.text)
         for word in transcript.words {
@@ -44,12 +44,5 @@ struct TranscribeCommand: AsyncParsableCommand {
     /// locale no machine setting can change, so the output diffs across machines.
     private func fixed(_ value: Double, places: Int) -> String {
         value.formatted(.number.precision(.fractionLength(places)).locale(Locale(identifier: "en_US_POSIX")))
-    }
-}
-
-/// `print(_:to:)` wants a TextOutputStream, and FileHandle is not one.
-private struct StandardError: TextOutputStream {
-    mutating func write(_ string: String) {
-        FileHandle.standardError.write(Data(string.utf8))
     }
 }
