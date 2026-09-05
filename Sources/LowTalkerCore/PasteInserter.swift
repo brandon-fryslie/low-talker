@@ -41,20 +41,30 @@ public final class PasteInserter {
         let prior = PasteboardContents(reading: pasteboard)
         let (landing, onLanding) = AsyncStream.makeStream(of: Void.self)
         let promise = TextPromise(text: text, landing: onLanding)
-        pasteboard.clearContents()
+        let ours = pasteboard.clearContents()
         guard pasteboard.writeObjects([promise.item()]) else {
-            try prior.write(to: pasteboard)
-            throw PasteboardError.writeRefused
+            _ = try restore(prior, unlessTakenSince: ours)
+            throw PasteError.textRefused
         }
-        let ours = pasteboard.changeCount
         keys.post(Self.pasteChord)
         let landed = await Self.awaitLanding(landing, within: landingTimeout)
-        // [LAW:one-source-of-truth] The change count is the pasteboard's own word on
-        // whether it still holds our text; the promise being withdrawn says the same
-        // thing earlier, but only this decides whether to write.
-        let restored = pasteboard.changeCount == ours
-        if restored { try prior.write(to: pasteboard) }
-        return PasteOutcome(landed: landed, restored: restored)
+        return PasteOutcome(landed: landed, restored: try restore(prior, unlessTakenSince: ours))
+    }
+
+    /// Puts the prior contents back, unless the pasteboard has changed hands since
+    /// `ours`, in which case whoever took it keeps it and this returns false.
+    ///
+    /// [LAW:single-enforcer] The change count is the pasteboard's own word on whether
+    /// it still holds our text; the promise being withdrawn says the same thing
+    /// earlier, but only this decides whether to write, for every path out of a paste.
+    private func restore(_ prior: PasteboardContents, unlessTakenSince ours: Int) throws -> Bool {
+        guard pasteboard.changeCount == ours else { return false }
+        do {
+            try prior.write(to: pasteboard)
+        } catch {
+            throw PasteError.priorContentsNotRestored(prior)
+        }
+        return true
     }
 
     /// True when the text was pulled before the timeout. The stream ending without an
@@ -75,6 +85,22 @@ public final class PasteInserter {
             let first = await group.next()!
             group.cancelAll()
             return first
+        }
+    }
+}
+
+public enum PasteError: Error, CustomStringConvertible {
+    /// The pasteboard refused the text. The prior contents are back, or with whoever
+    /// took the pasteboard meanwhile.
+    case textRefused
+    /// The pasteboard refused the prior contents after the paste. They are carried
+    /// here so the caller can put them back.
+    case priorContentsNotRestored(PasteboardContents)
+
+    public var description: String {
+        switch self {
+        case .textRefused: "the pasteboard refused the text to paste"
+        case .priorContentsNotRestored: "the pasteboard refused its prior contents back after the paste"
         }
     }
 }

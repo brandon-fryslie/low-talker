@@ -29,13 +29,14 @@ public struct PasteboardContents: Hashable, Sendable {
     }
 
     /// Reads every item now. A type whose owner promised data and cannot deliver it
-    /// (a stale promise, a file promise) has nothing to put back and is not kept.
+    /// (a stale promise, a file promise) has nothing to put back and is not kept, nor
+    /// is an item left with no type at all.
     public init(reading pasteboard: NSPasteboard) {
         items = (pasteboard.pasteboardItems ?? []).map { item in
             item.types.compactMap { type in
                 item.data(forType: type).map { Representation(type: type, data: $0) }
             }
-        }
+        }.filter { !$0.isEmpty }
     }
 
     /// Replaces the pasteboard's contents with these items.
