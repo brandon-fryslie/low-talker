@@ -3,16 +3,13 @@ import WhisperKit
 
 /// Whisper on the Neural Engine through WhisperKit, decoding a whole clip at once.
 ///
-/// [LAW:no-ambient-temporal-coupling] WhisperKit's pipeline must not be re-entered
-/// mid-decode, and actor isolation alone does not prevent that: an actor is
-/// reentrant at every `await`, and the decode is one. So the actor owns the order
-/// explicitly, as a chain of tasks: each call waits for the one before it to finish
-/// and only then decodes. Calls queue; they never overlap.
-public actor WhisperKitTranscriber: Transcriber {
+/// [LAW:no-shared-mutable-globals] WhisperKit's pipeline is a mutable class that must
+/// not be re-entered mid-decode. Every decode goes through one SerialQueue, so calls
+/// queue rather than overlap, and nothing else can reach the pipeline.
+public final class WhisperKitTranscriber: Transcriber {
     public let model: Model
     private let pipeline: Pipeline
-    /// The most recent call, finished or not. The next call awaits it before decoding.
-    private var previous: Task<Transcript, any Error>?
+    private let decodes = SerialQueue()
 
     /// Downloads the model into WhisperKit's cache on first use, then loads it onto
     /// the compute units. Returns only once the model is resident, so the first
@@ -23,15 +20,8 @@ public actor WhisperKitTranscriber: Transcriber {
     }
 
     public func transcribe(_ clip: AudioClip) async throws -> Transcript {
-        let earlier = previous
         let pipeline = pipeline
-        let task = Task {
-            // Only the order matters here; the earlier call's outcome went to its caller.
-            _ = await earlier?.result
-            return try await pipeline.transcribe(clip)
-        }
-        previous = task
-        return try await task.value
+        return try await decodes.run { try await pipeline.transcribe(clip) }
     }
 
     /// A model folder name in the whisperkit-coreml repo, such as `base.en` or
@@ -56,8 +46,8 @@ public actor WhisperKitTranscriber: Transcriber {
     }
 
     /// The loaded WhisperKit pipeline. `@unchecked Sendable` because WhisperKit is a
-    /// mutable class the compiler cannot vouch for; the actor's task chain is what
-    /// keeps every decode alone with it.
+    /// mutable class the compiler cannot vouch for; the SerialQueue is what keeps
+    /// every decode alone with it.
     private struct Pipeline: @unchecked Sendable {
         private let whisperKit: WhisperKit
 
