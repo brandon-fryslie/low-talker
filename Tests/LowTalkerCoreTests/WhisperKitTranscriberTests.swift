@@ -44,13 +44,21 @@ import WhisperKit
         #expect(word.time == 1.5...1.5)
     }
 
-    /// A segment without word timings means decoding ran without them; the mapping
-    /// refuses rather than inventing timings.
-    @Test func segmentWithoutWordTimingsIsRefused() {
-        let segment = TranscriptionSegment(text: " Hello", words: nil)
+    /// Speech with no words to carry it would vanish from the transcript, so the
+    /// mapping refuses it, whether the word list is missing or merely empty.
+    @Test(arguments: [nil, [WordTiming]()])
+    func speechWithoutWordTimingsIsRefused(words: [WordTiming]?) {
+        let segment = TranscriptionSegment(text: " Hello", words: words)
         #expect(throws: WhisperKitTranscriberError.self) {
             try Transcript(whisperKit: [segment])
         }
+    }
+
+    /// A segment that said nothing has nothing to lose; it contributes no words.
+    @Test(arguments: [nil, [WordTiming]()])
+    func silentSegmentWithoutWordTimingsIsNothingSaid(words: [WordTiming]?) throws {
+        let segment = TranscriptionSegment(text: " ", words: words)
+        #expect(try Transcript(whisperKit: [segment]).words.isEmpty)
     }
 
     @Test(arguments: [Float(1.01), Float(-0.01)])
