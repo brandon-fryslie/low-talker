@@ -1,13 +1,13 @@
+import AppKit
 import ArgumentParser
-import Foundation
 import LowTalkerCore
 
 /// Pastes text into whatever app is frontmost when the delay runs out, so the
 /// insertion path can be watched landing in TextEdit or Terminal before the app is
 /// wired, and the pasteboard checked afterward.
 ///
-/// Posting a key needs Accessibility for the posting process, which for this command
-/// is the terminal.
+/// Pressing another app's menu item needs Accessibility for this process, which for
+/// this command is the terminal.
 struct PasteCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "paste",
@@ -20,20 +20,22 @@ struct PasteCommand: AsyncParsableCommand {
     @Option(help: "Seconds to wait first, to bring the receiving app to the front.")
     var delay: Int = 0
 
-    // Whole milliseconds, for the same reason as `hotkey --tap-threshold`.
-    @Option(help: "Milliseconds to wait for the app to take the text before putting the pasteboard back.")
-    var landingTimeout: Int = Int(PasteInserter.defaultLandingTimeout / .milliseconds(1))
-
     func validate() throws {
         guard delay >= 0 else { throw ValidationError("--delay cannot be negative.") }
-        guard landingTimeout > 0 else { throw ValidationError("--landing-timeout must be positive.") }
     }
 
     @MainActor
     func run() async throws {
         try await Task.sleep(for: .seconds(delay))
-        let inserter = PasteInserter(landingTimeout: .milliseconds(landingTimeout))
-        let outcome = try await inserter.insert(text)
-        print("\(outcome.landed ? "landed" : "not taken"), pasteboard \(outcome.restored ? "restored" : "left to whoever took it")")
+        guard let app = NSWorkspace.shared.frontmostApplication else { throw NoFrontmostApp() }
+        let outcome = try await PasteInserter().insert(text, into: PasteMenuItem(of: app))
+        switch outcome {
+        case .restored: print("pasted into \(app.bundleIdentifier ?? "the frontmost app"), pasteboard restored")
+        case .pasteboardTaken: print("pasted into \(app.bundleIdentifier ?? "the frontmost app"), pasteboard left to whoever took it")
+        }
     }
+}
+
+struct NoFrontmostApp: Error, CustomStringConvertible {
+    var description: String { "no app is frontmost; nothing can receive a paste" }
 }
