@@ -1,0 +1,13 @@
+#!/bin/bash
+# Renders bench/say/<name>.wav from every bench/say/<name>.txt with the Mac's
+# speech synthesizer, at the pipeline's 16 kHz mono. In that folder the text is the
+# fixture and the wav is derived from it here and committed, because a voice changes
+# with the OS and the harness numbers are only comparable over the same audio.
+# bench/librispeech is the other way round, recordings with their transcripts, and
+# is never rendered.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+for text in bench/say/*.txt; do
+  say -v Samantha --data-format=LEI16@16000 -o "${text%.txt}.wav" -f "$text"
+  echo "${text%.txt}.wav"
+done

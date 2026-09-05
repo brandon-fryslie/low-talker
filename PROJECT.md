@@ -60,4 +60,4 @@ Configuration is one TOML file at `~/.config/low-talker/config.toml`: chords to 
 
 ## Open questions
 
-Which Whisper model to default to, since large-v3-turbo and the distilled models trade accuracy for speed differently on an M2 Max. Whether tap-to-toggle needs voice activity detection to auto-stop, or whether a second tap is enough. Both get answered by using milestone 1, not by deciding now.
+Which Whisper model to default to is answered. The latency harness (`lowtalker bench`) measured large-v3-turbo, the distilled models, small.en, and base.en over the same twelve fixtures on an M2 Max, and the default is large-v3-turbo in the whisperkit `_turbo` variant: it heard the same words as the plain variant on every fixture while decoding 25 to 30 percent sooner, and the distilled models mishear proper nouns, only their turbo variant being faster. The numbers are in the README under "The latency harness". Whether tap-to-toggle needs voice activity detection to auto-stop, or whether a second tap is enough, is still open, and gets answered by using milestone 1, not by deciding now.
