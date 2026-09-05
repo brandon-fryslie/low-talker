@@ -80,17 +80,31 @@ import Testing
     }
 
     /// Filling from a sequence appends every clip in order and then ends.
-    @Test func fillingFromASequenceAppendsEveryClipThenEnds() async {
+    @Test func fillingFromASequenceAppendsEveryClipThenEnds() async throws {
         let utterance = Utterance()
         let clips = AsyncStream<AudioClip> { continuation in
             continuation.yield(AudioClip(samples: [1, 2]))
             continuation.yield(AudioClip(samples: [3]))
             continuation.finish()
         }
-        await utterance.fill(from: clips)
+        try await utterance.fill(from: clips)
         let (samples, ended) = await utterance.audio(beyond: 0)
         #expect(Array(samples.prefix(3)) == [1, 2, 3])
         #expect(samples.count == 3 + Utterance.hangover)
         #expect(ended)
+    }
+
+    /// An utterance no clip of which reached the gate is refused with its loudest
+    /// peak, not heard as nothing said.
+    @Test func nothingReachingTheGateIsRefused() async {
+        let utterance = Utterance()
+        let clips = AsyncStream<AudioClip> { continuation in
+            continuation.yield(Self.quiet(1_600))
+            continuation.yield(AudioClip(samples: [0.01, -0.015]))
+            continuation.finish()
+        }
+        await #expect(throws: UtteranceError.nothingSpoken(peak: 0.015)) {
+            try await utterance.fill(from: clips)
+        }
     }
 }

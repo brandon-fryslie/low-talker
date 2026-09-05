@@ -76,7 +76,7 @@ public final class WhisperKitTranscriber: Transcriber {
             if ended { break }
             partial(hearing.partial)
         }
-        await fed
+        try await fed
         return hearing.transcript
     }
 

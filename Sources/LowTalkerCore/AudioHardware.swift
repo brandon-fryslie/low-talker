@@ -40,9 +40,9 @@ public enum AudioHardwareError: Error, CustomStringConvertible {
 }
 
 public struct SystemAudioHardware: AudioHardware {
-    /// How much audio the microphone delivers at a time: the tap fills a buffer
-    /// this long before `appending` hears it, so a session's audio grows in steps
-    /// of this size and the latency harness feeds a simulated hold in the same steps.
+    /// How much audio the tap asks for at a time; AVAudioEngine may round it to what a
+    /// device supports, and the built-in microphone delivers exactly it (4410 frames at
+    /// 44.1 kHz). A session's audio grows in these steps, as does a simulated hold.
     nonisolated public static let bufferDuration: TimeInterval = 0.1
 
     public init() {}

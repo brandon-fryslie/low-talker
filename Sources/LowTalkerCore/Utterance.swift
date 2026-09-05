@@ -27,12 +27,17 @@ actor Utterance {
     private var samples: [Float] = []
     /// Samples through the end of the last clip that held speech.
     private var spoken = 0
+    /// The loudest sample so far, what an utterance that never reached the gate
+    /// is refused with.
+    private var loudest: Float = 0
     private var ended = false
     private var waiting: [CheckedContinuation<Void, Never>] = []
 
     func append(_ clip: AudioClip) {
         samples += clip.samples
-        spoken = clip.peak >= Self.speechPeak ? samples.count : spoken
+        let peak = clip.peak
+        loudest = max(loudest, peak)
+        spoken = peak >= Self.speechPeak ? samples.count : spoken
         wake()
     }
 
@@ -43,11 +48,16 @@ actor Utterance {
     }
 
     /// Appends every clip of `audio` as it arrives, then ends the utterance.
-    func fill(from audio: some AsyncSequence<AudioClip, Never> & Sendable) async {
+    ///
+    /// [LAW:parse-dont-validate] An utterance no clip of which reached the gate is
+    /// refused here, with its loudest peak: an empty transcript would not say
+    /// whether nothing was said or the speech was too soft for the gate.
+    func fill(from audio: some AsyncSequence<AudioClip, Never> & Sendable) async throws {
         for await clip in audio {
             append(clip)
         }
         end()
+        guard spoken > 0 else { throw UtteranceError.nothingSpoken(peak: loudest) }
     }
 
     /// How much audio the speech so far is worth a pass over.
@@ -70,6 +80,21 @@ actor Utterance {
         waiting = []
         for continuation in woken {
             continuation.resume()
+        }
+    }
+}
+
+/// [LAW:no-silent-failure] The one way an utterance yields no transcript: named, with
+/// the measurement that decided it, so a quiet file or a silent hold is never an
+/// empty answer.
+public enum UtteranceError: Error, Equatable, CustomStringConvertible {
+    /// No clip reached the speech gate; `peak` is the loudest sample heard.
+    case nothingSpoken(peak: Float)
+
+    public var description: String {
+        switch self {
+        case .nothingSpoken(let peak):
+            "nothing spoken: the loudest sample was \(peak), under the speech gate \(Utterance.speechPeak)"
         }
     }
 }
