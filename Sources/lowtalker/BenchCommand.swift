@@ -38,7 +38,7 @@ struct BenchCommand: AsyncParsableCommand {
         for model in models {
             let reporter = PhaseReporter()
             print("model \(model)", to: &stderr)
-            let report = try await LatencyHarness.measure(fixtures, reruns: runs - 1) {
+            let report = try await LatencyHarness.measure(fixtures, reruns: UInt(runs - 1)) {
                 try await WhisperKitTranscriber.load(model, from: store, phase: reporter.report)
             }
             for result in report.fixtures {

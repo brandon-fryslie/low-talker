@@ -57,6 +57,15 @@ import Testing
         #expect(wer.substitutions == 0)
     }
 
+    /// A swapped pair ties matched, dropped, and added at the last cell; the
+    /// documented priority makes it two substitutions, so the report's split is stable.
+    @Test func aTieIsSplitBySubstitutionFirst() {
+        let wer = Self.rate("a b", "b a")
+        #expect(wer.substitutions == 2)
+        #expect(wer.deletions == 0)
+        #expect(wer.insertions == 0)
+    }
+
     @Test func hearingNothingDropsEveryWord() {
         let wer = Self.rate("one two three", "")
         #expect(wer.deletions == 3)

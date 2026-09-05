@@ -5,10 +5,11 @@ import Testing
 /// A bench directory built on the fly: a clip the pipeline wrote beside the text
 /// it is claimed to say.
 private final class BenchDirectory {
-    let url = FileManager.default.temporaryDirectory.appending(path: "lowtalker-bench-\(UUID().uuidString)")
+    let url: URL
     static let tone = AudioClip(samples: (0..<1_600).map { Float(sin(2 * Double.pi * 440 * Double($0) / AudioClip.sampleRate)) })
 
-    init() throws {
+    init(under base: URL = FileManager.default.temporaryDirectory) throws {
+        url = base.appending(path: "lowtalker-bench-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     }
 
@@ -21,6 +22,42 @@ private final class BenchDirectory {
         try FileManager.default.createDirectory(at: url.appending(path: name).deletingLastPathComponent(), withIntermediateDirectories: true)
         if wav { try Self.tone.write(to: url.appending(path: "\(name).wav")) }
         if let text { try text.write(to: url.appending(path: "\(name).txt"), atomically: true, encoding: .utf8) }
+    }
+}
+
+/// A case-sensitive volume, the only place `foo.wav` and `foo.WAV` can both exist:
+/// APFS as shipped stores them as one file, so the temp directory cannot host them.
+private final class CaseSensitiveVolume {
+    let mountPoint: URL
+    private let image: URL
+
+    init() throws {
+        let base = FileManager.default.temporaryDirectory.appending(path: "lowtalker-cs-\(UUID().uuidString)")
+        image = base.appendingPathExtension("dmg")
+        mountPoint = base
+        try Self.hdiutil("create", "-size", "8m", "-fs", "Case-sensitive APFS", "-volname", "lowtalker-cs", "-quiet", image.path)
+        try Self.hdiutil("attach", image.path, "-mountpoint", mountPoint.path, "-nobrowse", "-quiet")
+    }
+
+    deinit {
+        try? Self.hdiutil("detach", mountPoint.path, "-quiet")
+        try? FileManager.default.removeItem(at: image)
+    }
+
+    private static func hdiutil(_ arguments: String...) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+        process.arguments = arguments
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw HdiutilFailed(arguments: arguments, status: process.terminationStatus)
+        }
+    }
+
+    struct HdiutilFailed: Error {
+        let arguments: [String]
+        let status: Int32
     }
 }
 
@@ -45,6 +82,20 @@ private final class BenchDirectory {
         let fixtures = try Fixture.load(directory: bench.url)
         #expect(fixtures.map(\.name) == ["loud"])
         #expect(fixtures[0].reference.words == ["loud"])
+    }
+
+    @Test func twoSpellingsOfOneClipAreRefused() throws {
+        let volume = try CaseSensitiveVolume()
+        let bench = try BenchDirectory(under: volume.mountPoint)
+        try bench.add("echo", text: "Echo.")
+        try BenchDirectory.tone.write(to: bench.url.appending(path: "echo.WAV"))
+        do {
+            _ = try Fixture.load(directory: bench.url)
+            Issue.record("two spellings of one clip loaded as a fixture")
+        } catch FixtureError.twoOfAKind(let name, let first, let second) {
+            #expect(name == "echo")
+            #expect(Set([first.lastPathComponent, second.lastPathComponent]) == ["echo.wav", "echo.WAV"])
+        }
     }
 
     @Test func aClipWithoutItsWordsIsRefused() throws {

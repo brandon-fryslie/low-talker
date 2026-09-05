@@ -10,7 +10,7 @@
 public enum LatencyHarness {
     public static func measure(
         _ fixtures: [Fixture],
-        reruns: Int,
+        reruns: UInt,
         load: () async throws -> any Transcriber
     ) async throws -> LatencyReport {
         let clock = ContinuousClock()
