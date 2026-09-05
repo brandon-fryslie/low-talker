@@ -19,8 +19,8 @@ public enum PasteError: Error, Hashable, CustomStringConvertible {
     /// The app validated its Paste item as disabled after the text was on the
     /// pasteboard, and a press would do nothing.
     case pasteDisabled(bundleID: String?)
-    /// Accessibility refused before the press: this process is not trusted, or the app
-    /// did not answer.
+    /// Accessibility refused a call and no paste was pressed: this process is not
+    /// trusted, or the app did not answer.
     case accessibility(AXError)
     /// The app took the press but did not answer afterward, so whether it pasted is
     /// unknown; the press cannot be taken back.
@@ -35,7 +35,7 @@ public enum PasteError: Error, Hashable, CustomStringConvertible {
         case .accessibility(.apiDisabled):
             "Accessibility is off for the calling process; grant it in System Settings > Privacy & Security > Accessibility"
         case .accessibility(let error):
-            "Accessibility call failed (AXError \(error.rawValue)) before the paste was pressed"
+            "Accessibility call failed (AXError \(error.rawValue)); no paste was pressed"
         case .unanswered(let error):
             "the app took the paste but did not answer afterward (AXError \(error.rawValue)); it may or may not have pasted"
         }
