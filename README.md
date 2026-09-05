@@ -29,7 +29,7 @@ CI has no model cache, so the tests cover the mapping from WhisperKit's results 
     swift run lowtalker mic request    # prompt if never asked, then print the answer
     swift run lowtalker mic watch      # print every change until interrupted
 
-The exit status is 0 when access is granted and 1 otherwise. macOS charges a terminal command's microphone use to the terminal, so these answers are the terminal's; the app asks on its own behalf the first time it launches. macOS posts no notification when the switch is flipped in System Settings, so the app polls the status once a second, which is what `watch` shows.
+The exit status is 0 when access is granted and 1 otherwise. macOS charges a terminal command's microphone use to the terminal, so these answers are the terminal's; the app asks on its own behalf the first time it launches. macOS posts no notification when the switch is flipped in System Settings, so a change is only seen by reading the status again; `watch` reads it once a second.
 
 To see the first-launch prompt again, forget the app's decision and relaunch:
 
