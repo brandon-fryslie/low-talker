@@ -14,7 +14,7 @@ The chord you hold picks the mode. Your voice supplies the parameter.
 
 Dictation and commands are never told apart by listening for magic words in the transcript. If "switch to Safari" spoken mid-sentence ever switched apps, you would stop trusting the tool for the thing you use it for most. So a command exists only in a mode that a different chord selected. Hold Right Option and everything you say is text. Hold Right Option plus Shift and everything you say is a command. Dictation's reliability is untouched no matter how many commands are added.
 
-This rule is also what gives the recognizer a fair shot at commands. Each mode seeds the model with its own vocabulary: dictation mode with your own words and names, command mode with the names of running apps and the command keywords. A small vocabulary matched against a biased transcript is a much easier problem than spotting commands in open speech.
+This rule is also what gives the recognizer a fair shot at commands. Each mode seeds the model with its own vocabulary: dictation mode with your own words and names, command mode with the names of running apps and the command keywords. A small vocabulary matched against a biased transcript is a much easier problem than spotting commands in open speech. The biasing is measured: told three names, the default model spells all three where it got all three wrong unaided, at about a tenth of a second more per pass, with the other fixtures unchanged (README, "The latency harness").
 
 ## The pipeline
 
