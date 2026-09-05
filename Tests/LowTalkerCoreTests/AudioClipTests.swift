@@ -47,3 +47,36 @@ private func fixture(_ name: String) throws -> URL {
         }
     }
 }
+
+@Suite struct AudioClipWriteTests {
+    static func temporaryWav() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("lowtalker-\(UUID().uuidString).wav")
+    }
+
+    /// Write, then load through the same boundary every engine uses. 16-bit PCM
+    /// rounds each sample to the nearest 1/32768.
+    @Test func roundTripsThroughAFile() throws {
+        let tone = AudioClip(samples: (0..<1_600).map { Float(sin(2 * Double.pi * 440 * Double($0) / AudioClip.sampleRate)) })
+        let url = Self.temporaryWav()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try tone.write(to: url)
+
+        let loaded = try AudioClip(contentsOf: url)
+        #expect(loaded.samples.count == tone.samples.count)
+        let difference = zip(loaded.samples, tone.samples).reduce(Float(0)) { max($0, abs($1.0 - $1.1)) }
+        #expect(difference <= 1 / 32_768)
+    }
+
+    @Test func emptyClipWritesAnEmptyFile() throws {
+        let url = Self.temporaryWav()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try AudioClip(samples: []).write(to: url)
+        #expect(try AudioClip(contentsOf: url).samples.isEmpty)
+    }
+
+    @Test func unwritableDestinationFailsLoudly() {
+        #expect(throws: AudioClipError.self) {
+            try AudioClip(samples: [0]).write(to: URL(fileURLWithPath: "/nonexistent/dir/clip.wav"))
+        }
+    }
+}

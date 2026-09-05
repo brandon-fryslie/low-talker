@@ -8,6 +8,6 @@ struct LowTalker: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "lowtalker",
         abstract: "Exercise the low-talker pipeline without the hotkey.",
-        subcommands: [Info.self, RouteCommand.self, TranscribeCommand.self]
+        subcommands: [Info.self, RouteCommand.self, RecordCommand.self, TranscribeCommand.self]
     )
 }
