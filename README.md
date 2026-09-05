@@ -11,7 +11,7 @@ You need Xcode 16 or later plus `xcodegen` and `jq`, both from Homebrew.
 - `make test` runs `swift build` and `swift test`.
 - `make clean` removes the generated project, `DerivedData/`, and `.build/`.
 
-CI runs `make signing-identity`, `make test`, and `make app` on a macos-15 runner for every pull request to master; the workflow is `.github/workflows/ci.yml`.
+CI runs `make signing-identity`, `make test`, and `make app` on a macos-15 runner for every pull request to master and every push to master; the workflow is `.github/workflows/ci.yml`.
 
 Before the first `make app`, do the one-time setup below.
 
