@@ -37,8 +37,11 @@ struct MicCommand: ParsableCommand {
     struct Watch: AsyncParsableCommand {
         static let configuration = CommandConfiguration(abstract: "Print the authorization and every change to it until interrupted.")
 
-        @Option(help: "Seconds between reads of the authorization.")
-        var interval: Double = 1
+        // Whole milliseconds: an Int parses or fails at the command line, and
+        // `.milliseconds(Int)` cannot overflow, so `interval > 0` here is exactly the
+        // `> .zero` the library requires and nothing between the two can trap.
+        @Option(help: "Milliseconds between reads of the authorization.")
+        var interval: Int = 1000
 
         func validate() throws {
             guard interval > 0 else { throw ValidationError("--interval must be positive.") }
@@ -48,7 +51,7 @@ struct MicCommand: ParsableCommand {
             // A pipe would otherwise hold each line until the buffer fills, and a
             // watcher's whole point is seeing the change when it happens.
             setvbuf(stdout, nil, _IOLBF, 0)
-            for await authorization in MicrophonePermission().changes(every: .seconds(interval)) {
+            for await authorization in MicrophonePermission().changes(every: .milliseconds(interval)) {
                 print(authorization)
             }
         }
