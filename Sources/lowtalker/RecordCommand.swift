@@ -17,6 +17,10 @@ struct RecordCommand: AsyncParsableCommand {
     @Argument(help: "Where to write the wav.", transform: URL.init(fileURLWithPath:))
     var output: URL
 
+    func validate() throws {
+        guard seconds > 0 else { throw ValidationError("--seconds must be positive.") }
+    }
+
     @MainActor
     mutating func run() async throws {
         let capture = AudioCapture()

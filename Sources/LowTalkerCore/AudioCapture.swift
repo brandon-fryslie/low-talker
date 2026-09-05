@@ -87,6 +87,8 @@ public final class AudioCapture {
         phase = .stopped
     }
 
+    isolated deinit { stop() }
+
     /// The running engine, only while it is still the one a callback was formed
     /// for. [LAW:no-ambient-temporal-coupling] An observer block already queued
     /// when `dispose()` removes the observer still runs, and the tap's failure
