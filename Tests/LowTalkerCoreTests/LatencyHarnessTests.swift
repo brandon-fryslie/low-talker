@@ -1,5 +1,6 @@
 import Foundation
 import LowTalkerCore
+import Synchronization
 import Testing
 
 /// A bench directory built on the fly: a clip the pipeline wrote beside the text
@@ -145,18 +146,31 @@ private final class CaseSensitiveVolume {
     }
 }
 
-/// An engine that hears the same thing every time, so the harness's bookkeeping
-/// can be checked without weights.
-private struct FixedEar: Transcriber {
+/// An engine that hears the same thing every time and says so after every clip,
+/// so the harness's bookkeeping can be checked without weights. It remembers how
+/// many clips each utterance arrived in.
+private final class FixedEar: Transcriber {
     let heard: String
-    func transcribe(_ clip: AudioClip) async throws -> Transcript {
-        Transcript(typed: heard)
+    let holds = Mutex<[Int]>([])
+
+    init(heard: String) {
+        self.heard = heard
+    }
+
+    func transcribe(_ audio: some AsyncSequence<AudioClip, Never> & Sendable, partial: @escaping @Sendable (Partial) -> Void) async throws -> Transcript {
+        var clips = 0
+        for await _ in audio {
+            clips += 1
+            partial(Partial(confirmed: Transcript(words: []), tentative: Transcript(typed: heard)))
+        }
+        holds.withLock { $0.append(clips) }
+        return Transcript(typed: heard)
     }
 }
 
 @Suite struct LatencyHarnessTests {
-    static func fixture(_ name: String, says text: String) throws -> Fixture {
-        try Fixture(name: name, clip: BenchDirectory.tone, reference: text)
+    static func fixture(_ name: String, says text: String, clip: AudioClip = BenchDirectory.tone) throws -> Fixture {
+        try Fixture(name: name, clip: clip, reference: text)
     }
 
     @Test func loadsOnceAndScoresEveryFixture() async throws {
@@ -165,36 +179,83 @@ private struct FixedEar: Transcriber {
             try Self.fixture("close", says: "see me at noon soon"),
         ]
         var loads = 0
-        let report = try await LatencyHarness.measure(fixtures, reruns: 2) {
+        let ear = FixedEar(heard: "See you at noon.")
+        let report = try await LatencyHarness.measure(fixtures, deliveries: [.batch], reruns: 2) {
             loads += 1
-            return FixedEar(heard: "See you at noon.")
+            return ear
         }
         #expect(loads == 1)
         #expect(report.fixtures.map(\.name) == ["exact", "close"])
+        #expect(report.fixtures.map(\.delivery) == [.batch, .batch])
         #expect(report.fixtures.map(\.wordErrorRate.errors) == [0, 2])
-        #expect(report.fixtures.map(\.laterKeyUpToTranscript.count) == [2, 2])
+        #expect(report.fixtures.map(\.later.count) == [2, 2])
         #expect(report.fixtures[0].transcript.text == "See you at noon.")
         #expect(report.fixtures[0].audio == BenchDirectory.tone.duration)
+        // A batch hold is the whole clip at once, every time.
+        #expect(ear.holds.withLock { $0 } == [1, 1, 1, 1, 1, 1])
+    }
+
+    /// Streamed, the clip reaches the engine a microphone buffer at a time and the
+    /// first text shows during the hold; batched, it arrives whole at key-up and
+    /// the first text can only follow the hold.
+    @Test func streamedDeliveryFeedsABufferAtATime() async throws {
+        let clip = AudioClip(samples: Array(repeating: 0.1, count: AudioClip.sampleCount(for: 0.35)))
+        let ear = FixedEar(heard: "hi")
+        let report = try await LatencyHarness.measure([try Self.fixture("held", says: "hi", clip: clip)], deliveries: [.batch, .streamed], reruns: 0) { ear }
+        #expect(report.fixtures.map(\.delivery) == [.batch, .streamed])
+        #expect(ear.holds.withLock { $0 } == [1, 4])
+        let batch = report.fixtures[0].first
+        let streamed = report.fixtures[1].first
+        #expect(batch.holdToFirstText >= .seconds(0.35))
+        #expect(streamed.holdToFirstText >= .seconds(0.1))
+        #expect(streamed.holdToFirstText < .seconds(0.35))
+        #expect(streamed.keyUpToTranscript < .seconds(0.1))
+    }
+
+    /// The protocol's one-clip form is a batch hold.
+    @Test func aClipAloneIsAOneClipUtterance() async throws {
+        let ear = FixedEar(heard: "hi")
+        let transcript = try await ear.transcribe(BenchDirectory.tone)
+        #expect(transcript.text == "hi")
+        #expect(ear.holds.withLock { $0 } == [1])
     }
 
     @Test func aSingleRunIsItsOwnMedian() async throws {
-        let report = try await LatencyHarness.measure([try Self.fixture("one", says: "hi")], reruns: 0) {
+        let report = try await LatencyHarness.measure([try Self.fixture("one", says: "hi")], deliveries: [.batch], reruns: 0) {
             FixedEar(heard: "hi")
         }
         let result = report.fixtures[0]
-        #expect(result.laterKeyUpToTranscript.isEmpty)
-        #expect(result.medianKeyUpToTranscript == result.firstKeyUpToTranscript)
+        #expect(result.later.isEmpty)
+        #expect(result.medianKeyUpToTranscript == result.first.keyUpToTranscript)
+        #expect(result.medianHoldToFirstText == result.first.holdToFirstText)
     }
 
     /// An even number of runs reports the lower middle, a wait that happened.
     @Test func medianIsTheLowerMiddleOfEveryRun() {
         let result = LatencyReport.FixtureResult(
-            name: "n", audio: 1,
-            firstKeyUpToTranscript: .seconds(4),
-            laterKeyUpToTranscript: [.seconds(1), .seconds(3), .seconds(2)],
+            name: "n", delivery: .batch, audio: 1,
+            first: LatencyReport.Run(keyUpToTranscript: .seconds(4), holdToFirstText: .seconds(9)),
+            later: [
+                LatencyReport.Run(keyUpToTranscript: .seconds(1), holdToFirstText: .seconds(6)),
+                LatencyReport.Run(keyUpToTranscript: .seconds(3), holdToFirstText: .seconds(8)),
+                LatencyReport.Run(keyUpToTranscript: .seconds(2), holdToFirstText: .seconds(7)),
+            ],
             transcript: Transcript(typed: "n"),
             wordErrorRate: WordErrorRate(reference: SpokenWords("n"), hypothesis: SpokenWords("n"))
         )
         #expect(result.medianKeyUpToTranscript == .seconds(2))
+        #expect(result.medianHoldToFirstText == .seconds(7))
+    }
+}
+
+@Suite struct AudioClipChunkTests {
+    @Test func chunksCutTheClipWithTheRemainderLast() {
+        let clip = AudioClip(samples: [1, 2, 3, 4, 5])
+        let chunks = clip.chunks(of: 2 / AudioClip.sampleRate)
+        #expect(chunks.map(\.samples) == [[1, 2], [3, 4], [5]])
+    }
+
+    @Test func anEmptyClipIsNoChunks() {
+        #expect(AudioClip(samples: []).chunks(of: 1).isEmpty)
     }
 }

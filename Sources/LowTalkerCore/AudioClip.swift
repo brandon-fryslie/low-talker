@@ -29,6 +29,16 @@ public struct AudioClip: Sendable, Equatable {
     public var peak: Float {
         samples.reduce(0) { max($0, abs($1)) }
     }
+
+    /// The clip cut into consecutive clips `duration` long, the last holding
+    /// whatever remains; an empty clip is no chunks at all.
+    public func chunks(of duration: TimeInterval) -> [AudioClip] {
+        let length = Self.sampleCount(for: duration)
+        precondition(length > 0, "a chunk holds at least one sample")
+        return stride(from: 0, to: samples.count, by: length).map { start in
+            AudioClip(samples: Array(samples[start..<min(start + length, samples.count)]))
+        }
+    }
 }
 
 public enum AudioClipError: Error, CustomStringConvertible {

@@ -3,16 +3,17 @@ import Foundation
 import LowTalkerCore
 
 /// The latency harness from the terminal: every fixture in a directory through
-/// every model asked for, one table out. This is how the default model was chosen
-/// and how the streaming and vocabulary work measure themselves.
+/// every model asked for, held every way asked for, one table out. This is how
+/// the default model was chosen and how the streaming and vocabulary work measure
+/// themselves.
 ///
-/// Stdout is one tab-separated table, a row per model and fixture, so runs can be
-/// diffed or pasted into a ticket. Stderr narrates each load and shows what the
-/// engine heard, which is where a word error rate gets explained.
+/// Stdout is one tab-separated table, a row per model, fixture, and delivery, so
+/// runs can be diffed or pasted into a ticket. Stderr narrates each load and shows
+/// what the engine heard, which is where a word error rate gets explained.
 struct BenchCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "bench",
-        abstract: "Time model load and key-up-to-transcript, and score word error rate, over a fixture directory."
+        abstract: "Time model load, key-up-to-transcript, and first text, and score word error rate, over a fixture directory."
     )
 
     @Argument(help: "A directory of <name>.wav beside <name>.txt, the reference text.", transform: URL.init(fileURLWithPath:))
@@ -21,7 +22,10 @@ struct BenchCommand: AsyncParsableCommand {
     @Option(name: .customLong("model"), help: "A model folder name in the whisperkit-coreml repo. Repeat for several.")
     var models: [ModelName] = [.default]
 
-    @Option(help: "How many times to decode each fixture. The first decode after a load is reported apart from the median.")
+    @Option(name: .customLong("delivery"), help: "How a hold's audio reaches the engine: batch (the whole clip at key-up) or streamed (a microphone buffer at a time). Repeat for both.")
+    var deliveries: [LatencyHarness.Delivery] = LatencyHarness.Delivery.allCases
+
+    @Option(help: "How many times to hold each fixture. The first hold after a load is reported apart from the median.")
     var runs: Int = 3
 
     @OptionGroup var location: StoreOptions
@@ -38,11 +42,11 @@ struct BenchCommand: AsyncParsableCommand {
         for model in models {
             let reporter = PhaseReporter()
             print("model \(model)", to: &stderr)
-            let report = try await LatencyHarness.measure(fixtures, reruns: UInt(runs - 1)) {
+            let report = try await LatencyHarness.measure(fixtures, deliveries: deliveries, reruns: UInt(runs - 1)) {
                 try await WhisperKitTranscriber.load(model, from: store, phase: reporter.report)
             }
             for result in report.fixtures {
-                print("  \(result.name): heard \"\(result.transcript.text)\", \(result.wordErrorRate)", to: &stderr)
+                print("  \(result.name) \(result.delivery.rawValue): heard \"\(result.transcript.text)\", \(result.wordErrorRate)", to: &stderr)
                 let row = Self.row(model: model, load: report.load, result: result)
                 // [LAW:one-source-of-truth] The header is the first row's names, so a
                 // column cannot be titled one thing and filled with another.
@@ -62,10 +66,12 @@ struct BenchCommand: AsyncParsableCommand {
         return [
             ("model", model.description),
             ("fixture", result.name),
+            ("delivery", result.delivery.rawValue),
             ("audio_s", fixed(result.audio, places: 3)),
             ("load_s", load.seconds),
-            ("first_s", result.firstKeyUpToTranscript.seconds),
+            ("first_s", result.first.keyUpToTranscript.seconds),
             ("median_s", result.medianKeyUpToTranscript.seconds),
+            ("partial_s", result.medianHoldToFirstText.seconds),
             ("wer", fixed(wer.rate, places: 3)),
             ("substituted", String(wer.substitutions)),
             ("dropped", String(wer.deletions)),
@@ -74,3 +80,7 @@ struct BenchCommand: AsyncParsableCommand {
         ]
     }
 }
+
+/// [LAW:parse-dont-validate] `--delivery` is parsed into a case at the command line,
+/// so a spelling that is neither is refused before any hold is simulated.
+extension LatencyHarness.Delivery: ExpressibleByArgument {}

@@ -1,7 +1,7 @@
 import Foundation
 import WhisperKit
 
-/// Whisper on the Neural Engine through WhisperKit, decoding a whole clip at once.
+/// Whisper on the Neural Engine through WhisperKit.
 ///
 /// [LAW:no-shared-mutable-globals] WhisperKit's pipeline is a mutable class that must
 /// not be re-entered mid-decode. Every decode goes through one SerialQueue, so calls
@@ -50,9 +50,34 @@ public final class WhisperKitTranscriber: Transcriber {
         }
     }
 
-    public func transcribe(_ clip: AudioClip) async throws -> Transcript {
+    /// Hears the utterance in passes as its audio arrives. Whisper decodes a whole
+    /// window at a time, so streaming is re-reading: each pass decodes from a few
+    /// confirmed words back to the audio so far, and words two passes agree on are
+    /// confirmed and never read again. A pass runs whenever the engine is free and
+    /// speech has arrived since the last one, so the partials are as fresh as the
+    /// engine allows; the pass that covers the last of the speech is the last pass,
+    /// whether the key is still down when it starts or has already come up.
+    public func transcribe(
+        _ audio: some AsyncSequence<AudioClip, Never> & Sendable,
+        partial: @escaping @Sendable (Partial) -> Void
+    ) async throws -> Transcript {
         let pipeline = pipeline
-        return try await decodes.run { try await pipeline.transcribe(clip) }
+        let utterance = Utterance()
+        async let fed: Void = utterance.fill(from: audio)
+        var hearing = Hearing(margin: Pipeline.margin, context: Pipeline.contextWords)
+        // [LAW:dataflow-not-control-flow] The one branch is the utterance's own state:
+        // speech to hear, or nothing more. A pass over what is there is the same pass
+        // whether the key is still down or just came up, and the last pass's reading
+        // is the transcript once no speech follows it.
+        while case let (samples, ended) = await utterance.audio(beyond: hearing.passable), samples.count > hearing.passable {
+            let (cut, saying) = (hearing.cut, hearing.saying)
+            let words = try await decodes.run { try await pipeline.hear(samples, from: cut, saying: saying) }
+            hearing.hear(words, through: samples.count)
+            if ended { break }
+            partial(hearing.partial)
+        }
+        await fed
+        return hearing.transcript
     }
 
     /// The loaded WhisperKit pipeline. `@unchecked Sendable` because WhisperKit is a
@@ -60,10 +85,28 @@ public final class WhisperKitTranscriber: Transcriber {
     /// every decode alone with it.
     private struct Pipeline: @unchecked Sendable {
         private let whisperKit: WhisperKit
+        private let tokenizer: any WhisperTokenizer
 
         /// Word timings are the whole point: without them a result carries no per-word
-        /// confidence and the mapping refuses it.
-        private static let decodeOptions = DecodingOptions(wordTimestamps: true)
+        /// confidence and the mapping refuses it. A segment's text is its words alone:
+        /// with the special tokens left in, a pass that heard nothing comes back as
+        /// "<|startoftranscript|><|en|>...<|endoftext|>" with no words, which the
+        /// mapping would rightly refuse as speech that lost its words.
+        private static let decodeOptions = DecodingOptions(skipSpecialTokens: true, wordTimestamps: true)
+
+        /// [LAW:one-source-of-truth] WhisperKit decodes no window that starts within
+        /// `windowClipTime` of the clip's end, its guard against hallucinating over a
+        /// trailing sliver. A word is confirmed only when it ended this far before the
+        /// pass's end, so the next pass, starting at that word, always spans more.
+        static let margin = AudioClip.sampleCount(for: Double(decodeOptions.windowClipTime))
+
+        /// Confirmed words a pass starts from, forced as its first tokens rather than
+        /// prompted as earlier text: a prompt is decoded against audio that no longer
+        /// holds it, and Whisper then reads the prompted words a second time out of
+        /// the audio that follows, so the prefix is forced over the audio that does
+        /// hold it and its reading is dropped. Each forced token costs a decoder step,
+        /// the same as decoding it, so the prefix is a few words, not every confirmed one.
+        static let contextWords = 3
 
         /// Nonisolated on purpose: the non-Sendable WhisperKit is created and wrapped
         /// here without crossing an isolation boundary.
@@ -78,11 +121,24 @@ public final class WhisperKitTranscriber: Transcriber {
                 load: true,
                 download: false
             ))
+            // [LAW:parse-dont-validate] WhisperKit loads its tokenizer with the model
+            // and holds it as an optional; it is unwrapped here, once, so every pass
+            // has one to encode its prefix with.
+            guard let tokenizer = whisperKit.tokenizer else {
+                throw WhisperKitTranscriberError.tokenizerNotLoaded(installed.model)
+            }
+            self.tokenizer = tokenizer
         }
 
-        func transcribe(_ clip: AudioClip) async throws -> Transcript {
-            let results = try await whisperKit.transcribe(audioArray: clip.samples, decodeOptions: Self.decodeOptions)
-            return try Transcript(whisperKit: results.flatMap(\.segments))
+        /// One pass: the words in `samples` from `cut` on, the first of them forced to
+        /// read `prefix`, the text spoken from the cut. Times are from the utterance's
+        /// start, and the prefix's words come back first, timed over their own audio.
+        func hear(_ samples: [Float], from cut: Int, saying prefix: String) async throws -> [Transcript.Word] {
+            var options = Self.decodeOptions
+            options.clipTimestamps = [Float(cut) / Float(AudioClip.sampleRate)]
+            options.prefixTokens = tokenizer.encode(text: prefix)
+            let results = try await whisperKit.transcribe(audioArray: samples, decodeOptions: options)
+            return try Transcript(whisperKit: results.flatMap(\.segments)).words
         }
     }
 }
@@ -93,9 +149,13 @@ public enum WhisperKitTranscriberError: Error, CustomStringConvertible {
     case speechWithoutWords(text: String)
     case probabilityOutsideUnitInterval(WordTiming)
     case wordEndsBeforeStart(WordTiming)
+    /// WhisperKit loaded the model but holds no tokenizer for it.
+    case tokenizerNotLoaded(ModelName)
 
     public var description: String {
         switch self {
+        case .tokenizerNotLoaded(let model):
+            "WhisperKit loaded \(model) without its tokenizer"
         case .speechWithoutWords(let text):
             "WhisperKit returned segment \"\(text)\" without word timings"
         case .probabilityOutsideUnitInterval(let word):

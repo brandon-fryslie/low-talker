@@ -9,9 +9,13 @@ import Testing
     @Test func everyColumnCarriesItsOwnField() {
         let result = LatencyReport.FixtureResult(
             name: "say/greeting",
+            delivery: .streamed,
             audio: 2.0164,
-            firstKeyUpToTranscript: .milliseconds(900),
-            laterKeyUpToTranscript: [.milliseconds(700), .milliseconds(650)],
+            first: LatencyReport.Run(keyUpToTranscript: .milliseconds(900), holdToFirstText: .milliseconds(1_600)),
+            later: [
+                LatencyReport.Run(keyUpToTranscript: .milliseconds(700), holdToFirstText: .milliseconds(1_400)),
+                LatencyReport.Run(keyUpToTranscript: .milliseconds(650), holdToFirstText: .milliseconds(1_500)),
+            ],
             transcript: Transcript(typed: "hello here world four five"),
             wordErrorRate: WordErrorRate(
                 reference: SpokenWords("hello there world four"),
@@ -20,11 +24,11 @@ import Testing
         )
         let row = BenchCommand.row(model: "base.en", load: .milliseconds(1_250), result: result)
         #expect(row.map(\.name) == [
-            "model", "fixture", "audio_s", "load_s", "first_s", "median_s",
+            "model", "fixture", "delivery", "audio_s", "load_s", "first_s", "median_s", "partial_s",
             "wer", "substituted", "dropped", "added", "reference_words",
         ])
         #expect(row.map(\.value) == [
-            "base.en", "say/greeting", "2.016", "1.250", "0.900", "0.700",
+            "base.en", "say/greeting", "streamed", "2.016", "1.250", "0.900", "0.700", "1.500",
             "0.500", "1", "0", "1", "4",
         ])
     }

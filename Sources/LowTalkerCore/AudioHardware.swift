@@ -56,7 +56,7 @@ public struct SystemAudioHardware: AudioHardware {
         nonisolated(unsafe) let converter = try AudioClip.Converter(from: source)
         // Explicitly @Sendable: a closure formed here would otherwise inherit main-actor
         // isolation and trap when the tap fires on the audio service queue.
-        input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(source.sampleRate / 10), format: source) { @Sendable buffer, _ in
+        input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(source.sampleRate * AudioCapture.bufferDuration), format: source) { @Sendable buffer, _ in
             do {
                 appending(try converter.convert(buffer))
             } catch {
