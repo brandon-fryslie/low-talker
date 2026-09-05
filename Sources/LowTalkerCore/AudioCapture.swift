@@ -89,7 +89,10 @@ public final class AudioCapture {
         shared.ring.withLock { $0.clip(in: session.range(endingAt: $0.end)) }
     }
 
-    public func start() throws {
+    /// Starts listening. The grant is the proof the user allowed it: without one,
+    /// macOS lets the engine run and hands it silence, which nothing downstream could
+    /// tell from a quiet room.
+    public func start(_ grant: MicrophoneGrant) throws {
         stop()
         deviceChanges = 0
         phase = .running(try launch())

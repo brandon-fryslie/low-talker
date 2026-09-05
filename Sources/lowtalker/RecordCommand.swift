@@ -23,8 +23,10 @@ struct RecordCommand: AsyncParsableCommand {
 
     @MainActor
     mutating func run() async throws {
+        // Prompts on a Mac that has never been asked; the grant is what `start` requires.
+        let grant = try await MicrophonePermission().request().grant()
         let capture = AudioCapture()
-        try capture.start()
+        try capture.start(grant)
         defer { capture.stop() }
         let session = capture.beginSession()
         try await Task.sleep(for: .seconds(seconds))
