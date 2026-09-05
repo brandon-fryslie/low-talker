@@ -17,11 +17,37 @@ Before the first `make app`, do the one-time setup below.
 
 ## Trying the engine
 
-    swift run lowtalker transcribe Tests/LowTalkerCoreTests/Fixtures/hello-16k-mono.wav
+    make cli
+    .build/debug/lowtalker transcribe Tests/LowTalkerCoreTests/Fixtures/hello-16k-mono.wav
 
-prints the transcript, then one line per word with its start, end, and confidence. The first run downloads the default Whisper model (about 626 MB) into `~/Documents/huggingface/models/argmaxinc/whisperkit-coreml/`, which is where WhisperKit keeps its cache, and the first load after a download or an OS update takes a while longer while Core ML specializes the model for this chip. Pass `--model` with another folder name from that repo to try a different one.
+prints the transcript, then one line per word with its start, end, and confidence. Pass `--model` with another folder name from the whisperkit-coreml repo to try a different one.
 
-CI has no model cache, so the tests cover the mapping from WhisperKit's results onto `Transcript` with hand-built results; the real engine is only exercised through this command.
+`make cli` is `swift build` plus a re-signing step; the section below says why it matters.
+
+### The model store
+
+The app and the CLI share one model directory, `~/Library/Application Support/low-talker/hub`, laid out the way the Hugging Face hub lays out its cache. The first `transcribe`, or the first app launch, downloads the default Whisper model (about 626 MB) into it and records a manifest of the files and their sizes. Every launch after that checks the manifest against the files and loads straight from disk, with no network involved, so the app works offline once the model is in.
+
+    .build/debug/lowtalker model status      # installed, missing, or damaged; exits 1 unless installed
+    .build/debug/lowtalker model download    # fetch it, or finish a download that stopped
+
+A download that stopped part way leaves no manifest, so the model reads as missing and the next download resumes it: the hub client skips every file already on disk whose hash matches. A file that later goes missing or changes size reads as damaged, and `model download` repairs it the same way. Pass `--models-dir` to either command, or to `transcribe`, to use a different directory.
+
+The tokenizer is not part of the manifest: WhisperKit fetches it into the same directory during the first load and reads it from there afterwards.
+
+### Load times and the Neural Engine cache
+
+Loading the model means Core ML compiling it for this Mac's Neural Engine, which takes minutes for the default model. macOS caches the result, keyed by the model and by the **code-signing identifier** of the process that loaded it, and evicts the cache after an OS update. Measured on an M2 Max:
+
+| Situation | Load |
+|---|---|
+| First load of a model, or after an OS update | 2 to 4 minutes |
+| Same signing identifier, model already compiled | 5 to 7 seconds |
+| A binary with a new signing identifier | 2 to 4 minutes again |
+
+`swift build` links a fresh identifier into every binary it produces, so a plain `swift run` pays the full compile after every rebuild. `make cli` re-signs the built binary with the fixed identifier `lowtalker`, which keeps the cache warm across rebuilds. The app's identifier is its bundle id, set by its certificate signature, so `make app` builds keep the cache warm on their own.
+
+CI has no model cache, so the tests cover the mapping from WhisperKit's results onto `Transcript` with hand-built results and the manifest logic on scratch files; the real engine is only exercised through these commands.
 
 ## Microphone permission
 

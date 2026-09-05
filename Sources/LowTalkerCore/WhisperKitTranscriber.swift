@@ -11,12 +11,46 @@ public final class WhisperKitTranscriber: Transcriber {
     private let pipeline: Pipeline
     private let decodes = SerialQueue()
 
-    /// Downloads the model into WhisperKit's cache on first use, then loads it onto
-    /// the compute units. Returns only once the model is resident, so the first
-    /// `transcribe` pays no load cost.
-    public init(model: Model = .default) async throws {
-        self.model = model
-        pipeline = try await Pipeline(model: model)
+    /// Loads an installed model onto the compute units from its folder alone: no
+    /// network, no hub listing. Returns only once the model is resident, so the
+    /// first `transcribe` pays no load cost.
+    public init(_ installed: InstalledModel) async throws {
+        model = installed.model
+        pipeline = try await Pipeline(installed: installed)
+    }
+
+    /// The whole road from a store to a resident model: install the model if the
+    /// store lacks it, then load it. `phase` hears each step begin so a status item
+    /// or a terminal can say what the wait is for.
+    ///
+    /// [LAW:dataflow-not-control-flow] The sequence never changes; whether the
+    /// download runs is decided by the store's `Presence` value, the domain's own
+    /// discriminator, not by a flag a caller passes.
+    public static func load(
+        _ model: Model = .default,
+        from store: ModelStore,
+        phase: @escaping @Sendable (LoadPhase) -> Void
+    ) async throws -> WhisperKitTranscriber {
+        let installed: InstalledModel
+        switch store.presence(of: model) {
+        case .installed(let present):
+            installed = present
+        case .missing, .damaged:
+            phase(.downloading(fractionCompleted: 0))
+            installed = try await store.install(model) { phase(.downloading(fractionCompleted: $0)) }
+        }
+        phase(.loading)
+        return try await WhisperKitTranscriber(installed)
+    }
+
+    /// What `load(_:from:phase:)` is doing right now. There is no "ready" case: the
+    /// returned transcriber is that state.
+    public enum LoadPhase: Equatable, Sendable {
+        case downloading(fractionCompleted: Double)
+        /// Core ML is loading the model. The first load on a Mac, and the first
+        /// after an OS update or a change to the app's signing identity, also
+        /// specializes it for the Neural Engine, which takes minutes.
+        case loading
     }
 
     public func transcribe(_ clip: AudioClip) async throws -> Transcript {
@@ -57,9 +91,17 @@ public final class WhisperKitTranscriber: Transcriber {
 
         /// Nonisolated on purpose: the non-Sendable WhisperKit is created and wrapped
         /// here without crossing an isolation boundary.
-        nonisolated init(model: Model) async throws {
+        nonisolated init(installed: InstalledModel) async throws {
             // WhisperKit logs to stdout when verbose; stdout belongs to whoever called us.
-            whisperKit = try await WhisperKit(WhisperKitConfig(model: model.rawValue, verbose: false, load: true))
+            // The tokenizer is not part of the manifest: WhisperKit fetches it into the
+            // hub on the first load and reads it from there on every later one.
+            whisperKit = try await WhisperKit(WhisperKitConfig(
+                modelFolder: installed.folder.path,
+                tokenizerFolder: installed.hub,
+                verbose: false,
+                load: true,
+                download: false
+            ))
         }
 
         func transcribe(_ clip: AudioClip) async throws -> Transcript {
