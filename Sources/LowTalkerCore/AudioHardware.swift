@@ -17,8 +17,7 @@ public protocol AudioHardware {
     /// arrives at `appending` as pipeline samples, on the audio service queue. The
     /// engine reports on the main actor: `onFailure` when a buffer could not be
     /// converted, `onConfigurationChange` when macOS has stopped it because its device
-    /// changed. Throws when the current device cannot feed the pipeline, which is what
-    /// no device at all looks like.
+    /// changed. Throws when the current device cannot feed the pipeline.
     func launch(
         appending: @escaping @Sendable ([Float]) -> Void,
         onFailure: @escaping @MainActor (any Error) -> Void,
@@ -95,7 +94,8 @@ public struct SystemAudioHardware: AudioHardware {
         guard status == noErr else { throw AudioHardwareError.defaultInputWatchFailed(status) }
         return {
             var removing = address
-            AudioObjectRemovePropertyListenerBlock(system, &removing, .main, listener)
+            let status = AudioObjectRemovePropertyListenerBlock(system, &removing, .main, listener)
+            precondition(status == noErr, "CoreAudio refused to remove the default input listener it added (status \(status))")
         }
     }
 }

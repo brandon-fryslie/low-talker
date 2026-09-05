@@ -26,11 +26,11 @@ public final class AudioCapture {
         case failed(any Error)
     }
 
-    /// A stretch with no engine, from the failure to the launch that ended it.
-    public struct Outage: Sendable {
-        /// The last failure of the stretch; the first is what began it.
-        public let error: any Error
-        public let duration: Duration
+    /// The gaps in capture since `start()`, each ended by a device appearing: how
+    /// many, and how long without audio all together.
+    public struct Outages: Sendable {
+        public var count = 0
+        public var total: Duration = .zero
     }
 
     /// An engine on the input device of its moment. The generation is what this
@@ -44,7 +44,7 @@ public final class AudioCapture {
 
     private enum Engine {
         case running(Live)
-        /// No engine since `since`: launching on the device of the moment failed.
+        /// No engine since `since`.
         case failed(any Error, since: ContinuousClock.Instant)
     }
 
@@ -68,8 +68,7 @@ public final class AudioCapture {
     private var generation = 0
     /// Input device changes survived without a gap since `start()`.
     public private(set) var deviceChanges = 0
-    /// Gaps in capture since `start()`, each ended by a device appearing.
-    public private(set) var outages: [Outage] = []
+    public private(set) var outages = Outages()
 
     nonisolated public static let defaultRetention: TimeInterval = 60
 
@@ -111,7 +110,7 @@ public final class AudioCapture {
     public func start(_ grant: MicrophoneGrant) throws {
         stop()
         deviceChanges = 0
-        outages = []
+        outages = Outages()
         let watch = try hardware.watchDefaultInput { [weak self] in self?.recover() }
         do {
             phase = .started(watch: watch, .running(try launch()))
@@ -172,10 +171,11 @@ public final class AudioCapture {
     /// how a device that appears reaches it. A launch that fails again (the device
     /// that appeared cannot feed the pipeline either) extends the same outage.
     private func recover() {
-        guard case .started(let watch, .failed(let failure, let since)) = phase else { return }
+        guard case .started(let watch, .failed(_, let since)) = phase else { return }
         do {
             phase = .started(watch: watch, .running(try launch()))
-            outages.append(Outage(error: failure, duration: .now - since))
+            outages.count += 1
+            outages.total += .now - since
         } catch {
             phase = .started(watch: watch, .failed(error, since: since))
         }

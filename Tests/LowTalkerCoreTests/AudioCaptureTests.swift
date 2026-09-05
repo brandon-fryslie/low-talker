@@ -121,14 +121,13 @@ private struct Authorized: MicrophoneAuthority {
         hardware.engines[0].onConfigurationChange()
         #expect(failure(of: capture, as: NoDevice.self) == NoDevice())
         #expect(hardware.engines.count == 1)
-        #expect(capture.outages.isEmpty)
+        #expect(capture.outages.count == 0)
 
         try hardware.changeDefaultInput()
         #expect(isRunning(capture))
         #expect(hardware.engines.count == 2)
         #expect(capture.outages.count == 1)
-        #expect(capture.outages[0].error as? NoDevice == NoDevice())
-        #expect(capture.outages[0].duration >= .zero)
+        #expect(capture.outages.total >= .zero)
         #expect(capture.deviceChanges == 0)
     }
 
@@ -144,7 +143,6 @@ private struct Authorized: MicrophoneAuthority {
         try hardware.changeDefaultInput()
         #expect(isRunning(capture))
         #expect(capture.outages.count == 1)
-        #expect(capture.outages[0].error as? BadBuffer == BadBuffer())
     }
 
     /// While running, a default input change is the engine's to notice (macOS posts it
