@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Creates the self-signed identity that signs dev builds, in the login keychain.
+#
+#   make-signing-identity <identity-name>
+#
+# macOS keys Microphone, Accessibility, and Input Monitoring grants to the app's
+# designated requirement. Signed with a certificate, that requirement names the
+# certificate and survives every rebuild; signed ad hoc, it names the binary's own
+# hash and changes with each one. Any long-lived certificate works, so a self-signed
+# one is enough: the dev signature has to be stable, never trusted. The certificate
+# gets no trust settings on purpose; codesign does not need them, and granting them
+# is the one step that would raise a password dialog.
+set -euo pipefail
+
+identity=${1:?usage: make-signing-identity <identity-name>}
+
+# [LAW:no-silent-failure] A second identity with the same name would make every build
+# fail as ambiguous, so refuse to import a duplicate. The listing goes through a
+# variable so a failing `security` aborts with its own error instead of reading as
+# "no match".
+existing=$(security find-identity -p codesigning)
+if grep -qF "\"$identity\"" <<<"$existing"; then
+  echo "make-signing-identity: an identity named '$identity' already exists;" \
+       "delete it in Keychain Access to start over (every permission grant goes with it)" >&2
+  exit 1
+fi
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+/usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=$identity" \
+  -addext "keyUsage=critical,digitalSignature" \
+  -addext "extendedKeyUsage=critical,codeSigning" \
+  -addext "basicConstraints=critical,CA:FALSE" \
+  -keyout "$work/key.pem" -out "$work/cert.pem"
+
+# The PKCS#12 file lives only until the import below reads it, so its password is a
+# fixed word: `security import` rejects an empty one. The cipher flags pin the
+# pre-OpenSSL-3 algorithms, the only ones `security import` can read.
+/usr/bin/openssl pkcs12 -export -name "$identity" -passout pass:identity \
+  -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 \
+  -inkey "$work/key.pem" -in "$work/cert.pem" -out "$work/identity.p12"
+
+# No -k: the default keychain is the one xcodebuild searches and the one macOS
+# unlocks at login. -T lets codesign use the key without a dialog on every build.
+security import "$work/identity.p12" -P identity -T /usr/bin/codesign
+
+# [LAW:verifiable-goals] Prove the identity is usable before anything builds on it.
+imported=$(security find-identity -p codesigning)
+grep -F "\"$identity\"" <<<"$imported" \
+  || { echo "make-signing-identity: '$identity' not found after import" >&2; exit 1; }

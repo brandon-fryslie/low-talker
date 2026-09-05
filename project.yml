@@ -30,6 +30,9 @@ targets:
         GENERATE_INFOPLIST_FILE: true
         INFOPLIST_KEY_LSUIElement: true
         INFOPLIST_KEY_NSMicrophoneUsageDescription: low-talker listens to your microphone while you hold the dictation key so it can turn what you say into text. Audio never leaves this Mac.
-        # Ad hoc signing until low-scaffold-yc7.3 settles the stable dev identity.
+        # macOS keys Microphone, Accessibility, and Input Monitoring grants to the
+        # signing certificate, so dev builds carry a self-signed identity that
+        # `make signing-identity` creates once per Mac. Ad hoc signing would key the
+        # grants to each build's own hash and lose them on every rebuild.
         CODE_SIGN_STYLE: Manual
-        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_IDENTITY: LowTalker Dev
