@@ -3,19 +3,28 @@ import Foundation
 import LowTalkerCore
 import Synchronization
 
-/// Which model and which store, for every command that touches the engine.
+/// Which store, for every command that touches models.
 ///
 /// [LAW:one-source-of-truth] The default store is the app's; the CLI reads and writes
 /// the same directory so a download from the terminal is a download for the app.
-struct ModelOptions: ParsableArguments {
-    @Option(help: "A model folder name in the whisperkit-coreml repo.")
-    var model: ModelName = .default
-
+struct StoreOptions: ParsableArguments {
     @Option(name: .customLong("models-dir"), help: "Where models are stored. Defaults to the app's directory under Application Support.", transform: URL.init(fileURLWithPath:))
     var modelsDirectory: URL?
 
     func store() throws -> ModelStore {
         try modelsDirectory.map(ModelStore.init(directory:)) ?? ModelStore.applicationSupport()
+    }
+}
+
+/// Which model and which store, for every command that works one model.
+struct ModelOptions: ParsableArguments {
+    @Option(help: "A model folder name in the whisperkit-coreml repo.")
+    var model: ModelName = .default
+
+    @OptionGroup var location: StoreOptions
+
+    func store() throws -> ModelStore {
+        try location.store()
     }
 }
 
@@ -45,5 +54,19 @@ final class PhaseReporter: Sendable {
 struct StandardError: TextOutputStream {
     mutating func write(_ string: String) {
         FileHandle.standardError.write(Data(string.utf8))
+    }
+}
+
+/// [LAW:one-source-of-truth] Every number a command writes to stdout comes through
+/// here, pinned to a locale no machine setting can change, so output diffs across
+/// machines.
+func fixed(_ value: Double, places: Int) -> String {
+    value.formatted(.number.precision(.fractionLength(places)).locale(Locale(identifier: "en_US_POSIX")))
+}
+
+extension Duration {
+    /// Seconds to the millisecond, the resolution a latency table needs.
+    var seconds: String {
+        fixed(Double(components.seconds) + Double(components.attoseconds) / 1e18, places: 3)
     }
 }
