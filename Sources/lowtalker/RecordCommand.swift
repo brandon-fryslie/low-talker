@@ -34,6 +34,7 @@ struct RecordCommand: AsyncParsableCommand {
 
         let clip = capture.endSession(session)
         try clip.write(to: output)
-        print("\(output.path): \(clip.duration) s, peak \(clip.peak), device changes \(capture.deviceChanges)")
+        let outages = capture.outages.map { "\($0.duration.formatted(.units(allowed: [.seconds], fractionalPart: .show(length: 1)))) (\($0.error))" }
+        print("\(output.path): \(clip.duration) s, peak \(clip.peak), device changes \(capture.deviceChanges), outages \(outages.count)\(outages.map { ": " + $0 }.joined())")
     }
 }
