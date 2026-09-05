@@ -26,10 +26,11 @@ struct RecordCommand: AsyncParsableCommand {
         let capture = AudioCapture()
         try capture.start()
         defer { capture.stop() }
+        let session = capture.beginSession()
         try await Task.sleep(for: .seconds(seconds))
         if case .failed(let error) = capture.state { throw error }
 
-        let clip = capture.clip(in: capture.retained)
+        let clip = capture.endSession(session)
         try clip.write(to: output)
         print("\(output.path): \(clip.duration) s, peak \(clip.peak), device changes \(capture.deviceChanges)")
     }

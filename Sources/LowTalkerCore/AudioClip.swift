@@ -8,6 +8,13 @@ import AVFoundation
 public struct AudioClip: Sendable, Equatable {
     public static let sampleRate: Double = 16_000
 
+    /// The samples `duration` spans at the pipeline rate, to the nearest sample.
+    /// [LAW:one-source-of-truth] The one place seconds become sample counts, so a
+    /// ring's capacity and a session's pre-roll are measured by the same rule.
+    public static func sampleCount(for duration: TimeInterval) -> Int {
+        Int((duration * sampleRate).rounded())
+    }
+
     public let samples: [Float]
 
     public init(samples: [Float]) {
