@@ -58,34 +58,34 @@ import Testing
         #expect(try Manifest(contentsOf: url) == manifest)
     }
 
-    @Test func untouchedFolderVerifies() throws {
+    @Test func untouchedFolderHasNoFaults() throws {
         let scratch = try Scratch(files: Self.files)
         let manifest = try Manifest(recording: scratch.folder, relativeTo: scratch.root)
-        try manifest.verify(against: scratch.folder)
+        #expect(manifest.faults(in: scratch.folder).isEmpty)
     }
 
     /// Extra files are not damage: the hub adds sidecars of its own.
-    @Test func extraFilesDoNotFailVerification() throws {
+    @Test func extraFilesAreNotFaults() throws {
         let scratch = try Scratch(files: Self.files)
         let manifest = try Manifest(recording: scratch.folder, relativeTo: scratch.root)
         try "sidecar".write(to: scratch.folder.appending(path: "extra.metadata"), atomically: true, encoding: .utf8)
-        try manifest.verify(against: scratch.folder)
+        #expect(manifest.faults(in: scratch.folder).isEmpty)
     }
 
-    @Test func missingFileFailsVerification() throws {
+    @Test func missingFileIsAFault() throws {
         let scratch = try Scratch(files: Self.files)
         let manifest = try Manifest(recording: scratch.folder, relativeTo: scratch.root)
         try FileManager.default.removeItem(at: scratch.folder.appending(path: "AudioEncoder.mlmodelc/weights/weight.bin"))
-        #expect(throws: ManifestError.self) { try manifest.verify(against: scratch.folder) }
+        #expect(manifest.faults(in: scratch.folder) == [.init(path: "AudioEncoder.mlmodelc/weights/weight.bin", kind: .missing)])
     }
 
     /// A download that stopped mid-file leaves a short file behind; the size is the
     /// tell.
-    @Test func truncatedFileFailsVerification() throws {
+    @Test func truncatedFileIsAFault() throws {
         let scratch = try Scratch(files: Self.files)
         let manifest = try Manifest(recording: scratch.folder, relativeTo: scratch.root)
         try "0123".write(to: scratch.folder.appending(path: "AudioEncoder.mlmodelc/weights/weight.bin"), atomically: true, encoding: .utf8)
-        #expect(throws: ManifestError.self) { try manifest.verify(against: scratch.folder) }
+        #expect(manifest.faults(in: scratch.folder) == [.init(path: "AudioEncoder.mlmodelc/weights/weight.bin", kind: .wrongSize(expected: 10, actual: 4))])
     }
 
     @Test func storeWithoutAManifestIsMissing() throws {
@@ -114,11 +114,23 @@ import Testing
         let store = ModelStore(directory: scratch.root)
         try Manifest(recording: scratch.folder, relativeTo: scratch.root).write(to: scratch.root.appending(components: "installed", "test.json"))
         try FileManager.default.removeItem(at: scratch.folder.appending(path: "config.json"))
-        guard case .damaged(let reason) = store.presence(of: "test") else {
+        let presence = store.presence(of: "test")
+        guard case .damaged(.files(_, let faults)) = presence else {
             Issue.record("a manifest naming a missing file must count as damaged")
             return
         }
-        #expect(reason.contains("config.json"))
+        #expect(faults == [.init(path: "config.json", kind: .missing)])
+        #expect(presence.evictions.isEmpty, "a file that is already gone needs no eviction")
+    }
+
+    /// The hub client never re-fetches a file that exists, so a repair must start by
+    /// removing the files the manifest rejects.
+    @Test func truncatedFileIsEvictedByARepair() throws {
+        let scratch = try Scratch(files: Self.files)
+        let store = ModelStore(directory: scratch.root)
+        try Manifest(recording: scratch.folder, relativeTo: scratch.root).write(to: scratch.root.appending(components: "installed", "test.json"))
+        try "{".write(to: scratch.folder.appending(path: "config.json"), atomically: true, encoding: .utf8)
+        #expect(store.presence(of: "test").evictions.map(\.standardizedFileURL) == [scratch.folder.appending(path: "config.json").standardizedFileURL])
     }
 
     @Test func storeWithAnUnreadableManifestIsDamaged() throws {
@@ -126,9 +138,11 @@ import Testing
         let url = scratch.root.appending(components: "installed", "test.json")
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try "not json".write(to: url, atomically: true, encoding: .utf8)
-        guard case .damaged = ModelStore(directory: scratch.root).presence(of: "test") else {
+        let presence = ModelStore(directory: scratch.root).presence(of: "test")
+        guard case .damaged(.manifestUnreadable) = presence else {
             Issue.record("a corrupt manifest must count as damaged, not missing")
             return
         }
+        #expect(presence.evictions.isEmpty, "with no manifest to name faults, a repair removes nothing")
     }
 }

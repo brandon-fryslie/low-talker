@@ -31,18 +31,18 @@ The app and the CLI share one model directory, `~/Library/Application Support/lo
     .build/debug/lowtalker model status      # installed, missing, or damaged; exits 1 unless installed
     .build/debug/lowtalker model download    # fetch it, or finish a download that stopped
 
-A download that stopped part way leaves no manifest, so the model reads as missing and the next download resumes it: the hub client skips every file already on disk whose hash matches. A file that later goes missing or changes size reads as damaged, and `model download` repairs it the same way. Pass `--models-dir` to either command, or to `transcribe`, to use a different directory.
+A download that stopped part way leaves no manifest, so the model reads as missing and the next download resumes it: the hub client skips every file already on disk that its own sidecar marks as downloaded. A file that later goes missing or changes size reads as damaged, and `model download` repairs it by deleting the files the manifest rejects before asking the hub client for the model; the client never hashes a file it finds on disk, so a truncated file would otherwise pass. Pass `--models-dir` to either command, or to `transcribe`, to use a different directory.
 
 The tokenizer is not part of the manifest: WhisperKit fetches it into the same directory during the first load and reads it from there afterwards.
 
 ### Load times and the Neural Engine cache
 
-Loading the model means Core ML compiling it for this Mac's Neural Engine, which takes minutes for the default model. macOS caches the result, keyed by the model and by the **code-signing identifier** of the process that loaded it, and evicts the cache after an OS update. Measured on an M2 Max:
+Loading the model means Core ML compiling it for this Mac's Neural Engine, which takes minutes for the default model. macOS caches the result, keyed by the model's path and by the **code-signing identifier** of the process that loaded it, and evicts the cache after an OS update. Measured on an M2 Max:
 
 | Situation | Load |
 |---|---|
-| First load of a model, or after an OS update | 2 to 4 minutes |
-| Same signing identifier, model already compiled | 5 to 7 seconds |
+| First load of a model, after an OS update, or after the store moved | 1.5 to 4.5 minutes |
+| Same signing identifier, model already compiled | 1.5 to 7 seconds |
 | A binary with a new signing identifier | 2 to 4 minutes again |
 
 `swift build` links a fresh identifier into every binary it produces, so a plain `swift run` pays the full compile after every rebuild. `make cli` re-signs the built binary with the fixed identifier `lowtalker`, which keeps the cache warm across rebuilds. The app's identifier is its bundle id, set by its certificate signature, so `make app` builds keep the cache warm on their own.

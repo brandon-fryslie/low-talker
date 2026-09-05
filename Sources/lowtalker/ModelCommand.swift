@@ -28,8 +28,8 @@ struct ModelCommand: AsyncParsableCommand {
             case .missing:
                 print("missing: \(options.model)")
                 throw ExitCode(1)
-            case .damaged(let reason):
-                print("damaged: \(reason)")
+            case .damaged(let damage):
+                print("damaged: \(damage)")
                 throw ExitCode(1)
             }
         }
