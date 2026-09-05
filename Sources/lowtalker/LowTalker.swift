@@ -4,10 +4,10 @@ import ArgumentParser
 /// lands in LowTalkerCore gets a subcommand here, one per file, before it gets wired
 /// into the app.
 @main
-struct LowTalker: ParsableCommand {
+struct LowTalker: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "lowtalker",
         abstract: "Exercise the low-talker pipeline without the hotkey.",
-        subcommands: [Info.self, RouteCommand.self]
+        subcommands: [Info.self, RouteCommand.self, TranscribeCommand.self]
     )
 }

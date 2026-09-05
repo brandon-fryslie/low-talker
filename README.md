@@ -15,6 +15,14 @@ CI runs `make signing-identity`, `make test`, and `make app` on a macos-15 runne
 
 Before the first `make app`, do the one-time setup below.
 
+## Trying the engine
+
+    swift run lowtalker transcribe Tests/LowTalkerCoreTests/Fixtures/hello-16k-mono.wav
+
+prints the transcript, then one line per word with its start, end, and confidence. The first run downloads the default Whisper model (about 626 MB) into `~/Documents/huggingface/models/argmaxinc/whisperkit-coreml/`, which is where WhisperKit keeps its cache, and the first load after a download or an OS update takes a while longer while Core ML specializes the model for this chip. Pass `--model` with another folder name from that repo to try a different one.
+
+CI has no model cache, so the tests cover the mapping from WhisperKit's results onto `Transcript` with hand-built results; the real engine is only exercised through this command.
+
 ## One-time setup: signing identity
 
 Run once after cloning:

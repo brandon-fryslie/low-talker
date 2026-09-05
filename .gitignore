@@ -3,3 +3,5 @@
 DerivedData/
 .DS_Store
 LowTalker.xcodeproj/
+# Session handoff notes written by the remember hook; local to each checkout.
+.remember/
