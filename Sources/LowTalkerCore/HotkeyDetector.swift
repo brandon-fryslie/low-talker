@@ -98,10 +98,11 @@ public struct HotkeyDetector: Sendable {
     /// A press released before this long is a tap.
     public let tapThreshold: Duration
     public private(set) var phase: Phase = .idle
-    /// Keys whose down was swallowed and are still down, so their up is swallowed too
-    /// and the app sees each key move a balanced number of times. Beside the phase
-    /// rather than in it: a press can end, and the next begin, while a swallowed key
-    /// is still down.
+    /// Keys whose down was swallowed and whose up has not come, so it is swallowed
+    /// too and the app sees each key move a balanced number of times. Beside the
+    /// phase rather than in it: a press can end, and the next begin, while a
+    /// swallowed key is still down. An up that went by during a lapse leaves the key
+    /// here until its next down, which is swallowed with its up: one press unseen.
     private var swallowing: Set<ChordKey> = []
 
     public init(chords: Set<KeyChord>, tapThreshold: Duration) {
@@ -157,7 +158,7 @@ public struct HotkeyDetector: Sendable {
     }
 
     /// Events were missed: the open press ends, since its release may have gone by
-    /// unseen, and nothing stays swallowed, since the app saw whatever came up.
+    /// unseen. What was swallowed stays so; the app never saw those keys go down.
     public mutating func lapse() -> Transition? {
         let transition: Transition? = switch phase {
         case .idle: nil
@@ -165,7 +166,6 @@ public struct HotkeyDetector: Sendable {
         case .latched(let chord): .ended(chord, .tap)
         }
         phase = .idle
-        swallowing = []
         return transition
     }
 }

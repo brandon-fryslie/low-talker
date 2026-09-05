@@ -45,6 +45,8 @@ extension Modifier {
         case .rightOption: (CGKeyCode(kVK_RightOption), UInt64(NX_DEVICERALTKEYMASK))
         case .leftCommand: (CGKeyCode(kVK_Command), UInt64(NX_DEVICELCMDKEYMASK))
         case .rightCommand: (CGKeyCode(kVK_RightCommand), UInt64(NX_DEVICERCMDKEYMASK))
+        // Also set on the arrow, Home, End, Page and Forward Delete keys, Fn held or
+        // not; telling the Fn key itself apart is low-hotkey-a6m.3.
         case .function: (CGKeyCode(kVK_Function), UInt64(NX_SECONDARYFNMASK))
         }
     }
@@ -118,7 +120,7 @@ public struct SystemKeyboardTap: KeyboardTap {
         handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery,
         onLapse: @escaping @MainActor () -> Void
     ) throws -> Disposal {
-        let installed = Installed(handle: handle, onLapse: onLapse)
+        let installed = Unmanaged.passRetained(Installed(handle: handle, onLapse: onLapse))
         let interest: CGEventMask = [CGEventType.flagsChanged, .keyDown, .keyUp].reduce(0) { $0 | 1 << $1.rawValue }
         // Scheduled on the main run loop, so the callback runs on the main actor.
         guard let port = CGEvent.tapCreate(
@@ -133,9 +135,12 @@ public struct SystemKeyboardTap: KeyboardTap {
                 case .swallow: return nil
                 }
             },
-            userInfo: Unmanaged.passUnretained(installed).toOpaque()
-        ) else { throw KeyboardTapError.refused }
-        installed.port = port
+            userInfo: installed.toOpaque()
+        ) else {
+            installed.release()
+            throw KeyboardTapError.refused
+        }
+        installed.takeUnretainedValue().port = port
         guard let source = CFMachPortCreateRunLoopSource(nil, port, 0) else {
             preconditionFailure("CoreFoundation refused a run loop source for the event tap it just created")
         }
@@ -145,9 +150,7 @@ public struct SystemKeyboardTap: KeyboardTap {
             CGEvent.tapEnable(tap: port, enable: false)
             CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
             CFMachPortInvalidate(port)
-            // The callback reaches `installed` unretained; the disposal is what keeps
-            // it alive until the port that could call it is gone.
-            withExtendedLifetime(installed) {}
+            installed.release()
         }
     }
 }

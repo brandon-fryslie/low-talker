@@ -178,19 +178,32 @@ private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
         #expect(keyboard.detector.phase == .idle)
     }
 
-    /// A lapse ends whatever press is open, a hold or a latched tap, and swallows
-    /// nothing further: the key that comes up afterwards reaches the app.
+    /// A lapse ends whatever press is open, a hold or a latched tap. The key still
+    /// held through it is swallowed when it comes up, as its down was.
     @Test func aLapseEndsWhateverPressIsOpen() {
         var keyboard = Keyboard()
         #expect(keyboard.detector.lapse() == nil)
         _ = keyboard.press(.rightOption, at: 0)
         #expect(keyboard.detector.lapse() == .ended(rightOption, .hold))
         #expect(keyboard.detector.phase == .idle)
-        #expect(keyboard.release(.rightOption, at: 10) == passed)
+        #expect(keyboard.release(.rightOption, at: 10) == swallowed)
         _ = keyboard.press(.rightOption, at: 100)
         _ = keyboard.release(.rightOption, at: 150)
         #expect(keyboard.detector.lapse() == .ended(rightOption, .tap))
         #expect(keyboard.detector.phase == .idle)
+    }
+
+    /// A lapse forgets no swallowed key: the one carried over from the last press and
+    /// the one of the press it ended are both swallowed when they come up.
+    @Test func aLapseKeepsSwallowingTheKeysTheAppNeverSawGoDown() {
+        var keyboard = Keyboard(chords: [optionSpace, rightOption])
+        _ = keyboard.press(.leftOption, at: 0)
+        _ = keyboard.press(Key(rawValue: 49), at: 10)
+        _ = keyboard.release(.leftOption, at: 400)
+        #expect(keyboard.press(.rightOption, at: 410) == began(rightOption))
+        #expect(keyboard.detector.lapse() == .ended(rightOption, .hold))
+        #expect(keyboard.release(Key(rawValue: 49), at: 460) == swallowed)
+        #expect(keyboard.release(.rightOption, at: 470) == swallowed)
     }
 
     /// While latched, any configured chord ends the listening, not only the one that
