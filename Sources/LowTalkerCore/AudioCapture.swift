@@ -87,7 +87,9 @@ public final class AudioCapture {
         phase = .stopped
     }
 
-    isolated deinit { stop() }
+    // A non-Sendable @MainActor class is only ever held by main-actor code, so its
+    // last release is on the main actor; assumeIsolated traps if that stops holding.
+    deinit { MainActor.assumeIsolated { stop() } }
 
     /// The running engine, only while it is still the one a callback was formed
     /// for. [LAW:no-ambient-temporal-coupling] An observer block already queued
