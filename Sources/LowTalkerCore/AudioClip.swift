@@ -1,5 +1,4 @@
 import AVFoundation
-import Synchronization
 
 /// The pipeline's audio currency: 16 kHz mono Float32 samples.
 ///
@@ -102,19 +101,19 @@ extension AudioClip {
 
         var samples: [Float] = []
         samples.reserveCapacity(Int(Double(input.frameLength) * Self.sampleRate / source.sampleRate) + 1)
-        // The converter's input block is @Sendable, so the "handed over yet?" fact needs
-        // an owner rather than a captured var. [LAW:no-shared-mutable-globals] The mutex
-        // is that owner: the block takes the buffer exactly once, then reports end of
-        // stream while the converter drains its resampler tail. `.endOfStream` is the only exit.
-        let pending = Mutex<AVAudioPCMBuffer?>(input)
+        // The block hands the buffer over exactly once, then reports end of stream while
+        // the converter drains its resampler tail; `.endOfStream` is the only exit.
+        // [LAW:no-shared-mutable-globals] exception: the SDK types the block @Sendable,
+        // but `convert` calls it synchronously on this thread, so nothing is shared. A
+        // Mutex would satisfy the annotation only where AVAudioFormat is Sendable
+        // (macOS 26 SDK); on the macOS 15 SDK the buffer shares a region with the
+        // converter and cannot be sent into one.
+        nonisolated(unsafe) var pending: AVAudioPCMBuffer? = input
         drain: while true {
             var conversionError: NSError?
             let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
-                let next = pending.withLock { buffer -> AVAudioPCMBuffer? in
-                    let taken = buffer
-                    buffer = nil
-                    return taken
-                }
+                let next = pending
+                pending = nil
                 inputStatus.pointee = next == nil ? .endOfStream : .haveData
                 return next
             }
