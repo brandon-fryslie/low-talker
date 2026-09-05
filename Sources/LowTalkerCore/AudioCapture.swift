@@ -1,4 +1,4 @@
-import AVFoundation
+import Foundation
 import Synchronization
 
 /// Microphone capture that runs for the life of the app. Whatever the input device
@@ -8,40 +8,52 @@ import Synchronization
 /// The engine is disposable and the ring is not. When the input device changes,
 /// macOS stops the engine and posts a configuration change, and a tap reinstalled on
 /// that engine never delivers another buffer (tried with stop, reset, prepare, and a
-/// delay); only a fresh AVAudioEngine on the new device does. So a device change
-/// launches a new engine by the same routine as `start()`, and the ring, which lives
-/// here rather than in any engine, carries across.
+/// delay); only a fresh engine on the new device does. So a device change launches a
+/// new engine by the same routine as `start()`, and the ring, which lives here rather
+/// than in any engine, carries across.
+///
+/// When the only input device is unplugged, the replacement cannot launch (there is
+/// nothing to convert from) and capture is failed. A failed capture has no engine, so
+/// the plug-back-in reaches it another way: the system default input device is
+/// watched for the whole started period, and a change while failed launches again.
 @MainActor
 public final class AudioCapture {
     public enum State {
         case stopped
         case running
-        /// Capture stopped on its own and stays stopped until `start()`.
+        /// Capture stopped on its own. It stays that way until the default input device
+        /// changes, when it launches again, or until `stop()`.
         case failed(any Error)
     }
 
-    /// An engine on the current input device, with the observer that replaces it.
-    /// [LAW:types-are-the-program] One value, so an observer can never outlive its
-    /// engine or watch a stale one. The generation is what this engine's callbacks
-    /// carry (the tap's failure, the observer's change), so a callback from a replaced
-    /// engine is recognized as stale (a counter, because a replaced engine's address
-    /// can be reused).
-    private struct Live {
-        let engine: AVAudioEngine
-        let observer: any NSObjectProtocol
-        let generation: Int
-
-        func dispose() {
-            NotificationCenter.default.removeObserver(observer)
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
-        }
+    /// The gaps in capture since `start()`, each ended by a device appearing: how
+    /// many, and how long without audio all together.
+    public struct Outages: Sendable {
+        public var count = 0
+        public var total: Duration = .zero
     }
 
+    /// An engine on the input device of its moment. The generation is what this
+    /// engine's callbacks carry (the tap's failure, the observer's change), so a
+    /// callback from a replaced engine is recognized as stale (a counter, because a
+    /// replaced engine's address can be reused).
+    private struct Live {
+        let dispose: Disposal
+        let generation: Int
+    }
+
+    private enum Engine {
+        case running(Live)
+        /// No engine since `since`.
+        case failed(any Error, since: ContinuousClock.Instant)
+    }
+
+    /// [LAW:types-are-the-program] The default-input watch exists exactly between
+    /// `start()` and `stop()`, whatever the engine is doing, so it lives beside the
+    /// engine rather than in an optional every reader would have to reconcile.
     private enum Phase {
         case stopped
-        case running(Live)
-        case failed(any Error)
+        case started(watch: Disposal, Engine)
     }
 
     /// The ring behind a lock, shared between the tap's queue and the main actor.
@@ -50,23 +62,26 @@ public final class AudioCapture {
         init(_ ring: AudioRing) { self.ring = Mutex(ring) }
     }
 
+    private let hardware: any AudioHardware
     private let shared: SharedRing
     private var phase: Phase = .stopped
     private var generation = 0
-    /// Input device changes survived since `start()`.
+    /// Input device changes survived without a gap since `start()`.
     public private(set) var deviceChanges = 0
+    public private(set) var outages = Outages()
 
     nonisolated public static let defaultRetention: TimeInterval = 60
 
-    public init(retaining duration: TimeInterval = defaultRetention) {
+    public init(retaining duration: TimeInterval = defaultRetention, hardware: any AudioHardware = SystemAudioHardware()) {
+        self.hardware = hardware
         shared = SharedRing(AudioRing(retaining: duration))
     }
 
     public var state: State {
         switch phase {
         case .stopped: .stopped
-        case .running: .running
-        case .failed(let error): .failed(error)
+        case .started(_, .running): .running
+        case .started(_, .failed(let error, _)): .failed(error)
         }
     }
 
@@ -95,11 +110,21 @@ public final class AudioCapture {
     public func start(_ grant: MicrophoneGrant) throws {
         stop()
         deviceChanges = 0
-        phase = .running(try launch())
+        outages = Outages()
+        let watch = try hardware.watchDefaultInput { [weak self] in self?.recover() }
+        do {
+            phase = .started(watch: watch, .running(try launch()))
+        } catch {
+            watch()
+            throw error
+        }
     }
 
     public func stop() {
-        if case .running(let live) = phase { live.dispose() }
+        if case .started(let watch, let engine) = phase {
+            if case .running(let live) = engine { live.dispose() }
+            watch()
+        }
         phase = .stopped
     }
 
@@ -107,67 +132,60 @@ public final class AudioCapture {
     // last release is on the main actor; assumeIsolated traps if that stops holding.
     deinit { MainActor.assumeIsolated { stop() } }
 
-    /// The running engine, only while it is still the one a callback was formed
-    /// for. [LAW:no-ambient-temporal-coupling] An observer block already queued
-    /// when `dispose()` removes the observer still runs, and the tap's failure
-    /// arrives asynchronously, so both callbacks are resolved here by generation
-    /// rather than trusted by arrival.
-    private func live(of generation: Int) -> Live? {
-        guard case .running(let live) = phase, live.generation == generation else { return nil }
-        return live
+    /// The running engine, only while it is still the one a callback was formed for,
+    /// with the watch that outlives it. [LAW:no-ambient-temporal-coupling] An observer
+    /// block already queued when `dispose()` removes the observer still runs, and the
+    /// tap's failure arrives asynchronously, so both callbacks are resolved here by
+    /// generation rather than trusted by arrival.
+    private func live(of generation: Int) -> (watch: Disposal, live: Live)? {
+        guard case .started(let watch, .running(let live)) = phase, live.generation == generation else { return nil }
+        return (watch, live)
     }
 
     private func launch() throws -> Live {
-        let engine = AVAudioEngine()
-        let input = engine.inputNode
-        let source = input.outputFormat(forBus: 0)
-        // [LAW:no-shared-mutable-globals] exception: the converter is not Sendable on
-        // the macOS 15 SDK, but the tap block is its only caller and the audio service
-        // queue serializes the calls, so nothing is shared.
-        nonisolated(unsafe) let converter = try AudioClip.Converter(from: source)
         let shared = shared
         generation += 1
         let generation = generation
-        // Explicitly @Sendable: a closure formed here would otherwise inherit main-actor
-        // isolation and trap when the tap fires on the audio service queue.
-        input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(source.sampleRate / 10), format: source) { @Sendable [weak self] buffer, _ in
-            do {
-                let samples = try converter.convert(buffer)
-                shared.ring.withLock { $0.append(samples) }
-            } catch {
-                Task { @MainActor in self?.fail(error, from: generation) }
-            }
-        }
-        let observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.replaceEngine(from: generation) }
-        }
-        let live = Live(engine: engine, observer: observer, generation: generation)
-        do {
-            try engine.start()
-        } catch {
-            live.dispose()
-            throw error
-        }
-        return live
+        let dispose = try hardware.launch(
+            appending: { samples in shared.ring.withLock { $0.append(samples) } },
+            onFailure: { [weak self] error in self?.fail(error, from: generation) },
+            onConfigurationChange: { [weak self] in self?.replaceEngine(from: generation) }
+        )
+        return Live(dispose: dispose, generation: generation)
     }
 
     /// The device changed: macOS already stopped the engine, and it never delivers again.
     private func replaceEngine(from generation: Int) {
-        guard let live = live(of: generation) else { return }
+        guard case let (watch, live)? = live(of: generation) else { return }
         live.dispose()
         do {
-            phase = .running(try launch())
+            phase = .started(watch: watch, .running(try launch()))
             deviceChanges += 1
         } catch {
-            phase = .failed(error)
+            phase = .started(watch: watch, .failed(error, since: .now))
+        }
+    }
+
+    /// The default input device changed. A running engine hears that itself, through
+    /// its configuration change; a failed one has no engine to hear with, so this is
+    /// how a device that appears reaches it. A launch that fails again (the device
+    /// that appeared cannot feed the pipeline either) extends the same outage.
+    private func recover() {
+        guard case .started(let watch, .failed(_, let since)) = phase else { return }
+        do {
+            phase = .started(watch: watch, .running(try launch()))
+            outages.count += 1
+            outages.total += .now - since
+        } catch {
+            phase = .started(watch: watch, .failed(error, since: since))
         }
     }
 
     /// A failure from an engine a device change has since replaced is stale: the
     /// engine it came from is gone and the one running is healthy.
     private func fail(_ error: any Error, from generation: Int) {
-        guard let live = live(of: generation) else { return }
+        guard case let (watch, live)? = live(of: generation) else { return }
         live.dispose()
-        phase = .failed(error)
+        phase = .started(watch: watch, .failed(error, since: .now))
     }
 }
