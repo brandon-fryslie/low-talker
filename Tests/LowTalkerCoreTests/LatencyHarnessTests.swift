@@ -35,12 +35,14 @@ private final class CaseSensitiveVolume {
         let base = FileManager.default.temporaryDirectory.appending(path: "lowtalker-cs-\(UUID().uuidString)")
         image = base.appendingPathExtension("dmg")
         mountPoint = base
+        try FileManager.default.createDirectory(at: mountPoint, withIntermediateDirectories: true)
         try Self.hdiutil("create", "-size", "8m", "-fs", "Case-sensitive APFS", "-volname", "lowtalker-cs", "-quiet", image.path)
         try Self.hdiutil("attach", image.path, "-mountpoint", mountPoint.path, "-nobrowse", "-quiet")
     }
 
     deinit {
         try? Self.hdiutil("detach", mountPoint.path, "-quiet")
+        try? FileManager.default.removeItem(at: mountPoint)
         try? FileManager.default.removeItem(at: image)
     }
 
