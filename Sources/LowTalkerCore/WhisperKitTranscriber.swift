@@ -34,13 +34,20 @@ public final class WhisperKitTranscriber: Transcriber {
 
     /// What `load(_:from:phase:)` is doing right now. There is no "ready" case: the
     /// returned transcriber is that state.
-    public enum LoadPhase: Equatable, Sendable {
+    public enum LoadPhase: Equatable, Sendable, CustomStringConvertible {
         case installing(ModelStore.InstallPhase)
         /// Core ML is loading the model. The first load after an install also fetches
         /// the tokenizer when `tokenizer.json` is not in the hub yet; the first on a
         /// Mac, after an OS update, or after a change to the app's signing identity
         /// also specializes the model for the Neural Engine, which takes minutes.
         case loading
+
+        public var description: String {
+            switch self {
+            case .installing(let phase): phase.description
+            case .loading: "loading model"
+            }
+        }
     }
 
     public func transcribe(_ clip: AudioClip) async throws -> Transcript {

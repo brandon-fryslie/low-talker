@@ -91,9 +91,19 @@ public struct ModelStore: Sendable {
 
     /// What `install` is doing now. `waitingForAnotherInstall` is reported once,
     /// when the lock is found held; `downloading` repeats as the fraction grows.
-    public enum InstallPhase: Equatable, Sendable {
+    ///
+    /// [LAW:one-source-of-truth] The words every surface shows for a phase live here,
+    /// so the menu bar and the terminal cannot describe the same moment differently.
+    public enum InstallPhase: Equatable, Sendable, CustomStringConvertible {
         case waitingForAnotherInstall
         case downloading(fractionCompleted: Double)
+
+        public var description: String {
+            switch self {
+            case .waitingForAnotherInstall: "waiting for another install"
+            case .downloading(let fraction): "downloading \(Int(fraction * 100))%"
+            }
+        }
     }
 
     public enum Presence: Sendable {
@@ -134,7 +144,7 @@ public struct ModelStore: Sendable {
                     faults.compactMap { fault in
                         switch fault.kind {
                         case .missing: nil
-                        case .wrongSize: folder.appending(path: fault.path)
+                        case .wrongSize, .notAFile: folder.appending(path: fault.path)
                         }
                     }
                 }
@@ -300,10 +310,10 @@ public struct Manifest: Codable, Equatable, Sendable {
         try encoder.encode(self).write(to: url, options: .atomic)
     }
 
-    /// The listed files that are not in `folder` at their recorded size; empty
-    /// means whole. Extra files are not damage: the hub may add sidecars, and they
-    /// carry no model weight. Only a file that does not exist is a fault; any other
-    /// trouble reading it is thrown, since it is not something a download repairs.
+    /// The listed files that are not in `folder` as files of their recorded size;
+    /// empty means whole. Extra files are not damage: the hub may add sidecars, and
+    /// they carry no model weight. Only a file that does not exist is a fault; any
+    /// other trouble reading it is thrown, since it is not something a download repairs.
     public func faults(in folder: URL) throws -> [Fault] {
         try files.compactMap { file in
             let values: URLResourceValues
@@ -312,9 +322,9 @@ public struct Manifest: Codable, Equatable, Sendable {
             } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
                 return Fault(path: file.path, kind: .missing)
             }
-            // A directory in a file's place has no size; zero makes it wrong-sized, so
-            // the repair removes it.
-            let size = Int64(values.fileSize ?? 0)
+            guard let size = values.fileSize.map(Int64.init) else {
+                return Fault(path: file.path, kind: .notAFile)
+            }
             return size == file.size ? nil : Fault(path: file.path, kind: .wrongSize(expected: file.size, actual: size))
         }
     }
@@ -327,6 +337,8 @@ public struct Manifest: Codable, Equatable, Sendable {
         public enum Kind: Equatable, Sendable {
             case missing
             case wrongSize(expected: Int64, actual: Int64)
+            /// Something with no size, such as a folder, stands where the file was.
+            case notAFile
         }
 
         public init(path: String, kind: Kind) {
@@ -338,6 +350,7 @@ public struct Manifest: Codable, Equatable, Sendable {
             switch kind {
             case .missing: "\(path) is missing"
             case .wrongSize(let expected, let actual): "\(path) is \(actual) bytes, expected \(expected)"
+            case .notAFile: "\(path) is not a file"
             }
         }
     }

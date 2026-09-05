@@ -62,7 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let store = try ModelStore.applicationSupport()
             let transcriber = try await WhisperKitTranscriber.load(from: store) { phase in
-                Task { @MainActor in self.showEngineStatus(Self.status(for: phase)) }
+                Task { @MainActor in self.showEngineStatus(phase.description) }
             }
             showEngineStatus("ready (\(transcriber.model))")
             return transcriber
@@ -72,17 +72,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // with no explanation on screen.
             showEngineStatus("failed — \(error)")
             throw error
-        }
-    }
-
-    private static func status(for phase: WhisperKitTranscriber.LoadPhase) -> String {
-        switch phase {
-        case .installing(.waitingForAnotherInstall):
-            "waiting for another install…"
-        case .installing(.downloading(let fraction)):
-            "downloading \(Int(fraction * 100))%"
-        case .loading:
-            "loading…"
         }
     }
 

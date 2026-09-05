@@ -114,15 +114,31 @@ import Testing
         #expect(try manifest.faults(in: scratch.folder) == [.init(path: "AudioEncoder.mlmodelc/weights/weight.bin", kind: .wrongSize(expected: 10, actual: 4))])
     }
 
-    /// A folder standing where a file belongs has no size, so it is wrong-sized and
-    /// the repair removes it rather than leaving the hub client to trust it.
-    @Test func folderInAFilesPlaceIsAWrongSizeFault() throws {
-        let scratch = try Scratch(files: Self.files)
-        let manifest = try Manifest(recording: scratch.folder, relativeTo: scratch.root)
-        let weights = scratch.folder.appending(path: "AudioEncoder.mlmodelc/weights/weight.bin")
-        try FileManager.default.removeItem(at: weights)
-        try FileManager.default.createDirectory(at: weights, withIntermediateDirectories: false)
-        #expect(try manifest.faults(in: scratch.folder) == [.init(path: "AudioEncoder.mlmodelc/weights/weight.bin", kind: .wrongSize(expected: 10, actual: 0))])
+    /// A folder standing where a file belongs is its own kind of fault, not a size:
+    /// a 0-byte file is a legitimate recording, so no size may stand in for "none".
+    /// The repair removes the folder rather than leaving the hub client to trust it.
+    @Test func folderInAFilesPlaceIsAFaultTheRepairEvicts() throws {
+        let scratch = try Scratch(files: Self.files.merging(["empty.txt": ""]) { _, new in new })
+        let store = ModelStore(directory: scratch.root)
+        try Manifest(recording: scratch.folder, relativeTo: scratch.root).write(to: scratch.manifestURL)
+        let empty = scratch.folder.appending(path: "empty.txt")
+        try FileManager.default.removeItem(at: empty)
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: false)
+        let presence = try store.presence(of: "test")
+        guard case .damaged(.files(_, let faults)) = presence else {
+            Issue.record("a folder in a listed file's place must count as damaged")
+            return
+        }
+        #expect(faults == [.init(path: "empty.txt", kind: .notAFile)])
+        #expect(try presence.evictions.map(\.standardizedFileURL) == [empty.standardizedFileURL])
+    }
+
+    /// The menu bar and the terminal both show a phase's own words, so the words
+    /// are pinned once, here.
+    @Test func phasesDescribeThemselves() {
+        #expect("\(WhisperKitTranscriber.LoadPhase.installing(.waitingForAnotherInstall))" == "waiting for another install")
+        #expect("\(WhisperKitTranscriber.LoadPhase.installing(.downloading(fractionCompleted: 0.426)))" == "downloading 42%")
+        #expect("\(WhisperKitTranscriber.LoadPhase.loading)" == "loading model")
     }
 
     /// A file this process may not reach is not a missing file: a download would
