@@ -5,14 +5,10 @@ APP := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/LowTalker.app
 
 .PHONY: app run test clean
 
-# The project is derived from project.yml and the source tree it enumerates, so a new
-# file under App/ regenerates it too.
-APP_SOURCES := $(shell find App -type f)
-
-LowTalker.xcodeproj: project.yml $(APP_SOURCES)
+# Regeneration is unconditional: xcodegen is idempotent and sub-second, and a
+# timestamp rule cannot see removed sources or in-place rewrites of the project.
+app:
 	xcodegen generate
-
-app: LowTalker.xcodeproj
 	xcodebuild -project LowTalker.xcodeproj -scheme LowTalker -configuration $(CONFIGURATION) \
 		-derivedDataPath $(DERIVED_DATA) build
 	@echo "$(APP)"
