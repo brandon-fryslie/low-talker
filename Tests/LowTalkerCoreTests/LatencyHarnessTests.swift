@@ -4,12 +4,16 @@ import Testing
 
 /// A bench directory built on the fly: a clip the pipeline wrote beside the text
 /// it is claimed to say.
-private struct BenchDirectory {
+private final class BenchDirectory {
     let url = FileManager.default.temporaryDirectory.appending(path: "lowtalker-bench-\(UUID().uuidString)")
     static let tone = AudioClip(samples: (0..<1_600).map { Float(sin(2 * Double.pi * 440 * Double($0) / AudioClip.sampleRate)) })
 
     init() throws {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    }
+
+    deinit {
+        try? FileManager.default.removeItem(at: url)
     }
 
     /// `name` may carry a folder, such as `say/greeting`.
@@ -31,6 +35,16 @@ private struct BenchDirectory {
         #expect(fixtures[0].reference.words == ["hello", "world"])
         // 16-bit PCM rounds each sample, so the clip is compared by length, not value.
         #expect(fixtures[0].clip.samples.count == BenchDirectory.tone.samples.count)
+    }
+
+    /// An uppercase extension is the same file kind, not a file to skip.
+    @Test func anUppercaseExtensionStillPairs() throws {
+        let bench = try BenchDirectory()
+        try bench.add("loud", text: "Loud.", wav: false)
+        try BenchDirectory.tone.write(to: bench.url.appending(path: "loud.WAV"))
+        let fixtures = try Fixture.load(directory: bench.url)
+        #expect(fixtures.map(\.name) == ["loud"])
+        #expect(fixtures[0].reference.words == ["loud"])
     }
 
     @Test func aClipWithoutItsWordsIsRefused() throws {
