@@ -110,7 +110,8 @@ public struct MicrophonePermission: Sendable {
     /// [LAW:no-ambient-temporal-coupling] The interval is the consumer's to choose,
     /// and cancelling the consumer's loop is what ends the polling.
     public func changes(every interval: Duration = .seconds(1)) -> AsyncStream<MicrophoneAuthorization> {
-        AsyncStream { continuation in
+        precondition(interval > .zero, "a poll waits between reads; zero would spin")
+        return AsyncStream { continuation in
             let polling = Task {
                 var last = current
                 continuation.yield(last)
