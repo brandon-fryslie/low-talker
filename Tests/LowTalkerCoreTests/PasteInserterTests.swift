@@ -44,7 +44,7 @@ private func priorContents() throws -> PasteboardContents {
     @Test func theTextLandsAndThePriorItemsComeBackIncludingTheImage() async throws {
         defer { pasteboard.releaseGlobally() }
         let prior = try priorContents()
-        try prior.write(to: pasteboard)
+        prior.write(to: pasteboard)
         var read: String?
         var typesOffered: [NSPasteboard.PasteboardType] = []
         let app = ReceivingApp { [pasteboard] in
@@ -72,7 +72,7 @@ private func priorContents() throws -> PasteboardContents {
     @Test func aFocusThatNeverPastesGetsThePasteboardBackWhenTheWaitRunsOut() async throws {
         defer { pasteboard.releaseGlobally() }
         let prior = try priorContents()
-        try prior.write(to: pasteboard)
+        prior.write(to: pasteboard)
         let inserter = PasteInserter(pasteboard: pasteboard, keys: ReceivingApp(), landingTimeout: .milliseconds(20))
         let outcome = try await inserter.insert("hello")
         #expect(outcome == PasteOutcome(landed: false, restored: true))
@@ -84,7 +84,7 @@ private func priorContents() throws -> PasteboardContents {
     @Test func overlappingInsertsRunOneAfterAnother() async throws {
         defer { pasteboard.releaseGlobally() }
         let prior = try priorContents()
-        try prior.write(to: pasteboard)
+        prior.write(to: pasteboard)
         let inserter = PasteInserter(pasteboard: pasteboard, keys: ReceivingApp(), landingTimeout: .milliseconds(30))
         let first = Task { @MainActor in try await inserter.insert("one") }
         let second = Task { @MainActor in try await inserter.insert("two") }
@@ -119,7 +119,7 @@ private final class EmptyPromise: NSObject, NSPasteboardItemDataProvider {
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
         let contents = try priorContents()
-        try contents.write(to: pasteboard)
+        contents.write(to: pasteboard)
         #expect(PasteboardContents(reading: pasteboard) == contents)
         #expect(pasteboard.pasteboardItems?.count == 2)
     }

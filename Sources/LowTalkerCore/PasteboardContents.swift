@@ -40,11 +40,11 @@ public struct PasteboardContents: Hashable, Sendable {
     }
 
     /// Replaces the pasteboard's contents with these items.
-    public func write(to pasteboard: NSPasteboard) throws {
+    public func write(to pasteboard: NSPasteboard) {
         pasteboard.clearContents()
-        // [LAW:no-silent-failure] AppKit reports a refused write with a Bool; the
-        // caller learns the prior contents did not come back.
-        guard pasteboard.writeObjects(items.map(NSPasteboardItem.init)) else { throw PasteboardError.writeRefused }
+        // AppKit refuses only an item already on another pasteboard, and it raises for
+        // that; these items are fresh, so a refusal is AppKit broken, not a condition.
+        precondition(pasteboard.writeObjects(items.map(NSPasteboardItem.init)), "AppKit refused fresh pasteboard items")
     }
 }
 
@@ -53,16 +53,6 @@ extension NSPasteboardItem {
         self.init()
         for representation in item {
             setData(representation.data, forType: representation.type)
-        }
-    }
-}
-
-public enum PasteboardError: Error, CustomStringConvertible {
-    case writeRefused
-
-    public var description: String {
-        switch self {
-        case .writeRefused: "the pasteboard refused a write"
         }
     }
 }

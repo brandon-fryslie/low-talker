@@ -42,13 +42,12 @@ public final class PasteInserter {
         let (landing, onLanding) = AsyncStream.makeStream(of: Void.self)
         let promise = TextPromise(text: text, landing: onLanding)
         let ours = pasteboard.clearContents()
-        guard pasteboard.writeObjects([promise.item()]) else {
-            _ = try restore(prior, unlessTakenSince: ours)
-            throw PasteError.textRefused
-        }
+        // AppKit refuses only an item already on another pasteboard, and it raises for
+        // that; this item is fresh, so a refusal is AppKit broken, not a condition.
+        precondition(pasteboard.writeObjects([promise.item()]), "AppKit refused a fresh pasteboard item")
         keys.post(Self.pasteChord)
         let landed = await Self.awaitLanding(landing, within: landingTimeout)
-        return PasteOutcome(landed: landed, restored: try restore(prior, unlessTakenSince: ours))
+        return PasteOutcome(landed: landed, restored: restore(prior, unlessTakenSince: ours))
     }
 
     /// Puts the prior contents back, unless the pasteboard has changed hands since
@@ -57,13 +56,9 @@ public final class PasteInserter {
     /// [LAW:single-enforcer] The change count is the pasteboard's own word on whether
     /// it still holds our text; the promise being withdrawn says the same thing
     /// earlier, but only this decides whether to write, for every path out of a paste.
-    private func restore(_ prior: PasteboardContents, unlessTakenSince ours: Int) throws -> Bool {
+    private func restore(_ prior: PasteboardContents, unlessTakenSince ours: Int) -> Bool {
         guard pasteboard.changeCount == ours else { return false }
-        do {
-            try prior.write(to: pasteboard)
-        } catch {
-            throw PasteError.priorContentsNotRestored(prior)
-        }
+        prior.write(to: pasteboard)
         return true
     }
 
@@ -89,22 +84,6 @@ public final class PasteInserter {
     }
 }
 
-public enum PasteError: Error, CustomStringConvertible {
-    /// The pasteboard refused the text. The prior contents are back, or with whoever
-    /// took the pasteboard meanwhile.
-    case textRefused
-    /// The pasteboard refused the prior contents after the paste. They are carried
-    /// here so the caller can put them back.
-    case priorContentsNotRestored(PasteboardContents)
-
-    public var description: String {
-        switch self {
-        case .textRefused: "the pasteboard refused the text to paste"
-        case .priorContentsNotRestored: "the pasteboard refused its prior contents back after the paste"
-        }
-    }
-}
-
 /// What a paste leaves behind: two facts that vary on their own.
 public struct PasteOutcome: Hashable, Sendable {
     /// The frontmost app pulled the text before the wait ran out.
@@ -123,9 +102,11 @@ public struct PasteOutcome: Hashable, Sendable {
 /// when a reader wants them, which is the landing signal, and says when the promise
 /// is withdrawn, which ends the wait early.
 ///
-/// Every field is immutable and the callbacks arrive on whatever thread the pasteboard
-/// server chooses, so the class is Sendable in fact though NSObject cannot say so.
-private final class TextPromise: NSObject, NSPasteboardItemDataProvider, @unchecked Sendable {
+/// AppKit delivers both callbacks through the main run loop, so the waiter on the main
+/// actor cannot run while the text is being set. The protocol declares them
+/// nonisolated; the precondition makes a delivery anywhere else a trap, not a race.
+@MainActor
+private final class TextPromise: NSObject, NSPasteboardItemDataProvider {
     private let text: String
     private let landing: AsyncStream<Void>.Continuation
 
@@ -144,12 +125,14 @@ private final class TextPromise: NSObject, NSPasteboardItemDataProvider, @unchec
     /// The request is the landing; the bytes follow. Delivering the only promised type
     /// ends the promise, and AppKit says so from inside `setString`, so the yield has
     /// to come first.
-    func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
+    nonisolated func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
+        MainActor.preconditionIsolated()
         landing.yield()
         item.setString(text, forType: type)
     }
 
-    func pasteboardFinishedWithDataProvider(_ pasteboard: NSPasteboard) {
+    nonisolated func pasteboardFinishedWithDataProvider(_ pasteboard: NSPasteboard) {
+        MainActor.preconditionIsolated()
         landing.finish()
     }
 }
