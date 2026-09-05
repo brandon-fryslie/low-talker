@@ -4,7 +4,7 @@ import Synchronization
 import Testing
 
 /// What "installed" means, exercised on a scratch directory with small files in
-/// place of model weights. The download itself needs the network and 630 MB, so it
+/// place of model weights. The download itself needs the network and 632 MB, so it
 /// is exercised by `lowtalker model download` on a Mac, not here.
 @Suite struct ModelStoreTests {
     /// A store root with a model folder inside it, deleted when the test ends.

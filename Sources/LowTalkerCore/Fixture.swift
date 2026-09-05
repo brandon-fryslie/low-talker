@@ -35,17 +35,21 @@ public struct Fixture: Sendable {
             return false
         }
         guard let enumerator else { throw FixtureError.unreadable(directory, reason: "no enumerator") }
-        let entries = enumerator.compactMap { $0 as? URL }.filter { ["wav", "txt"].contains($0.pathExtension) }
+        // The extension is read once, case-folded, so `foo.WAV` pairs like `foo.wav`
+        // and the guarantee above holds on any filesystem.
+        let entries = enumerator.compactMap { $0 as? URL }
+            .map { (kind: $0.pathExtension.lowercased(), url: $0) }
+            .filter { ["wav", "txt"].contains($0.kind) }
         if let failure { throw failure }
-        let stems = Dictionary(grouping: entries) { String($0.standardizedFileURL.deletingPathExtension().path.dropFirst(root.count + 1)) }
+        let stems = Dictionary(grouping: entries) { String($0.url.standardizedFileURL.deletingPathExtension().path.dropFirst(root.count + 1)) }
         guard !stems.isEmpty else { throw FixtureError.noFixtures(directory: directory) }
         return try stems.keys.sorted().map { name in
-            let extensions = Set(stems[name]!.map(\.pathExtension))
-            guard extensions == ["wav", "txt"] else {
-                throw FixtureError.halfAFixture(name: name, directory: directory, missing: extensions.contains("wav") ? "txt" : "wav")
+            let files = Dictionary(grouping: stems[name]!, by: \.kind).mapValues { $0.map(\.url) }
+            guard let wav = files["wav"]?.first, let txt = files["txt"]?.first else {
+                throw FixtureError.halfAFixture(name: name, directory: directory, missing: files["wav"] == nil ? "wav" : "txt")
             }
-            let clip = try AudioClip(contentsOf: directory.appending(path: "\(name).wav"))
-            let text = try String(contentsOf: directory.appending(path: "\(name).txt"), encoding: .utf8)
+            let clip = try AudioClip(contentsOf: wav)
+            let text = try String(contentsOf: txt, encoding: .utf8)
             return try Fixture(name: name, clip: clip, reference: text)
         }
     }
