@@ -7,7 +7,7 @@ import Testing
 /// what survives that trip, not how the types are laid out.
 @Suite struct PipelineTypesTests {
     static let context = Context(
-        chord: KeyChord(modifiers: [.rightOption, .leftShift]),
+        chord: KeyChord(modifiers: .rightOption, .leftShift),
         press: .hold,
         frontmostApp: BundleID(rawValue: "com.apple.Safari"),
         focusedElementRole: AccessibilityRole(rawValue: "AXTextField")
@@ -22,7 +22,7 @@ import Testing
     static let actions: [Action] = [
         .insertText(text: "hi", target: .focus),
         .insertText(text: "hi", target: .app(bundleID: BundleID(rawValue: "com.tinyspeck.slackmacgap"))),
-        .sendKeys(chord: KeyChord(modifiers: [.leftCommand, .leftShift], key: Key(rawValue: 0x11))),
+        .sendKeys(chord: KeyChord(key: Key(rawValue: 0x11), modifiers: [.leftCommand, .leftShift])),
         .activateApp(bundleID: BundleID(rawValue: "com.apple.Safari")),
         .openURL(url: URL(string: "https://example.com/?q=low%20talker")!),
         .runShortcut(name: "Append to Journal", input: "hi"),
@@ -70,7 +70,7 @@ import Testing
         #expect(decoded == [
             .insertText(text: "hi", target: .focus),
             .insertText(text: "hi", target: .app(bundleID: BundleID(rawValue: "com.tinyspeck.slackmacgap"))),
-            .sendKeys(chord: KeyChord(modifiers: [.leftCommand], key: Key(rawValue: 17))),
+            .sendKeys(chord: KeyChord(key: Key(rawValue: 17), modifiers: [.leftCommand])),
             .activateApp(bundleID: BundleID(rawValue: "com.apple.Safari")),
             .openURL(url: URL(string: "https://example.com/")!),
             .runShortcut(name: "Toggle Lights", input: nil),
@@ -86,11 +86,30 @@ import Testing
         """
         let decoded = try JSONDecoder().decode(Context.self, from: Data(json.utf8))
         #expect(decoded == Context(
-            chord: KeyChord(modifiers: [.rightOption]),
+            chord: KeyChord(modifiers: .rightOption),
             press: .tap,
             frontmostApp: BundleID(rawValue: "com.apple.Notes"),
             focusedElementRole: AccessibilityRole(rawValue: "AXTextArea")
         ))
+    }
+
+    /// A chord with nothing pressed is not a chord; the decoder refuses it.
+    @Test func chordDecodeRejectsNoKeys() {
+        let json = Data(#"{"modifiers": []}"#.utf8)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(KeyChord.self, from: json)
+        }
+    }
+
+    /// A probability outside 0...1 is not a confidence, from a number or from JSON.
+    @Test func confidenceRejectsValuesOutsideUnitInterval() {
+        #expect(Confidence(exactly: 1.5) == nil)
+        #expect(Confidence(exactly: -0.1) == nil)
+        #expect(Confidence(exactly: 1) == 1.0)
+        let json = Data(#"{"text": "x", "time": [0, 1], "confidence": 1.5}"#.utf8)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(Transcript.Word.self, from: json)
+        }
     }
 
     /// An end before a start is not a word timing; the decoder refuses it.

@@ -17,8 +17,7 @@ public enum Action: Hashable, Codable, Sendable {
     /// A Shortcuts.app shortcut by name, optionally handed input text.
     case runShortcut(name: String, input: String?)
     /// Hands the transcript to an external program and reads a list of actions back as
-    /// JSON. `executable` is separate from `arguments` so an empty command line is
-    /// unrepresentable.
+    /// JSON. Run as argv, never through a shell.
     case pipe(executable: String, arguments: [String])
 }
 

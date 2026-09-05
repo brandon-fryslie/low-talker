@@ -2,12 +2,12 @@
 /// after the hotkey goes down.
 public struct Context: Hashable, Codable, Sendable {
     /// The chord that started listening. It selects the mode; the transcript never does.
-    public var chord: KeyChord
-    public var press: PressKind
-    public var frontmostApp: BundleID
+    public let chord: KeyChord
+    public let press: PressKind
+    public let frontmostApp: BundleID
     /// The Accessibility role of the focused element, or nil when nothing has focus or
     /// the frontmost app exposes no accessibility tree.
-    public var focusedElementRole: AccessibilityRole?
+    public let focusedElementRole: AccessibilityRole?
 
     public init(chord: KeyChord, press: PressKind, frontmostApp: BundleID, focusedElementRole: AccessibilityRole?) {
         self.chord = chord
