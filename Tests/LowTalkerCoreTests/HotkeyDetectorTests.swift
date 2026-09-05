@@ -159,6 +159,17 @@ private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
         #expect(keyboard.release(Key(rawValue: 49), at: 410) == swallowed)
     }
 
+    /// The key with another modifier already held is a different chord, and one that
+    /// is not configured: the app sees the key, down and up.
+    @Test func theKeyChordWithAnotherModifierHeldIsNotThePress() {
+        var keyboard = Keyboard(chords: [optionSpace])
+        _ = keyboard.press(.leftOption, at: 0)
+        _ = keyboard.press(.leftShift, at: 10)
+        #expect(keyboard.press(Key(rawValue: 49), at: 20) == passed)
+        #expect(keyboard.detector.phase == .idle)
+        #expect(keyboard.release(Key(rawValue: 49), at: 30) == passed)
+    }
+
     /// A press can begin while the last one's swallowed key is still down: that key's
     /// up is swallowed whenever it comes, so the app never sees an up without its down.
     @Test func aNewPressKeepsSwallowingTheLastOnesKeyUntilItComesUp() {
