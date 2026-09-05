@@ -140,14 +140,16 @@ PROBE="$PROBE_DIR/.build/debug/probe"
 [ "$($PROBE locked)" = unlocked ] || { echo "screen is locked; nothing can receive a paste" >&2; exit 1; }
 front=$($PROBE front)
 scratch=$(mktemp -d)
+doc="$scratch/live-paste.txt"
+reader="$scratch/reader.command"
 terminal_was_running=$(pgrep -x Terminal >/dev/null && echo yes || echo no)
 # Every path out closes what the check opened, whichever step it stopped at, and then
 # puts the desk back as found. errexit stays off inside: each step reports its own
 # failure and the rest still run.
 cleanup() {
     set +e
-    $PROBE close com.apple.TextEdit live-paste.txt 5
-    $PROBE close com.apple.Terminal reader.command 5
+    $PROBE close com.apple.TextEdit "${doc##*/}" 5
+    $PROBE close com.apple.Terminal "${reader##*/}" 5
     [ "$terminal_was_running" = yes ] || $PROBE quit com.apple.Terminal
     rm -rf "$scratch"
     open -b "$front"
@@ -158,12 +160,11 @@ echo "frontmost before: $front"
 
 # TextEdit: a file-backed .txt document, which TextEdit writes when its window closes,
 # so the file is the verdict and no chord is posted.
-doc="$scratch/live-paste.txt"
 : > "$doc"
 open -a TextEdit "$doc"; $PROBE ready com.apple.TextEdit 10
 $CLI paste "hello from low-talker into TextEdit"
 focused=$($PROBE axwait "hello from low-talker into TextEdit" 3 && echo "held the text" || echo "never held the text")
-$PROBE close com.apple.TextEdit live-paste.txt 5
+$PROBE close com.apple.TextEdit "${doc##*/}" 5
 t0=$SECONDS
 until grep -q "hello from low-talker into TextEdit" "$doc" || [ $((SECONDS - t0)) -ge 5 ]; do sleep 0.1; done
 grep -q "hello from low-talker into TextEdit" "$doc" && echo "TEXTEDIT OK (saved file holds the text)" || { echo "TEXTEDIT FAILED: focused element $focused; saved file holds [$(cat "$doc")]"; exit 1; }
@@ -175,7 +176,6 @@ grep -q "hello from low-talker into TextEdit" "$doc" && echo "TEXTEDIT OK (saved
 # the pty echoes typed text that the shell then drops. The echo of the pasted text
 # is Terminal writing it to the pty, which is the paste landing; tr answers only in
 # uppercase, so lowercase text in the window is that echo and nothing else.
-reader="$scratch/reader.command"
 printf '#!/bin/sh\necho lowtalker-reader-up; exec tr a-z A-Z\n' > "$reader"; chmod +x "$reader"
 open -a Terminal "$reader"; $PROBE ready com.apple.Terminal 10; $PROBE axwait lowtalker-reader-up 15
 $CLI paste "pasted-into-terminal-ok"
