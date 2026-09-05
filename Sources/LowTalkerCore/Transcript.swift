@@ -12,6 +12,16 @@ public struct Transcript: Hashable, Codable, Sendable {
         self.words = words
     }
 
+    /// A transcript nobody spoke: text typed in for a dry run or a test. Each
+    /// whitespace run stays attached to the word after it (the last word keeps any
+    /// trailing whitespace), so `text` gives the string back unchanged. No time
+    /// passed and nothing was recognized, so every word is instantaneous and certain.
+    public init(typed text: String) {
+        self.words = text.matches(of: /\s*\S+(?:\s+$)?/).map { match in
+            Word(text: String(match.output), time: 0...0, confidence: 1.0)
+        }
+    }
+
     /// The words concatenated as the engine emitted them. Each word carries its own
     /// leading whitespace and trailing punctuation, so concatenation reproduces the
     /// utterance exactly.
