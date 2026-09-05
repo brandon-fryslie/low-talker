@@ -23,25 +23,20 @@ struct ModelOptions: ParsableArguments {
 /// value that is not one path step is refused before any path is built from it.
 extension ModelName: ExpressibleByArgument {}
 
-/// Narrates a load on stderr: one line per whole percent of download, one line when
-/// loading starts. Stdout stays the command's own.
+/// Narrates a load on stderr, one line each time the phase's own words change, so
+/// a download prints once per whole percent. Stdout stays the command's own.
 final class PhaseReporter: Sendable {
-    private let lastPercent = Mutex(-1)
+    private let lastLine = Mutex<String?>(nil)
 
     func report(_ phase: WhisperKitTranscriber.LoadPhase) {
-        var stderr = StandardError()
-        switch phase {
-        case .downloading(let fraction):
-            let percent = Int(fraction * 100)
-            let changed = lastPercent.withLock { last in
-                defer { last = percent }
-                return percent != last
-            }
-            if changed {
-                print("downloading model: \(percent)%", to: &stderr)
-            }
-        case .loading:
-            print("loading model", to: &stderr)
+        let line = phase.description
+        let changed = lastLine.withLock { last in
+            defer { last = line }
+            return line != last
+        }
+        if changed {
+            var stderr = StandardError()
+            print(line, to: &stderr)
         }
     }
 }

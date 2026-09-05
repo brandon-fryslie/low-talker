@@ -19,39 +19,35 @@ public final class WhisperKitTranscriber: Transcriber {
         pipeline = try await Pipeline(installed: installed)
     }
 
-    /// The whole road from a store to a resident model: install the model if the
-    /// store lacks it, then load it. `phase` hears each step begin so a status item
-    /// or a terminal can say what the wait is for.
-    ///
-    /// [LAW:dataflow-not-control-flow] The sequence never changes; whether the
-    /// download runs is decided by the store's `Presence` value, the domain's own
-    /// discriminator, not by a flag a caller passes.
+    /// The whole road from a store to a resident model: the store installs whatever
+    /// it lacks, then the model is loaded. `phase` hears each step begin so a status
+    /// item or a terminal can say what the wait is for.
     public static func load(
         _ model: ModelName = .default,
         from store: ModelStore,
         phase: @escaping @Sendable (LoadPhase) -> Void
     ) async throws -> WhisperKitTranscriber {
-        let installed: InstalledModel
-        switch store.presence(of: model) {
-        case .installed(let present):
-            installed = present
-        case .missing, .damaged:
-            phase(.downloading(fractionCompleted: 0))
-            installed = try await store.install(model) { phase(.downloading(fractionCompleted: $0)) }
-        }
+        let installed = try await store.install(model) { phase(.installing($0)) }
         phase(.loading)
         return try await WhisperKitTranscriber(installed)
     }
 
     /// What `load(_:from:phase:)` is doing right now. There is no "ready" case: the
     /// returned transcriber is that state.
-    public enum LoadPhase: Equatable, Sendable {
-        case downloading(fractionCompleted: Double)
+    public enum LoadPhase: Equatable, Sendable, CustomStringConvertible {
+        case installing(ModelStore.InstallPhase)
         /// Core ML is loading the model. The first load after an install also fetches
         /// the tokenizer when `tokenizer.json` is not in the hub yet; the first on a
         /// Mac, after an OS update, or after a change to the app's signing identity
         /// also specializes the model for the Neural Engine, which takes minutes.
         case loading
+
+        public var description: String {
+            switch self {
+            case .installing(let phase): phase.description
+            case .loading: "loading model"
+            }
+        }
     }
 
     public func transcribe(_ clip: AudioClip) async throws -> Transcript {
