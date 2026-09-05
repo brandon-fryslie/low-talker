@@ -6,7 +6,8 @@ import Testing
 /// the tap. The contract is that the pipeline sees one continuous 16 kHz tone no
 /// matter how the source was chunked.
 @Suite struct AudioClipConverterTests {
-    static let source = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)!
+    /// Computed, not stored: the macOS 15 SDK does not mark AVAudioFormat Sendable.
+    static var source: AVAudioFormat { AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)! }
     static let sourceFrames = 48_000
     static let expectedSamples = 16_000
 
