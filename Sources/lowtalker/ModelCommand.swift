@@ -22,7 +22,7 @@ struct ModelCommand: AsyncParsableCommand {
         func run() throws {
             let store = try options.store()
             print("store: \(store.directory.path)")
-            switch store.presence(of: options.model) {
+            switch try store.presence(of: options.model) {
             case .installed(let installed):
                 print("installed: \(installed.folder.path)")
             case .missing:
@@ -44,7 +44,7 @@ struct ModelCommand: AsyncParsableCommand {
 
         func run() async throws {
             let reporter = PhaseReporter()
-            let installed = try await options.store().install(options.model) { reporter.report(.downloading(fractionCompleted: $0)) }
+            let installed = try await options.store().install(options.model) { reporter.report(.installing($0)) }
             print("installed: \(installed.folder.path)")
         }
     }

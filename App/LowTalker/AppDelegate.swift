@@ -77,7 +77,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private static func status(for phase: WhisperKitTranscriber.LoadPhase) -> String {
         switch phase {
-        case .downloading(let fraction):
+        case .installing(.waitingForAnotherInstall):
+            "waiting for another install…"
+        case .installing(.downloading(let fraction)):
             "downloading \(Int(fraction * 100))%"
         case .loading:
             "loading…"

@@ -23,15 +23,17 @@ struct ModelOptions: ParsableArguments {
 /// value that is not one path step is refused before any path is built from it.
 extension ModelName: ExpressibleByArgument {}
 
-/// Narrates a load on stderr: one line per whole percent of download, one line when
-/// loading starts. Stdout stays the command's own.
+/// Narrates a load on stderr: one line when waiting on another install, one per
+/// whole percent of download, one when loading starts. Stdout stays the command's own.
 final class PhaseReporter: Sendable {
     private let lastPercent = Mutex(-1)
 
     func report(_ phase: WhisperKitTranscriber.LoadPhase) {
         var stderr = StandardError()
         switch phase {
-        case .downloading(let fraction):
+        case .installing(.waitingForAnotherInstall):
+            print("waiting for another install to finish", to: &stderr)
+        case .installing(.downloading(let fraction)):
             let percent = Int(fraction * 100)
             let changed = lastPercent.withLock { last in
                 defer { last = percent }
