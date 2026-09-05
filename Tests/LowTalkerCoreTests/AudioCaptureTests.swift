@@ -127,7 +127,7 @@ private struct Authorized: MicrophoneAuthority {
         #expect(isRunning(capture))
         #expect(hardware.engines.count == 2)
         #expect(capture.outages.count == 1)
-        #expect(capture.outages.total >= .zero)
+        #expect(capture.outages.total > .zero)
         #expect(capture.deviceChanges == 0)
     }
 
@@ -209,14 +209,19 @@ private struct Authorized: MicrophoneAuthority {
     }
 
     @Test func startAgainResetsTheCounts() throws {
-        let hardware = FakeHardware()
+        let hardware = FakeHardware(launches: [nil, NoDevice(), nil, nil])
         let capture = AudioCapture(hardware: hardware)
         try capture.start(grant)
         hardware.engines[0].onConfigurationChange()
+        try hardware.changeDefaultInput()
+        hardware.engines[1].onConfigurationChange()
         #expect(capture.deviceChanges == 1)
+        #expect(capture.outages.count == 1)
         try capture.start(grant)
         #expect(capture.deviceChanges == 0)
-        #expect(hardware.engines[1].disposed)
+        #expect(capture.outages.count == 0)
+        #expect(capture.outages.total == .zero)
+        #expect(hardware.engines[2].disposed)
         #expect(hardware.watchDisposals == 1)
         #expect(hardware.isWatching)
     }

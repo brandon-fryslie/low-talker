@@ -34,7 +34,8 @@ struct RecordCommand: AsyncParsableCommand {
 
         let clip = capture.endSession(session)
         try clip.write(to: output)
-        let without = capture.outages.total.formatted(.units(allowed: [.seconds], fractionalPart: .show(length: 1)))
+        // Pinned like TranscribeCommand's numbers, so the line reads the same on every machine.
+        let without = capture.outages.total.formatted(.units(allowed: [.seconds], fractionalPart: .show(length: 1)).locale(Locale(identifier: "en_US_POSIX")))
         print("\(output.path): \(clip.duration) s, peak \(clip.peak), device changes \(capture.deviceChanges), outages \(capture.outages.count) (\(without) without audio)")
     }
 }
