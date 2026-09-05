@@ -40,6 +40,11 @@ public enum AudioHardwareError: Error, CustomStringConvertible {
 }
 
 public struct SystemAudioHardware: AudioHardware {
+    /// How much audio the tap asks for at a time; AVAudioEngine may round it to what a
+    /// device supports, and the built-in microphone delivers exactly it (4410 frames at
+    /// 44.1 kHz). A session's audio grows in these steps, as does a simulated hold.
+    nonisolated public static let bufferDuration: TimeInterval = 0.1
+
     public init() {}
 
     public func launch(
@@ -56,7 +61,7 @@ public struct SystemAudioHardware: AudioHardware {
         nonisolated(unsafe) let converter = try AudioClip.Converter(from: source)
         // Explicitly @Sendable: a closure formed here would otherwise inherit main-actor
         // isolation and trap when the tap fires on the audio service queue.
-        input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(source.sampleRate / 10), format: source) { @Sendable buffer, _ in
+        input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(source.sampleRate * Self.bufferDuration), format: source) { @Sendable buffer, _ in
             do {
                 appending(try converter.convert(buffer))
             } catch {
