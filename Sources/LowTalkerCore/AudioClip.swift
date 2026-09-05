@@ -56,7 +56,9 @@ public enum AudioClipError: Error, CustomStringConvertible {
 extension AudioClip {
     /// Deinterleaved Float32 at the pipeline rate. `standardFormat` never fails for a
     /// positive rate and channel count, so the unwrap is a static fact, not a guess.
-    static let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
+    /// Computed rather than stored: the macOS 15 SDK does not mark AVAudioFormat
+    /// Sendable, so Swift 6 rejects it as a static let there.
+    static var format: AVAudioFormat { AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)! }
 
     /// Load any file AVFoundation can read (wav, aiff, m4a, ...) as a clip.
     ///
