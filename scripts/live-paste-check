@@ -1,0 +1,79 @@
+#!/bin/bash
+# Pastes into TextEdit and Terminal with `lowtalker paste` and checks what landed,
+# without AppleScript: Automation prompts cannot be answered by an unattended shell and
+# a timed-out prompt writes a denial. `open -a` brings the app forward, the focused
+# element's text is read through Accessibility, and follow-up chords (save, close) are
+# posted with the same KeyPoster the paste uses. Needs an unlocked screen and a
+# terminal with Accessibility. Leaves the pasteboard and the frontmost app as found.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+swift build --product lowtalker >/dev/null
+CLI=.build/debug/lowtalker
+
+# A probe with three verbs the check needs and the CLI does not offer: read the
+# focused element, press a chord, name the frontmost app.
+PROBE_DIR=$(mktemp -d)
+mkdir -p "$PROBE_DIR/Sources/probe"
+cat > "$PROBE_DIR/Package.swift" <<EOF
+// swift-tools-version: 6.0
+import PackageDescription
+let package = Package(name: "probe", platforms: [.macOS(.v15)],
+    dependencies: [.package(path: "$PWD")],
+    targets: [.executableTarget(name: "probe", dependencies: [.product(name: "LowTalkerCore", package: "low-talker")])])
+EOF
+cat > "$PROBE_DIR/Sources/probe/main.swift" <<'EOF'
+import AppKit
+import ApplicationServices
+import LowTalkerCore
+
+@MainActor func focusedValue() -> String {
+    var focused: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &focused) == .success, let element = focused else { return "<no focused element>" }
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element as! AXUIElement, kAXValueAttribute as CFString, &value) == .success else { return "<no value>" }
+    return String(describing: value!)
+}
+
+let args = Array(CommandLine.arguments.dropFirst())
+MainActor.assumeIsolated {
+    switch args[0] {
+    case "axread": print(focusedValue())
+    case "front": print(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "<none>")
+    case "press": SystemKeyPoster().post(KeyChord(key: Key(rawValue: UInt16(args[1])!), modifiers: Set(args.dropFirst(2).map { Modifier(rawValue: $0)! })))
+    case "locked": print((CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] ?? 0)
+    default: exit(2)
+    }
+}
+EOF
+(cd "$PROBE_DIR" && swift build >/dev/null 2>&1)
+PROBE="$PROBE_DIR/.build/debug/probe"
+
+[ "$($PROBE locked)" = "0" ] || { echo "screen is locked; nothing can receive a paste" >&2; exit 1; }
+front=$($PROBE front)
+before=$(osascript -e 'clipboard info' 2>&1 || true)
+echo "frontmost before: $front"
+
+# TextEdit: a file-backed document, so Cmd+S writes what landed to disk with no dialog.
+doc=$(mktemp /tmp/live-paste-XXXX.txt)
+open -a TextEdit "$doc"; sleep 1.5
+$CLI paste "hello from low-talker into TextEdit"
+sleep 0.3
+echo "TextEdit focused text: [$($PROBE axread)]"
+$PROBE press 1 leftCommand; sleep 0.7      # kVK_ANSI_S
+$PROBE press 13 leftCommand; sleep 0.5     # kVK_ANSI_W
+grep -q "hello from low-talker into TextEdit" "$doc" && echo "TEXTEDIT OK (saved file holds the text)" || { echo "TEXTEDIT FAILED: $(cat "$doc")"; exit 1; }
+
+# Terminal: a shell prompt; the pasted command shows in the tab's text.
+terminal_was_running=$(pgrep -x Terminal >/dev/null && echo yes || echo no)
+open -a Terminal; sleep 2
+$CLI paste "echo pasted-into-terminal-ok"
+sleep 0.3
+if $PROBE axread | grep -q "pasted-into-terminal-ok"; then echo "TERMINAL OK"; else echo "TERMINAL FAILED"; exit 1; fi
+if [ "$terminal_was_running" = no ]; then $PROBE press 12 leftCommand; else $PROBE press 13 leftCommand; fi   # Cmd+Q or Cmd+W
+sleep 0.5
+
+after=$(osascript -e 'clipboard info' 2>&1 || true)
+[ "$before" = "$after" ] && echo "PASTEBOARD UNCHANGED" || { echo "PASTEBOARD DIFFERS: before [$before] after [$after]"; exit 1; }
+open -b "$front"
+echo "frontmost restored to $front"
