@@ -22,9 +22,10 @@ public final class AudioCapture {
 
     /// An engine on the current input device, with the observer that replaces it.
     /// [LAW:types-are-the-program] One value, so an observer can never outlive its
-    /// engine or watch a stale one. The generation is what a failure reported from
-    /// this engine's tap carries, so a failure from a replaced engine is recognized
-    /// as stale (a counter, because a replaced engine's address can be reused).
+    /// engine or watch a stale one. The generation is what this engine's callbacks
+    /// carry (the tap's failure, the observer's change), so a callback from a replaced
+    /// engine is recognized as stale (a counter, because a replaced engine's address
+    /// can be reused).
     private struct Live {
         let engine: AVAudioEngine
         let observer: any NSObjectProtocol
@@ -55,7 +56,9 @@ public final class AudioCapture {
     /// Input device changes survived since `start()`.
     public private(set) var deviceChanges = 0
 
-    public init(retaining duration: TimeInterval = 60) {
+    nonisolated public static let defaultRetention: TimeInterval = 60
+
+    public init(retaining duration: TimeInterval = defaultRetention) {
         shared = SharedRing(AudioRing(retaining: duration))
     }
 
@@ -75,17 +78,23 @@ public final class AudioCapture {
 
     public func start() throws {
         stop()
-        phase = .running(try launch())
         deviceChanges = 0
+        phase = .running(try launch())
     }
 
     public func stop() {
-        dispose()
+        if case .running(let live) = phase { live.dispose() }
         phase = .stopped
     }
 
-    private func dispose() {
-        if case .running(let live) = phase { live.dispose() }
+    /// The running engine, only while it is still the one a callback was formed
+    /// for. [LAW:no-ambient-temporal-coupling] An observer block already queued
+    /// when `dispose()` removes the observer still runs, and the tap's failure
+    /// arrives asynchronously, so both callbacks are resolved here by generation
+    /// rather than trusted by arrival.
+    private func live(of generation: Int) -> Live? {
+        guard case .running(let live) = phase, live.generation == generation else { return nil }
+        return live
     }
 
     private func launch() throws -> Live {
@@ -110,7 +119,7 @@ public final class AudioCapture {
             }
         }
         let observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.replaceEngine() }
+            MainActor.assumeIsolated { self?.replaceEngine(from: generation) }
         }
         let live = Live(engine: engine, observer: observer, generation: generation)
         do {
@@ -123,8 +132,9 @@ public final class AudioCapture {
     }
 
     /// The device changed: macOS already stopped the engine, and it never delivers again.
-    private func replaceEngine() {
-        dispose()
+    private func replaceEngine(from generation: Int) {
+        guard let live = live(of: generation) else { return }
+        live.dispose()
         do {
             phase = .running(try launch())
             deviceChanges += 1
@@ -136,7 +146,7 @@ public final class AudioCapture {
     /// A failure from an engine a device change has since replaced is stale: the
     /// engine it came from is gone and the one running is healthy.
     private func fail(_ error: any Error, from generation: Int) {
-        guard case .running(let live) = phase, live.generation == generation else { return }
+        guard let live = live(of: generation) else { return }
         live.dispose()
         phase = .failed(error)
     }

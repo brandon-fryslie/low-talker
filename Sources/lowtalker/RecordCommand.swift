@@ -11,7 +11,7 @@ struct RecordCommand: AsyncParsableCommand {
         abstract: "Capture the microphone into a 16 kHz mono wav."
     )
 
-    @Option(help: "How long to capture. The ring retains 60 s, so a longer run writes the last 60.")
+    @Option(help: "How long to capture. The ring retains \(AudioCapture.defaultRetention.formatted()) s, so a longer run writes only that much.")
     var seconds: Double = 5
 
     @Argument(help: "Where to write the wav.", transform: URL.init(fileURLWithPath:))
