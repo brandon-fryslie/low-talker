@@ -44,8 +44,12 @@ public struct Fixture: Sendable {
         let stems = Dictionary(grouping: entries) { String($0.url.standardizedFileURL.deletingPathExtension().path.dropFirst(root.count + 1)) }
         guard !stems.isEmpty else { throw FixtureError.noFixtures(directory: directory) }
         return try stems.keys.sorted().map { name in
-            let files = Dictionary(grouping: stems[name]!, by: \.kind).mapValues { $0.map(\.url) }
-            guard let wav = files["wav"]?.first, let txt = files["txt"]?.first else {
+            // [LAW:no-silent-failure] Two spellings of one slot throw rather than
+            // letting the walk's order pick one.
+            let files = try Dictionary(stems[name]!.map { ($0.kind, $0.url) }) { first, second in
+                throw FixtureError.twoOfAKind(name: name, first: first, second: second)
+            }
+            guard let wav = files["wav"], let txt = files["txt"] else {
                 throw FixtureError.halfAFixture(name: name, directory: directory, missing: files["wav"] == nil ? "wav" : "txt")
             }
             let clip = try AudioClip(contentsOf: wav)
@@ -61,6 +65,8 @@ public enum FixtureError: Error, Equatable, CustomStringConvertible {
     case noFixtures(directory: URL)
     /// A `.wav` or `.txt` whose partner is not beside it.
     case halfAFixture(name: String, directory: URL, missing: String)
+    /// Two files for one slot, such as `foo.wav` beside `foo.WAV` on a case-sensitive volume.
+    case twoOfAKind(name: String, first: URL, second: URL)
     /// The reference text has no words to score against.
     case referenceSaysNothing(name: String)
 
@@ -72,6 +78,8 @@ public enum FixtureError: Error, Equatable, CustomStringConvertible {
             "no fixtures under \(directory.path): expected <name>.wav beside <name>.txt"
         case .halfAFixture(let name, let directory, let missing):
             "fixture \(name) under \(directory.path) has no \(name).\(missing)"
+        case .twoOfAKind(let name, let first, let second):
+            "fixture \(name) has two files for one slot: \(first.lastPathComponent) and \(second.lastPathComponent)"
         case .referenceSaysNothing(let name):
             "fixture \(name)'s reference text has no words"
         }
