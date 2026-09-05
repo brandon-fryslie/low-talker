@@ -21,10 +21,9 @@ struct RecordCommand: AsyncParsableCommand {
     mutating func run() async throws {
         let capture = AudioCapture()
         try capture.start()
+        defer { capture.stop() }
         try await Task.sleep(for: .seconds(seconds))
-        let state = capture.state
-        capture.stop()
-        if case .failed(let error) = state { throw error }
+        if case .failed(let error) = capture.state { throw error }
 
         let clip = capture.clip(in: capture.retained)
         try clip.write(to: output)

@@ -22,10 +22,13 @@ public final class AudioCapture {
 
     /// An engine on the current input device, with the observer that replaces it.
     /// [LAW:types-are-the-program] One value, so an observer can never outlive its
-    /// engine or watch a stale one.
+    /// engine or watch a stale one. The generation is what a failure reported from
+    /// this engine's tap carries, so a failure from a replaced engine is recognized
+    /// as stale (a counter, because a replaced engine's address can be reused).
     private struct Live {
         let engine: AVAudioEngine
         let observer: any NSObjectProtocol
+        let generation: Int
 
         func dispose() {
             NotificationCenter.default.removeObserver(observer)
@@ -48,6 +51,7 @@ public final class AudioCapture {
 
     private let shared: SharedRing
     private var phase: Phase = .stopped
+    private var generation = 0
     /// Input device changes survived since `start()`.
     public private(set) var deviceChanges = 0
 
@@ -70,7 +74,7 @@ public final class AudioCapture {
     public func clip(in range: Range<Int>) -> AudioClip { shared.ring.withLock { $0.clip(in: range) } }
 
     public func start() throws {
-        dispose()
+        stop()
         phase = .running(try launch())
         deviceChanges = 0
     }
@@ -93,6 +97,8 @@ public final class AudioCapture {
         // queue serializes the calls, so nothing is shared.
         nonisolated(unsafe) let converter = try AudioClip.Converter(from: source)
         let shared = shared
+        generation += 1
+        let generation = generation
         // Explicitly @Sendable: a closure formed here would otherwise inherit main-actor
         // isolation and trap when the tap fires on the audio service queue.
         input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(source.sampleRate / 10), format: source) { @Sendable [weak self] buffer, _ in
@@ -100,13 +106,13 @@ public final class AudioCapture {
                 let samples = try converter.convert(buffer)
                 shared.ring.withLock { $0.append(samples) }
             } catch {
-                Task { @MainActor in self?.fail(error) }
+                Task { @MainActor in self?.fail(error, from: generation) }
             }
         }
         let observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.replaceEngine() }
         }
-        let live = Live(engine: engine, observer: observer)
+        let live = Live(engine: engine, observer: observer, generation: generation)
         do {
             try engine.start()
         } catch {
@@ -127,8 +133,11 @@ public final class AudioCapture {
         }
     }
 
-    private func fail(_ error: any Error) {
-        dispose()
+    /// A failure from an engine a device change has since replaced is stale: the
+    /// engine it came from is gone and the one running is healthy.
+    private func fail(_ error: any Error, from generation: Int) {
+        guard case .running(let live) = phase, live.generation == generation else { return }
+        live.dispose()
         phase = .failed(error)
     }
 }

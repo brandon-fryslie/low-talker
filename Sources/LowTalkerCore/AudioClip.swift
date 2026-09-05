@@ -114,7 +114,7 @@ extension AudioClip {
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
             AVSampleRateKey: Self.sampleRate,
-            AVNumberOfChannelsKey: 1,
+            AVNumberOfChannelsKey: Self.format.channelCount,
             AVLinearPCMBitDepthKey: 16,
             AVLinearPCMIsFloatKey: false,
         ]
