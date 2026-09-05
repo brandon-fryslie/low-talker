@@ -7,13 +7,13 @@ import WhisperKit
 /// not be re-entered mid-decode. Every decode goes through one SerialQueue, so calls
 /// queue rather than overlap, and nothing else can reach the pipeline.
 public final class WhisperKitTranscriber: Transcriber {
-    public let model: Model
+    public let model: ModelName
     private let pipeline: Pipeline
     private let decodes = SerialQueue()
 
-    /// Loads an installed model onto the compute units from its folder alone: no
-    /// network, no hub listing. Returns only once the model is resident, so the
-    /// first `transcribe` pays no load cost.
+    /// Loads an installed model onto the compute units, its weights from disk alone.
+    /// Returns only once the model is resident, so the first `transcribe` pays no
+    /// load cost.
     public init(_ installed: InstalledModel) async throws {
         model = installed.model
         pipeline = try await Pipeline(installed: installed)
@@ -27,7 +27,7 @@ public final class WhisperKitTranscriber: Transcriber {
     /// download runs is decided by the store's `Presence` value, the domain's own
     /// discriminator, not by a flag a caller passes.
     public static func load(
-        _ model: Model = .default,
+        _ model: ModelName = .default,
         from store: ModelStore,
         phase: @escaping @Sendable (LoadPhase) -> Void
     ) async throws -> WhisperKitTranscriber {
@@ -47,36 +47,16 @@ public final class WhisperKitTranscriber: Transcriber {
     /// returned transcriber is that state.
     public enum LoadPhase: Equatable, Sendable {
         case downloading(fractionCompleted: Double)
-        /// Core ML is loading the model. The first load on a Mac, and the first
-        /// after an OS update or a change to the app's signing identity, also
-        /// specializes it for the Neural Engine, which takes minutes.
+        /// Core ML is loading the model. The first load after an install also fetches
+        /// the tokenizer when `tokenizer.json` is not in the hub yet; the first on a
+        /// Mac, after an OS update, or after a change to the app's signing identity
+        /// also specializes the model for the Neural Engine, which takes minutes.
         case loading
     }
 
     public func transcribe(_ clip: AudioClip) async throws -> Transcript {
         let pipeline = pipeline
         return try await decodes.run { try await pipeline.transcribe(clip) }
-    }
-
-    /// A model folder name in the whisperkit-coreml repo, such as `base.en` or
-    /// `large-v3-v20240930_626MB`. The repo grows, so this is a name, not an enum.
-    public struct Model: RawRepresentable, Hashable, Codable, Sendable, ExpressibleByStringLiteral, CustomStringConvertible {
-        public let rawValue: String
-
-        public init(rawValue: String) {
-            self.rawValue = rawValue
-        }
-
-        public init(stringLiteral value: String) {
-            self.init(rawValue: value)
-        }
-
-        public var description: String { rawValue }
-
-        /// Whisper large-v3-turbo: large-v3's encoder with a four-layer decoder, so it
-        /// keeps the accuracy while decoding several times faster. The default until
-        /// the latency harness measures the candidates on real hardware.
-        public static let `default`: Model = "large-v3-v20240930_626MB"
     }
 
     /// The loaded WhisperKit pipeline. `@unchecked Sendable` because WhisperKit is a
@@ -93,8 +73,8 @@ public final class WhisperKitTranscriber: Transcriber {
         /// here without crossing an isolation boundary.
         nonisolated init(installed: InstalledModel) async throws {
             // WhisperKit logs to stdout when verbose; stdout belongs to whoever called us.
-            // The tokenizer is not part of the manifest: WhisperKit fetches it into the
-            // hub on the first load and reads it from there on every later one.
+            // `download` gates only the weights, which `modelFolder` supplies; the
+            // tokenizer is read from `tokenizerFolder`, fetched into it when absent.
             whisperKit = try await WhisperKit(WhisperKitConfig(
                 modelFolder: installed.folder.path,
                 tokenizerFolder: installed.hub,

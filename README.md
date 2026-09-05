@@ -26,7 +26,7 @@ prints the transcript, then one line per word with its start, end, and confidenc
 
 ### The model store
 
-The app and the CLI share one model directory, `~/Library/Application Support/low-talker/hub`, laid out the way the Hugging Face hub lays out its cache. The first `transcribe`, or the first app launch, downloads the default Whisper model (about 626 MB) into it and records a manifest of the files and their sizes. Every launch after that checks the manifest against the files and loads straight from disk, with no network involved, so the app works offline once the model is in.
+The app and the CLI share one model directory, `~/Library/Application Support/low-talker/hub`, laid out the way the Hugging Face hub lays out its cache. The first `transcribe`, or the first app launch, downloads the default Whisper model (about 626 MB) into it and records a manifest of the files and their sizes. Every launch after that checks the manifest against the files and loads straight from disk, so the app works offline once the first load has finished.
 
     .build/debug/lowtalker model status      # installed, missing, or damaged; exits 1 unless installed
     .build/debug/lowtalker model download    # fetch it, or finish a download that stopped

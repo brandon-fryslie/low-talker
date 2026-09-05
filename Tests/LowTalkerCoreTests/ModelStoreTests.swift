@@ -120,7 +120,7 @@ import Testing
             return
         }
         #expect(faults == [.init(path: "config.json", kind: .missing)])
-        #expect(presence.evictions.isEmpty, "a file that is already gone needs no eviction")
+        #expect(try presence.evictions.isEmpty, "a file that is already gone needs no eviction")
     }
 
     /// The hub client never re-fetches a file that exists, so a repair must start by
@@ -130,19 +130,80 @@ import Testing
         let store = ModelStore(directory: scratch.root)
         try Manifest(recording: scratch.folder, relativeTo: scratch.root).write(to: scratch.root.appending(components: "installed", "test.json"))
         try "{".write(to: scratch.folder.appending(path: "config.json"), atomically: true, encoding: .utf8)
-        #expect(store.presence(of: "test").evictions.map(\.standardizedFileURL) == [scratch.folder.appending(path: "config.json").standardizedFileURL])
+        #expect(try store.presence(of: "test").evictions.map(\.standardizedFileURL) == [scratch.folder.appending(path: "config.json").standardizedFileURL])
     }
 
     @Test func storeWithAnUnreadableManifestIsDamaged() throws {
         let scratch = try Scratch(files: Self.files)
-        let url = scratch.root.appending(components: "installed", "test.json")
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try "not json".write(to: url, atomically: true, encoding: .utf8)
+        let url = try scratch.writeManifest("not json")
         let presence = ModelStore(directory: scratch.root).presence(of: "test")
-        guard case .damaged(.manifestUnreadable) = presence else {
+        guard case .damaged(.manifestUnreadable(let manifest, _)) = presence else {
             Issue.record("a corrupt manifest must count as damaged, not missing")
             return
         }
-        #expect(presence.evictions.isEmpty, "with no manifest to name faults, a repair removes nothing")
+        #expect(manifest == url)
+        #expect(throws: ModelStoreError.self, "with no manifest to name faults, no repair is offered") {
+            try presence.evictions
+        }
+    }
+
+    /// A repair over an unreadable manifest would certify whatever is on disk, so
+    /// the refusal comes before any download.
+    @Test func installRefusesToRepairAnUnreadableManifest() async throws {
+        let scratch = try Scratch(files: Self.files)
+        let url = try scratch.writeManifest("not json")
+        await #expect {
+            try await ModelStore(directory: scratch.root).install("test") { _ in }
+        } throws: { error in
+            guard case ModelStoreError.manifestUnreadable(let manifest, _) = error else { return false }
+            return manifest == url
+        }
+    }
+
+    /// The manifest is the only path the store follows blindly, so a manifest that
+    /// points outside the store is refused as unreadable rather than followed.
+    @Test func manifestPointingOutsideTheStoreIsRefused() throws {
+        let scratch = try Scratch(files: Self.files)
+        let url = try scratch.writeManifest(#"{"folder": "../../etc", "files": []}"#)
+        #expect(throws: ManifestError.pathEscapes("../../etc")) {
+            try Manifest(contentsOf: url)
+        }
+        guard case .damaged(.manifestUnreadable) = ModelStore(directory: scratch.root).presence(of: "test") else {
+            Issue.record("a manifest that escapes the store must count as damaged")
+            return
+        }
+    }
+
+    @Test(arguments: ["a/b", "..", ".", "", "/x"])
+    func modelNameRefusesAnythingButOnePathStep(raw: String) {
+        #expect(ModelName(rawValue: raw) == nil)
+    }
+
+    @Test func modelNameAcceptsAFolderName() {
+        #expect(ModelName(rawValue: "base.en")?.rawValue == "base.en")
+    }
+
+    /// The app's launch load and the CLI's `model download` share one store.
+    @Test func installRefusesWhileAnotherInstallerHoldsTheLock() async throws {
+        let scratch = try Scratch(files: Self.files)
+        let lock = scratch.root.appending(components: "installed", ".lock")
+        try FileManager.default.createDirectory(at: lock.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let descriptor = open(lock.path, O_RDONLY | O_CREAT, 0o644)
+        try #require(descriptor >= 0)
+        defer { close(descriptor) }
+        try #require(flock(descriptor, LOCK_EX) == 0)
+        await #expect(throws: ModelStoreError.installInProgress(lock: lock)) {
+            try await ModelStore(directory: scratch.root).install("test") { _ in }
+        }
+    }
+}
+
+extension ModelStoreTests.Scratch {
+    /// Puts `contents` where the store expects the manifest for model `test`.
+    func writeManifest(_ contents: String) throws -> URL {
+        let url = root.appending(components: "installed", "test.json")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try contents.write(to: url, atomically: true, encoding: .utf8)
+        return url
     }
 }

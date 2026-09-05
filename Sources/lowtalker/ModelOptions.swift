@@ -8,8 +8,8 @@ import Synchronization
 /// [LAW:one-source-of-truth] The default store is the app's; the CLI reads and writes
 /// the same directory so a download from the terminal is a download for the app.
 struct ModelOptions: ParsableArguments {
-    @Option(help: "A model folder name in the whisperkit-coreml repo.", transform: WhisperKitTranscriber.Model.init(rawValue:))
-    var model: WhisperKitTranscriber.Model = .default
+    @Option(help: "A model folder name in the whisperkit-coreml repo.")
+    var model: ModelName = .default
 
     @Option(name: .customLong("models-dir"), help: "Where models are stored. Defaults to the app's directory under Application Support.", transform: URL.init(fileURLWithPath:))
     var modelsDirectory: URL?
@@ -18,6 +18,10 @@ struct ModelOptions: ParsableArguments {
         try modelsDirectory.map(ModelStore.init(directory:)) ?? ModelStore.applicationSupport()
     }
 }
+
+/// [LAW:parse-dont-validate] `--model` is parsed into a name at the command line, so a
+/// value that is not one path step is refused before any path is built from it.
+extension ModelName: ExpressibleByArgument {}
 
 /// Narrates a load on stderr: one line per whole percent of download, one line when
 /// loading starts. Stdout stays the command's own.
