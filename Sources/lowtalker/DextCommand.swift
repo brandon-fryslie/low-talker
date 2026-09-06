@@ -35,7 +35,7 @@ struct DextTypeCommand: AsyncParsableCommand {
     )
 
     @Argument(help: "The bundle id of the app to type into, e.g. com.apple.TextEdit.")
-    var into: String
+    var into: BundleID
 
     @Argument(help: "The text to type: printable ASCII, newline, and tab.")
     var text: String
@@ -64,7 +64,7 @@ struct DextTypeCommand: AsyncParsableCommand {
         let firstPosted = clock.now
         _ = try daemon.press(first)
         let firstSeen = try await screen.wait(within: .seconds(3)) { $0.count(of: first.character) > before.count(of: first.character) }
-        print("first character on screen in \(into) after \((clock.now - firstPosted).milliseconds) ms\(firstSeen ? "" : " (NEVER SEEN)")")
+        print("first character on screen in \(into.rawValue) after \((clock.now - firstPosted).milliseconds) ms\(firstSeen ? "" : " (NEVER SEEN)")")
 
         let restPosted = clock.now
         var last: UInt64 = 0
@@ -404,6 +404,8 @@ enum USLayout {
     }
 }
 
+extension BundleID: ExpressibleByArgument {}
+
 struct UntypeableCharacters: Error, CustomStringConvertible {
     let characters: String
     var description: String { "the US layout spike cannot type \(characters.debugDescription); it knows printable ASCII, newline, and tab" }
@@ -416,23 +418,25 @@ struct UntypeableCharacters: Error, CustomStringConvertible {
 @MainActor
 struct TargetApp {
     /// The app the caller means to type into; anything else in front is a refusal.
-    let bundleID: String
+    /// [LAW:one-type-per-behavior] BundleID already names an app target everywhere else
+    /// in this codebase, so this seam speaks it rather than a second bare String.
+    let bundleID: BundleID
 
     /// Brings the target to the front and waits for macOS to agree it is there.
     /// [LAW:no-ambient-temporal-coupling] Focus is a state this command drives and
     /// confirms, never a condition it hopes the shell arranged beforehand.
     func raise(within limit: Duration) async throws {
-        guard let target = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) else {
-            throw ScreenUnreadable.notRunning(bundleID)
+        guard let target = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID.rawValue }) else {
+            throw ScreenUnreadable.notRunning(bundleID.rawValue)
         }
         let clock = ContinuousClock()
         let start = clock.now
         repeat {
             target.activate()
             try await Task.sleep(for: .milliseconds(100))
-            if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID { return }
+            if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID.rawValue { return }
         } while clock.now - start < limit
-        throw ScreenUnreadable.wrongApp(wanted: bundleID, frontmost: NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nothing")
+        throw ScreenUnreadable.wrongApp(wanted: bundleID.rawValue, frontmost: NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nothing")
     }
 
     /// [LAW:no-silent-failure] A screen that cannot be read is said so, never reported
@@ -440,7 +444,7 @@ struct TargetApp {
     func read() throws -> String {
         guard let app = NSWorkspace.shared.frontmostApplication else { throw ScreenUnreadable.noFrontmostApp }
         let name = app.bundleIdentifier ?? "pid \(app.processIdentifier)"
-        guard name == bundleID else { throw ScreenUnreadable.wrongApp(wanted: bundleID, frontmost: name) }
+        guard name == bundleID.rawValue else { throw ScreenUnreadable.wrongApp(wanted: bundleID.rawValue, frontmost: name) }
         var focused: CFTypeRef?
         guard AXUIElementCopyAttributeValue(AXUIElementCreateApplication(app.processIdentifier), kAXFocusedUIElementAttribute as CFString, &focused) == .success, let element = focused else { throw ScreenUnreadable.noFocus(name) }
         var value: CFTypeRef?
