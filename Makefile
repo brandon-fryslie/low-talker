@@ -18,10 +18,11 @@ run: app
 	open "$(APP)"
 
 test: check-docs
+	scripts/virtual-hid-driver-test
 	swift build
 	swift test
 
-# [LAW:one-source-of-truth] scripts/virtual-hid-driver pins the versions; README.md
+# [LAW:one-source-of-truth] scripts/virtual-hid-driver pins these values; README.md
 # quotes them for a reader following the runbook by hand. The script is the source and
 # the README is the copy, so this is what keeps the copy from drifting quietly the next
 # time a pin moves. Every pinned constant README.md quotes belongs in the list below.
@@ -34,6 +35,20 @@ check-docs:
 	    || { echo "check-docs: scripts/virtual-hid-driver pins $$constant=$$pinned, which README.md never mentions" >&2; exit 1; }; \
 	  echo "check-docs: README.md agrees with $$constant=$$pinned"; \
 	done
+# The verdict vocabulary is the other copy README.md keeps: `verdict_for` emits the
+# words and the prose lists them. Compared as sets in both directions, so a verdict
+# added to the script and a verdict left standing in README after the script dropped
+# it both fail. Empty on either side is a broken reader, not agreement, and says so.
+	@set -euo pipefail; \
+	emitted=$$(sed -n '/^verdict_for()/,/^}/p' scripts/virtual-hid-driver \
+	  | sed -n 's/.*echo \([a-z][a-z-]*\).*/\1/p' | sort -u); \
+	quoted=$$(grep -o 'The verdicts are [^.]*\.' README.md \
+	  | grep -o '`[a-z-]*`' | tr -d '`' | sort -u); \
+	[ -n "$$emitted" ] || { echo "check-docs: found no verdict words in verdict_for" >&2; exit 1; }; \
+	[ -n "$$quoted" ] || { echo "check-docs: README.md carries no 'The verdicts are ...' sentence" >&2; exit 1; }; \
+	diff <(echo "$$emitted") <(echo "$$quoted") \
+	  || { echo "check-docs: verdict_for and README.md disagree about the verdicts (< script, > README)" >&2; exit 1; }; \
+	echo "check-docs: README.md names every verdict verdict_for emits"
 
 # The CLI for engine work. The Neural Engine keeps its compiled model per signing
 # identifier, and `swift build` links a fresh identifier into every binary, so a
