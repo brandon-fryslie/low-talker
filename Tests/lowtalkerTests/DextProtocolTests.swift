@@ -214,14 +214,14 @@ import Testing
 @Suite struct TypingStoppedTests {
     @Test func aRunStoppedPartWaySaysHowMuchLandedAndThatTheRestDidNot() {
         let stopped = TypingStopped(typed: 34, of: 500, cause: ScreenUnreadable.wrongApp(wanted: "com.apple.TextEdit", frontmost: "com.googlecode.iterm2"))
-        #expect("\(stopped)" == "com.googlecode.iterm2 is frontmost, not com.apple.TextEdit. 34 of 500 characters were typed before this, and the rest were not")
+        #expect("\(stopped)" == "com.googlecode.iterm2 is frontmost, not com.apple.TextEdit. 34 of 500 characters had been posted and acknowledged before this, and the rest were not sent")
     }
 
     /// The same failure after the last keystroke is a different fact, and claiming a
     /// remainder that does not exist is how the first version of this misled.
     @Test func aRunStoppedAfterTheLastKeystrokeClaimsNoRemainder() {
         let stopped = TypingStopped(typed: 40, of: 40, cause: Interrupted(number: SIGINT))
-        #expect("\(stopped)" == "interrupted by signal 2. all 40 characters had been typed before this")
+        #expect("\(stopped)" == "interrupted by signal 2. all 40 characters had been posted and acknowledged before this")
     }
 
     /// Any cause, not only a screen one: a daemon that goes quiet mid-burst leaves just

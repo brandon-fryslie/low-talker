@@ -69,7 +69,8 @@ struct DextTypeCommand: AsyncParsableCommand {
         // [LAW:no-ambient-temporal-coupling] The target is stated, not discovered, and
         // every read re-checks it, so a window that steals focus mid-run is a named
         // failure rather than text delivered somewhere nobody asked for.
-        let screen = TargetApp(bundleID: into)
+        let screen = TargetApp(bundleID: into, interrupt: interrupt)
+        try interrupt.check()
         try await screen.raise(within: .seconds(5))
         let start = try screen.focus()
         let before = start.text
@@ -85,11 +86,10 @@ struct DextTypeCommand: AsyncParsableCommand {
         // does not change what the operator needs to be told. [LAW:single-enforcer]
         let first = keystrokes[0]
         let firstPosted = clock.now
-        var posted = 0
         do {
+            try interrupt.check()
             // One character alone, so its latency is the driver's and not the queue's.
             try daemon.press(first)
-            posted = 1
             let firstSeen = try await screen.wait(within: .seconds(3)) { $0.occurrences(of: String(first.character)) > before.occurrences(of: String(first.character)) }
             print("first character on screen in \(into.rawValue) after \((clock.now - firstPosted).milliseconds) ms\(firstSeen ? "" : " (NEVER SEEN)")")
 
@@ -104,7 +104,6 @@ struct DextTypeCommand: AsyncParsableCommand {
                 try interrupt.check()
                 try screen.requireFrontmost()
                 try daemon.press(keystroke)
-                posted += 1
             }
             let acknowledged = clock.now - restPosted
             // Against a baseline, like the first character's check: an app already holding
@@ -113,8 +112,13 @@ struct DextTypeCommand: AsyncParsableCommand {
             let settled = clock.now - restPosted
             // The count is the one the clock actually covers: the first character was
             // posted and timed above, on its own, and is not in this window.
-            // [LAW:one-source-of-truth]
-            print("\(rest.count) more characters posted and acknowledged in \(acknowledged.milliseconds) ms, all \(keystrokes.count) on screen after \(settled.milliseconds) ms")
+            // [LAW:one-source-of-truth] With nothing after that character there is no
+            // burst, and no window either - "0 more in 0.0 ms, all 1 on screen after
+            // 0.1 ms" is measured from after the character had already landed and reads
+            // as a claim about it, which the line above has already made properly.
+            if !rest.isEmpty {
+                print("\(rest.count) more characters posted and acknowledged in \(acknowledged.milliseconds) ms, all \(keystrokes.count) on screen after \(settled.milliseconds) ms")
+            }
             if allSeen {
                 print("the screen holds the text, complete and in order")
             } else {
@@ -125,7 +129,7 @@ struct DextTypeCommand: AsyncParsableCommand {
                 catch { print("MISMATCH, and the screen would not be read afterwards: \(error)") }
             }
         } catch {
-            throw TypingStopped(typed: posted, of: keystrokes.count, cause: error)
+            throw TypingStopped(typed: daemon.pressesBegun, of: keystrokes.count, cause: error)
         }
     }
 }
@@ -213,6 +217,13 @@ final class DaemonConnection {
     private var nextRequestID: UInt64 = 1
     /// The daemon's latest word on each status it has ever sent.
     private(set) var status: [Status: Bool] = [:]
+    /// How many presses the daemon has acknowledged the key-down of. A press is two
+    /// reports and the character is on screen after the first, so a failure between them
+    /// still put a character in the document - counting completed presses would report
+    /// one fewer than is actually there. The count belongs here because this is what
+    /// sends them; a caller keeping its own tally keeps one that can disagree.
+    /// [LAW:one-source-of-truth]
+    private(set) var pressesBegun = 0
 
     init() throws {
         guard FileManager.default.fileExists(atPath: Self.socketPath) else { throw DaemonError.noSocket }
@@ -274,6 +285,7 @@ final class DaemonConnection {
     /// on rather than a sleep guessed at. [LAW:no-ambient-temporal-coupling]
     func press(_ keystroke: USLayout.Keystroke) throws {
         try request(.postKeyboardInputReport, KeyboardReport(modifiers: keystroke.shift ? KeyboardReport.leftShift : 0, keys: [keystroke.usage]).bytes, within: .seconds(2))
+        pressesBegun += 1
         try request(.postKeyboardInputReport, KeyboardReport.released.bytes, within: .seconds(2))
     }
 
@@ -534,9 +546,13 @@ struct TypingStopped: Error, CustomStringConvertible {
     let of: Int
     let cause: any Error
     var description: String {
+        // "Posted and acknowledged", not "typed", and the difference is this spike's
+        // whole finding: the daemon acknowledges reports the driver then drops, so the
+        // count is what left here and an upper bound on what landed, never a delivery
+        // receipt. A run interrupted at 445 has been seen to leave 436 in the document.
         let progress = typed < of
-            ? "\(typed) of \(of) characters were typed before this, and the rest were not"
-            : "all \(of) characters had been typed before this"
+            ? "\(typed) of \(of) characters had been posted and acknowledged before this, and the rest were not sent"
+            : "all \(of) characters had been posted and acknowledged before this"
         return "\(cause). \(progress)"
     }
 }
@@ -546,8 +562,15 @@ struct TypingStopped: Error, CustomStringConvertible {
 /// during a burst leaves a key down with nothing left to release it, and macOS repeats
 /// that key into whatever app comes forward next - the exact failure this command exists
 /// to study. Ignored as a signal and watched as a source instead, it becomes something
-/// the burst can read and stop for, unwinding through the same release every other
+/// the run can read and stop for, unwinding through the same release every other
 /// failure takes. [LAW:dataflow-not-control-flow]
+///
+/// Being ignored has a price worth stating plainly: the signal no longer ends a blocking
+/// read either, so it is seen only where something asks. Every loop that waits on another
+/// process asks - raising the app, polling the screen, each keystroke of the burst - and
+/// so does each step between them. What is left is the daemon's own reads, so an
+/// interrupt arriving inside one is seen when that read returns, at most two seconds
+/// later.
 final class Interrupt: @unchecked Sendable {
     private let lock = NSLock()
     private var raised: Int32?
@@ -600,6 +623,10 @@ struct TargetApp {
     /// [LAW:one-type-per-behavior] BundleID already names an app target everywhere else
     /// in this codebase, so this seam speaks it rather than a second bare String.
     let bundleID: BundleID
+    /// Every loop in here waits on another process, and a wait is where an interrupt
+    /// arrives. Ignoring the signal to keep it away from the driver's key state means
+    /// nothing observes it unless something asks, so each poll asks.
+    let interrupt: Interrupt
 
     /// Brings the target to the front and waits for macOS to agree it is there.
     /// [LAW:no-ambient-temporal-coupling] Focus is a state this command drives and
@@ -611,6 +638,7 @@ struct TargetApp {
         let clock = ContinuousClock()
         let start = clock.now
         repeat {
+            try interrupt.check()
             target.activate()
             try await Task.sleep(for: .milliseconds(100))
             if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID.rawValue { return }
@@ -641,6 +669,30 @@ struct TargetApp {
     /// [LAW:no-silent-failure] A screen that cannot be read is said so, never reported
     /// as an empty one: empty is what the verdict compares against.
     func focus() throws -> Focus {
+        let (element, name) = try focusedElement()
+        var role: CFTypeRef?
+        _ = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
+        return Focus(role: role as? String ?? "an element that will not name its role", text: try Self.text(of: element, in: name))
+    }
+
+    /// The value alone. [LAW:decomposition] `wait` polls this every 2 ms for seconds at a
+    /// time, and the role it does not use is another synchronous call into the app whose
+    /// main thread the poll rate was chosen to leave alone - the reading would have been
+    /// loading the very thing it measures.
+    func read() throws -> String {
+        let (element, name) = try focusedElement()
+        return try Self.text(of: element, in: name)
+    }
+
+    private static func text(of element: AXUIElement, in name: String) throws -> String {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success, let text = value as? String else { throw ScreenUnreadable.noText(name) }
+        return text
+    }
+
+    /// The focused element, with the app re-proven frontmost first. Both readings come
+    /// through here, so neither can quietly read an app the caller did not name.
+    private func focusedElement() throws -> (AXUIElement, String) {
         let app = try requireFrontmost()
         let name = bundleID.rawValue
         let application = AXUIElementCreateApplication(app.processIdentifier)
@@ -655,11 +707,7 @@ struct TargetApp {
         var focused: CFTypeRef?
         guard AXUIElementCopyAttributeValue(application, kAXFocusedUIElementAttribute as CFString, &focused) == .success, let element = Self.element(focused) else { throw ScreenUnreadable.noFocus(name) }
         AXUIElementSetMessagingTimeout(element, 0.5)
-        var role: CFTypeRef?
-        _ = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success, let text = value as? String else { throw ScreenUnreadable.noText(name) }
-        return Focus(role: role as? String ?? "an element that will not name its role", text: text)
+        return (element, name)
     }
 
     /// The answer as an element, when the app answered with one. A CoreFoundation value
@@ -674,16 +722,13 @@ struct TargetApp {
         return (value as! AXUIElement)
     }
 
-    func read() throws -> String {
-        try focus().text
-    }
-
     /// Polls the focused text until `condition` holds or `limit` passes: an app paints
     /// when it paints, so the wait is on the state and the bound is the verdict.
     func wait(within limit: Duration, until condition: (String) -> Bool) async throws -> Bool {
         let clock = ContinuousClock()
         let start = clock.now
         while clock.now - start < limit {
+            try interrupt.check()
             if condition(try read()) { return true }
             // Far below the 10-35 ms being measured, and far above a rate that would load
             // the target app's main thread with synchronous Accessibility calls and skew
