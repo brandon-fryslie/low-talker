@@ -29,8 +29,8 @@ let package = Package(
         // usage, the modifiers held with it, and the two names one key goes by. It links
         // nothing, so neither the layout nor the device has to link the other to speak.
         .target(name: "Keystrokes"),
-        // Carbon lives here and nowhere else, so the privileged helper that owns the
-        // device never links a window server API. [LAW:one-way-deps]
+        // Carbon lives here and not in VirtualKeyboard, so the privileged side that owns
+        // the device never links a window server API. [LAW:one-way-deps]
         .target(name: "KeyboardLayout", dependencies: ["Keystrokes"]),
         // [LAW:one-way-deps] Everything about the virtual keyboard and nothing about
         // low-talker: no dependency on LowTalkerCore, so it leaves for its own package by

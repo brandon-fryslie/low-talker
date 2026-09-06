@@ -85,16 +85,28 @@ struct Refused: Error {}
         #expect(scribe.halfTyped == nil)
     }
 
-    /// The dead key was posted and the letter was not, at each of the four points where
-    /// that can happen: the key-down that failed, the release after it, the check before
-    /// the letter, and the letter's own key-down. The app is holding an accent in all four.
+    /// The dead key may have been posted and the letter was not, at each of the four points
+    /// where that can happen: the dead key's own key-down, the release after it, the check
+    /// before the letter, and the letter's key-down. The app may be holding an accent in
+    /// all four, so all four say so.
     @Test func aCharacterStoppedBeforeItsLastKeystrokeIsHalfTyped() {
-        for stoppedAfter in [2, 3, 4, 5, 6] {
+        for stoppedAfter in [3, 4, 5, 6] {
             var (scribe, _) = scribe(allowing: stoppedAfter)
             #expect(throws: Refused.self) { try scribe.press("\u{e9}", Self.acute) }
             #expect(scribe.typed == 0, "stopped after \(stoppedAfter) calls")
             #expect(scribe.halfTyped == "\u{e9}", "stopped after \(stoppedAfter) calls")
         }
+    }
+
+    /// A check that refuses sent nothing. It is a decision taken here, before any report
+    /// leaves - unlike a `down` that throws, which may have reached the driver anyway - so
+    /// the dead key is not pending in the app and the run must not say it is. An operator
+    /// told to clear a composition that is not there will clear something else.
+    @Test func aCharacterRefusedBeforeItsDeadKeyWasPostedLeavesNothingPending() {
+        var (scribe, _) = scribe(allowing: 2)
+        #expect(throws: Refused.self) { try scribe.press("\u{e9}", Self.acute) }
+        #expect(scribe.typed == 0)
+        #expect(scribe.halfTyped == nil)
     }
 
     /// The last key-down was acknowledged, so the character is on screen even though the
@@ -128,7 +140,7 @@ struct Refused: Error {}
         var (scribe, keyboard) = scribe()
         for character in "abc" { try scribe.press(character, [Keystroke(Usage(rawValue: 0x04))]) }
         #expect(scribe.typed == 3)
-        keyboard.allow = keyboard.log.count + 2
+        keyboard.allow = keyboard.log.count + 3
         #expect(throws: Refused.self) { try scribe.press("\u{e9}", Self.acute) }
         #expect(scribe.typed == 3)
         #expect(scribe.halfTyped == "\u{e9}")

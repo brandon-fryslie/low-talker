@@ -57,21 +57,28 @@ struct Scribe {
     /// leaves a key down for macOS to repeat into whatever comes forward next, which is
     /// worse than what the check prevents: the check is what makes a refusal safe, so it
     /// cannot be what stops the release.
-    private func press(_ usage: Usage) throws {
+    /// `composing` is the character this key leaves pending in the app - the dead key of
+    /// an accented letter, and nothing else. It travels with the call rather than being set
+    /// beside it, so the one line that can record a pending accent is the one line that is
+    /// ambiguous about whether it happened. [LAW:dataflow-not-control-flow]
+    private mutating func press(_ usage: Usage, composing pending: Character?) throws {
         try keyboard.check()
+        // Recorded between the check and the down, and cleared after the character's last
+        // key comes back. The two failures are not the same thing and must not report the
+        // same thing: a `down` that throws may still have reached the driver, so its accent
+        // is assumed pending rather than assumed away - the bias `keysDown` keeps, for the
+        // same reason - while a `check` that throws is a local decision that sent nothing,
+        // and reporting an accent for it would tell the operator to clear a composition
+        // that is not there.
+        if let pending { halfTyped = pending }
         try keyboard.down(usage)
     }
 
     mutating func press(_ character: Character, _ keystrokes: [Keystroke]) throws {
         for (index, keystroke) in keystrokes.enumerated() {
-            for modifier in keystroke.modifiers.usages { try press(modifier) }
+            for modifier in keystroke.modifiers.usages { try press(modifier, composing: nil) }
             let last = index == keystrokes.count - 1
-            // Recorded BEFORE the key goes down, and cleared after the last one comes
-            // back. A request that throws may still have reached the driver, so a dead key
-            // whose post failed is assumed to be pending in the app rather than assumed
-            // away - the same bias `keysDown` keeps, for the same reason.
-            if !last { halfTyped = character }
-            try press(keystroke.usage)
+            try press(keystroke.usage, composing: last ? nil : character)
             // Counted on the key-down the daemon has acknowledged, not after the release:
             // a failure between the two still put the character on screen, and a count
             // taken after the release would report one fewer than is really there. It is
