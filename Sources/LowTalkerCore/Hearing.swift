@@ -100,3 +100,48 @@ struct Hearing: Equatable {
         Transcript(words: confirmed + tentative)
     }
 }
+
+extension Hearing {
+    /// What one pass is asked to read: the speech so far, where in it to start, and
+    /// the confirmed words to say first.
+    struct Pass: Equatable, Sendable {
+        let samples: [Float]
+        let cut: Int
+        let saying: String
+    }
+
+    /// Hears an utterance out as it arrives: fills it from `audio`, and runs `pass`
+    /// over the speech so far whenever the engine is free and speech worth a pass has
+    /// arrived, feeding the words back in and telling `partial` what is heard so far.
+    /// The last pass's reading is the transcript. Engine-agnostic: `pass` is the
+    /// engine, `margin` the span it decodes no window under, and `context` how many
+    /// confirmed words it is told to say first.
+    ///
+    /// [LAW:dataflow-not-control-flow] The one branch is the utterance's own state:
+    /// speech to hear, or nothing more. A pass over what is there is the same pass
+    /// whether the key is still down or just came up, and the last pass's reading is
+    /// the transcript once no speech follows it. During the hold a pass waits for
+    /// speech worth one; once the utterance has ended, whatever speech no pass has
+    /// heard gets the last pass, however short, and the engine pads it out to its
+    /// floor. So a tap-to-toggle "yes" is heard, not decoded as nothing, and a hold
+    /// with nothing said in it is still no pass at all.
+    static func transcribe(
+        _ audio: some AsyncSequence<AudioClip, Never> & Sendable,
+        margin: Int,
+        context: Int,
+        pass: (Pass) async throws -> [Transcript.Word],
+        partial: (Partial) -> Void
+    ) async throws -> Transcript {
+        let utterance = Utterance()
+        async let fed: Void = utterance.fill(from: audio)
+        var hearing = Hearing(margin: margin, context: context)
+        while case let (samples, ended) = await utterance.audio(beyond: hearing.passable), samples.count > hearing.heard {
+            let words = try await pass(Pass(samples: samples, cut: hearing.cut, saying: hearing.saying))
+            hearing.hear(words, through: samples.count)
+            if ended { break }
+            partial(hearing.partial)
+        }
+        try await fed
+        return hearing.transcript
+    }
+}
