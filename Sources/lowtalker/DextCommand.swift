@@ -57,26 +57,34 @@ struct DextTypeCommand: AsyncParsableCommand {
         // failure rather than text delivered somewhere nobody asked for.
         let screen = TargetApp(bundleID: into)
         try await screen.raise(within: .seconds(5))
-        let before = try screen.read()
+        let start = try screen.focus()
+        let before = start.text
+        // Which element, not just which app: a find bar accepts keystrokes as readily as
+        // a document, and reads them back just as convincingly.
+        print("typing into \(into.rawValue), focus is \(start.role)")
 
         // One character alone, so its latency is the driver's and not the queue's.
         let first = keystrokes[0]
         let firstPosted = clock.now
-        _ = try daemon.press(first)
-        let firstSeen = try await screen.wait(within: .seconds(3)) { $0.count(of: first.character) > before.count(of: first.character) }
+        try daemon.press(first)
+        let firstSeen = try await screen.wait(within: .seconds(3)) { $0.occurrences(of: String(first.character)) > before.occurrences(of: String(first.character)) }
         print("first character on screen in \(into.rawValue) after \((clock.now - firstPosted).milliseconds) ms\(firstSeen ? "" : " (NEVER SEEN)")")
 
+        // Focus is re-checked before every report, not once before the burst. A keystroke
+        // is irrevocable the moment it is posted, so the window in which focus may move
+        // has to be one keystroke wide; anything wider delivers the rest of the text to
+        // whatever app took the front. [LAW:no-ambient-temporal-coupling]
         let restPosted = clock.now
-        var last: UInt64 = 0
         for keystroke in keystrokes.dropFirst() {
-            last = try daemon.press(keystroke)
+            try screen.requireFrontmost()
+            try daemon.press(keystroke)
         }
-        let posting = clock.now - restPosted
-        try daemon.awaitResponse(to: last, within: .seconds(5))
         let acknowledged = clock.now - restPosted
-        let allSeen = try await screen.wait(within: .seconds(5)) { $0.contains(text) }
+        // Against a baseline, like the first character's check: an app already holding this
+        // text would otherwise confirm a run that delivered nothing.
+        let allSeen = try await screen.wait(within: .seconds(5)) { $0.occurrences(of: text) > before.occurrences(of: text) }
         let settled = clock.now - restPosted
-        print("\(keystrokes.count) characters posted in \(posting.milliseconds) ms, acknowledged by the daemon after \(acknowledged.milliseconds) ms, on screen after \(settled.milliseconds) ms")
+        print("\(keystrokes.count) characters posted and acknowledged in \(acknowledged.milliseconds) ms, on screen after \(settled.milliseconds) ms")
         print(allSeen ? "the screen holds the text, complete and in order" : "MISMATCH: the screen holds [\(try screen.read())]")
         try daemon.request(.keyboardReset, [], within: .seconds(2))
     }
@@ -171,7 +179,14 @@ final class DaemonConnection {
         socket = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard socket >= 0 else { throw DaemonError.socket("socket", errno) }
         var noSignal: Int32 = 1
-        setsockopt(socket, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
+        // [LAW:no-silent-failure] This is the only thing standing between a write to a
+        // closed socket and SIGPIPE killing the process without a word, so a failure to
+        // set it is reported rather than assumed.
+        guard setsockopt(socket, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+            let code = errno
+            close(socket)
+            throw DaemonError.socket("setsockopt(SO_NOSIGPIPE)", code)
+        }
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         let path = Array(Self.socketPath.utf8CString)
@@ -208,10 +223,16 @@ final class DaemonConnection {
     }
 
     /// A key down and back up: the two reports a HID keyboard sends for one press.
-    /// Returns the id of the second, the one to wait on.
-    func press(_ keystroke: USLayout.Keystroke) throws -> UInt64 {
-        try send(.postKeyboardInputReport, KeyboardReport(modifiers: keystroke.shift ? KeyboardReport.leftShift : 0, keys: [keystroke.usage]).bytes)
-        return try send(.postKeyboardInputReport, KeyboardReport.released.bytes)
+    ///
+    /// Each report is awaited, and that is not politeness - it is flow control. Fired
+    /// back to back with no wait, 500 characters overrun the path and reports are lost;
+    /// a lost key-up leaves its key held, so macOS starts repeating it and the tail of
+    /// the text becomes hundreds of one shifted character. Measured, twice, in this
+    /// spike. The daemon answers every request, so its answer is a real signal to wait
+    /// on rather than a sleep guessed at. [LAW:no-ambient-temporal-coupling]
+    func press(_ keystroke: USLayout.Keystroke) throws {
+        try request(.postKeyboardInputReport, KeyboardReport(modifiers: keystroke.shift ? KeyboardReport.leftShift : 0, keys: [keystroke.usage]).bytes, within: .seconds(2))
+        try request(.postKeyboardInputReport, KeyboardReport.released.bytes, within: .seconds(2))
     }
 
     /// Reads frames until the response to `id` arrives, taking in every status the
@@ -232,10 +253,14 @@ final class DaemonConnection {
         let deadline = ContinuousClock.now + limit
         var answered: ContinuousClock.Instant?
         while status[.keyboardReady] != true {
+            // Checked before the read, not after it: a mismatch pushed during an earlier
+            // request is already recorded, and no further frame is coming to carry it.
+            // Blocking here would bury the named cause under a timeout.
+            // [LAW:no-silent-failure]
+            guard status[.driverVersionMismatched] != true else { throw DaemonError.driverVersionMismatched }
             let (type, frameID, data) = try readFrame(by: deadline)
             try handle(type, id: frameID, data)
             answered = answered ?? ContinuousClock.now
-            if status[.driverVersionMismatched] == true { throw DaemonError.driverVersionMismatched }
         }
         return (answered ?? ContinuousClock.now, ContinuousClock.now)
     }
@@ -439,17 +464,42 @@ struct TargetApp {
         throw ScreenUnreadable.wrongApp(wanted: bundleID.rawValue, frontmost: NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nothing")
     }
 
-    /// [LAW:no-silent-failure] A screen that cannot be read is said so, never reported
-    /// as an empty one: empty is what the verdict compares against.
-    func read() throws -> String {
+    /// [LAW:parse-dont-validate] The one place focus is decided. It returns the target
+    /// app only when the target is the app in front, so a caller holding the result holds
+    /// the proof and nothing downstream asks again. [LAW:single-enforcer]
+    @discardableResult
+    func requireFrontmost() throws -> NSRunningApplication {
         guard let app = NSWorkspace.shared.frontmostApplication else { throw ScreenUnreadable.noFrontmostApp }
         let name = app.bundleIdentifier ?? "pid \(app.processIdentifier)"
         guard name == bundleID.rawValue else { throw ScreenUnreadable.wrongApp(wanted: bundleID.rawValue, frontmost: name) }
+        return app
+    }
+
+    /// What the app's focus actually is, and what it holds. The role travels with the
+    /// text because naming the app does not name the element inside it: a find bar, a
+    /// search field and the document are all equally "frontmost", and a run that types
+    /// into the wrong one reads its own text back and calls itself correct.
+    struct Focus {
+        let role: String
+        let text: String
+    }
+
+    /// [LAW:no-silent-failure] A screen that cannot be read is said so, never reported
+    /// as an empty one: empty is what the verdict compares against.
+    func focus() throws -> Focus {
+        let app = try requireFrontmost()
+        let name = bundleID.rawValue
         var focused: CFTypeRef?
         guard AXUIElementCopyAttributeValue(AXUIElementCreateApplication(app.processIdentifier), kAXFocusedUIElementAttribute as CFString, &focused) == .success, let element = focused else { throw ScreenUnreadable.noFocus(name) }
+        var role: CFTypeRef?
+        _ = AXUIElementCopyAttributeValue(element as! AXUIElement, kAXRoleAttribute as CFString, &role)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element as! AXUIElement, kAXValueAttribute as CFString, &value) == .success, let text = value as? String else { throw ScreenUnreadable.noText(name) }
-        return text
+        return Focus(role: role as? String ?? "an element that will not name its role", text: text)
+    }
+
+    func read() throws -> String {
+        try focus().text
     }
 
     /// Polls the focused text until `condition` holds or `limit` passes: an app paints
@@ -459,7 +509,10 @@ struct TargetApp {
         let start = clock.now
         while clock.now - start < limit {
             if condition(try read()) { return true }
-            try await Task.sleep(for: .microseconds(200))
+            // Far below the 10-35 ms being measured, and far above a rate that would load
+            // the target app's main thread with synchronous Accessibility calls and skew
+            // the number this command exists to report.
+            try await Task.sleep(for: .milliseconds(2))
         }
         return condition(try read())
     }
@@ -484,8 +537,17 @@ enum ScreenUnreadable: Error, CustomStringConvertible {
 }
 
 extension String {
-    func count(of character: Character) -> Int {
-        filter { $0 == character }.count
+    /// [LAW:one-type-per-behavior] One counter serves both checks; the first character's
+    /// is this with a one-character needle.
+    func occurrences(of text: String) -> Int {
+        guard !text.isEmpty else { return 0 }
+        var count = 0
+        var searched = startIndex
+        while let found = self[searched...].range(of: text) {
+            count += 1
+            searched = found.upperBound
+        }
+        return count
     }
 }
 
