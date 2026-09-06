@@ -48,6 +48,16 @@ struct DextTypeCommand: AsyncParsableCommand {
         let clock = ContinuousClock()
         let connecting = clock.now
         let daemon = try DaemonConnection()
+        // [LAW:single-enforcer] Every key is released on the way out, whichever way out
+        // it is. A press is two requests, so a throw between them - a socket timeout, a
+        // focus check that fails - leaves that key held, and macOS repeats a held key
+        // until something releases it. One place enforces that, not each throw site.
+        defer {
+            do { try daemon.request(.keyboardReset, [], within: .seconds(2)) }
+            // [LAW:no-silent-failure] Nowhere to throw from a defer, so it is said out
+            // loud: a key may be left held and the next thing typed will show it.
+            catch { print("the keyboard was not reset: \(error). A key may be left held.") }
+        }
         try daemon.request(.keyboardInitialize, DaemonConnection.keyboardParameters, within: .seconds(2))
         let readyAfter = try daemon.awaitKeyboardReady(within: .seconds(2))
         print("daemon answered in \((readyAfter.answered - connecting).milliseconds) ms, keyboard ready after \((readyAfter.ready - connecting).milliseconds) ms")
@@ -70,13 +80,21 @@ struct DextTypeCommand: AsyncParsableCommand {
         let firstSeen = try await screen.wait(within: .seconds(3)) { $0.occurrences(of: String(first.character)) > before.occurrences(of: String(first.character)) }
         print("first character on screen in \(into.rawValue) after \((clock.now - firstPosted).milliseconds) ms\(firstSeen ? "" : " (NEVER SEEN)")")
 
-        // Focus is re-checked before every report, not once before the burst. A keystroke
-        // is irrevocable the moment it is posted, so the window in which focus may move
-        // has to be one keystroke wide; anything wider delivers the rest of the text to
-        // whatever app took the front. [LAW:no-ambient-temporal-coupling]
+        // Focus is re-checked before every keystroke, not once before the burst. A
+        // keystroke is irrevocable the moment it is posted, so the window in which focus
+        // may move has to be one keystroke wide; anything wider delivers the rest of the
+        // text to whatever app took the front. [LAW:no-ambient-temporal-coupling]
+        let rest = Array(keystrokes.dropFirst())
         let restPosted = clock.now
-        for keystroke in keystrokes.dropFirst() {
-            try screen.requireFrontmost()
+        for (posted, keystroke) in rest.enumerated() {
+            // [LAW:types-are-the-program] requireFrontmost knows the wrong app is in
+            // front and nothing else; how much text is already in the document is this
+            // loop's knowledge, so this loop is what says it. A keystroke cannot be
+            // recalled, so a run that stops here has left a fragment behind and the
+            // operator has to be told how long it is.
+            do { try screen.requireFrontmost() } catch let moved as ScreenUnreadable {
+                throw FocusLost(typed: posted + 1, of: keystrokes.count, cause: moved)
+            }
             try daemon.press(keystroke)
         }
         let acknowledged = clock.now - restPosted
@@ -84,9 +102,10 @@ struct DextTypeCommand: AsyncParsableCommand {
         // text would otherwise confirm a run that delivered nothing.
         let allSeen = try await screen.wait(within: .seconds(5)) { $0.occurrences(of: text) > before.occurrences(of: text) }
         let settled = clock.now - restPosted
-        print("\(keystrokes.count) characters posted and acknowledged in \(acknowledged.milliseconds) ms, on screen after \(settled.milliseconds) ms")
+        // The count is the one the clock actually covers: the first character was posted
+        // and timed above, on its own, and is not in this window. [LAW:one-source-of-truth]
+        print("\(rest.count) more characters posted and acknowledged in \(acknowledged.milliseconds) ms, all \(keystrokes.count) on screen after \(settled.milliseconds) ms")
         print(allSeen ? "the screen holds the text, complete and in order" : "MISMATCH: the screen holds [\(try screen.read())]")
-        try daemon.request(.keyboardReset, [], within: .seconds(2))
     }
 }
 
@@ -160,7 +179,7 @@ final class DaemonConnection {
     }
 
     /// The frame types, by index, from `unix_domain_stream/impl/protocol.hpp`.
-    private enum FrameType: UInt8 {
+    enum FrameType: UInt8 {
         case heartbeat = 0
         case userData = 1
         case healthCheck = 2
@@ -213,7 +232,7 @@ final class DaemonConnection {
         nextRequestID += 1
         let version = Self.clientProtocolVersion
         let data = [UInt8(version & 0xff), UInt8(version >> 8), request.rawValue] + payload
-        try write(frame(.request, id: id, data))
+        try write(Self.frame(.request, id: id, data))
         return id
     }
 
@@ -272,10 +291,10 @@ final class DaemonConnection {
         case .heartbeat, .userData, .healthCheckResponse:
             break
         case .healthCheck:
-            try write(frame(.healthCheckResponse, id: nil, []))
+            try write(Self.frame(.healthCheckResponse, id: nil, []))
         case .request:
             try record(data)
-            try write(frame(.response, id: id, []))
+            try write(Self.frame(.response, id: id, []))
         case .response:
             try record(data)
         }
@@ -289,7 +308,12 @@ final class DaemonConnection {
         }
     }
 
-    private func frame(_ type: FrameType, id: UInt64?, _ data: [UInt8]) -> [UInt8] {
+    /// The framing is bytes alone, with no socket in it. Byte order is the part of a
+    /// protocol that goes wrong silently - a reasonable-looking guess at pqrs's layout
+    /// would have corrupted every report while looking perfectly healthy - so the part
+    /// that decides it is separated from the part that does I/O, where it can be proven
+    /// by a test rather than only by a live driver. [LAW:decomposition]
+    static func frame(_ type: FrameType, id: UInt64?, _ data: [UInt8]) -> [UInt8] {
         let requestID = id.map { id in (0..<8).reversed().map { UInt8(truncatingIfNeeded: id >> (8 * $0)) } } ?? []
         let body = [type.rawValue] + requestID + data
         let length = UInt32(body.count)
@@ -305,11 +329,15 @@ final class DaemonConnection {
         }
     }
 
-    private func readFrame(by deadline: ContinuousClock.Instant) throws -> (FrameType, UInt64, [UInt8]) {
-        let header = try read(4, by: deadline)
+    /// The other half of the framing, and the same reason it is here: pure bytes in,
+    /// meaning out. [LAW:decomposition]
+    static func bodyLength(header: [UInt8]) throws -> Int {
         let length = header.reduce(0) { $0 << 8 | Int($1) }
         guard length >= 1 else { throw DaemonError.malformed("an empty frame") }
-        let body = try read(length, by: deadline)
+        return length
+    }
+
+    static func parse(body: [UInt8]) throws -> (FrameType, UInt64, [UInt8]) {
         guard let type = FrameType(rawValue: body[0]) else { throw DaemonError.malformed("frame type \(body[0]), which this was not written for") }
         switch type {
         case .request, .response:
@@ -319,6 +347,11 @@ final class DaemonConnection {
         default:
             return (type, 0, Array(body[1...]))
         }
+    }
+
+    private func readFrame(by deadline: ContinuousClock.Instant) throws -> (FrameType, UInt64, [UInt8]) {
+        let length = try Self.bodyLength(header: read(4, by: deadline))
+        return try Self.parse(body: read(length, by: deadline))
     }
 
     private func read(_ count: Int, by deadline: ContinuousClock.Instant) throws -> [UInt8] {
@@ -431,6 +464,16 @@ enum USLayout {
 
 extension BundleID: ExpressibleByArgument {}
 
+/// Focus moved to another app part way through a burst, so some of the text is in the
+/// target and the rest was never posted. The length is the message: text already typed
+/// cannot be taken back, and the operator is the one who has to clean it up.
+struct FocusLost: Error, CustomStringConvertible {
+    let typed: Int
+    let of: Int
+    let cause: ScreenUnreadable
+    var description: String { "\(cause). \(typed) of \(of) characters were already typed; the rest were not" }
+}
+
 struct UntypeableCharacters: Error, CustomStringConvertible {
     let characters: String
     var description: String { "the US layout spike cannot type \(characters.debugDescription); it knows printable ASCII, newline, and tab" }
@@ -461,7 +504,7 @@ struct TargetApp {
             try await Task.sleep(for: .milliseconds(100))
             if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID.rawValue { return }
         } while clock.now - start < limit
-        throw ScreenUnreadable.wrongApp(wanted: bundleID.rawValue, frontmost: NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nothing")
+        throw ScreenUnreadable.wouldNotComeForward(wanted: bundleID.rawValue, frontmost: NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nothing")
     }
 
     /// [LAW:parse-dont-validate] The one place focus is decided. It returns the target
@@ -521,6 +564,14 @@ struct TargetApp {
 enum ScreenUnreadable: Error, CustomStringConvertible {
     case noFrontmostApp
     case notRunning(String)
+    /// Raising the target failed, which happens before a single report is posted. This
+    /// is the only case that can promise nothing was typed, so it is the only one that
+    /// says so. [LAW:types-are-the-program]
+    case wouldNotComeForward(wanted: String, frontmost: String)
+    /// The wrong app is in front. That is all this says, because it is thrown from the
+    /// checks before typing and from the checks between keystrokes alike, and only the
+    /// caller knows which. A single case claiming "nothing was typed" would be a lie
+    /// half the time it fired.
     case wrongApp(wanted: String, frontmost: String)
     case noFocus(String)
     case noText(String)
@@ -529,7 +580,8 @@ enum ScreenUnreadable: Error, CustomStringConvertible {
         switch self {
         case .noFrontmostApp: "no app is frontmost, so there is no focused element to read"
         case .notRunning(let app): "\(app) is not running, so there is nothing to type into"
-        case .wrongApp(let wanted, let frontmost): "\(frontmost) is frontmost, not \(wanted); nothing was typed"
+        case .wouldNotComeForward(let wanted, let frontmost): "\(wanted) would not come to the front, \(frontmost) is there; nothing was typed"
+        case .wrongApp(let wanted, let frontmost): "\(frontmost) is frontmost, not \(wanted)"
         case .noFocus(let app): "\(app) has no focused element; is this process allowed under Accessibility?"
         case .noText(let app): "the focused element in \(app) carries no text value"
         }
