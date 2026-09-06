@@ -74,6 +74,35 @@ import WhisperKit
         }
     }
 
+    /// WhisperKit decodes no window unless it spans more than `windowClipTime` past
+    /// its start, so a pass over less is run out with silence to one sample past
+    /// that floor, and the speech in it is untouched.
+    @Test func aPassShorterThanTheFloorIsPaddedOutPastIt() {
+        let margin = WhisperKitTranscriber.Pipeline.margin
+        let speech = Array(repeating: Float(0.5), count: 6_400)
+        let window = WhisperKitTranscriber.Pipeline.window(speech, from: 0)
+        #expect(margin == AudioClip.sampleCount(for: 1))
+        #expect(window.count == margin + 1)
+        #expect(window.prefix(6_400).allSatisfy { $0 == 0.5 })
+        #expect(window.dropFirst(6_400).allSatisfy { $0 == 0 })
+    }
+
+    /// The floor is measured from the cut, not from the utterance's start: a pass
+    /// that starts late in the audio is padded so that its own span clears it.
+    @Test func theFloorIsMeasuredFromTheCut() {
+        let margin = WhisperKitTranscriber.Pipeline.margin
+        let audio = Array(repeating: Float(0.5), count: 40_000)
+        #expect(WhisperKitTranscriber.Pipeline.window(audio, from: 30_000).count == 30_000 + margin + 1)
+    }
+
+    /// Audio already past the floor is handed over as it is, so the engine's guard
+    /// against a trailing sliver still sees the clip it would have seen.
+    @Test(arguments: [0, 8_000])
+    func aPassPastTheFloorIsUntouched(cut: Int) {
+        let audio = Array(repeating: Float(0.5), count: 40_000)
+        #expect(WhisperKitTranscriber.Pipeline.window(audio, from: cut) == audio)
+    }
+
     /// The prompt is the terms as spoken text: each with its leading space and no
     /// punctuation to read back, and nothing at all for no terms, so an empty
     /// vocabulary encodes to no tokens and WhisperKit prompts with nothing.
