@@ -9,7 +9,9 @@ let package = Package(
         .library(name: "Keystrokes", targets: ["Keystrokes"]),
         .library(name: "KeyboardLayout", targets: ["KeyboardLayout"]),
         .library(name: "VirtualKeyboard", targets: ["VirtualKeyboard"]),
+        .library(name: "KeyboardService", targets: ["KeyboardService"]),
         .executable(name: "lowtalker", targets: ["lowtalker"]),
+        .executable(name: "lowtalker-keyboardd", targets: ["lowtalker-keyboardd"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
@@ -36,12 +38,24 @@ let package = Package(
         // low-talker: no dependency on LowTalkerCore, so it leaves for its own package by
         // a move rather than by an untangling.
         .target(name: "VirtualKeyboard", dependencies: ["Keystrokes"]),
+        // What crosses the privilege boundary, and the client's side of it. It links
+        // Keystrokes and nothing else: not the layout, because a root helper must never
+        // read one, and not the device, because a client must never open one.
+        // [LAW:one-way-deps]
+        .target(name: "KeyboardService", dependencies: ["Keystrokes"]),
+        // The root daemon that owns the device. It links VirtualKeyboard and the seam, and
+        // deliberately not KeyboardLayout: text never reaches this process.
+        .executableTarget(
+            name: "lowtalker-keyboardd",
+            dependencies: ["KeyboardService", "VirtualKeyboard", "Keystrokes"]
+        ),
         .executableTarget(
             name: "lowtalker",
             dependencies: [
                 "LowTalkerCore",
                 "VirtualKeyboard",
                 "KeyboardLayout",
+                "KeyboardService",
                 "Keystrokes",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]

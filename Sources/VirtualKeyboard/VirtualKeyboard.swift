@@ -49,7 +49,7 @@ public struct TooManyKeys: Error, CustomStringConvertible {
 /// paces a burst, because the pacing a burst needs is not a fact about the device.
 ///
 /// **The calling process must be root**, for the reason `DaemonConnection` gives.
-public final class VirtualKeyboard {
+public final class VirtualKeyboard: KeyPress {
     /// pqrs's own defaults for the virtual keyboard, three uint64 in this order. All
     /// three are `strong_typedef`s over `uint64_t`, so the payload is 24 bytes; the
     /// reasonable-looking reading - two 16-bit ids and a byte - is five bytes long, well

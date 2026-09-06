@@ -3,6 +3,7 @@ import ApplicationServices
 import ArgumentParser
 import Foundation
 import KeyboardLayout
+import KeyboardService
 import Keystrokes
 import LowTalkerCore
 import VirtualKeyboard
@@ -43,6 +44,12 @@ struct DextTypeCommand: AsyncParsableCommand {
     @Argument(help: "The text to type. Anything the current keyboard layout has keys for, dead-key sequences included.")
     var text: String
 
+    /// [LAW:no-mode-explosion] Which keyboard, as a value on the one typing command,
+    /// rather than a second command that would be this one with four lines changed and
+    /// every later fix owed to both.
+    @Option(name: .customLong("through"), help: "Where the keystrokes go: the driver in this process, which needs root, or the installed helper, which does not.")
+    var through: Through = .device
+
     @Option(name: .customLong("layout"), help: "The keyboard layout to type through, by input source id (com.apple.keylayout.Dvorak). Defaults to this process's own, which under sudo is root's US and not the console user's - so a machine on any other layout needs this said.")
     var layoutID: String?
 
@@ -71,25 +78,23 @@ struct DextTypeCommand: AsyncParsableCommand {
         // mismatch over a character no keyboard can produce. [LAW:one-source-of-truth]
         let expected = String(typing.map(\.character))
         let clock = ContinuousClock()
-        let connecting = clock.now
         // Watched before a single report goes out, so there is no window where an
         // interrupt can end the process with a key already down.
         let interrupt = Interrupt.watched()
-        let keyboard = try VirtualKeyboard()
-        let opened = clock.now
+        let opened = try through.open(clock)
+        let keyboard = opened.keyboard
         // [LAW:single-enforcer] Every key is released on every way out this process
         // controls. A character is several reports, so a throw between them - a socket
         // timeout, a focus check that fails, the operator's Ctrl-C - leaves that key
         // held, and macOS repeats a held key until something releases it. One place
         // enforces that, not each throw site.
         defer {
-            do { try keyboard.reset() }
+            do { try keyboard.releaseAll() }
             // [LAW:no-silent-failure] Nowhere to throw from a defer, so it is said out
             // loud: a key may be left held and the next thing typed will show it.
-            catch { print("the keyboard was not reset: \(error). A key may be left held.") }
+            catch { print("the keyboard was not released: \(error). A key may be left held.") }
         }
-        let startup = try keyboard.start(within: .seconds(3))
-        print("connected in \((opened - connecting).milliseconds) ms, daemon answered in \(startup.answered.milliseconds) ms, keyboard ready after \(startup.ready.milliseconds) ms")
+        print(opened.report)
 
         // A press in the device's own vocabulary: a modifier is a key like any other, held
         // around the one it modifies. So a keystroke costs one report per modifier held,
@@ -195,7 +200,7 @@ extension BundleID: ExpressibleByArgument {}
 /// operator's interrupt, and the app in front - meet here and nowhere else, so `Scribe`
 /// presses keys without knowing what a window server is.
 struct GuardedKeyboard: Keyboard {
-    let keyboard: VirtualKeyboard
+    let keyboard: any KeyPress
     let interrupt: Interrupt
     let screen: TargetApp
 
