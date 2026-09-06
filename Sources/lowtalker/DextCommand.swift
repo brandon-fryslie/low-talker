@@ -55,9 +55,18 @@ struct DextTypeCommand: AsyncParsableCommand {
         // root is answered with root's own layout: on a machine switched to Dvorak, the
         // console user is told Dvorak and this process is told US. Typing US keys under
         // Dvorak types something else entirely and every check here would still pass, so
-        // the layout is printed below whether it was named or found. [LAW:no-silent-failure]
+        // the layout is printed whether it was named or found. [LAW:no-silent-failure]
         let layout = try layoutID.map { try KeyboardLayout.named($0) } ?? KeyboardLayout.current()
+        // Printed here, where the fact becomes known, and not alongside the focus report
+        // below: a run that never raises the app throws before that line, and the layout is
+        // exactly what an operator needs told when the machine is not on root's US.
+        print("typing through \(layout.name)")
         let typing = try layout.typing(text)
+        // What the keys will put on screen, which is not always what was asked for: a CRLF
+        // is one Return, and the app writes one line break for it. Compared against this
+        // rather than the argument, so a run that typed correctly is not reported as a
+        // mismatch over a character no keyboard can produce. [LAW:one-source-of-truth]
+        let expected = String(typing.map(\.character))
         let clock = ContinuousClock()
         let connecting = clock.now
         // Watched before a single report goes out, so there is no window where an
@@ -86,54 +95,9 @@ struct DextTypeCommand: AsyncParsableCommand {
         // the key it modifies do not go down in the same scan on real hardware either.
         // [LAW:no-ambient-temporal-coupling] The target is stated, not discovered, and
         // every read re-checks it, so a window that steals focus mid-run is a named
-        // failure rather than text delivered somewhere nobody asked for. Declared above
-        // `press`, which reads it: a nested function may name a local declared after it,
-        // but only until someone moves the call, and then it traps rather than failing to
-        // build.
+        // failure rather than text delivered somewhere nobody asked for.
         let screen = TargetApp(bundleID: into, interrupt: interrupt)
-
-        var typed = 0
-        // A character left with its dead key posted and the letter after it not. Only a
-        // run that stopped inside a character has one, and the target app is holding a
-        // pending accent that the next keystroke it receives - a retry, another run, the
-        // operator's own hands - will combine with into some other character. Nothing here
-        // can undo a posted keystroke, so this is said rather than fixed.
-        var halfTyped: Character?
-        func press(_ character: (character: Character, keystrokes: [Keystroke])) throws {
-            for (index, keystroke) in character.keystrokes.enumerated() {
-                // Before every keystroke, not every character. A keystroke is irrevocable
-                // the moment it is posted, so the window in which focus may move has to be
-                // one keystroke wide - and an accented character is two keystrokes, so
-                // checking once a character would let the letter half of it land in
-                // whatever app took the front. One place decides this for every keystroke
-                // of every character. [LAW:single-enforcer] [LAW:no-ambient-temporal-coupling]
-                try interrupt.check()
-                try screen.requireFrontmost()
-                for modifier in keystroke.modifiers.usages { try keyboard.down(modifier) }
-                let last = index == character.keystrokes.count - 1
-                // Recorded BEFORE the key goes down, and cleared after the last one comes
-                // back. A request that throws may still have reached the driver, so a dead
-                // key whose post failed is assumed to be pending in the app rather than
-                // assumed away - the same bias `keysDown` keeps, for the same reason.
-                if !last { halfTyped = character.character }
-                try keyboard.down(keystroke.usage)
-                // Counted on the key-down the daemon has acknowledged, not after the
-                // release: a failure between the two still put the character on screen,
-                // and a count taken after the release would report one fewer than is
-                // really there. It is the LAST key-down of the character, because a
-                // character typed as a dead key and then the letter it accents is not on
-                // screen until the second of them.
-                //
-                // The opposite bias to `halfTyped` above, and deliberately: this count says
-                // "posted and acknowledged", which a throw means did not happen, while that
-                // says "may be pending", which a throw means it might be.
-                if last {
-                    typed += 1
-                    halfTyped = nil
-                }
-                try keyboard.releaseAll()
-            }
-        }
+        var scribe = Scribe(keyboard: GuardedKeyboard(keyboard: keyboard, interrupt: interrupt, screen: screen))
 
         try interrupt.check()
         try await screen.raise(within: .seconds(5))
@@ -141,7 +105,7 @@ struct DextTypeCommand: AsyncParsableCommand {
         let before = start.text
         // Which element, not just which app: a find bar accepts keystrokes as readily as
         // a document, and reads them back just as convincingly.
-        print("typing into \(into.rawValue) through \(layout.name), focus is \(start.role)")
+        print("typing into \(into.rawValue), focus is \(start.role)")
 
         // From the first report on there is text in the document that cannot be taken
         // back, so every failure from here has to say how much of it landed. The guard is
@@ -153,19 +117,19 @@ struct DextTypeCommand: AsyncParsableCommand {
         let firstPosted = clock.now
         do {
             // One character alone, so its latency is the driver's and not the queue's.
-            try press(first)
+            try scribe.press(first.character, first.keystrokes)
             let firstSeen = try await screen.wait(within: .seconds(3)) { $0.occurrences(of: String(first.character)) > before.occurrences(of: String(first.character)) }
             print("first character on screen in \(into.rawValue) after \((clock.now - firstPosted).milliseconds) ms\(firstSeen ? "" : " (NEVER SEEN)")")
 
             let rest = Array(typing.dropFirst())
             let restPosted = clock.now
             for character in rest {
-                try press(character)
+                try scribe.press(character.character, character.keystrokes)
             }
             let acknowledged = clock.now - restPosted
             // Against a baseline, like the first character's check: an app already holding
             // this text would otherwise confirm a run that delivered nothing.
-            let allSeen = try await screen.wait(within: .seconds(5)) { $0.occurrences(of: text) > before.occurrences(of: text) }
+            let allSeen = try await screen.wait(within: .seconds(5)) { $0.occurrences(of: expected) > before.occurrences(of: expected) }
             let settled = clock.now - restPosted
             // The count is the one the clock actually covers: the first character was
             // posted and timed above, on its own, and is not in this window.
@@ -186,7 +150,7 @@ struct DextTypeCommand: AsyncParsableCommand {
                 catch { print("MISMATCH, and the screen would not be read afterwards: \(error)") }
             }
         } catch {
-            throw TypingStopped(typed: typed, of: typing.count, halfTyped: halfTyped, cause: error)
+            throw TypingStopped(typed: scribe.typed, of: typing.count, halfTyped: scribe.halfTyped, cause: error)
         }
     }
 }
@@ -222,6 +186,24 @@ struct DextWatchCommand: AsyncParsableCommand {
 }
 
 extension BundleID: ExpressibleByArgument {}
+
+/// The virtual keyboard, refusing any keystroke this run has lost the right to post.
+/// [LAW:decomposition] The three things a keystroke depends on - the device, the
+/// operator's interrupt, and the app in front - meet here and nowhere else, so `Scribe`
+/// presses keys without knowing what a window server is.
+struct GuardedKeyboard: Keyboard {
+    let keyboard: VirtualKeyboard
+    let interrupt: Interrupt
+    let screen: TargetApp
+
+    func check() throws {
+        try interrupt.check()
+        try screen.requireFrontmost()
+    }
+
+    func down(_ usage: Usage) throws { try keyboard.down(usage) }
+    func releaseAll() throws { try keyboard.releaseAll() }
+}
 
 /// A run that stopped once text was already in the target: focus moved, the daemon went
 /// quiet, the operator interrupted it. What stopped it is the cause; how much is in the
