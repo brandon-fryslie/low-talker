@@ -26,14 +26,17 @@
 set -euo pipefail
 
 # [LAW:one-source-of-truth] Every fact about which artifact we install lives here and
-# nowhere else. README.md quotes PKG_VERSION for a human reader; `make check-docs`
-# fails if the two disagree, so the human copy cannot drift in silence.
+# nowhere else. README.md quotes PKG_VERSION and DEXT_VERSION for a human reader;
+# `make check-docs` fails if the two disagree, so the copy cannot drift in silence.
 PKG_VERSION=8.4.0
 PKG_SHA256=8e6c433f4e3aaa0403f6f3c72849cfcd054d52d83b53d7408771ade54f1d49a1
 DEXT_VERSION=1.8.0
 BUNDLE_ID=org.pqrs.Karabiner-DriverKit-VirtualHIDDevice
 TEAM_ID=G43BCU2T37
 SIGNING_AUTHORITY="Developer ID Installer: Fumihiko Takayama ($TEAM_ID)"
+# The three spaces are pkgutil's own indent. Matched whole-line below: a chain entry
+# whose Common Name carried this text would satisfy a substring match.
+TRUSTED_STATUS="   Status: signed by a developer certificate issued by Apple for distribution"
 PKG_URL="https://github.com/pqrs-org/Karabiner-DriverKit-VirtualHIDDevice/releases/download/v$PKG_VERSION/Karabiner-DriverKit-VirtualHIDDevice-$PKG_VERSION.pkg"
 
 MANAGER_APP=/Applications/.Karabiner-VirtualHIDDevice-Manager.app
@@ -248,7 +251,7 @@ cmd_expect() {
 }
 
 cmd_install() {
-  local pkg result
+  local pkg result signature
   mkdir -p "$VHID_SCRATCH"
   pkg="$VHID_SCRATCH/driver.pkg"
 
@@ -261,13 +264,17 @@ cmd_install() {
   echo "==> downloading $PKG_URL" >&2
   curl --fail --show-error --silent --location --output "$pkg" "$PKG_URL"
 
-  # [LAW:no-silent-failure] Two different lies get caught here. The checksum catches
-  # bytes that are not the pinned release, a moved tag included; the signature catches
-  # bytes that are not from pqrs at all, and goes on meaning something after somebody
-  # bumps PKG_VERSION and its checksum together.
+  # [LAW:no-silent-failure] Three lies get caught here, and the last two are one report
+  # read twice. The checksum catches bytes that are not the pinned release, a moved tag
+  # included. The status line catches an untrusted chain and the authority catches the
+  # wrong signer: pkgutil prints a Common Name whether or not the chain behind it is
+  # trusted, so a forged self-signed certificate survives either check taken alone.
   echo "$PKG_SHA256  $pkg" | shasum -a 256 --check --status \
     || die "the downloaded package does not match the checksum pinned for $PKG_VERSION"
-  pkgutil --check-signature "$pkg" | grep -qF "$SIGNING_AUTHORITY" \
+  signature=$(pkgutil --check-signature "$pkg")
+  echo "$signature" | grep -qxF "$TRUSTED_STATUS" \
+    || die "the downloaded package has no signature macOS trusts; pkgutil did not report '$TRUSTED_STATUS'"
+  echo "$signature" | grep -qF "$SIGNING_AUTHORITY" \
     || die "the downloaded package is not signed by '$SIGNING_AUTHORITY'"
 
   echo "==> installing (sudo)" >&2
