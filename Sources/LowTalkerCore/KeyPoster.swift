@@ -19,19 +19,23 @@ public struct SystemKeyPoster: KeyPoster {
         // Events from a private source carry the flags set here and nothing the user's
         // hands are doing at the same moment.
         let source = CGEventSource(stateID: .privateState)
-        for keystroke in chord.keystrokes {
-            guard let event = CGEvent(keyboardEventSource: source, virtualKey: keystroke.key, keyDown: keystroke.type == .keyDown) else {
-                preconditionFailure("CoreGraphics refused a keyboard event for key code \(keystroke.key)")
+        for step in chord.events {
+            guard let event = CGEvent(keyboardEventSource: source, virtualKey: step.key, keyDown: step.type == .keyDown) else {
+                preconditionFailure("CoreGraphics refused a keyboard event for key code \(step.key)")
             }
-            event.type = keystroke.type
-            event.flags = keystroke.flags
+            event.type = step.type
+            event.flags = step.flags
             event.post(tap: .cghidEventTap)
         }
     }
 }
 
 /// One event of a chord press, as the window server will see it.
-public struct Keystroke: Equatable, Sendable {
+///
+/// Not a `Keystroke`: a single press is several of these - each modifier going down, the
+/// key down and up, the modifiers back up - and `Keystroke`, the seam that carries a press
+/// to the virtual keyboard, names the whole press. [LAW:one-type-per-behavior]
+public struct ChordEvent: Equatable, Sendable {
     public let key: CGKeyCode
     public let type: CGEventType
     /// The modifiers held as this event happens, this key included when it is a
@@ -44,15 +48,15 @@ extension KeyChord {
     /// key goes down and up under them, and they come back up in reverse, which is what
     /// a person's hands do. Each event's flags are those of the modifiers held at that
     /// moment, so a side-blind bit stays set while either side is down.
-    public var keystrokes: [Keystroke] {
+    public var events: [ChordEvent] {
         let held = Modifier.allCases.filter(modifiers.contains)
         let pressing = held.indices.map { i in
-            Keystroke(key: held[i].hardware.keyCode, type: .flagsChanged, flags: Modifier.flags(of: held[...i]))
+            ChordEvent(key: held[i].hardware.keyCode, type: .flagsChanged, flags: Modifier.flags(of: held[...i]))
         }
         let all = Modifier.flags(of: held[...])
-        let striking = key.map { [Keystroke(key: CGKeyCode($0.rawValue), type: .keyDown, flags: all), Keystroke(key: CGKeyCode($0.rawValue), type: .keyUp, flags: all)] } ?? []
+        let striking = key.map { [ChordEvent(key: CGKeyCode($0.rawValue), type: .keyDown, flags: all), ChordEvent(key: CGKeyCode($0.rawValue), type: .keyUp, flags: all)] } ?? []
         let releasing = held.indices.reversed().map { i in
-            Keystroke(key: held[i].hardware.keyCode, type: .flagsChanged, flags: Modifier.flags(of: held[..<i]))
+            ChordEvent(key: held[i].hardware.keyCode, type: .flagsChanged, flags: Modifier.flags(of: held[..<i]))
         }
         return pressing + striking + releasing
     }

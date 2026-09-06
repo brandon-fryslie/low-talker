@@ -1,88 +1,13 @@
 import Foundation
+@testable import LowTalkerCore
+import Keystrokes
 import Testing
 import VirtualKeyboard
 @testable import lowtalker
 
-/// The character table the spike types from, and the report a stopped run makes. The wire
-/// protocol these used to sit beside now lives in the VirtualKeyboard module and is tested
-/// there, against a fake daemon on a real socket.
-
-@Suite struct USLayoutTests {
-    /// The letters run from usage 0x04 in alphabetical order. Written out rather than
-    /// derived, because deriving it from the same expression the table uses would prove
-    /// only that the expression equals itself.
-    @Test func theLettersRunFromUsageFourInOrder() throws {
-        let typed = try USLayout.keystrokes(for: "abcdefghijklmnopqrstuvwxyz")
-        #expect(typed.map(\.usage) == Array(0x04...0x1d))
-        #expect(typed.allSatisfy { !$0.shift })
-    }
-
-    /// The digits run from 0x1e and start at one, not zero: 0x27 types "0", which is the
-    /// off-by-one this table invites.
-    @Test func theDigitsRunFromUsageThirtyWithZeroLast() throws {
-        let typed = try USLayout.keystrokes(for: "1234567890")
-        #expect(typed.map(\.usage) == Array(0x1e...0x27))
-    }
-
-    /// A shifted character types the same key as its unshifted twin, with shift. This is
-    /// the check that catches a transposition inside either run, since a slip moves a
-    /// character to a usage its twin does not share.
-    @Test func everyShiftedCharacterSharesItsTwinsUsage() throws {
-        for (plain, shifted) in zip("abcdefghijklmnopqrstuvwxyz1234567890", "ABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()") {
-            let bare = try USLayout.keystrokes(for: String(plain))[0]
-            let held = try USLayout.keystrokes(for: String(shifted))[0]
-            #expect(bare.usage == held.usage, "\(plain) and \(shifted) should be one key")
-            #expect(!bare.shift)
-            #expect(held.shift)
-        }
-    }
-
-    /// The punctuation pairs, both halves, since these are transcribed from the usage
-    /// tables by hand and nothing else in the file checks them.
-    @Test func thePunctuationPairsShareTheirKeys() throws {
-        for (plain, shifted) in zip("-=[]\\;'`,./", "_+{}|:\"~<>?") {
-            let bare = try USLayout.keystrokes(for: String(plain))[0]
-            let held = try USLayout.keystrokes(for: String(shifted))[0]
-            #expect(bare.usage == held.usage, "\(plain) and \(shifted) should be one key")
-            #expect(held.shift)
-        }
-    }
-
-    /// Two characters that type the same key with the same modifier would mean one of
-    /// them never arrives as itself. Nothing in the table's construction prevents it.
-    @Test func noTwoCharactersClaimTheSameKeyAndModifier() throws {
-        let alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890!@#$%^&*()-=[]\\;'`,./_+{}|:\"~<>? \n\t"
-        let typed = try USLayout.keystrokes(for: alphabet)
-        #expect(Set(typed.map { "\($0.usage)-\($0.shift)" }).count == alphabet.count)
-    }
-
-    /// Whitespace types keys, not nothing: newline is Return, tab is Tab, space is Space.
-    @Test func theThreeWhitespaceCharactersTypeTheirOwnKeys() throws {
-        #expect(try USLayout.keystrokes(for: "\n")[0].usage == 0x28)
-        #expect(try USLayout.keystrokes(for: "\t")[0].usage == 0x2b)
-        #expect(try USLayout.keystrokes(for: " ")[0].usage == 0x2c)
-    }
-
-    /// [LAW:parse-dont-validate] A character the layout cannot type is refused here and
-    /// named, so nothing downstream has to decide what to do with it - and a partly
-    /// typeable string is refused whole rather than typed up to the bad character.
-    @Test func aCharacterTheLayoutCannotTypeIsRefusedByName() {
-        #expect(throws: UntypeableCharacters.self) { try USLayout.keystrokes(for: "café") }
-        #expect(throws: UntypeableCharacters.self) { try USLayout.keystrokes(for: "hello 😀") }
-        do {
-            _ = try USLayout.keystrokes(for: "a€b£c")
-            Issue.record("the layout claimed it could type € and £")
-        } catch let refusal as UntypeableCharacters {
-            #expect(refusal.characters == "€£")
-        } catch {
-            Issue.record("refused with \(error) rather than naming the characters")
-        }
-    }
-
-    @Test func typingNothingIsRefused() {
-        #expect(throws: (any Error).self) { try USLayout.keystrokes(for: "") }
-    }
-}
+/// The report a stopped run makes, and which screen failures a poll may ride out. The
+/// wire protocol these used to sit beside lives in the VirtualKeyboard module now, and the
+/// character table lives in KeyboardLayout; both are tested where they live.
 
 /// The report a stopped run makes. It has been wrong twice - once claiming nothing was
 /// typed when a fragment was already in the document, once saying "the rest were not"
@@ -105,6 +30,50 @@ import VirtualKeyboard
     @Test func aDaemonFailureCarriesTheCountToo() {
         let stopped = TypingStopped(typed: 7, of: 40, cause: DaemonError.silent)
         #expect("\(stopped)".hasPrefix("the daemon did not answer in time. 7 of 40"))
+    }
+
+    /// A run that stopped between a dead key and the letter it accents left the target app
+    /// holding a pending accent. It is not in the count - it is not on screen - and it is
+    /// not nothing either: the next keystroke that app receives combines with it.
+    @Test func aRunStoppedInsideACharacterSaysWhatIsPendingInTheApp() {
+        let stopped = TypingStopped(typed: 12, of: 40, halfTyped: "\u{e9}", cause: DaemonError.silent)
+        #expect("\(stopped)".contains("12 of 40 characters"))
+        #expect("\(stopped)".contains("was left half typed"))
+        #expect("\(stopped)".contains("\u{e9}"))
+    }
+
+    /// Every other stop is between characters, and saying nothing about a pending accent
+    /// is the truth there. A report that hedged on every run would be read past.
+    @Test func aRunStoppedBetweenCharactersSaysNothingAboutPendingAccents() {
+        let stopped = TypingStopped(typed: 12, of: 40, cause: DaemonError.silent)
+        #expect(!"\(stopped)".contains("half typed"))
+    }
+}
+
+/// The two hand-transcribed key code tables in this repo, checked against each other.
+///
+/// `Usage(virtualKeyCode:)` was written from the ADB and HID tables for this epic;
+/// `Modifier.hardware.keyCode` was written for the hotkey and the event poster, long
+/// before it, and is exercised every time the hotkey works. Neither is derived from the
+/// other, so where they overlap they are two witnesses rather than one repeated.
+/// [LAW:one-source-of-truth] The character rows are checked against the spike's
+/// driver-proven table in KeyboardLayoutTests; this is the modifier row, which types no
+/// character and so appears in no layout map at all.
+@Suite struct VirtualKeyCodeTests {
+    @Test func theModifierRowAgreesWithTheTableTheHotkeyUses() {
+        let expected: [Modifier: Usage] = [
+            .leftShift: .leftShift, .rightShift: .rightShift,
+            .leftControl: .leftControl, .rightControl: .rightControl,
+            .leftOption: .leftOption, .rightOption: .rightOption,
+            .leftCommand: .leftCommand, .rightCommand: .rightCommand,
+        ]
+        for (modifier, usage) in expected {
+            #expect(Usage(virtualKeyCode: modifier.hardware.keyCode) == usage, "\(modifier) disagrees")
+        }
+        // Every side-specific modifier is covered; `function` has no HID keyboard usage,
+        // and saying so here is what keeps this from silently covering seven of nine.
+        #expect(Set(expected.keys).union([.function]) == Set(Modifier.allCases))
+        #expect(Usage(virtualKeyCode: Modifier.function.hardware.keyCode) == nil)
     }
 }
 

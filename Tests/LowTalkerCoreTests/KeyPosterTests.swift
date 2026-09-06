@@ -2,12 +2,12 @@ import CoreGraphics
 import LowTalkerCore
 import Testing
 
-@Suite struct KeystrokeTests {
+@Suite struct ChordEventTests {
     private let shiftBits = CGEventFlags(rawValue: 0x2 | 0x4)
 
     /// Both shifts held: the side-blind Shift bit stays set until the last one is up.
     @Test func aSideBlindBitOutlivesTheFirstOfTwoSidesReleased() {
-        let strokes = KeyChord(key: Key(rawValue: 0), modifiers: [.leftShift, .rightShift]).keystrokes
+        let strokes = KeyChord(key: Key(rawValue: 0), modifiers: [.leftShift, .rightShift]).events
         #expect(strokes.map(\.type) == [.flagsChanged, .flagsChanged, .keyDown, .keyUp, .flagsChanged, .flagsChanged])
         #expect(strokes.map(\.key) == [56, 60, 0, 0, 60, 56])
         #expect(strokes.map(\.flags) == [
@@ -21,7 +21,7 @@ import Testing
     }
 
     @Test func aModifierOnlyChordHasNoKeyEvents() {
-        let strokes = KeyChord(modifiers: .rightOption).keystrokes
+        let strokes = KeyChord(modifiers: .rightOption).events
         #expect(strokes.map(\.type) == [.flagsChanged, .flagsChanged])
         #expect(strokes.map(\.flags) == [.maskAlternate.union(CGEventFlags(rawValue: 0x40)), []])
     }
