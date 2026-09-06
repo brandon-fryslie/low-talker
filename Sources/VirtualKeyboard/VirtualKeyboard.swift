@@ -102,10 +102,10 @@ public final class VirtualKeyboard {
         self.reportTimeout = reportTimeout
     }
 
-    /// How long the daemon took to say anything, and how long until it said the keyboard
-    /// was ready, both measured from the call.
     public struct Startup: Sendable, Equatable {
+        /// How long the daemon took to answer `keyboard_initialize`.
         public let answered: Duration
+        /// How long until it said the keyboard was ready.
         public let ready: Duration
     }
 
@@ -123,8 +123,13 @@ public final class VirtualKeyboard {
         let began = ContinuousClock.now
         let deadline = began + limit
         try daemon.request(.keyboardInitialize, Self.parameters, by: deadline)
-        let ready = try daemon.awaitKeyboardReady(by: deadline)
-        return Startup(answered: ready.answered - began, ready: ready.ready - began)
+        // Taken here because `request` returns on the daemon's answer to it. Timing the
+        // first frame of the readiness wait instead - as this did, and the spike before
+        // it - reports the first status push under a name that says the daemon had not
+        // spoken yet, when answering the request is exactly what it just did.
+        let answered = ContinuousClock.now
+        try daemon.awaitKeyboardReady(by: deadline)
+        return Startup(answered: answered - began, ready: ContinuousClock.now - began)
     }
 
     /// Holds `usage` down. Recorded before the report is posted, deliberately: if the post

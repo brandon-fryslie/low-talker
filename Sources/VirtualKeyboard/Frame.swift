@@ -44,6 +44,7 @@ enum Frame: Equatable {
         case .request(let id, let payload): [Self.requestByte] + Self.bigEndian(id, bytes: 8) + payload
         case .response(let id, let payload): [Self.responseByte] + Self.bigEndian(id, bytes: 8) + payload
         }
+        precondition(body.count <= Self.largestBody, "a frame of \(body.count) bytes, past the \(Self.largestBody) this side reads back")
         return Self.bigEndian(UInt64(body.count), bytes: 4) + body
     }
 
@@ -57,14 +58,15 @@ enum Frame: Equatable {
     }
 
     static func decode(body: [UInt8]) throws -> Frame {
-        switch body[0] {
+        guard let type = body.first else { throw DaemonError.malformed("a frame body of no bytes, which has no type") }
+        switch type {
         case requestByte, responseByte:
             guard body.count >= 9 else { throw DaemonError.malformed("a frame of \(body.count) bytes, too short for the id its type promises") }
             let id = body[1..<9].reduce(0) { $0 << 8 | UInt64($1) }
             let payload = Array(body[9...])
-            return body[0] == requestByte ? .request(id: id, payload: payload) : .response(id: id, payload: payload)
+            return type == requestByte ? .request(id: id, payload: payload) : .response(id: id, payload: payload)
         default:
-            guard let kind = Kind(rawValue: body[0]) else { throw DaemonError.malformed("frame type \(body[0]), which this was not written for") }
+            guard let kind = Kind(rawValue: type) else { throw DaemonError.malformed("frame type \(type), which this was not written for") }
             return .control(kind, payload: Array(body[1...]))
         }
     }
