@@ -1,5 +1,4 @@
 import Foundation
-import Keystrokes
 import Testing
 @testable import VirtualKeyboard
 

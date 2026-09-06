@@ -5,9 +5,12 @@ public extension Usage {
     /// The two vocabularies for one key. macOS key codes are the ADB layout's positions
     /// and run in no order a reader can predict - A is 0, S is 1, and 5 sits between 6 and
     /// `=` - so this is transcribed rather than computed, and every row is a chance to be
-    /// wrong in a way nothing downstream can notice. What proves it is not this table: it
-    /// is the test that types the printable ASCII through the US layout and compares the
-    /// usages against the hand-written table the 3ti.2 spike drove a real driver with.
+    /// wrong in a way nothing downstream can notice. So no row is taken on this table's own
+    /// word. The character rows are checked against the alphabet the 3ti.2 spike drove a
+    /// real driver with; the modifier row against the table the hotkey already posts; and
+    /// the rows that type nothing - navigation, function keys, keypad - against Carbon's own
+    /// key code symbols and the order the HID usage page fixes, since no layout test can
+    /// reach a key that answers with no character.
     ///
     /// The keys that carry no character are here too. A chord names arrows and function
     /// keys, and the same act reaches the device the same way. [LAW:composability]
