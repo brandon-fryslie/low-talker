@@ -8,17 +8,28 @@ import Testing
 /// the usage table still types a character. Only the daemon and the driver would ever
 /// have said so, and only by typing the wrong thing.
 @Suite struct DaemonFramingTests {
-    /// The header is big-endian, and it is the length of the body alone.
+    /// The header is big-endian, and it is the length of the body alone. Read the other
+    /// way round, 256 is 65536 and 1 is 16777216 - both plausible, neither refused by
+    /// anything but this.
     @Test func theHeaderIsTheBodyLengthBigEndian() throws {
         #expect(try DaemonConnection.bodyLength(header: [0, 0, 1, 0]) == 256)
         #expect(try DaemonConnection.bodyLength(header: [0, 0, 0, 1]) == 1)
-        #expect(try DaemonConnection.bodyLength(header: [1, 0, 0, 0]) == 16_777_216)
+        #expect(try DaemonConnection.bodyLength(header: [0, 0, 0x0f, 0xff]) == 4095)
     }
 
     /// A frame of nothing at all is refused rather than read as a type byte that is not
     /// there. [LAW:no-silent-failure]
     @Test func anEmptyFrameIsRefused() {
         #expect(throws: DaemonError.self) { try DaemonConnection.bodyLength(header: [0, 0, 0, 0]) }
+    }
+
+    /// A header claiming more than any frame this protocol carries is refused before
+    /// anything allocates against it. Unrefused, four bytes of noise ask for four
+    /// gigabytes and end the process instead of naming what arrived.
+    @Test func aLengthPastTheLargestFrameIsRefused() {
+        #expect(throws: DaemonError.self) { try DaemonConnection.bodyLength(header: [0xff, 0xff, 0xff, 0xff]) }
+        #expect(throws: DaemonError.self) { try DaemonConnection.bodyLength(header: [0, 0, 0x10, 0x01]) }
+        #expect(throws: Never.self) { try DaemonConnection.bodyLength(header: [0, 0, 0x10, 0x00]) }
     }
 
     /// Every byte of a request frame, written out: the id is eight bytes, big-endian,
