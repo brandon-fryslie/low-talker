@@ -4,10 +4,9 @@ import CoreGraphics
 /// it, whatever it is.
 ///
 /// [LAW:effects-at-boundaries] Posting an event is an effect against the window
-/// server and needs Accessibility. It sits behind this seam so the paste above it
-/// runs in tests against an app the test plays.
-/// [LAW:one-type-per-behavior] Cmd+V for a paste and a SendKeys action's chord are the
-/// same press to the OS, so they are the same call here.
+/// server and needs Accessibility. It sits behind this seam so the SendKeys action
+/// can run in tests against an app the test plays; nothing posts through it until the
+/// pipeline runs actions.
 @MainActor
 public protocol KeyPoster {
     func post(_ chord: KeyChord)
