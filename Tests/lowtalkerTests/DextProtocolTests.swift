@@ -75,6 +75,23 @@ import Testing
         #expect(throws: DaemonError.self) { try DaemonConnection.parse(body: [99]) }
     }
 
+    /// The daemon's status payload is pairs of (status, value) in the order it sent
+    /// them, and any non-zero value is true. Transposed, a pair records the wrong status
+    /// and nothing about it looks wrong at runtime.
+    @Test func aStatusPayloadDecodesAsOrderedPairs() throws {
+        let pairs = try DaemonConnection.statusPairs([1, 1, 4, 0, 2, 0xff])
+        #expect(pairs.map(\.0) == [.driverActivated, .keyboardReady, .driverConnected])
+        #expect(pairs.map(\.1) == [true, false, true])
+        #expect(try DaemonConnection.statusPairs([]).isEmpty)
+    }
+
+    /// A payload that is not pairs, and a status byte this side was not written for, are
+    /// both named rather than read past. [LAW:no-silent-failure]
+    @Test func aStatusPayloadThatIsNotPairsIsRefused() {
+        #expect(throws: DaemonError.self) { try DaemonConnection.statusPairs([1, 1, 4]) }
+        #expect(throws: DaemonError.self) { try DaemonConnection.statusPairs([99, 1]) }
+    }
+
     /// The three parameters are uint64 each, little-endian, in the order vendor,
     /// product, country. The plausible reading - two 16-bit ids and a byte - is 5 bytes
     /// long, well formed, and initializes a keyboard that is not the one asked for.
@@ -188,5 +205,29 @@ import Testing
 
     @Test func typingNothingIsRefused() {
         #expect(throws: (any Error).self) { try USLayout.keystrokes(for: "") }
+    }
+}
+
+/// The report a stopped run makes. It has been wrong twice - once claiming nothing was
+/// typed when a fragment was already in the document, once saying "the rest were not"
+/// about a run where there was no rest - so what it says is checked rather than read.
+@Suite struct TypingStoppedTests {
+    @Test func aRunStoppedPartWaySaysHowMuchLandedAndThatTheRestDidNot() {
+        let stopped = TypingStopped(typed: 34, of: 500, cause: ScreenUnreadable.wrongApp(wanted: "com.apple.TextEdit", frontmost: "com.googlecode.iterm2"))
+        #expect("\(stopped)" == "com.googlecode.iterm2 is frontmost, not com.apple.TextEdit. 34 of 500 characters were typed before this, and the rest were not")
+    }
+
+    /// The same failure after the last keystroke is a different fact, and claiming a
+    /// remainder that does not exist is how the first version of this misled.
+    @Test func aRunStoppedAfterTheLastKeystrokeClaimsNoRemainder() {
+        let stopped = TypingStopped(typed: 40, of: 40, cause: Interrupted(number: SIGINT))
+        #expect("\(stopped)" == "interrupted by signal 2. all 40 characters had been typed before this")
+    }
+
+    /// Any cause, not only a screen one: a daemon that goes quiet mid-burst leaves just
+    /// as much text behind, and the operator needs the same number.
+    @Test func aDaemonFailureCarriesTheCountToo() {
+        let stopped = TypingStopped(typed: 7, of: 40, cause: DaemonError.silent)
+        #expect("\(stopped)".hasPrefix("the daemon did not answer in time. 7 of 40"))
     }
 }

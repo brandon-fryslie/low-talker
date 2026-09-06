@@ -47,11 +47,15 @@ struct DextTypeCommand: AsyncParsableCommand {
         let keystrokes = try USLayout.keystrokes(for: text)
         let clock = ContinuousClock()
         let connecting = clock.now
+        // Watched before a single report goes out, so there is no window where an
+        // interrupt can end the process with a key already down.
+        let interrupt = Interrupt.watched()
         let daemon = try DaemonConnection()
-        // [LAW:single-enforcer] Every key is released on the way out, whichever way out
-        // it is. A press is two requests, so a throw between them - a socket timeout, a
-        // focus check that fails - leaves that key held, and macOS repeats a held key
-        // until something releases it. One place enforces that, not each throw site.
+        // [LAW:single-enforcer] Every key is released on every way out this process
+        // controls. A press is two requests, so a throw between them - a socket timeout,
+        // a focus check that fails, the operator's Ctrl-C - leaves that key held, and
+        // macOS repeats a held key until something releases it. One place enforces that,
+        // not each throw site.
         defer {
             do { try daemon.request(.keyboardReset, [], within: .seconds(2)) }
             // [LAW:no-silent-failure] Nowhere to throw from a defer, so it is said out
@@ -73,18 +77,19 @@ struct DextTypeCommand: AsyncParsableCommand {
         // a document, and reads them back just as convincingly.
         print("typing into \(into.rawValue), focus is \(start.role)")
 
-        // One character alone, so its latency is the driver's and not the queue's.
+        // From the first report on there is text in the document that cannot be taken
+        // back, so every failure from here has to say how much of it landed. The guard is
+        // over the region where that is true, not over one kind of error: catching only
+        // ScreenUnreadable let a daemon timeout mid-burst walk past it, and leaving the
+        // first press outside the block let its own failure past as well. What throws
+        // does not change what the operator needs to be told. [LAW:single-enforcer]
         let first = keystrokes[0]
         let firstPosted = clock.now
-        try daemon.press(first)
-        // A keystroke is in the document now, and it cannot be taken back, so every
-        // failure from here on has to say how much of the text landed. One place turns a
-        // screen failure into that answer, rather than each read remembering to: the
-        // first version of this guarded the burst loop alone, which left both read-backs
-        // free to report "the wrong app is frontmost" after a complete and successful
-        // run - the very confusion the guard existed to prevent. [LAW:single-enforcer]
-        var posted = 1
+        var posted = 0
         do {
+            // One character alone, so its latency is the driver's and not the queue's.
+            try daemon.press(first)
+            posted = 1
             let firstSeen = try await screen.wait(within: .seconds(3)) { $0.occurrences(of: String(first.character)) > before.occurrences(of: String(first.character)) }
             print("first character on screen in \(into.rawValue) after \((clock.now - firstPosted).milliseconds) ms\(firstSeen ? "" : " (NEVER SEEN)")")
 
@@ -96,6 +101,7 @@ struct DextTypeCommand: AsyncParsableCommand {
             let rest = Array(keystrokes.dropFirst())
             let restPosted = clock.now
             for keystroke in rest {
+                try interrupt.check()
                 try screen.requireFrontmost()
                 try daemon.press(keystroke)
                 posted += 1
@@ -118,8 +124,8 @@ struct DextTypeCommand: AsyncParsableCommand {
                 do { print("MISMATCH: the screen holds [\(try screen.read())]") }
                 catch { print("MISMATCH, and the screen would not be read afterwards: \(error)") }
             }
-        } catch let moved as ScreenUnreadable {
-            throw FocusLost(typed: posted, of: keystrokes.count, cause: moved)
+        } catch {
+            throw TypingStopped(typed: posted, of: keystrokes.count, cause: error)
         }
     }
 }
@@ -217,9 +223,7 @@ final class DaemonConnection {
         // closed socket and SIGPIPE killing the process without a word, so a failure to
         // set it is reported rather than assumed.
         guard setsockopt(socket, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
-            let code = errno
-            close(socket)
-            throw DaemonError.socket("setsockopt(SO_NOSIGPIPE)", code)
+            throw DaemonError.socket("setsockopt(SO_NOSIGPIPE)", errno)
         }
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
@@ -230,12 +234,16 @@ final class DaemonConnection {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(socket, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
         }
         guard connected == 0 else {
-            let code = errno
-            close(socket)
-            throw DaemonError.socket("connect", code)
+            throw DaemonError.socket("connect", errno)
         }
     }
 
+    /// The one place the descriptor closes. [LAW:single-enforcer] Every stored property
+    /// is set by the line above, so an initializer that throws past that point still
+    /// deallocates the instance and still runs this - and the explicit closes that used
+    /// to stand in the throwing branches closed the same descriptor a second time. A
+    /// second close usually fails with EBADF and is ignored, but the number it names is
+    /// free to have been handed to something else by then.
     deinit {
         close(socket)
     }
@@ -315,11 +323,21 @@ final class DaemonConnection {
         }
     }
 
-    private func record(_ pairs: [UInt8]) throws {
+    /// The daemon's status payload, decoded: pairs of (status, value). Pure, and here
+    /// rather than inside record for the same reason the framing is - a transposed pair
+    /// records the wrong status as true and nothing about that looks wrong at runtime.
+    /// [LAW:decomposition]
+    static func statusPairs(_ pairs: [UInt8]) throws -> [(Status, Bool)] {
         guard pairs.count % 2 == 0 else { throw DaemonError.malformed("a status payload of \(pairs.count) bytes, which is not pairs") }
-        for index in stride(from: 0, to: pairs.count, by: 2) {
+        return try stride(from: 0, to: pairs.count, by: 2).map { index in
             guard let status = Status(rawValue: pairs[index]) else { throw DaemonError.malformed("status \(pairs[index]), which this was not written for") }
-            self.status[status] = pairs[index + 1] != 0
+            return (status, pairs[index + 1] != 0)
+        }
+    }
+
+    private func record(_ pairs: [UInt8]) throws {
+        for (status, value) in try Self.statusPairs(pairs) {
+            self.status[status] = value
         }
     }
 
@@ -507,18 +525,64 @@ enum USLayout {
 
 extension BundleID: ExpressibleByArgument {}
 
-/// Focus moved to another app part way through a burst, so some of the text is in the
-/// target and the rest was never posted. The length is the message: text already typed
-/// cannot be taken back, and the operator is the one who has to clean it up.
-struct FocusLost: Error, CustomStringConvertible {
+/// A run that stopped once text was already in the target: focus moved, the daemon went
+/// quiet, the operator interrupted it. What stopped it is the cause; how much is in the
+/// document is the part only this knows, and the part the operator has to act on, since
+/// text already typed cannot be taken back.
+struct TypingStopped: Error, CustomStringConvertible {
     let typed: Int
     let of: Int
-    let cause: ScreenUnreadable
+    let cause: any Error
     var description: String {
-        typed < of
-            ? "\(cause). \(typed) of \(of) characters were already typed; the rest were not"
-            : "\(cause). All \(of) characters had been typed already; this was the read-back afterwards"
+        let progress = typed < of
+            ? "\(typed) of \(of) characters were typed before this, and the rest were not"
+            : "all \(of) characters had been typed before this"
+        return "\(cause). \(progress)"
     }
+}
+
+/// Ctrl-C, as a value the run reads rather than a way out that skips the run's own
+/// ending. SIGINT's default disposition ends the process where it stands, so an interrupt
+/// during a burst leaves a key down with nothing left to release it, and macOS repeats
+/// that key into whatever app comes forward next - the exact failure this command exists
+/// to study. Ignored as a signal and watched as a source instead, it becomes something
+/// the burst can read and stop for, unwinding through the same release every other
+/// failure takes. [LAW:dataflow-not-control-flow]
+final class Interrupt: @unchecked Sendable {
+    private let lock = NSLock()
+    private var raised: Int32?
+    private var sources: [any DispatchSourceSignal] = []
+
+    static func watched(_ numbers: [Int32] = [SIGINT, SIGTERM]) -> Interrupt {
+        let interrupt = Interrupt()
+        interrupt.sources = numbers.map { number in
+            signal(number, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
+            source.setEventHandler { interrupt.raise(number) }
+            return source
+        }
+        interrupt.sources.forEach { $0.resume() }
+        return interrupt
+    }
+
+    private func raise(_ number: Int32) {
+        lock.lock()
+        defer { lock.unlock() }
+        raised = raised ?? number
+    }
+
+    /// [LAW:no-silent-failure] An interrupt is a named failure like any other, so it
+    /// travels the same path and is reported with the same count beside it.
+    func check() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if let raised { throw Interrupted(number: raised) }
+    }
+}
+
+struct Interrupted: Error, CustomStringConvertible {
+    let number: Int32
+    var description: String { "interrupted by signal \(number)" }
 }
 
 struct UntypeableCharacters: Error, CustomStringConvertible {
@@ -579,8 +643,18 @@ struct TargetApp {
     func focus() throws -> Focus {
         let app = try requireFrontmost()
         let name = bundleID.rawValue
+        let application = AXUIElementCreateApplication(app.processIdentifier)
+        // A bound this code states is a bound it has to keep. An Accessibility read is a
+        // synchronous call into another process, and left at the system default one read
+        // of an app whose main thread is busy can outlast the whole `within` it was made
+        // under - so `wait(within: .seconds(3))` would quietly take longer than three
+        // seconds. [FRAMING:representation] A stated bound the code cannot hold is a map
+        // that does not match its territory. Half a second is far above the 10-35 ms an
+        // answer takes here and far below any budget it is polled inside.
+        AXUIElementSetMessagingTimeout(application, 0.5)
         var focused: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(AXUIElementCreateApplication(app.processIdentifier), kAXFocusedUIElementAttribute as CFString, &focused) == .success, let element = Self.element(focused) else { throw ScreenUnreadable.noFocus(name) }
+        guard AXUIElementCopyAttributeValue(application, kAXFocusedUIElementAttribute as CFString, &focused) == .success, let element = Self.element(focused) else { throw ScreenUnreadable.noFocus(name) }
+        AXUIElementSetMessagingTimeout(element, 0.5)
         var role: CFTypeRef?
         _ = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
         var value: CFTypeRef?
