@@ -1,34 +1,5 @@
 import Foundation
-
-/// A key on the virtual keyboard, as the device names it: a usage from HID usage page
-/// 0x07. Modifiers are usages like any other key - 0xE0 through 0xE7 - and nothing here
-/// treats them as a separate kind of thing.
-public struct Usage: RawRepresentable, Hashable, Comparable, Sendable {
-    public let rawValue: UInt16
-    public init(rawValue: UInt16) { self.rawValue = rawValue }
-    public static func < (a: Usage, b: Usage) -> Bool { a.rawValue < b.rawValue }
-
-    /// The bit this usage carries in a report's modifier byte, when it is one of the
-    /// eight that do. Derived from the usage rather than tabulated beside it: the eight
-    /// modifier usages run in the same order as their bits, so the bit IS the usage seen
-    /// another way. [LAW:one-source-of-truth] The spike kept the two as separate
-    /// constants, which is one edit away from a shift key that types a control character.
-    var modifierBit: UInt8? {
-        guard (0xE0...0xE7).contains(rawValue) else { return nil }
-        return UInt8(1 << (rawValue - 0xE0))
-    }
-}
-
-public extension Usage {
-    static let leftControl = Usage(rawValue: 0xE0)
-    static let leftShift = Usage(rawValue: 0xE1)
-    static let leftOption = Usage(rawValue: 0xE2)
-    static let leftCommand = Usage(rawValue: 0xE3)
-    static let rightControl = Usage(rawValue: 0xE4)
-    static let rightShift = Usage(rawValue: 0xE5)
-    static let rightOption = Usage(rawValue: 0xE6)
-    static let rightCommand = Usage(rawValue: 0xE7)
-}
+import Keystrokes
 
 /// The keyboard input report as the driver's packed `keyboard_input` lays it out: report
 /// id 1, one byte of modifier bits, one reserved byte, then 32 little-endian usages for
