@@ -30,6 +30,23 @@ import VirtualKeyboard
         let stopped = TypingStopped(typed: 7, of: 40, cause: DaemonError.silent)
         #expect("\(stopped)".hasPrefix("the daemon did not answer in time. 7 of 40"))
     }
+
+    /// A run that stopped between a dead key and the letter it accents left the target app
+    /// holding a pending accent. It is not in the count - it is not on screen - and it is
+    /// not nothing either: the next keystroke that app receives combines with it.
+    @Test func aRunStoppedInsideACharacterSaysWhatIsPendingInTheApp() {
+        let stopped = TypingStopped(typed: 12, of: 40, halfTyped: "\u{e9}", cause: DaemonError.silent)
+        #expect("\(stopped)".contains("12 of 40 characters"))
+        #expect("\(stopped)".contains("was left half typed"))
+        #expect("\(stopped)".contains("\u{e9}"))
+    }
+
+    /// Every other stop is between characters, and saying nothing about a pending accent
+    /// is the truth there. A report that hedged on every run would be read past.
+    @Test func aRunStoppedBetweenCharactersSaysNothingAboutPendingAccents() {
+        let stopped = TypingStopped(typed: 12, of: 40, cause: DaemonError.silent)
+        #expect(!"\(stopped)".contains("half typed"))
+    }
 }
 
 /// Which failures a poll may ride out. A wait exists because an app answers when it

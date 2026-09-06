@@ -8,8 +8,9 @@ import Keystrokes
 /// The map runs backwards from the way the OS thinks. macOS answers "what does this key
 /// with these modifiers type"; typing needs the reverse, and the reverse is not a table
 /// Apple publishes - it is built by asking the forward question about every key and every
-/// modifier combination and keeping the answers. That is 512 questions and it is asked
-/// once, when the layout is read. [LAW:no-ambient-temporal-coupling]
+/// modifier combination and keeping the answers. How many questions that is depends on how
+/// many dead keys the layout has, which is the layout's business; all of them are asked
+/// once, when it is read. [LAW:no-ambient-temporal-coupling]
 ///
 /// A layout is a value here, not a global. `current()` is the one impure step - it asks
 /// the system which layout is in front - and everything after it is a pure function of the

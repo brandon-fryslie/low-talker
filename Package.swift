@@ -25,9 +25,6 @@ let package = Package(
                 .product(name: "WhisperKit", package: "argmax-oss-swift"),
             ]
         ),
-        // [LAW:one-way-deps] Everything about the virtual keyboard and nothing about
-        // low-talker: no dependency on LowTalkerCore, so it leaves for its own package by
-        // a move rather than by an untangling.
         // The vocabulary at the seam between deciding what to type and typing it: a HID
         // usage, the modifiers held with it, and the two names one key goes by. It links
         // nothing, so neither the layout nor the device has to link the other to speak.
@@ -35,6 +32,9 @@ let package = Package(
         // Carbon lives here and nowhere else, so the privileged helper that owns the
         // device never links a window server API. [LAW:one-way-deps]
         .target(name: "KeyboardLayout", dependencies: ["Keystrokes"]),
+        // [LAW:one-way-deps] Everything about the virtual keyboard and nothing about
+        // low-talker: no dependency on LowTalkerCore, so it leaves for its own package by
+        // a move rather than by an untangling.
         .target(name: "VirtualKeyboard", dependencies: ["Keystrokes"]),
         .executableTarget(
             name: "lowtalker",

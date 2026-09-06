@@ -84,8 +84,22 @@ struct DextTypeCommand: AsyncParsableCommand {
         // sent two, and that is the more faithful count - a modifier and the key it
         // modifies do not go down in the same scan on real hardware either.
         var typed = 0
+        // A character left with its dead key posted and the letter after it not. Only a
+        // run that stopped inside a character has one, and the target app is holding a
+        // pending accent that the next keystroke it receives - a retry, another run, the
+        // operator's own hands - will combine with into some other character. Nothing here
+        // can undo a posted keystroke, so this is said rather than fixed.
+        var halfTyped: Character?
         func press(_ character: (character: Character, keystrokes: [Keystroke])) throws {
             for (index, keystroke) in character.keystrokes.enumerated() {
+                // Before every keystroke, not every character. A keystroke is irrevocable
+                // the moment it is posted, so the window in which focus may move has to be
+                // one keystroke wide - and an accented character is two keystrokes, so
+                // checking once a character would let the letter half of it land in
+                // whatever app took the front. One place decides this for every keystroke
+                // of every character. [LAW:single-enforcer] [LAW:no-ambient-temporal-coupling]
+                try interrupt.check()
+                try screen.requireFrontmost()
                 for modifier in keystroke.modifiers.usages { try keyboard.down(modifier) }
                 try keyboard.down(keystroke.usage)
                 // Counted on the key-down the daemon has acknowledged, not after the
@@ -94,7 +108,8 @@ struct DextTypeCommand: AsyncParsableCommand {
                 // really there. It is the LAST key-down of the character, because a
                 // character typed as a dead key and then the letter it accents is not on
                 // screen until the second of them.
-                if index == character.keystrokes.count - 1 { typed += 1 }
+                halfTyped = index == character.keystrokes.count - 1 ? nil : character.character
+                if halfTyped == nil { typed += 1 }
                 try keyboard.releaseAll()
             }
         }
@@ -120,22 +135,14 @@ struct DextTypeCommand: AsyncParsableCommand {
         let first = typing[0]
         let firstPosted = clock.now
         do {
-            try interrupt.check()
             // One character alone, so its latency is the driver's and not the queue's.
             try press(first)
             let firstSeen = try await screen.wait(within: .seconds(3)) { $0.occurrences(of: String(first.character)) > before.occurrences(of: String(first.character)) }
             print("first character on screen in \(into.rawValue) after \((clock.now - firstPosted).milliseconds) ms\(firstSeen ? "" : " (NEVER SEEN)")")
 
-            // Focus is re-checked before every keystroke, not once before the burst. A
-            // keystroke is irrevocable the moment it is posted, so the window in which
-            // focus may move has to be one keystroke wide; anything wider delivers the
-            // rest of the text to whatever app took the front.
-            // [LAW:no-ambient-temporal-coupling]
             let rest = Array(typing.dropFirst())
             let restPosted = clock.now
             for character in rest {
-                try interrupt.check()
-                try screen.requireFrontmost()
                 try press(character)
             }
             let acknowledged = clock.now - restPosted
@@ -162,7 +169,7 @@ struct DextTypeCommand: AsyncParsableCommand {
                 catch { print("MISMATCH, and the screen would not be read afterwards: \(error)") }
             }
         } catch {
-            throw TypingStopped(typed: typed, of: typing.count, cause: error)
+            throw TypingStopped(typed: typed, of: typing.count, halfTyped: halfTyped, cause: error)
         }
     }
 }
@@ -206,6 +213,10 @@ extension BundleID: ExpressibleByArgument {}
 struct TypingStopped: Error, CustomStringConvertible {
     let typed: Int
     let of: Int
+    /// The character whose first keystroke landed and whose last did not, when the run
+    /// stopped inside one. It is not in the count, because it is not on screen; it is in
+    /// the target app as a pending accent, which is a different thing to act on.
+    var halfTyped: Character?
     let cause: any Error
     var description: String {
         // "Posted and acknowledged", not "typed", and the difference is this spike's
@@ -215,7 +226,11 @@ struct TypingStopped: Error, CustomStringConvertible {
         let progress = typed < of
             ? "\(typed) of \(of) characters had been posted and acknowledged before this, and the rest were not sent"
             : "all \(of) characters had been posted and acknowledged before this"
-        return "\(cause). \(progress)"
+        // A dead key posted without the letter after it leaves the app mid-composition,
+        // which no reset here can clear and which silently changes the next character
+        // that app receives. [LAW:no-silent-failure]
+        let pending = halfTyped.map { ", and \(String($0).debugDescription) was left half typed: its accent is pending in the app and will combine with whatever it receives next" } ?? ""
+        return "\(cause). \(progress)\(pending)"
     }
 }
 
