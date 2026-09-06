@@ -9,9 +9,9 @@
 /// two passes in a row read it the same (the local-agreement rule of
 /// whisper_streaming, Macháček et al. 2023) and it ended at least `margin` before
 /// the later pass's end, so that the next pass, starting no later than that word,
-/// still spans more than `margin`. That margin is what keeps every pass decodable:
-/// an engine that decodes no window shorter than its end clip would otherwise be
-/// handed a span too short to hear and lose the words in it.
+/// still spans more than `margin` of speech. The engine decodes no window shorter
+/// than its end clip; the transcriber pads an utterance shorter than that out to
+/// the floor with silence, and this margin keeps every later pass over speech alone.
 ///
 /// [LAW:effects-at-boundaries] A value with no engine and no clock: words come in
 /// with the sample count they were read through, and the engine reads out where
@@ -69,8 +69,11 @@ struct Hearing: Equatable {
         prefix.first.map { AudioClip.sampleCount(for: $0.time.lowerBound) } ?? 0
     }
 
-    /// The sample count the audio must exceed before a pass has something to
-    /// hear: new audio since the last pass, and more than `margin` past the cut.
+    /// The sample count the speech must exceed before a pass is worth starting while
+    /// the utterance is still being spoken: new audio since the last pass, and more
+    /// than `margin` past the cut, so the first pass reads a second of speech rather
+    /// than a fragment padded out with silence. Once the utterance has ended, any
+    /// speech past `heard` is worth the last pass, however short.
     var passable: Int {
         max(heard, cut + margin)
     }

@@ -73,8 +73,12 @@ public final class WhisperKitTranscriber: Transcriber {
         // [LAW:dataflow-not-control-flow] The one branch is the utterance's own state:
         // speech to hear, or nothing more. A pass over what is there is the same pass
         // whether the key is still down or just came up, and the last pass's reading
-        // is the transcript once no speech follows it.
-        while case let (samples, ended) = await utterance.audio(beyond: hearing.passable), samples.count > hearing.passable {
+        // is the transcript once no speech follows it. During the hold a pass waits
+        // for speech worth one; once the utterance has ended, whatever speech no pass
+        // has heard gets the last pass, however short, and the pipeline pads it out
+        // to the engine's floor. So a tap-to-toggle "yes" is heard, not decoded as
+        // nothing, and a hold with nothing said in it is still no pass at all.
+        while case let (samples, ended) = await utterance.audio(beyond: hearing.passable), samples.count > hearing.heard {
             let (cut, saying) = (hearing.cut, hearing.saying)
             let words = try await decodes.run { try await pipeline.hear(samples, from: cut, saying: saying, told: prompt) }
             hearing.hear(words, through: samples.count)
@@ -87,8 +91,9 @@ public final class WhisperKitTranscriber: Transcriber {
 
     /// The loaded WhisperKit pipeline. `@unchecked Sendable` because WhisperKit is a
     /// mutable class the compiler cannot vouch for; the SerialQueue is what keeps
-    /// every decode alone with it.
-    private struct Pipeline: @unchecked Sendable {
+    /// every decode alone with it. Internal, not private, so the tests can reach the
+    /// windowing arithmetic without a model.
+    struct Pipeline: @unchecked Sendable {
         private let whisperKit: WhisperKit
         private let tokenizer: any WhisperTokenizer
 
@@ -102,8 +107,23 @@ public final class WhisperKitTranscriber: Transcriber {
         /// [LAW:one-source-of-truth] WhisperKit decodes no window that starts within
         /// `windowClipTime` of the clip's end, its guard against hallucinating over a
         /// trailing sliver. A word is confirmed only when it ended this far before the
-        /// pass's end, so the next pass, starting at that word, always spans more.
+        /// pass's end, so the next pass, starting at that word, always spans more; and
+        /// a pass over less than this from its cut, the whole of an utterance shorter
+        /// than a second, is padded out past it by `window(_:from:)`.
         static let margin = AudioClip.sampleCount(for: Double(decodeOptions.windowClipTime))
+
+        /// The audio a pass reads: `samples`, run out with silence to one sample more
+        /// than `margin` past `cut` when they fall short of it, so the engine's guard
+        /// sees a window it will decode. Silence after the speech is what the encoder
+        /// pads every window with anyway, so the reading is the same as the guard
+        /// would have given a longer clip; and audio already past the floor is
+        /// untouched, so a real trailing sliver is still refused as it was.
+        ///
+        /// [LAW:effects-at-boundaries] Pure, so the arithmetic is tested without a
+        /// model; `hear` is the effect that reads what this returns.
+        static func window(_ samples: [Float], from cut: Int) -> [Float] {
+            samples + Array(repeating: 0, count: max(0, cut + margin + 1 - samples.count))
+        }
 
         /// Confirmed words a pass starts from, forced as its first tokens rather than
         /// prompted as earlier text: a prompt is decoded against audio that no longer
@@ -166,13 +186,14 @@ public final class WhisperKitTranscriber: Transcriber {
         /// One pass: the words in `samples` from `cut` on, the first of them forced to
         /// read `prefix`, the text spoken from the cut, with `prompt` as the text
         /// before the utterance. Times are from the utterance's start, and the
-        /// prefix's words come back first, timed over their own audio.
+        /// prefix's words come back first, timed over their own audio. Samples short
+        /// of the engine's floor are padded out to it; see `window(_:from:)`.
         func hear(_ samples: [Float], from cut: Int, saying prefix: String, told prompt: [Int]) async throws -> [Transcript.Word] {
             var options = Self.decodeOptions
             options.clipTimestamps = [Float(AudioClip.duration(for: cut))]
             options.promptTokens = prompt
             options.prefixTokens = tokenizer.encode(text: prefix)
-            let results = try await whisperKit.transcribe(audioArray: samples, decodeOptions: options)
+            let results = try await whisperKit.transcribe(audioArray: Self.window(samples, from: cut), decodeOptions: options)
             return try Transcript(whisperKit: results.flatMap(\.segments)).words
         }
     }

@@ -25,8 +25,11 @@ actor Utterance {
     static let hangover = AudioClip.sampleCount(for: 0.3)
 
     private var samples: [Float] = []
-    /// Samples through the end of the last clip that held speech.
-    private var spoken = 0
+    /// Samples through the end of the last clip that held speech, once one has.
+    /// [LAW:types-are-the-program] No speech yet is its own state, not a count of
+    /// zero: the hangover rides on speech, so with none there is no audio to hand a
+    /// pass, and an utterance that ends in this state is refused rather than heard.
+    private var spoken: Int?
     /// The loudest sample so far, what an utterance that never reached the gate
     /// is refused with.
     private var loudest: Float = 0
@@ -57,12 +60,13 @@ actor Utterance {
             append(clip)
         }
         end()
-        guard spoken > 0 else { throw UtteranceError.nothingSpoken(peak: loudest) }
+        guard spoken != nil else { throw UtteranceError.nothingSpoken(peak: loudest) }
     }
 
-    /// How much audio the speech so far is worth a pass over.
+    /// How much audio the speech so far is worth a pass over: none until a clip
+    /// has reached the gate.
     private var speechCount: Int {
-        spoken + Self.hangover
+        spoken.map { $0 + Self.hangover } ?? 0
     }
 
     /// The speech so far, once it runs to more than `count` samples or the
