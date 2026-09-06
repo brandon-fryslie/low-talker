@@ -156,6 +156,39 @@ Run it as the logged-in user, never under `sudo`; it takes sudo itself for the f
 
 Two version numbers travel together and are not the same. The package is 8.4.0 and carries the Manager and Daemon helper apps; the driver extension inside it is 1.8.0, which is what `systemextensionsctl` reports. It has not moved across many package releases, so a package upgrade that leaves `systemextensionsctl` still reading 1.8.0 has not failed. The script is authoritative for both numbers, and pins the package's SHA-256 checksum besides. This file quotes the versions, not the checksum, and `make check-docs` fails when a number quoted here disagrees with the script.
 
+### Typing through it by hand
+
+    make cli
+    sudo .build/debug/lowtalker dext type com.apple.TextEdit "hello there"  # type it into TextEdit and read back what landed
+    .build/debug/lowtalker dext watch                                       # print every key the session's own tap sees
+
+`type` raises the named app, types the text through the virtual keyboard, and reads the app's text back through Accessibility to report what landed. `watch` prints every keyboard event the session's own event tap sees, with the time from the driver's stamp to the tap callback, until interrupted. `make cli` builds and re-signs the binary, as everywhere else here; `swift run` is not used in this project.
+
+`type` needs `sudo`, and not for the driver: it cannot open the driver extension's user client at all. Opening that user client takes the entitlement `com.apple.developer.driverkit.userclient-access`, which Apple grants per application identifier and which only pqrs's own `Karabiner-VirtualHIDDevice-Daemon` holds, so root does not help. `type` is therefore a client of that daemon, over a Unix domain socket at `/Library/Application Support/org.pqrs/tmp/rootonly/karabiner_virtual_hid_device_service.sock`, whose directory is mode 0700 owned by root. That socket is what the sudo is for.
+
+The daemon is a prerequisite and nothing starts it. The public package installs no launchd job for it, and `scripts/virtual-hid-driver state` reporting `running` describes the driver extension alone: it says nothing about whether anything can type. Start the daemon by hand:
+
+    sudo nohup "/Library/Application Support/org.pqrs/Karabiner-DriverKit-VirtualHIDDevice/Applications/Karabiner-VirtualHIDDevice-Daemon.app/Contents/MacOS/Karabiner-VirtualHIDDevice-Daemon" &
+
+`sudo launchctl list | grep pqrs` does return a job, which is confusing: that job is the driver extension itself, running as user `_driverkit` under macOS's system-extension machinery, not the daemon.
+
+`type` takes the target app's bundle id as an argument and refuses to type into anything else. It raises the named app, waits for macOS to agree it is frontmost, and re-checks on every read. When another app holds focus it posts no keystrokes and prints a refusal:
+
+    com.googlecode.iterm2 is frontmost, not com.apple.TextEdit; nothing was typed
+
+That is deliberate. An earlier version typed into whatever happened to be frontmost, and once delivered its text into the operator's own terminal.
+
+The alphabet is limited: printable ASCII, newline, and tab, as the US layout types them. A character outside that is refused by name before the daemon is touched, so a refusal never leaves a half-typed line.
+
+The first keystroke waits up to about a second after the connection is made. That is not the hardware. pqrs's daemon polls the driver for readiness on a one-second timer, so readiness is discovered on the next tick rather than when it happens. Once the driver is ready, a character reaches the screen in roughly 10 to 35 ms, and 500 characters posted back to back land complete and in order.
+
+macOS raises the Keyboard Setup Assistant the first time the virtual keyboard appears; it steals focus and asks for a physical keypress. It caches its answer in `/Library/Preferences/com.apple.keyboardtype.plist`, keyed `<product>-<vendor>-<country>`, so writing this device's own entry stops it returning:
+
+    sudo defaults write /Library/Preferences/com.apple.keyboardtype \
+      keyboardtype -dict-add "10203-5824-0" -int 40      # 40 = ANSI
+
+`watch` runs as the logged-in user and needs the terminal's Input Monitoring and Accessibility, as `hotkey` does. It sees the synthetic keys too: the app's own tap observes the keys the app types, which is a thing anything built on this has to account for.
+
 ### Installing
 
     scripts/virtual-hid-driver install
