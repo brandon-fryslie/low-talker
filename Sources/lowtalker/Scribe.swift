@@ -44,22 +44,34 @@ struct Scribe {
     /// posted keystroke, so this is said rather than fixed.
     private(set) var halfTyped: Character?
 
+    /// One key down, and the refusal that guards it.
+    ///
+    /// [LAW:single-enforcer] Every irrevocable act goes through here, and a keystroke is
+    /// several of them: an em dash holds Shift and Option before its key, and each of those
+    /// is its own report with its own round trip to the daemon. Checking once a keystroke
+    /// left a window between the modifiers in which focus could move and the rest of the
+    /// keystroke land in whatever app took the front - and then close again before the next
+    /// check, so nothing ever reported it.
+    ///
+    /// `releaseAll` is deliberately not guarded this way. A release that refuses to run
+    /// leaves a key down for macOS to repeat into whatever comes forward next, which is
+    /// worse than what the check prevents: the check is what makes a refusal safe, so it
+    /// cannot be what stops the release.
+    private func press(_ usage: Usage) throws {
+        try keyboard.check()
+        try keyboard.down(usage)
+    }
+
     mutating func press(_ character: Character, _ keystrokes: [Keystroke]) throws {
         for (index, keystroke) in keystrokes.enumerated() {
-            // Before every keystroke, not every character. A keystroke is irrevocable the
-            // moment it is posted, so the window in which focus may move has to be one
-            // keystroke wide - and an accented character is two keystrokes, so checking
-            // once a character would let the letter half of it land in whatever app took
-            // the front. [LAW:single-enforcer] [LAW:no-ambient-temporal-coupling]
-            try keyboard.check()
-            for modifier in keystroke.modifiers.usages { try keyboard.down(modifier) }
+            for modifier in keystroke.modifiers.usages { try press(modifier) }
             let last = index == keystrokes.count - 1
             // Recorded BEFORE the key goes down, and cleared after the last one comes
             // back. A request that throws may still have reached the driver, so a dead key
             // whose post failed is assumed to be pending in the app rather than assumed
             // away - the same bias `keysDown` keeps, for the same reason.
             if !last { halfTyped = character }
-            try keyboard.down(keystroke.usage)
+            try press(keystroke.usage)
             // Counted on the key-down the daemon has acknowledged, not after the release:
             // a failure between the two still put the character on screen, and a count
             // taken after the release would report one fewer than is really there. It is

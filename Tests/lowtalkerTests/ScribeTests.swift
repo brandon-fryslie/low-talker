@@ -57,17 +57,23 @@ struct Refused: Error {}
     @Test func theModifiersOfAKeystrokeGoDownBeforeIt() throws {
         var (scribe, keyboard) = scribe()
         try scribe.press("\u{2014}", Self.emDash)
-        #expect(keyboard.log == ["check", "down e1", "down e2", "down 2d", "up"])
+        #expect(keyboard.log == ["check", "down e1", "check", "down e2", "check", "down 2d", "up"])
         #expect(scribe.typed == 1)
     }
 
-    /// The check runs before every keystroke and not once a character: an accented letter
-    /// is two of them, and the window in which focus may move has to be one keystroke wide.
-    @Test func everyKeystrokeIsCheckedAndNotEveryCharacter() throws {
+    /// The check runs before every key that goes down, and not once a character or even
+    /// once a keystroke: each down is its own report and its own round trip to the daemon,
+    /// so the window in which focus may move has to be one report wide. An accented letter
+    /// is three downs - the Option that makes the dead key, the dead key, the letter - and
+    /// checking any less often leaves a gap the rest of that character can land in.
+    ///
+    /// The release is not checked, and that is not an oversight: a release that refuses to
+    /// run leaves a key held for macOS to repeat.
+    @Test func everyKeyThatGoesDownIsCheckedAndNotJustEveryKeystroke() throws {
         var (scribe, keyboard) = scribe()
         try scribe.press("\u{e9}", Self.acute)
-        #expect(keyboard.log.filter { $0 == "check" }.count == 2)
-        #expect(keyboard.log == ["check", "down e2", "down 8", "up", "check", "down 8", "up"])
+        #expect(keyboard.log.filter { $0 == "check" }.count == keyboard.log.filter { $0.hasPrefix("down") }.count)
+        #expect(keyboard.log == ["check", "down e2", "check", "down 8", "up", "check", "down 8", "up"])
     }
 
     /// Refused before anything was posted: nothing is on screen and nothing is pending, so
@@ -83,7 +89,7 @@ struct Refused: Error {}
     /// that can happen: the key-down that failed, the release after it, the check before
     /// the letter, and the letter's own key-down. The app is holding an accent in all four.
     @Test func aCharacterStoppedBeforeItsLastKeystrokeIsHalfTyped() {
-        for stoppedAfter in [2, 3, 4, 5] {
+        for stoppedAfter in [2, 3, 4, 5, 6] {
             var (scribe, _) = scribe(allowing: stoppedAfter)
             #expect(throws: Refused.self) { try scribe.press("\u{e9}", Self.acute) }
             #expect(scribe.typed == 0, "stopped after \(stoppedAfter) calls")
@@ -94,7 +100,7 @@ struct Refused: Error {}
     /// The last key-down was acknowledged, so the character is on screen even though the
     /// release that follows it failed. Counted, and no longer pending.
     @Test func aCharacterStoppedAfterItsLastKeystrokeIsTypedAndNotPending() {
-        var (scribe, _) = scribe(allowing: 6)
+        var (scribe, _) = scribe(allowing: 7)
         #expect(throws: Refused.self) { try scribe.press("\u{e9}", Self.acute) }
         #expect(scribe.typed == 1)
         #expect(scribe.halfTyped == nil)
@@ -105,7 +111,7 @@ struct Refused: Error {}
     /// the em dash's second modifier and of the dead key's own - `halfTyped` is recorded
     /// between the modifiers and the key, which is where the pending accent begins.
     @Test func aKeystrokeStoppedAmongItsModifiersLeavesNothingPending() {
-        var (dash, _) = scribe(allowing: 2)
+        var (dash, _) = scribe(allowing: 3)
         #expect(throws: Refused.self) { try dash.press("\u{2014}", Self.emDash) }
         #expect(dash.typed == 0)
         #expect(dash.halfTyped == nil)

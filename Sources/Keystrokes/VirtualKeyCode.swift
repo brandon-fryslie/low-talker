@@ -8,9 +8,10 @@ public extension Usage {
     /// wrong in a way nothing downstream can notice. So no row is taken on this table's own
     /// word. The character rows are checked against the alphabet the 3ti.2 spike drove a
     /// real driver with; the modifier row against the table the hotkey already posts; and
-    /// the rows that type nothing - navigation, function keys, keypad - against Carbon's own
-    /// key code symbols and the order the HID usage page fixes, since no layout test can
-    /// reach a key that answers with no character.
+    /// every row that types nothing - navigation, function keys, keypad, and the four
+    /// stragglers Escape, Delete, Caps Lock and ISO Section - against Carbon's own key code
+    /// symbols and the order the HID usage page fixes, since no layout test can reach a key
+    /// that answers with no character.
     ///
     /// The keys that carry no character are here too. A chord names arrows and function
     /// keys, and the same act reaches the device the same way. [LAW:composability]

@@ -48,9 +48,6 @@ struct DextTypeCommand: AsyncParsableCommand {
 
     @MainActor
     func run() async throws {
-        guard !text.isEmpty else { throw ValidationError("there is nothing to type") }
-        // [LAW:parse-dont-validate] The text is proven typeable before the daemon is
-        // touched, so a refusal leaves no half-typed line behind.
         // Named rather than discovered when it has to be. This command runs as root, and
         // root is answered with root's own layout: on a machine switched to Dvorak, the
         // console user is told Dvorak and this process is told US. Typing US keys under
@@ -61,6 +58,12 @@ struct DextTypeCommand: AsyncParsableCommand {
         // below: a run that never raises the app throws before that line, and the layout is
         // exactly what an operator needs told when the machine is not on root's US.
         print("typing through \(layout.name)")
+        // After the print and not before it, so that "the layout it used" holds for a run
+        // that types nothing too. Resolving a layout cannot fail differently for an empty
+        // string, so the cheap check has no claim on going first.
+        // [LAW:parse-dont-validate] The text is proven typeable before the daemon is
+        // touched, so a refusal leaves no half-typed line behind.
+        guard !text.isEmpty else { throw ValidationError("there is nothing to type") }
         let typing = try layout.typing(text)
         // What the keys will put on screen, which is not always what was asked for: a CRLF
         // is one Return, and the app writes one line break for it. Compared against this

@@ -133,6 +133,10 @@ import Testing
     @Test func theCharactersReturnedAreWhatLandsAndNotWhatWasAsked() throws {
         #expect(try Self.us.typing("a\r\nb").map(\.character) == ["a", "\n", "b"])
         #expect(try Self.us.typing("a\rb").map(\.character) == ["a", "\n", "b"])
+        // Asked of both, on the same string. They read the text through one function now,
+        // and they did not: `canType` said a CRLF was untypeable while `typing` typed it.
+        #expect(Self.us.canType("line one\r\nline two"))
+        #expect(Self.us.canType("a\rb"))
         #expect(try Self.us.typing("a\rb").flatMap(\.keystrokes) == [
             Keystroke(Usage(rawValue: 0x04)), Keystroke(.returnKey), Keystroke(Usage(rawValue: 0x05)),
         ])

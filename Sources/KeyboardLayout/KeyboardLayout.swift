@@ -99,23 +99,7 @@ public struct KeyboardLayout: Sendable {
     /// the first one - half a sentence in a document is worse than none, because only one
     /// of the two is obviously wrong.
     public func typing(_ text: String) throws -> [(character: Character, keystrokes: [Keystroke])] {
-        // Composed first. The map is keyed by what Swift calls a character - a grapheme
-        // cluster - and filled with what the keys type, which is the composed form; text
-        // that arrives decomposed is the same string to Swift and a different key to a
-        // dictionary, so `e` followed by a combining acute would be refused as untypeable
-        // while `\u{e9}` types. Canonically equivalent strings compare equal in Swift, so
-        // this changes what is typed for nobody and a caller reading the screen back
-        // against its own text still matches. [LAW:parse-dont-validate]
-        // Line breaks next, and for the same reason one step further on: Return is one
-        // key, and a document that receives it holds one line break however the text asked
-        // for it. A CRLF is a single grapheme cluster to Swift and a lone CR is what the
-        // layout itself answers with, and both come back from the screen as a newline - so
-        // a caller comparing what it asked for against what it reads would find a mismatch
-        // in a run that typed perfectly. Normalised here, the characters returned below are
-        // what the keys put on screen. [LAW:parse-dont-validate]
-        let text = text.precomposedStringWithCanonicalMapping
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
+        let text = Self.normalized(text)
         let untypeable = text.filter { byCharacter[$0] == nil }
         guard untypeable.isEmpty else {
             throw UntypeableCharacters(characters: String(Set(untypeable).sorted()), layout: name)
@@ -129,8 +113,34 @@ public struct KeyboardLayout: Sendable {
     }
 
     /// Whether this layout can type every character of `text`, without building anything.
+    ///
+    /// The same question `typing` answers by throwing, so it reads the text the same way.
     public func canType(_ text: String) -> Bool {
-        text.precomposedStringWithCanonicalMapping.allSatisfy { byCharacter[$0] != nil }
+        Self.normalized(text).allSatisfy { byCharacter[$0] != nil }
+    }
+
+    /// The text as the keys will put it on screen, which is where every character in this
+    /// type is looked up. One function, because two readings of one string are two answers
+    /// to "can this be typed" and no way to ask which is lying - `canType` said no to a
+    /// CRLF that `typing` typed, for exactly that reason. [LAW:one-source-of-truth]
+    ///
+    /// Composed first. The map is keyed by what Swift calls a character - a grapheme
+    /// cluster - and filled with what the keys type, which is the composed form; text that
+    /// arrives decomposed is the same string to Swift and a different key to a dictionary,
+    /// so `e` followed by a combining acute would be refused as untypeable while `\u{e9}`
+    /// types. Canonically equivalent strings compare equal in Swift, so this changes what
+    /// is typed for nobody.
+    ///
+    /// Line breaks next, one step further on. Return is one key, and a document that
+    /// receives it holds one line break however the text asked for it: a CRLF is a single
+    /// grapheme cluster to Swift and a lone CR is what the layout itself answers with, and
+    /// both come back from the screen as a newline. A caller comparing what it asked for
+    /// against what it reads would find a mismatch in a run that typed perfectly.
+    /// [LAW:parse-dont-validate]
+    private static func normalized(_ text: String) -> String {
+        text.precomposedStringWithCanonicalMapping
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
     }
 }
 

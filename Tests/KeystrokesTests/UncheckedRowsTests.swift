@@ -58,6 +58,17 @@ import Testing
         expect(kVK_ANSI_KeypadDecimal, 0x63, "keypad decimal")
     }
 
+    /// The four that belong to no block and so are easiest to leave out of one. Escape and
+    /// Delete type no character, Caps Lock types nothing at all, and ISO Section is the
+    /// extra key on a European board - the one entry here whose key code and usage differ,
+    /// so a transposition in it could not be caught by the two numbers coinciding.
+    @Test func theKeysThatBelongToNoBlockAreThereToo() {
+        expect(kVK_Escape, 0x29, "escape")
+        expect(kVK_Delete, 0x2A, "delete")
+        expect(kVK_CapsLock, 0x39, "caps lock")
+        expect(kVK_ISO_Section, 0x64, "ISO section")
+    }
+
     /// The operators, which the spec runs divide, multiply, minus, plus, enter from 0x54 -
     /// not the order they sit in on any keypad, and not the order a reader would guess.
     @Test func theKeypadOperatorsRunInTheSpecsOrderAndNotTheKeyboardsLayout() {
