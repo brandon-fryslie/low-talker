@@ -57,6 +57,9 @@ private func report(modifiers: UInt8, _ usages: [UInt16] = []) -> [UInt8] {
         #expect(startup.ready > .milliseconds(180))
         // Well inside the five seconds it was given: it returned when told, not on a timer.
         #expect(startup.ready < .seconds(2))
+        // The daemon answered the initialize at once and only then slept; a startup that
+        // reported this stall would be timing the next thing the daemon said, not its answer.
+        #expect(startup.answered < .milliseconds(100))
     }
 
     /// A driver built for another protocol accepts reports and then does something other
