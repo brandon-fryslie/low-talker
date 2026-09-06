@@ -69,13 +69,28 @@ import Testing
         #expect(ended)
     }
 
-    /// A hold with nothing said in it is the hangover of silence and nothing else.
-    @Test func nothingSaidIsOnlyTheHangover() async {
+    /// A hold with nothing said in it has no speech to hand a pass: the hangover
+    /// rides on speech, so with none there is not even that.
+    @Test func nothingSaidIsNoAudioAtAll() async {
         let utterance = Utterance()
         await utterance.append(Self.quiet(32_000))
         await utterance.end()
         let (samples, ended) = await utterance.audio(beyond: 0)
-        #expect(samples.count == Utterance.hangover)
+        #expect(samples.isEmpty)
+        #expect(ended)
+    }
+
+    /// Speech shorter than any wait is still handed over whole once the utterance
+    /// ends: the speech plus its hangover, nothing withheld for being short.
+    @Test func shortSpeechIsHandedOverWholeAtTheEnd() async {
+        let utterance = Utterance()
+        async let heard = utterance.audio(beyond: 16_000)
+        await utterance.append(Self.speech(6_400))
+        await utterance.append(Self.quiet(1_600))
+        await utterance.end()
+        let (samples, ended) = await heard
+        #expect(samples.count == 6_400 + Utterance.hangover)
+        #expect(samples.prefix(6_400).allSatisfy { $0 == 0.5 })
         #expect(ended)
     }
 
@@ -107,7 +122,7 @@ import Testing
         filling.cancel()
         let (samples, ended) = await heard
         #expect(ended)
-        #expect(samples.count == Utterance.hangover)
+        #expect(samples.isEmpty)
         feed.finish()
     }
 
