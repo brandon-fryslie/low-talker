@@ -3,6 +3,7 @@ import ApplicationServices
 import ArgumentParser
 import Foundation
 import LowTalkerCore
+import VirtualKeyboard
 
 /// The spike behind low-keyboard-3ti.2: keystrokes sent to the
 /// Karabiner-DriverKit-VirtualHIDDevice driver extension from this process, with as
@@ -50,21 +51,36 @@ struct DextTypeCommand: AsyncParsableCommand {
         // Watched before a single report goes out, so there is no window where an
         // interrupt can end the process with a key already down.
         let interrupt = Interrupt.watched()
-        let daemon = try DaemonConnection()
+        let keyboard = try VirtualKeyboard()
+        let opened = clock.now
         // [LAW:single-enforcer] Every key is released on every way out this process
-        // controls. A press is two requests, so a throw between them - a socket timeout,
-        // a focus check that fails, the operator's Ctrl-C - leaves that key held, and
-        // macOS repeats a held key until something releases it. One place enforces that,
-        // not each throw site.
+        // controls. A character is several reports, so a throw between them - a socket
+        // timeout, a focus check that fails, the operator's Ctrl-C - leaves that key
+        // held, and macOS repeats a held key until something releases it. One place
+        // enforces that, not each throw site.
         defer {
-            do { try daemon.request(.keyboardReset, [], within: .seconds(2)) }
+            do { try keyboard.reset() }
             // [LAW:no-silent-failure] Nowhere to throw from a defer, so it is said out
             // loud: a key may be left held and the next thing typed will show it.
             catch { print("the keyboard was not reset: \(error). A key may be left held.") }
         }
-        try daemon.request(.keyboardInitialize, DaemonConnection.keyboardParameters, within: .seconds(2))
-        let readyAfter = try daemon.awaitKeyboardReady(within: .seconds(2))
-        print("daemon answered in \((readyAfter.answered - connecting).milliseconds) ms, keyboard ready after \((readyAfter.ready - connecting).milliseconds) ms")
+        let startup = try keyboard.start(within: .seconds(3))
+        print("connected in \((opened - connecting).milliseconds) ms, daemon answered in \(startup.answered.milliseconds) ms, keyboard ready after \(startup.ready.milliseconds) ms")
+
+        // A press in the device's own vocabulary: shift is a key like any other, held
+        // around the one it shifts. Three reports for a shifted character where the spike
+        // sent two, and that is the more faithful count - a modifier and the key it
+        // modifies do not go down in the same scan on real hardware either.
+        var typed = 0
+        func press(_ keystroke: USLayout.Keystroke) throws {
+            if keystroke.shift { try keyboard.down(.leftShift) }
+            try keyboard.down(Usage(rawValue: keystroke.usage))
+            // Counted here, on the key-down the daemon has acknowledged, not after the
+            // release: a failure between the two still put the character on screen, and a
+            // count taken after the release would report one fewer than is really there.
+            typed += 1
+            try keyboard.releaseAll()
+        }
 
         // [LAW:no-ambient-temporal-coupling] The target is stated, not discovered, and
         // every read re-checks it, so a window that steals focus mid-run is a named
@@ -89,7 +105,7 @@ struct DextTypeCommand: AsyncParsableCommand {
         do {
             try interrupt.check()
             // One character alone, so its latency is the driver's and not the queue's.
-            try daemon.press(first)
+            try press(first)
             let firstSeen = try await screen.wait(within: .seconds(3)) { $0.occurrences(of: String(first.character)) > before.occurrences(of: String(first.character)) }
             print("first character on screen in \(into.rawValue) after \((clock.now - firstPosted).milliseconds) ms\(firstSeen ? "" : " (NEVER SEEN)")")
 
@@ -103,7 +119,7 @@ struct DextTypeCommand: AsyncParsableCommand {
             for keystroke in rest {
                 try interrupt.check()
                 try screen.requireFrontmost()
-                try daemon.press(keystroke)
+                try press(keystroke)
             }
             let acknowledged = clock.now - restPosted
             // Against a baseline, like the first character's check: an app already holding
@@ -129,7 +145,7 @@ struct DextTypeCommand: AsyncParsableCommand {
                 catch { print("MISMATCH, and the screen would not be read afterwards: \(error)") }
             }
         } catch {
-            throw TypingStopped(typed: daemon.pressesBegun, of: keystrokes.count, cause: error)
+            throw TypingStopped(typed: typed, of: keystrokes.count, cause: error)
         }
     }
 }
@@ -160,330 +176,6 @@ struct DextWatchCommand: AsyncParsableCommand {
             case .modifier(let modifier): "modifier \(modifier.rawValue)"
             }
             print("\(event.direction) \(key) stamp-to-tap \((arrived - event.time).microseconds) us")
-        }
-    }
-}
-
-// MARK: - The daemon's socket
-
-/// One connection to Karabiner-VirtualHIDDevice-Daemon over its Unix domain stream
-/// socket, speaking pqrs's framing by the numbers the pinned package fixes (8.4.0,
-/// client protocol 7). Every failure names what the daemon did or did not say.
-/// [LAW:no-silent-failure]
-///
-/// A frame is a 4-byte big-endian body length, a type byte, and for requests and
-/// responses an 8-byte big-endian request id before the payload. A request payload
-/// is the client protocol version (2 bytes, native order), the request byte, and the
-/// request's own bytes. The daemon answers each request with a response frame of the
-/// same id whose payload is (response, value) byte pairs, and pushes the same pairs
-/// as requests of its own whenever the driver's state changes; those are answered
-/// with an empty response, as pqrs's client does.
-final class DaemonConnection {
-    static let socketPath = "/Library/Application Support/org.pqrs/tmp/rootonly/karabiner_virtual_hid_device_service.sock"
-    static let clientProtocolVersion: UInt16 = 7
-    /// pqrs's own defaults for the virtual keyboard: vendor id, product id, and a
-    /// country code of "not supported", each a uint64.
-    static let keyboardParameters: [UInt8] = [0x16c0, 0x27db, 0].flatMap { (value: UInt64) in (0..<8).map { UInt8(truncatingIfNeeded: value >> (8 * $0)) } }
-
-    /// The request table, by index, from `virtual_hid_device_service/request.hpp`.
-    enum Request: UInt8 {
-        case keyboardInitialize = 0
-        case keyboardTerminate = 1
-        case keyboardReset = 2
-        case postKeyboardInputReport = 6
-    }
-
-    /// The status table, by index, from `virtual_hid_device_service/response.hpp`.
-    enum Status: UInt8 {
-        case none = 0
-        case driverActivated = 1
-        case driverConnected = 2
-        case driverVersionMismatched = 3
-        case keyboardReady = 4
-        case pointingReady = 5
-    }
-
-    /// The frame types, by index, from `unix_domain_stream/impl/protocol.hpp`.
-    enum FrameType: UInt8 {
-        case heartbeat = 0
-        case userData = 1
-        case healthCheck = 2
-        case healthCheckResponse = 3
-        case request = 4
-        case response = 5
-    }
-
-    private let socket: Int32
-    private var nextRequestID: UInt64 = 1
-    /// The daemon's latest word on each status it has ever sent.
-    private(set) var status: [Status: Bool] = [:]
-    /// How many presses the daemon has acknowledged the key-down of. A press is two
-    /// reports and the character is on screen after the first, so a failure between them
-    /// still put a character in the document - counting completed presses would report
-    /// one fewer than is actually there. The count belongs here because this is what
-    /// sends them; a caller keeping its own tally keeps one that can disagree.
-    /// [LAW:one-source-of-truth]
-    private(set) var pressesBegun = 0
-
-    init() throws {
-        guard FileManager.default.fileExists(atPath: Self.socketPath) else { throw DaemonError.noSocket }
-        socket = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
-        guard socket >= 0 else { throw DaemonError.socket("socket", errno) }
-        var noSignal: Int32 = 1
-        // [LAW:no-silent-failure] This is the only thing standing between a write to a
-        // closed socket and SIGPIPE killing the process without a word, so a failure to
-        // set it is reported rather than assumed.
-        guard setsockopt(socket, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
-            throw DaemonError.socket("setsockopt(SO_NOSIGPIPE)", errno)
-        }
-        var address = sockaddr_un()
-        address.sun_family = sa_family_t(AF_UNIX)
-        let path = Array(Self.socketPath.utf8CString)
-        precondition(path.count <= MemoryLayout.size(ofValue: address.sun_path), "the socket path outgrew sun_path")
-        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: path.map { UInt8(bitPattern: $0) }) }
-        let connected = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(socket, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
-        }
-        guard connected == 0 else {
-            throw DaemonError.socket("connect", errno)
-        }
-    }
-
-    /// The one place the descriptor closes. [LAW:single-enforcer] Every stored property
-    /// is set by the line above, so an initializer that throws past that point still
-    /// deallocates the instance and still runs this - and the explicit closes that used
-    /// to stand in the throwing branches closed the same descriptor a second time. A
-    /// second close usually fails with EBADF and is ignored, but the number it names is
-    /// free to have been handed to something else by then.
-    deinit {
-        close(socket)
-    }
-
-    /// Sends a request and returns its id, without waiting for the answer.
-    @discardableResult
-    func send(_ request: Request, _ payload: [UInt8]) throws -> UInt64 {
-        let id = nextRequestID
-        nextRequestID += 1
-        let version = Self.clientProtocolVersion
-        let data = [UInt8(version & 0xff), UInt8(version >> 8), request.rawValue] + payload
-        try write(Self.frame(.request, id: id, data))
-        return id
-    }
-
-    /// Sends a request and waits for the daemon's answer to it.
-    func request(_ request: Request, _ payload: [UInt8], within limit: Duration) throws {
-        try awaitResponse(to: send(request, payload), within: limit)
-    }
-
-    /// A key down and back up: the two reports a HID keyboard sends for one press.
-    ///
-    /// Each report is awaited, and that is not politeness - it is flow control. Fired
-    /// back to back with no wait, 500 characters overrun the path and reports are lost;
-    /// a lost key-up leaves its key held, so macOS starts repeating it and the tail of
-    /// the text becomes hundreds of one shifted character. Measured, twice, in this
-    /// spike. The daemon answers every request, so its answer is a real signal to wait
-    /// on rather than a sleep guessed at. [LAW:no-ambient-temporal-coupling]
-    func press(_ keystroke: USLayout.Keystroke) throws {
-        try request(.postKeyboardInputReport, KeyboardReport(modifiers: keystroke.shift ? KeyboardReport.leftShift : 0, keys: [keystroke.usage]).bytes, within: .seconds(2))
-        pressesBegun += 1
-        try request(.postKeyboardInputReport, KeyboardReport.released.bytes, within: .seconds(2))
-    }
-
-    /// Reads frames until the response to `id` arrives, taking in every status the
-    /// daemon pushes on the way. [LAW:no-ambient-temporal-coupling] The wait is on the
-    /// daemon's answer, and the bound is a failure, not a silence.
-    func awaitResponse(to id: UInt64, within limit: Duration) throws {
-        let deadline = ContinuousClock.now + limit
-        while true {
-            let (type, frameID, data) = try readFrame(by: deadline)
-            try handle(type, id: frameID, data)
-            if type == .response, frameID == id { return }
-        }
-    }
-
-    /// Reads frames until the daemon has said the keyboard is ready, and says when it
-    /// first answered at all and when it said so.
-    func awaitKeyboardReady(within limit: Duration) throws -> (answered: ContinuousClock.Instant, ready: ContinuousClock.Instant) {
-        let deadline = ContinuousClock.now + limit
-        var answered: ContinuousClock.Instant?
-        while status[.keyboardReady] != true {
-            // Checked before the read, not after it: a mismatch pushed during an earlier
-            // request is already recorded, and no further frame is coming to carry it.
-            // Blocking here would bury the named cause under a timeout.
-            // [LAW:no-silent-failure]
-            guard status[.driverVersionMismatched] != true else { throw DaemonError.driverVersionMismatched }
-            let (type, frameID, data) = try readFrame(by: deadline)
-            try handle(type, id: frameID, data)
-            answered = answered ?? ContinuousClock.now
-        }
-        return (answered ?? ContinuousClock.now, ContinuousClock.now)
-    }
-
-    /// What every frame means to this side: a pushed status is recorded and answered,
-    /// a health check is answered, a response's status pairs are recorded.
-    private func handle(_ type: FrameType, id: UInt64, _ data: [UInt8]) throws {
-        switch type {
-        case .heartbeat, .userData, .healthCheckResponse:
-            break
-        case .healthCheck:
-            try write(Self.frame(.healthCheckResponse, id: nil, []))
-        case .request:
-            try record(data)
-            try write(Self.frame(.response, id: id, []))
-        case .response:
-            try record(data)
-        }
-    }
-
-    /// The daemon's status payload, decoded: pairs of (status, value). Pure, and here
-    /// rather than inside record for the same reason the framing is - a transposed pair
-    /// records the wrong status as true and nothing about that looks wrong at runtime.
-    /// [LAW:decomposition]
-    static func statusPairs(_ pairs: [UInt8]) throws -> [(Status, Bool)] {
-        guard pairs.count % 2 == 0 else { throw DaemonError.malformed("a status payload of \(pairs.count) bytes, which is not pairs") }
-        return try stride(from: 0, to: pairs.count, by: 2).map { index in
-            guard let status = Status(rawValue: pairs[index]) else { throw DaemonError.malformed("status \(pairs[index]), which this was not written for") }
-            return (status, pairs[index + 1] != 0)
-        }
-    }
-
-    private func record(_ pairs: [UInt8]) throws {
-        for (status, value) in try Self.statusPairs(pairs) {
-            self.status[status] = value
-        }
-    }
-
-    /// The framing is bytes alone, with no socket in it. Byte order is the part of a
-    /// protocol that goes wrong silently - a reasonable-looking guess at pqrs's layout
-    /// would have corrupted every report while looking perfectly healthy - so the part
-    /// that decides it is separated from the part that does I/O, where it can be proven
-    /// by a test rather than only by a live driver. [LAW:decomposition]
-    static func frame(_ type: FrameType, id: UInt64?, _ data: [UInt8]) -> [UInt8] {
-        let requestID = id.map { id in (0..<8).reversed().map { UInt8(truncatingIfNeeded: id >> (8 * $0)) } } ?? []
-        let body = [type.rawValue] + requestID + data
-        let length = UInt32(body.count)
-        return (0..<4).reversed().map { UInt8(truncatingIfNeeded: length >> (8 * $0)) } + body
-    }
-
-    /// EINTR says the call did not happen and must be made again, which is the opposite
-    /// of a failure - and reporting a non-failure as one is the same lie as the reverse.
-    /// [LAW:no-silent-failure] A signal delivered during a run is enough to trip this: a
-    /// terminal resize while typing into iTerm2 would otherwise abort a connection that
-    /// is perfectly healthy. Used for the data calls only; poll is retried by its own
-    /// loop, which recomputes the timeout it has left rather than starting it over.
-    private static func uninterrupted(_ call: () -> Int) -> Int {
-        while true {
-            let result = call()
-            guard result < 0, errno == EINTR else { return result }
-        }
-    }
-
-    private func write(_ bytes: [UInt8]) throws {
-        var offset = 0
-        while offset < bytes.count {
-            let written = Self.uninterrupted { bytes[offset...].withUnsafeBytes { Darwin.write(socket, $0.baseAddress, $0.count) } }
-            guard written > 0 else { throw DaemonError.socket("write", errno) }
-            offset += written
-        }
-    }
-
-    /// The other half of the framing, and the same reason it is here: pure bytes in,
-    /// meaning out. [LAW:decomposition]
-    /// The largest frame this side will allocate for. A keyboard report is 67 bytes and
-    /// the framing around it nine more; every response the daemon sends is shorter. The
-    /// cap is generous by two orders of magnitude and still refuses the four-gigabyte
-    /// allocation a desynced or corrupted header can otherwise ask for - which would end
-    /// the process rather than name what the daemon said, and naming it is this class's
-    /// whole promise.
-    static let largestFrame = 4096
-
-    static func bodyLength(header: [UInt8]) throws -> Int {
-        let length = header.reduce(0) { $0 << 8 | Int($1) }
-        // [LAW:parse-dont-validate] The length is sane by the time it leaves here, so
-        // nothing downstream allocates against a number it has to think about first.
-        guard length >= 1 else { throw DaemonError.malformed("an empty frame") }
-        guard length <= largestFrame else { throw DaemonError.malformed("a frame of \(length) bytes, past the \(largestFrame) this reads") }
-        return length
-    }
-
-    static func parse(body: [UInt8]) throws -> (FrameType, UInt64, [UInt8]) {
-        guard let type = FrameType(rawValue: body[0]) else { throw DaemonError.malformed("frame type \(body[0]), which this was not written for") }
-        switch type {
-        case .request, .response:
-            guard body.count >= 9 else { throw DaemonError.malformed("a \(type) frame of \(body.count) bytes, too short for its id") }
-            let id = body[1..<9].reduce(0) { $0 << 8 | UInt64($1) }
-            return (type, id, Array(body[9...]))
-        default:
-            return (type, 0, Array(body[1...]))
-        }
-    }
-
-    private func readFrame(by deadline: ContinuousClock.Instant) throws -> (FrameType, UInt64, [UInt8]) {
-        let length = try Self.bodyLength(header: read(4, by: deadline))
-        return try Self.parse(body: read(length, by: deadline))
-    }
-
-    private func read(_ count: Int, by deadline: ContinuousClock.Instant) throws -> [UInt8] {
-        var bytes = [UInt8](repeating: 0, count: count)
-        var offset = 0
-        while offset < count {
-            let remaining = deadline - ContinuousClock.now
-            guard remaining > .zero else { throw DaemonError.silent }
-            var descriptor = pollfd(fd: socket, events: Int16(POLLIN), revents: 0)
-            let readable = poll(&descriptor, 1, Int32(remaining.components.seconds * 1_000 + remaining.components.attoseconds / 1_000_000_000_000_000))
-            // Around the loop rather than retried in place, so the deadline is consulted
-            // again and poll is given the time that is actually left instead of the whole
-            // budget over: a signal must not extend the wait it interrupted.
-            if readable < 0, errno == EINTR { continue }
-            guard readable >= 0 else { throw DaemonError.socket("poll", errno) }
-            guard readable > 0 else { throw DaemonError.silent }
-            let got = Self.uninterrupted { bytes[offset...].withUnsafeMutableBytes { Darwin.read(socket, $0.baseAddress, $0.count) } }
-            guard got > 0 else { throw got == 0 ? DaemonError.closed : DaemonError.socket("read", errno) }
-            offset += got
-        }
-        return bytes
-    }
-}
-
-/// The keyboard input report as the driver's packed `keyboard_input` lays it out:
-/// report id 1, one byte of modifier bits, one reserved byte, then 32 little-endian
-/// usages from keyboard page 0x07 for the keys held. 67 bytes.
-struct KeyboardReport {
-    static let leftShift: UInt8 = 0x02
-    static let released = KeyboardReport(modifiers: 0, keys: [])
-
-    let modifiers: UInt8
-    let keys: [UInt16]
-
-    var bytes: [UInt8] {
-        precondition(keys.count <= 32, "a keyboard report holds at most 32 keys")
-        let padded = keys + Array(repeating: 0, count: 32 - keys.count)
-        return [1, modifiers, 0] + padded.flatMap { [UInt8($0 & 0xff), UInt8($0 >> 8)] }
-    }
-}
-
-enum DaemonError: Error, CustomStringConvertible {
-    case noSocket
-    case socket(String, Int32)
-    case silent
-    case closed
-    case malformed(String)
-    case driverVersionMismatched
-
-    var description: String {
-        switch self {
-        case .noSocket:
-            "no socket at \(DaemonConnection.socketPath); Karabiner-VirtualHIDDevice-Daemon is not running, and only root can see it when it is"
-        case .socket(let call, let code):
-            "\(call) on the daemon's socket failed: \(String(cString: strerror(code))) (\(code))"
-        case .silent:
-            "the daemon did not answer in time"
-        case .closed:
-            "the daemon closed the connection"
-        case .malformed(let what):
-            "the daemon sent \(what)"
-        case .driverVersionMismatched:
-            "the daemon reports the driver's version is not the one it was built for"
         }
     }
 }
@@ -727,14 +419,27 @@ struct TargetApp {
     func wait(within limit: Duration, until condition: (String) -> Bool) async throws -> Bool {
         let clock = ContinuousClock()
         let start = clock.now
+        var unanswered: ScreenUnreadable?
         while clock.now - start < limit {
             try interrupt.check()
-            if condition(try read()) { return true }
+            do {
+                if condition(try read()) { return true }
+                unanswered = nil
+            } catch let unreadable as ScreenUnreadable where unreadable.mayPassWithTime {
+                // A poll that did not get an answer is not the end of the wait; riding
+                // out a moment like this is what polling is for. TextEdit's own
+                // autocorrect popup takes the focused element away for a few frames, and
+                // ending a five-second wait on it reports a failure about a run that
+                // typed all 500 characters correctly. The bound is still the verdict:
+                // something that lasts to the deadline is raised there, by name.
+                unanswered = unreadable
+            }
             // Far below the 10-35 ms being measured, and far above a rate that would load
             // the target app's main thread with synchronous Accessibility calls and skew
             // the number this command exists to report.
             try await Task.sleep(for: .milliseconds(2))
         }
+        if let unanswered { throw unanswered }
         return condition(try read())
     }
 }
@@ -753,6 +458,18 @@ enum ScreenUnreadable: Error, CustomStringConvertible {
     case wrongApp(wanted: String, frontmost: String)
     case noFocus(String)
     case noText(String)
+
+    /// Whether waiting could still change the answer. An app that will not answer right
+    /// now may answer in two milliseconds; an app that is not in front is not going to
+    /// come back on its own, and a wait that rides that out delivers a late verdict about
+    /// the wrong window. [LAW:types-are-the-program] The cases already carry the
+    /// difference, so nothing has to inspect a message to find it.
+    var mayPassWithTime: Bool {
+        switch self {
+        case .noFocus, .noText: true
+        case .noFrontmostApp, .notRunning, .wouldNotComeForward, .wrongApp: false
+        }
+    }
 
     var description: String {
         switch self {
