@@ -13,8 +13,8 @@ import Testing
     }
 }
 
-private func keyboard(on fake: FakeDaemon, reportTimeout: Duration = .seconds(2)) -> VirtualKeyboard {
-    VirtualKeyboard(daemon: DaemonConnection(fileDescriptor: fake.clientDescriptor), reportTimeout: reportTimeout)
+private func keyboard(on fake: FakeDaemon, reportTimeout: Duration = .seconds(2)) throws -> VirtualKeyboard {
+    VirtualKeyboard(daemon: try DaemonConnection(fileDescriptor: fake.clientDescriptor), reportTimeout: reportTimeout)
 }
 
 /// The reports the device actually put on the wire, in order.
@@ -101,7 +101,7 @@ private func report(modifiers: UInt8, _ usages: [UInt16] = []) -> [UInt8] {
     /// exactly one failure mode, and it is the one this whole epic is about.
     @Test func everyReportIsTheKeysDownAndNothingElse() throws {
         let fake = FakeDaemon(handling: daemonThatComesUp)
-        let device = keyboard(on: fake)
+        let device = try keyboard(on: fake)
         try device.start(within: .seconds(2))
         try device.down(Usage(rawValue: 0x04))
         try device.down(Usage(rawValue: 0x05))
@@ -122,7 +122,7 @@ private func report(modifiers: UInt8, _ usages: [UInt16] = []) -> [UInt8] {
     /// 0xE1 is the second of the eight, not because a table says so.
     @Test func aModifierIsAUsageAndItsBitComesFromTheUsage() throws {
         let fake = FakeDaemon(handling: daemonThatComesUp)
-        let device = keyboard(on: fake)
+        let device = try keyboard(on: fake)
         try device.start(within: .seconds(2))
         try device.down(.leftShift)
         try device.down(Usage(rawValue: 0x04))
@@ -176,7 +176,7 @@ private func report(modifiers: UInt8, _ usages: [UInt16] = []) -> [UInt8] {
             guard requestSent(payload).request != DaemonConnection.Request.postKeyboardInputReport.rawValue else { return }
             try fake.send(.response(id: id, payload: []))
         }
-        let device = keyboard(on: fake, reportTimeout: .milliseconds(200))
+        let device = try keyboard(on: fake, reportTimeout: .milliseconds(200))
         #expect(throws: DaemonError.silent) { try device.down(.leftShift) }
         #expect(device.keysDown == [.leftShift])
     }
@@ -184,7 +184,7 @@ private func report(modifiers: UInt8, _ usages: [UInt16] = []) -> [UInt8] {
     /// reset clears the device's own idea of what is held as well as this side's.
     @Test func resetAsksTheDaemonToClearTheDeviceAndForgetsWhatWasHeld() throws {
         let fake = FakeDaemon(handling: daemonThatComesUp)
-        let device = keyboard(on: fake)
+        let device = try keyboard(on: fake)
         try device.start(within: .seconds(2))
         try device.down(.leftShift)
         try device.reset()

@@ -48,8 +48,7 @@ final class DaemonConnection {
         guard FileManager.default.fileExists(atPath: Self.socketPath) else { throw DaemonError.noSocket }
         let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw DaemonError.socket("socket", errno) }
-        self.init(fileDescriptor: descriptor)
-        try configure()
+        try self.init(fileDescriptor: descriptor)
         try connectToDaemon()
     }
 
@@ -58,8 +57,9 @@ final class DaemonConnection {
     /// the framing, the deadline reads and the request/response matching are exercised
     /// over a real socket rather than mocked away. [LAW:decomposition] The protocol and
     /// the pipe it runs over are two things, and only one of them needs root.
-    init(fileDescriptor: Int32) {
+    init(fileDescriptor: Int32) throws {
         socket = fileDescriptor
+        try refuseSIGPIPE(socket)
     }
 
     /// The one place the descriptor closes. [LAW:single-enforcer] Every stored property is
@@ -69,16 +69,6 @@ final class DaemonConnection {
     /// have been handed to something else by then.
     deinit {
         close(socket)
-    }
-
-    private func configure() throws {
-        var noSignal: Int32 = 1
-        // [LAW:no-silent-failure] This is the only thing standing between a write to a
-        // closed socket and SIGPIPE ending the process without a word, so a failure to set
-        // it is reported rather than assumed.
-        guard setsockopt(socket, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
-            throw DaemonError.socket("setsockopt(SO_NOSIGPIPE)", errno)
-        }
     }
 
     private func connectToDaemon() throws {
@@ -169,20 +159,10 @@ final class DaemonConnection {
         return try Frame.decode(body: read(length, by: deadline))
     }
 
-    /// EINTR says the call did not happen and must be made again, which is the opposite of
-    /// a failure - and reporting a non-failure as one is the same lie as the reverse.
-    /// [LAW:no-silent-failure] A signal delivered during a run is enough to trip it.
-    private static func uninterrupted(_ call: () -> Int) -> Int {
-        while true {
-            let result = call()
-            guard result < 0, errno == EINTR else { return result }
-        }
-    }
-
     private func write(_ bytes: [UInt8]) throws {
         var offset = 0
         while offset < bytes.count {
-            let written = Self.uninterrupted { bytes[offset...].withUnsafeBytes { Darwin.write(socket, $0.baseAddress, $0.count) } }
+            let written = uninterrupted { bytes[offset...].withUnsafeBytes { Darwin.write(socket, $0.baseAddress, $0.count) } }
             guard written > 0 else { throw DaemonError.socket("write", errno) }
             offset += written
         }
@@ -202,36 +182,10 @@ final class DaemonConnection {
             if readable < 0, errno == EINTR { continue }
             guard readable >= 0 else { throw DaemonError.socket("poll", errno) }
             guard readable > 0 else { throw DaemonError.silent }
-            let got = Self.uninterrupted { bytes[offset...].withUnsafeMutableBytes { Darwin.read(socket, $0.baseAddress, $0.count) } }
+            let got = uninterrupted { bytes[offset...].withUnsafeMutableBytes { Darwin.read(socket, $0.baseAddress, $0.count) } }
             guard got > 0 else { throw got == 0 ? DaemonError.closed : DaemonError.socket("read", errno) }
             offset += got
         }
         return bytes
-    }
-}
-
-public enum DaemonError: Error, CustomStringConvertible, Equatable {
-    case noSocket
-    case socket(String, Int32)
-    case silent
-    case closed
-    case malformed(String)
-    case driverVersionMismatched
-
-    public var description: String {
-        switch self {
-        case .noSocket:
-            "no socket at \(DaemonConnection.socketPath); Karabiner-VirtualHIDDevice-Daemon is not running, and only root can see it when it is"
-        case .socket(let call, let code):
-            "\(call) on the daemon's socket failed: \(String(cString: strerror(code))) (\(code))"
-        case .silent:
-            "the daemon did not answer in time"
-        case .closed:
-            "the daemon closed the connection"
-        case .malformed(let what):
-            "the daemon sent \(what)"
-        case .driverVersionMismatched:
-            "the daemon reports the driver's version is not the one it was built for"
-        }
     }
 }
