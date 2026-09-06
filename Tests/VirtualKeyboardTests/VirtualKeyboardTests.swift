@@ -156,6 +156,27 @@ private func report(modifiers: UInt8, _ usages: [UInt16] = []) -> [UInt8] {
         #expect(try KeyboardReport(held: held).bytes == report(modifiers: 0, [0x04, 0x07, 0x0a]))
     }
 
+    /// The 67 bytes of one report, placed by hand.
+    ///
+    /// Every other byte assertion here compares the module's packing against `report(_:_:)`,
+    /// which packs a report the same way the module does - so the one thing those tests
+    /// exist to catch, a wrong layout, is the one thing they would agree with. This is the
+    /// only place the layout is stated independently of the code that produces it, and the
+    /// helper is checked against it here. [LAW:one-source-of-truth]
+    @Test func aReportIsSixtySevenBytesLaidOutTheWayTheDriverReadsThem() throws {
+        var expected = [UInt8](repeating: 0, count: 67)
+        expected[0] = 1     // report id 1, the keyboard collection
+        expected[1] = 0x02  // left shift, the second of the eight modifier bits
+        expected[2] = 0     // reserved, and it stays reserved
+        // Then 32 usages of two bytes each, low byte first - little-endian, unlike the
+        // big-endian framing that carries them. The high byte of each is zero here.
+        expected[3] = 0x04
+        expected[5] = 0x1e
+        let held: Set<Usage> = [.leftShift, Usage(rawValue: 0x04), Usage(rawValue: 0x1e)]
+        #expect(try KeyboardReport(held: held).bytes == expected)
+        #expect(report(modifiers: 0x02, [0x04, 0x1e]) == expected)
+    }
+
     /// The usage field is fixed width. More keys than it carries is refused by name rather
     /// than by dropping one, which would be a key held that no report mentions.
     @Test func moreKeysThanOneReportCarriesIsRefused() throws {
