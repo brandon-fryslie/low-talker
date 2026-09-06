@@ -181,6 +181,52 @@ private func report(modifiers: UInt8, _ usages: [UInt16] = []) -> [UInt8] {
         #expect(device.keysDown == [.leftShift])
     }
 
+    /// The mirror of the rule above, and the half that had it backwards: a release the
+    /// daemon does not answer leaves the key recorded as held. The record may over-report
+    /// what the device is holding and may never under-report, because a key it has already
+    /// forgotten is one nothing will lift.
+    @Test func aReleaseThatIsNotAnsweredLeavesTheKeyRecordedAsHeld() throws {
+        // Presses are answered and the three ways of releasing are not, which is the
+        // mid-burst timeout this is about: the report reaching the driver and the answer
+        // coming back are two events, and only the second one failed.
+        let fake = FakeDaemon { frame, fake in
+            guard case .request(let id, let payload) = frame else { return }
+            let sent = requestSent(payload)
+            let releasing = sent.request == DaemonConnection.Request.keyboardReset.rawValue
+                || (sent.request == DaemonConnection.Request.postKeyboardInputReport.rawValue
+                    && sent.bytes.dropFirst().allSatisfy { $0 == 0 })
+            guard !releasing else { return }
+            try fake.send(.response(id: id, payload: []))
+        }
+        let device = try keyboard(on: fake, reportTimeout: .milliseconds(200))
+        try device.down(.leftShift)
+        #expect(throws: DaemonError.silent) { try device.up(.leftShift) }
+        #expect(device.keysDown == [.leftShift])
+        #expect(throws: DaemonError.silent) { try device.releaseAll() }
+        #expect(device.keysDown == [.leftShift])
+        #expect(throws: DaemonError.silent) { try device.reset() }
+        #expect(device.keysDown == [.leftShift])
+    }
+
+    /// A report this side refuses to encode put no bytes on the wire, so the key it names
+    /// is not recorded: the pessimistic bias belongs to the send, which is ambiguous about
+    /// what the driver saw, and not to a local refusal, which is not. Recorded anyway, the
+    /// over-capacity set would be re-encoded and refused by every later post until some
+    /// caller happened to shrink it back under the cap.
+    @Test func aKeyNoReportCanCarryIsNotRecordedAsHeld() throws {
+        let fake = FakeDaemon(handling: daemonThatComesUp)
+        let device = try keyboard(on: fake)
+        try device.start(within: .seconds(2))
+        let full = (0x04...0x23).map { Usage(rawValue: UInt16($0)) }
+        for usage in full { try device.down(usage) }
+        #expect(device.keysDown == Set(full))
+        #expect(throws: TooManyKeys.self) { try device.down(Usage(rawValue: 0x24)) }
+        #expect(device.keysDown == Set(full))
+        // Unchanged means still usable: the next post encodes the same 32 keys it always
+        // could, where a recorded 33rd would have refused this one too.
+        #expect(throws: Never.self) { try device.down(full[0]) }
+    }
+
     /// reset clears the device's own idea of what is held as well as this side's.
     @Test func resetAsksTheDaemonToClearTheDeviceAndForgetsWhatWasHeld() throws {
         let fake = FakeDaemon(handling: daemonThatComesUp)

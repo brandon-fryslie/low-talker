@@ -132,35 +132,46 @@ public final class VirtualKeyboard {
         return Startup(answered: answered - began, ready: ContinuousClock.now - began)
     }
 
-    /// Holds `usage` down. Recorded before the report is posted, deliberately: if the post
-    /// fails after the driver saw it, a record that already says the key is down is the
-    /// one `releaseAll` can act on. The opposite order forgets keys that are really held.
+    /// Holds `usage` down.
     public func down(_ usage: Usage) throws {
-        keysDown.insert(usage)
-        try post()
+        try post(keysDown.union([usage]))
     }
 
     public func up(_ usage: Usage) throws {
-        keysDown.remove(usage)
-        try post()
+        try post(keysDown.subtracting([usage]))
     }
 
     /// Every key up, which is what a report of nothing held says. This is the line between
     /// a run that ends and a key the driver goes on reporting for macOS to repeat, so it
     /// posts unconditionally rather than only when something is recorded as down.
     public func releaseAll() throws {
-        keysDown.removeAll()
-        try post()
+        try post([])
     }
 
     /// Clears the device's own state as well as this side's. `keyboardReset` is what the
-    /// daemon offers for the case where the two might have drifted apart.
+    /// daemon offers for the case where the two might have drifted apart. The record is
+    /// emptied on the daemon's answer and not before, for the reason `post` gives.
     public func reset() throws {
-        keysDown.removeAll()
         try daemon.request(.keyboardReset, by: .now + reportTimeout)
+        keysDown.removeAll()
     }
 
-    private func post() throws {
-        try daemon.request(.postKeyboardInputReport, KeyboardReport(held: keysDown).bytes, by: .now + reportTimeout)
+    /// Posts the report for `held` and makes it the record.
+    ///
+    /// `keysDown` may say a key is held that is not; it may never say a key is up that is.
+    /// So the record widens before the request and narrows only on the answer to it: a
+    /// request that throws may still have reached the driver, and a record that already
+    /// forgot the key is one `releaseAll` cannot get back up. A press and a release keep
+    /// that one bias between them rather than each choosing an order.
+    /// [LAW:dataflow-not-control-flow]
+    ///
+    /// The report is built first because `TooManyKeys` is this side refusing with nothing
+    /// on the wire - the driver did not see that key, and a record that claims otherwise
+    /// re-encodes the same over-capacity set and throws again on every later post.
+    private func post(_ held: Set<Usage>) throws {
+        let report = try KeyboardReport(held: held)
+        keysDown.formUnion(held)
+        try daemon.request(.postKeyboardInputReport, report.bytes, by: .now + reportTimeout)
+        keysDown = held
     }
 }
