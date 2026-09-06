@@ -67,26 +67,12 @@ public final class WhisperKitTranscriber: Transcriber {
         // audio is taken in, so a hold never gets as far as the gate with a prompt
         // the engine cannot carry.
         let prompt = try await decodes.run { try pipeline.prompt(for: vocabulary) }
-        let utterance = Utterance()
-        async let fed: Void = utterance.fill(from: audio)
-        var hearing = Hearing(margin: Pipeline.margin, context: Pipeline.contextWords)
-        // [LAW:dataflow-not-control-flow] The one branch is the utterance's own state:
-        // speech to hear, or nothing more. A pass over what is there is the same pass
-        // whether the key is still down or just came up, and the last pass's reading
-        // is the transcript once no speech follows it. During the hold a pass waits
-        // for speech worth one; once the utterance has ended, whatever speech no pass
-        // has heard gets the last pass, however short, and the pipeline pads it out
-        // to the engine's floor. So a tap-to-toggle "yes" is heard, not decoded as
-        // nothing, and a hold with nothing said in it is still no pass at all.
-        while case let (samples, ended) = await utterance.audio(beyond: hearing.passable), samples.count > hearing.heard {
-            let (cut, saying) = (hearing.cut, hearing.saying)
-            let words = try await decodes.run { try await pipeline.hear(samples, from: cut, saying: saying, told: prompt) }
-            hearing.hear(words, through: samples.count)
-            if ended { break }
-            partial(hearing.partial)
-        }
-        try await fed
-        return hearing.transcript
+        // [LAW:composability] The passes are Hearing's to run; this engine is one
+        // decode of what a pass asks for, and its floor and prefix length are the
+        // facts it hands over.
+        return try await Hearing.transcribe(audio, margin: Pipeline.margin, context: Pipeline.contextWords, pass: { pass in
+            try await decodes.run { try await pipeline.hear(pass.samples, from: pass.cut, saying: pass.saying, told: prompt) }
+        }, partial: partial)
     }
 
     /// The loaded WhisperKit pipeline. `@unchecked Sendable` because WhisperKit is a
