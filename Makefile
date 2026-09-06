@@ -27,7 +27,7 @@ test: check-docs
 # time a pin moves. Every pinned constant README.md quotes belongs in the list below.
 check-docs:
 	@set -euo pipefail; \
-	for constant in PKG_VERSION DEXT_VERSION TEAM_ID; do \
+	for constant in PKG_VERSION DEXT_VERSION TEAM_ID BUNDLE_ID IO_NODE; do \
 	  pinned=$$(sed -n "s/^$$constant=//p" scripts/virtual-hid-driver); \
 	  [ -n "$$pinned" ] || { echo "check-docs: scripts/virtual-hid-driver defines no $$constant" >&2; exit 1; }; \
 	  grep -qF "$$pinned" README.md \

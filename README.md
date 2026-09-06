@@ -152,7 +152,7 @@ LowTalker types by driving a virtual keyboard macOS treats as real hardware: the
 
 Run it as the logged-in user, never under `sudo`; it takes sudo itself for the file steps. macOS attributes the activation request to whoever makes it, and your approval answers that request.
 
-Two version numbers travel together and are not the same. The package is 8.4.0 and carries the Manager and Daemon helper apps; the driver extension inside it is 1.8.0, which is what `systemextensionsctl` reports. It has not moved across many package releases, so a package upgrade that leaves `systemextensionsctl` still reading 1.8.0 has not failed. The script pins the version and its SHA-256 checksum and is authoritative; this file quotes it, and `make check-docs` fails if they disagree.
+Two version numbers travel together and are not the same. The package is 8.4.0 and carries the Manager and Daemon helper apps; the driver extension inside it is 1.8.0, which is what `systemextensionsctl` reports. It has not moved across many package releases, so a package upgrade that leaves `systemextensionsctl` still reading 1.8.0 has not failed. The script is authoritative for both numbers, and pins the package's SHA-256 checksum besides. This file quotes the versions, not the checksum, and `make check-docs` fails when a number quoted here disagrees with the script.
 
 ### Installing
 
