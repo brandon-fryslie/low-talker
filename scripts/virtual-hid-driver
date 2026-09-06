@@ -26,8 +26,10 @@
 set -euo pipefail
 
 # [LAW:one-source-of-truth] Every fact about which artifact we install lives here and
-# nowhere else. README.md quotes PKG_VERSION and DEXT_VERSION for a human reader;
-# `make check-docs` fails if the two disagree, so the copy cannot drift in silence.
+# nowhere else. README.md quotes several of them for a reader following the runbook by
+# hand; `make check-docs` names which ones and fails when a copy disagrees. Which
+# constants those are is the recipe's to say, not this comment's - a list kept in both
+# places is the drift that target exists to catch.
 PKG_VERSION=8.4.0
 PKG_SHA256=8e6c433f4e3aaa0403f6f3c72849cfcd054d52d83b53d7408771ade54f1d49a1
 DEXT_VERSION=1.8.0
@@ -92,7 +94,7 @@ registration_word() {
 }
 
 dext_registration() {
-  local listing pattern lines status live
+  local listing pattern lines status extracted live
   listing=$(systemextensionsctl list) && status=0 || status=$?
   if (( status != 0 )); then
     probe_failure "could not list the system extensions (systemextensionsctl exit $status)"
@@ -112,11 +114,19 @@ dext_registration() {
   # A Mac that has been upgraded but not yet restarted lists the bundle twice: the
   # incoming registration, and the outgoing one still waiting on a reboot. The
   # outgoing entry governs nothing, so it is dropped and what remains is the answer.
-  live=$(sed -n 's/.*\[\(.*\)\]$/\1/p' <<<"$lines" \
-         | sed '/^terminated waiting to uninstall on reboot$/d')
+  #
+  # The two steps stay separate values because they answer different questions, and an
+  # empty result means something different for each: nothing extracted is a listing
+  # this probe cannot parse, while nothing left after the filter is a genuine
+  # pending-reboot. Collapsing them reports an unread machine as a state `remove` will
+  # happily finish from. [LAW:no-silent-failure]
+  extracted=$(sed -n 's/.*\[\(.*\)\]$/\1/p' <<<"$lines")
+  live=$(sed '/^terminated waiting to uninstall on reboot$/d' <<<"$extracted")
 
   if [[ -z $lines ]]; then
     echo unregistered
+  elif [[ -z $extracted ]]; then
+    probe_failure "systemextensionsctl listed $BUNDLE_ID but no line carried a bracketed state"
   elif [[ -z $live ]]; then
     echo pending-reboot
   elif [[ $live == *$'\n'* ]]; then
@@ -318,13 +328,13 @@ cmd_install() {
   case "$result" in
     enabled|running) echo "virtual-hid-driver: the driver is active." >&2 ;;
     awaiting-approval|disabled)
-      cat >&2 <<'INSTRUCTION'
+      cat >&2 <<INSTRUCTION
 
 virtual-hid-driver: the driver is installed and waiting for you.
 
   Open  System Settings > General > Login Items & Extensions
   Click the (i) beside "Driver Extensions"
-  Turn ON  org.pqrs.Karabiner-DriverKit-VirtualHIDDevice
+  Turn ON  $BUNDLE_ID
   Authenticate when macOS asks
 
 Then confirm with:  scripts/virtual-hid-driver expect enabled
