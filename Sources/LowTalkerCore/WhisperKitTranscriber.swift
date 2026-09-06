@@ -88,7 +88,24 @@ public final class WhisperKitTranscriber: Transcriber {
         /// with the special tokens left in, a pass that heard nothing comes back as
         /// "<|startoftranscript|><|en|>...<|endoftext|>" with no words, which the
         /// mapping would rightly refuse as speech that lost its words.
-        private static let decodeOptions = DecodingOptions(skipSpecialTokens: true, wordTimestamps: true)
+        ///
+        /// One decode a pass, at temperature zero: WhisperKit's temperature ladder is
+        /// off. By default it re-decodes a window up to five times at rising
+        /// temperatures when the reading looks repetitive or under-confident, each
+        /// rung a full decoder loop over the same encoder output, so one pass could
+        /// cost several. On the bench it fired on nothing but mid-hold passes cut
+        /// into a word, up to 4.4 s against 0.6 s, with the key-up waiting behind
+        /// them, and its upper rungs read back stutter or nothing where the next pass
+        /// read the words plainly; no final pass over a whole utterance ever climbed
+        /// it. The first-token threshold goes with the ladder: it ends a decode at
+        /// one doubtful token so the next rung can start sooner, and with no rung to
+        /// fall to it would hand back that one token as the reading.
+        static let decodeOptions = DecodingOptions(
+            temperatureFallbackCount: 0,
+            skipSpecialTokens: true,
+            wordTimestamps: true,
+            firstTokenLogProbThreshold: nil
+        )
 
         /// [LAW:one-source-of-truth] WhisperKit decodes no window that starts within
         /// `windowClipTime` of the clip's end, its guard against hallucinating over a
