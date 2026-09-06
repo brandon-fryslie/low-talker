@@ -32,6 +32,20 @@ struct ModelOptions: ParsableArguments {
 /// value that is not one path step is refused before any path is built from it.
 extension ModelName: ExpressibleByArgument {}
 
+/// What the speaker is expected to say, for every command that hears: the
+/// vocabulary a mode would supply, given by hand.
+///
+/// [LAW:parse-dont-validate] Each `--vocabulary` is parsed into a term at the
+/// command line, so a blank one is refused before any model loads.
+struct VocabularyOptions: ParsableArguments {
+    @Option(name: .customLong("vocabulary"), help: "A name or term the speaker is expected to say, spelled as it should be written; the engine is told it ahead of the audio. Repeat for several.", transform: Vocabulary.Term.init)
+    var terms: [Vocabulary.Term] = []
+
+    var vocabulary: Vocabulary {
+        Vocabulary(terms)
+    }
+}
+
 /// Narrates a load on stderr, one line each time the phase's own words change, so
 /// a download prints once per whole percent. Stdout stays the command's own.
 final class PhaseReporter: Sendable {

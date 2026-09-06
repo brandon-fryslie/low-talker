@@ -1,4 +1,4 @@
-import LowTalkerCore
+@testable import LowTalkerCore
 import Testing
 import WhisperKit
 
@@ -72,5 +72,14 @@ import WhisperKit
         #expect(throws: WhisperKitTranscriberError.self) {
             try Transcript.Word(whisperKit: Self.word(" hi", 1.0, 0.5, 1))
         }
+    }
+
+    /// The prompt is the terms as spoken text: each with its leading space and no
+    /// punctuation to read back, and nothing at all for no terms, so an empty
+    /// vocabulary encodes to no tokens and WhisperKit prompts with nothing.
+    @Test func theVocabularyPromptIsTheTermsAsEarlierText() throws {
+        let vocabulary = Vocabulary([try Vocabulary.Term("Brynleigh"), try Vocabulary.Term("Fryslie"), try Vocabulary.Term("pull request")])
+        #expect(vocabulary.whisperPrompt == " Brynleigh Fryslie pull request")
+        #expect(Vocabulary.empty.whisperPrompt == "")
     }
 }

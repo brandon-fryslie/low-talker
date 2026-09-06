@@ -8,8 +8,10 @@ import LowTalkerCore
 /// themselves.
 ///
 /// Stdout is one tab-separated table, a row per model, fixture, and delivery, so
-/// runs can be diffed or pasted into a ticket. Stderr narrates each load and shows
-/// what the engine heard, which is where a word error rate gets explained.
+/// runs can be diffed or pasted into a ticket: a run with `--vocabulary` against
+/// one without is how a vocabulary's effect on every fixture is read. Stderr
+/// narrates each load and shows what the engine heard, which is where a word
+/// error rate gets explained.
 struct BenchCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "bench",
@@ -29,6 +31,7 @@ struct BenchCommand: AsyncParsableCommand {
     var runs: Int = 3
 
     @OptionGroup var location: StoreOptions
+    @OptionGroup var expected: VocabularyOptions
 
     func validate() throws {
         guard runs >= 1 else { throw ValidationError("--runs must be at least 1.") }
@@ -42,7 +45,7 @@ struct BenchCommand: AsyncParsableCommand {
         for model in models {
             let reporter = PhaseReporter()
             print("model \(model)", to: &stderr)
-            let report = try await LatencyHarness.measure(fixtures, deliveries: deliveries, reruns: UInt(runs - 1)) {
+            let report = try await LatencyHarness.measure(fixtures, deliveries: deliveries, reruns: UInt(runs - 1), expecting: expected.vocabulary) {
                 try await WhisperKitTranscriber.load(model, from: store, phase: reporter.report)
             }
             for result in report.fixtures {
