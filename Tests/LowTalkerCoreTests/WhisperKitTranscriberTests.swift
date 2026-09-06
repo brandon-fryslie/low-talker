@@ -103,6 +103,16 @@ import WhisperKit
         #expect(WhisperKitTranscriber.Pipeline.window(audio, from: cut) == audio)
     }
 
+    /// A pass is one decode: no temperature rung to climb, and so no first-token
+    /// abort either, since that abort exists to reach the next rung sooner and with
+    /// none to reach it would return a single token as the whole reading.
+    @Test func aPassIsOneDecodeWithNothingToFallBackTo() {
+        let options = WhisperKitTranscriber.Pipeline.decodeOptions
+        #expect(options.temperatureFallbackCount == 0)
+        #expect(options.firstTokenLogProbThreshold == nil)
+        #expect(options.temperature == 0)
+    }
+
     /// The prompt is the terms as spoken text: each with its leading space and no
     /// punctuation to read back, and nothing at all for no terms, so an empty
     /// vocabulary encodes to no tokens and WhisperKit prompts with nothing.
