@@ -77,35 +77,50 @@ struct DextTypeCommand: AsyncParsableCommand {
         let first = keystrokes[0]
         let firstPosted = clock.now
         try daemon.press(first)
-        let firstSeen = try await screen.wait(within: .seconds(3)) { $0.occurrences(of: String(first.character)) > before.occurrences(of: String(first.character)) }
-        print("first character on screen in \(into.rawValue) after \((clock.now - firstPosted).milliseconds) ms\(firstSeen ? "" : " (NEVER SEEN)")")
+        // A keystroke is in the document now, and it cannot be taken back, so every
+        // failure from here on has to say how much of the text landed. One place turns a
+        // screen failure into that answer, rather than each read remembering to: the
+        // first version of this guarded the burst loop alone, which left both read-backs
+        // free to report "the wrong app is frontmost" after a complete and successful
+        // run - the very confusion the guard existed to prevent. [LAW:single-enforcer]
+        var posted = 1
+        do {
+            let firstSeen = try await screen.wait(within: .seconds(3)) { $0.occurrences(of: String(first.character)) > before.occurrences(of: String(first.character)) }
+            print("first character on screen in \(into.rawValue) after \((clock.now - firstPosted).milliseconds) ms\(firstSeen ? "" : " (NEVER SEEN)")")
 
-        // Focus is re-checked before every keystroke, not once before the burst. A
-        // keystroke is irrevocable the moment it is posted, so the window in which focus
-        // may move has to be one keystroke wide; anything wider delivers the rest of the
-        // text to whatever app took the front. [LAW:no-ambient-temporal-coupling]
-        let rest = Array(keystrokes.dropFirst())
-        let restPosted = clock.now
-        for (posted, keystroke) in rest.enumerated() {
-            // [LAW:types-are-the-program] requireFrontmost knows the wrong app is in
-            // front and nothing else; how much text is already in the document is this
-            // loop's knowledge, so this loop is what says it. A keystroke cannot be
-            // recalled, so a run that stops here has left a fragment behind and the
-            // operator has to be told how long it is.
-            do { try screen.requireFrontmost() } catch let moved as ScreenUnreadable {
-                throw FocusLost(typed: posted + 1, of: keystrokes.count, cause: moved)
+            // Focus is re-checked before every keystroke, not once before the burst. A
+            // keystroke is irrevocable the moment it is posted, so the window in which
+            // focus may move has to be one keystroke wide; anything wider delivers the
+            // rest of the text to whatever app took the front.
+            // [LAW:no-ambient-temporal-coupling]
+            let rest = Array(keystrokes.dropFirst())
+            let restPosted = clock.now
+            for keystroke in rest {
+                try screen.requireFrontmost()
+                try daemon.press(keystroke)
+                posted += 1
             }
-            try daemon.press(keystroke)
+            let acknowledged = clock.now - restPosted
+            // Against a baseline, like the first character's check: an app already holding
+            // this text would otherwise confirm a run that delivered nothing.
+            let allSeen = try await screen.wait(within: .seconds(5)) { $0.occurrences(of: text) > before.occurrences(of: text) }
+            let settled = clock.now - restPosted
+            // The count is the one the clock actually covers: the first character was
+            // posted and timed above, on its own, and is not in this window.
+            // [LAW:one-source-of-truth]
+            print("\(rest.count) more characters posted and acknowledged in \(acknowledged.milliseconds) ms, all \(keystrokes.count) on screen after \(settled.milliseconds) ms")
+            if allSeen {
+                print("the screen holds the text, complete and in order")
+            } else {
+                // The mismatch report is the entire output of a bad run, so it is not
+                // allowed to fail on its own account. A screen that will not be read is
+                // part of the report, not a reason to lose it. [LAW:no-silent-failure]
+                do { print("MISMATCH: the screen holds [\(try screen.read())]") }
+                catch { print("MISMATCH, and the screen would not be read afterwards: \(error)") }
+            }
+        } catch let moved as ScreenUnreadable {
+            throw FocusLost(typed: posted, of: keystrokes.count, cause: moved)
         }
-        let acknowledged = clock.now - restPosted
-        // Against a baseline, like the first character's check: an app already holding this
-        // text would otherwise confirm a run that delivered nothing.
-        let allSeen = try await screen.wait(within: .seconds(5)) { $0.occurrences(of: text) > before.occurrences(of: text) }
-        let settled = clock.now - restPosted
-        // The count is the one the clock actually covers: the first character was posted
-        // and timed above, on its own, and is not in this window. [LAW:one-source-of-truth]
-        print("\(rest.count) more characters posted and acknowledged in \(acknowledged.milliseconds) ms, all \(keystrokes.count) on screen after \(settled.milliseconds) ms")
-        print(allSeen ? "the screen holds the text, complete and in order" : "MISMATCH: the screen holds [\(try screen.read())]")
     }
 }
 
@@ -320,10 +335,23 @@ final class DaemonConnection {
         return (0..<4).reversed().map { UInt8(truncatingIfNeeded: length >> (8 * $0)) } + body
     }
 
+    /// EINTR says the call did not happen and must be made again, which is the opposite
+    /// of a failure - and reporting a non-failure as one is the same lie as the reverse.
+    /// [LAW:no-silent-failure] A signal delivered during a run is enough to trip this: a
+    /// terminal resize while typing into iTerm2 would otherwise abort a connection that
+    /// is perfectly healthy. Used for the data calls only; poll is retried by its own
+    /// loop, which recomputes the timeout it has left rather than starting it over.
+    private static func uninterrupted(_ call: () -> Int) -> Int {
+        while true {
+            let result = call()
+            guard result < 0, errno == EINTR else { return result }
+        }
+    }
+
     private func write(_ bytes: [UInt8]) throws {
         var offset = 0
         while offset < bytes.count {
-            let written = bytes[offset...].withUnsafeBytes { Darwin.write(socket, $0.baseAddress, $0.count) }
+            let written = Self.uninterrupted { bytes[offset...].withUnsafeBytes { Darwin.write(socket, $0.baseAddress, $0.count) } }
             guard written > 0 else { throw DaemonError.socket("write", errno) }
             offset += written
         }
@@ -331,9 +359,20 @@ final class DaemonConnection {
 
     /// The other half of the framing, and the same reason it is here: pure bytes in,
     /// meaning out. [LAW:decomposition]
+    /// The largest frame this side will allocate for. A keyboard report is 67 bytes and
+    /// the framing around it nine more; every response the daemon sends is shorter. The
+    /// cap is generous by two orders of magnitude and still refuses the four-gigabyte
+    /// allocation a desynced or corrupted header can otherwise ask for - which would end
+    /// the process rather than name what the daemon said, and naming it is this class's
+    /// whole promise.
+    static let largestFrame = 4096
+
     static func bodyLength(header: [UInt8]) throws -> Int {
         let length = header.reduce(0) { $0 << 8 | Int($1) }
+        // [LAW:parse-dont-validate] The length is sane by the time it leaves here, so
+        // nothing downstream allocates against a number it has to think about first.
         guard length >= 1 else { throw DaemonError.malformed("an empty frame") }
+        guard length <= largestFrame else { throw DaemonError.malformed("a frame of \(length) bytes, past the \(largestFrame) this reads") }
         return length
     }
 
@@ -362,9 +401,13 @@ final class DaemonConnection {
             guard remaining > .zero else { throw DaemonError.silent }
             var descriptor = pollfd(fd: socket, events: Int16(POLLIN), revents: 0)
             let readable = poll(&descriptor, 1, Int32(remaining.components.seconds * 1_000 + remaining.components.attoseconds / 1_000_000_000_000_000))
+            // Around the loop rather than retried in place, so the deadline is consulted
+            // again and poll is given the time that is actually left instead of the whole
+            // budget over: a signal must not extend the wait it interrupted.
+            if readable < 0, errno == EINTR { continue }
             guard readable >= 0 else { throw DaemonError.socket("poll", errno) }
             guard readable > 0 else { throw DaemonError.silent }
-            let got = bytes[offset...].withUnsafeMutableBytes { Darwin.read(socket, $0.baseAddress, $0.count) }
+            let got = Self.uninterrupted { bytes[offset...].withUnsafeMutableBytes { Darwin.read(socket, $0.baseAddress, $0.count) } }
             guard got > 0 else { throw got == 0 ? DaemonError.closed : DaemonError.socket("read", errno) }
             offset += got
         }
@@ -471,7 +514,11 @@ struct FocusLost: Error, CustomStringConvertible {
     let typed: Int
     let of: Int
     let cause: ScreenUnreadable
-    var description: String { "\(cause). \(typed) of \(of) characters were already typed; the rest were not" }
+    var description: String {
+        typed < of
+            ? "\(cause). \(typed) of \(of) characters were already typed; the rest were not"
+            : "\(cause). All \(of) characters had been typed already; this was the read-back afterwards"
+    }
 }
 
 struct UntypeableCharacters: Error, CustomStringConvertible {
@@ -533,12 +580,24 @@ struct TargetApp {
         let app = try requireFrontmost()
         let name = bundleID.rawValue
         var focused: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(AXUIElementCreateApplication(app.processIdentifier), kAXFocusedUIElementAttribute as CFString, &focused) == .success, let element = focused else { throw ScreenUnreadable.noFocus(name) }
+        guard AXUIElementCopyAttributeValue(AXUIElementCreateApplication(app.processIdentifier), kAXFocusedUIElementAttribute as CFString, &focused) == .success, let element = Self.element(focused) else { throw ScreenUnreadable.noFocus(name) }
         var role: CFTypeRef?
-        _ = AXUIElementCopyAttributeValue(element as! AXUIElement, kAXRoleAttribute as CFString, &role)
+        _ = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element as! AXUIElement, kAXValueAttribute as CFString, &value) == .success, let text = value as? String else { throw ScreenUnreadable.noText(name) }
+        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success, let text = value as? String else { throw ScreenUnreadable.noText(name) }
         return Focus(role: role as? String ?? "an element that will not name its role", text: text)
+    }
+
+    /// The answer as an element, when the app answered with one. A CoreFoundation value
+    /// admits no cast check, so its type id is the check. [LAW:parse-dont-validate] This
+    /// command is pointed at whatever bundle id the caller names, and an app whose
+    /// Accessibility implementation answers this query with something else would
+    /// otherwise trap the process where it should have been refused by name.
+    /// LowTalkerCore's PasteMenuItem guards the same cast the same way; 3ti.12 takes
+    /// reading the screen over from both and is where the two become one.
+    private static func element(_ value: CFTypeRef?) -> AXUIElement? {
+        guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return (value as! AXUIElement)
     }
 
     func read() throws -> String {
