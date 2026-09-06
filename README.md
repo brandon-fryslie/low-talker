@@ -172,15 +172,19 @@ The daemon is a prerequisite and nothing starts it. The public package installs 
 
 `sudo launchctl list | grep pqrs` does return a job, which is confusing: that job is the driver extension itself, running as user `_driverkit` under macOS's system-extension machinery, not the daemon.
 
-`type` takes the target app's bundle id as an argument and refuses to type into anything else. It raises the named app, waits for macOS to agree it is frontmost, and re-checks on every read. When another app holds focus it posts no keystrokes and prints a refusal:
+`type` takes the target app's bundle id as an argument and refuses to type into anything else. It raises the named app, waits for macOS to agree it is frontmost, and re-checks before every keystroke. If the app will not come forward, nothing is posted at all:
 
-    com.googlecode.iterm2 is frontmost, not com.apple.TextEdit; nothing was typed
+    com.apple.TextEdit would not come to the front, com.googlecode.iterm2 is there; nothing was typed
+
+Once typing has begun that promise is no longer available to make. A keystroke cannot be recalled, so an app that takes the front mid-run leaves a fragment in the target, and the refusal says how long it is rather than claiming the run posted nothing:
+
+    com.googlecode.iterm2 is frontmost, not com.apple.TextEdit. 34 of 500 characters were already typed; the rest were not
 
 That is deliberate. An earlier version typed into whatever happened to be frontmost, and once delivered its text into the operator's own terminal.
 
 The alphabet is limited: printable ASCII, newline, and tab, as the US layout types them. A character outside that is refused by name before the daemon is touched, so a refusal never leaves a half-typed line.
 
-The first keystroke waits up to about a second after the connection is made. That is not the hardware. pqrs's daemon polls the driver for readiness on a one-second timer, so readiness is discovered on the next tick rather than when it happens. Once the driver is ready, a character reaches the screen in roughly 10 to 35 ms. Longer text is another matter. Each report is awaited rather than fired, because reports posted back to back are lost, and a lost key-up leaves its key held for macOS to repeat: an unpaced 500-character run ends in hundreds of one shifted character. Awaiting them fixes that and is not a sleep, since the daemon answers every request, but it does not make length safe either: a 500-character run still truncates quietly about one time in three. A dictated phrase types reliably. A page does not.
+The first keystroke waits up to about a second after the connection is made. That is not the hardware. pqrs's daemon polls the driver for readiness on a one-second timer, so readiness is discovered on the next tick rather than when it happens. Once the driver is ready, a character reaches the screen in roughly 10 to 35 ms. Longer text is another matter. Each report is awaited rather than fired, because reports posted back to back are lost, and a lost key-up leaves its key held for macOS to repeat: an unpaced 500-character run ends in hundreds of one shifted character. Awaiting them fixes that and is not a sleep, since the daemon answers every request, but it does not make length safe either: half of twelve 500-character runs came out wrong. Where they go is measured rather than guessed. The app's own event tap counts the keys that arrive, and on every bad run it saw fewer than the 500 the daemon had already acknowledged — as few as 469, and once a matched down and up together, so that keystroke never became an event at all. The acknowledgement is not a delivery receipt, and the loss is under it, in the driver. Nor is a short document the only way it shows: one run lost 41 key-ups and macOS repeated the keys it left held into 608 characters. A dictated phrase types reliably. A page does not.
 
 macOS raises the Keyboard Setup Assistant the first time the virtual keyboard appears; it steals focus and asks for a physical keypress. It caches its answer in `/Library/Preferences/com.apple.keyboardtype.plist`, keyed `<product>-<vendor>-<country>`, so writing this device's own entry stops it returning:
 
