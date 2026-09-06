@@ -183,6 +183,8 @@ The package installs its own uninstall scripts, `deactivate_driver.sh` and `remo
 
 Brandon's MacBook already had Karabiner-Elements 15.5.0. Its installer wrote both receipts, `org.pqrs.Karabiner-Elements` and `org.pqrs.Karabiner-DriverKit-VirtualHIDDevice`, in one transaction at the same second. The two products share one Manager app path, one support directory, and one receipt identifier; there is no arrangement where both own the driver. Installing the pinned package upgraded that shared Manager from 6.0.0 to 8.4.0; Karabiner-Elements.app, Karabiner-EventViewer.app, its own support directory and receipt were untouched and remain 15.5.0.
 
+Because those paths are shared, `remove` refuses to run at all while an `org.pqrs.Karabiner-Elements` receipt is present: it would delete the Manager and support tree Karabiner-Elements depends on, and nothing in this script could put them back. It names the product and both paths and stops before deactivating anything. Removing Karabiner-Elements first is the way through, and there is deliberately no flag to skip the check. `install` is not blocked, because it replaces files rather than deleting them.
+
 If Karabiner-Elements is ever launched and repairs its driver, it will install its own bundled copy over the pinned one. On this Mac it is disabled and no Karabiner processes are running, so nothing is competing today. The background task entries `org.pqrs.service.daemon.Karabiner-VirtualHIDDevice-Daemon` and `karabiner_grabber` are children of Karabiner-Elements' privileged-daemons bundle, not of the driver package; LowTalker needs no pqrs daemon, its own helper opening the extension directly, so they were left alone.
 
 ### What has been verified
