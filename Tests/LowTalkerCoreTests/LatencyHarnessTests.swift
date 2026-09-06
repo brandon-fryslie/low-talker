@@ -158,22 +158,25 @@ private final class CaseSensitiveVolume {
 /// An engine that hears the same thing every time and says so after every clip
 /// but the first, which it hears as nothing, the way a pass over leading quiet
 /// reads no words; so the harness's bookkeeping can be checked without weights.
-/// It remembers how many clips each utterance arrived in.
+/// It remembers how many clips each utterance arrived in and what it was told
+/// to expect.
 private final class FixedEar: Transcriber {
     let heard: String
     let holds = Mutex<[Int]>([])
+    let told = Mutex<[Vocabulary]>([])
 
     init(heard: String) {
         self.heard = heard
     }
 
-    func transcribe(_ audio: some AsyncSequence<AudioClip, Never> & Sendable, partial: @escaping @Sendable (Partial) -> Void) async throws -> Transcript {
+    func transcribe(_ audio: some AsyncSequence<AudioClip, Never> & Sendable, expecting vocabulary: Vocabulary, partial: @escaping @Sendable (Partial) -> Void) async throws -> Transcript {
         var clips = 0
         for await _ in audio {
             clips += 1
             partial(Partial(confirmed: Transcript(words: []), tentative: Transcript(typed: clips == 1 ? "" : heard)))
         }
         holds.withLock { $0.append(clips) }
+        told.withLock { $0.append(vocabulary) }
         return Transcript(typed: heard)
     }
 }
@@ -190,11 +193,14 @@ private final class FixedEar: Transcriber {
         ]
         var loads = 0
         let ear = FixedEar(heard: "See you at noon.")
-        let report = try await LatencyHarness.measure(fixtures, deliveries: [.batch], reruns: 2) {
+        let vocabulary = Vocabulary([try Vocabulary.Term("noon")])
+        let report = try await LatencyHarness.measure(fixtures, deliveries: [.batch], reruns: 2, expecting: vocabulary) {
             loads += 1
             return ear
         }
         #expect(loads == 1)
+        // Every hold is told the vocabulary, reruns included.
+        #expect(ear.told.withLock { $0 } == Array(repeating: vocabulary, count: 6))
         #expect(report.fixtures.map(\.name) == ["exact", "close"])
         #expect(report.fixtures.map(\.delivery) == [.batch, .batch])
         #expect(report.fixtures.map(\.wordErrorRate.errors) == [0, 2])
@@ -212,7 +218,7 @@ private final class FixedEar: Transcriber {
     @Test func streamedDeliveryFeedsABufferAtATime() async throws {
         let clip = AudioClip(samples: Array(repeating: 0.1, count: AudioClip.sampleCount(for: 0.35)))
         let ear = FixedEar(heard: "hi")
-        let report = try await LatencyHarness.measure([try Self.fixture("held", says: "hi", clip: clip)], deliveries: [.batch, .streamed], reruns: 0) { ear }
+        let report = try await LatencyHarness.measure([try Self.fixture("held", says: "hi", clip: clip)], deliveries: [.batch, .streamed], reruns: 0, expecting: .empty) { ear }
         #expect(report.fixtures.map(\.delivery) == [.batch, .streamed])
         #expect(ear.holds.withLock { $0 } == [1, 4])
         let batch = report.fixtures[0].first
@@ -226,13 +232,13 @@ private final class FixedEar: Transcriber {
     /// The protocol's one-clip form is a batch hold.
     @Test func aClipAloneIsAOneClipUtterance() async throws {
         let ear = FixedEar(heard: "hi")
-        let transcript = try await ear.transcribe(BenchDirectory.tone)
+        let transcript = try await ear.transcribe(BenchDirectory.tone, expecting: .empty)
         #expect(transcript.text == "hi")
         #expect(ear.holds.withLock { $0 } == [1])
     }
 
     @Test func aSingleRunIsItsOwnMedian() async throws {
-        let report = try await LatencyHarness.measure([try Self.fixture("one", says: "hi")], deliveries: [.batch], reruns: 0) {
+        let report = try await LatencyHarness.measure([try Self.fixture("one", says: "hi")], deliveries: [.batch], reruns: 0, expecting: .empty) {
             FixedEar(heard: "hi")
         }
         let result = report.fixtures[0]

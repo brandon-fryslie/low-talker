@@ -59,9 +59,14 @@ public final class WhisperKitTranscriber: Transcriber {
     /// whether the key is still down when it starts or has already come up.
     public func transcribe(
         _ audio: some AsyncSequence<AudioClip, Never> & Sendable,
+        expecting vocabulary: Vocabulary,
         partial: @escaping @Sendable (Partial) -> Void
     ) async throws -> Transcript {
         let pipeline = pipeline
+        // The vocabulary is encoded once and refused, if it must be, before any
+        // audio is taken in, so a hold never gets as far as the gate with a prompt
+        // the engine cannot carry.
+        let prompt = try await decodes.run { try pipeline.prompt(for: vocabulary) }
         let utterance = Utterance()
         async let fed: Void = utterance.fill(from: audio)
         var hearing = Hearing(margin: Pipeline.margin, context: Pipeline.contextWords)
@@ -71,7 +76,7 @@ public final class WhisperKitTranscriber: Transcriber {
         // is the transcript once no speech follows it.
         while case let (samples, ended) = await utterance.audio(beyond: hearing.passable), samples.count > hearing.passable {
             let (cut, saying) = (hearing.cut, hearing.saying)
-            let words = try await decodes.run { try await pipeline.hear(samples, from: cut, saying: saying) }
+            let words = try await decodes.run { try await pipeline.hear(samples, from: cut, saying: saying, told: prompt) }
             hearing.hear(words, through: samples.count)
             if ended { break }
             partial(hearing.partial)
@@ -114,9 +119,11 @@ public final class WhisperKitTranscriber: Transcriber {
             // WhisperKit logs to stdout when verbose; stdout belongs to whoever called us.
             // `download` gates only the weights, which `modelFolder` supplies; the
             // tokenizer is read from `tokenizerFolder`, fetched into it when absent.
+            // The seeker is ours so that a prompted pass keeps its word timings.
             whisperKit = try await WhisperKit(WhisperKitConfig(
                 modelFolder: installed.folder.path,
                 tokenizerFolder: installed.hub,
+                segmentSeeker: PromptOffsetSegmentSeeker(),
                 verbose: false,
                 load: true,
                 download: false
@@ -130,12 +137,40 @@ public final class WhisperKitTranscriber: Transcriber {
             self.tokenizer = tokenizer
         }
 
+        /// The vocabulary as the decoder's prompt: the text of a segment before the
+        /// utterance, which is how Whisper is told spellings it could not guess.
+        /// Told " Brynleigh Fryslie" and then hearing the names, it writes them so
+        /// rather than "Brynley Frisley". The prompt stands before the start of the
+        /// transcript and the forced prefix after it, so one pass carries both. A
+        /// prompt is decoded against audio that does not hold it, and Whisper will
+        /// read prompted words a second time out of the audio that follows when
+        /// they were the words just heard; a list of terms is not, which is why the
+        /// vocabulary goes here and the confirmed words go in the prefix.
+        ///
+        /// [LAW:no-silent-failure] A vocabulary past WhisperKit's prompt limit is
+        /// refused with its size, where WhisperKit would keep the last of it and say
+        /// nothing, losing the first terms without a word said. The count is of the
+        /// tokens WhisperKit would keep, its special tokens filtered out as its
+        /// decoder does. Every prompt token also takes one of the decoder steps a
+        /// window has (`Constants.maxTokenContext` less one, prefill included), so a
+        /// long vocabulary leaves a 30 s window fewer words to read.
+        func prompt(for vocabulary: Vocabulary) throws -> [Int] {
+            let tokens = tokenizer.encode(text: vocabulary.whisperPrompt).filter { $0 < tokenizer.specialTokens.specialTokenBegin }
+            let limit = PromptOffsetSegmentSeeker.promptTokenLimit
+            guard tokens.count <= limit else {
+                throw WhisperKitTranscriberError.vocabularyTooLong(tokens: tokens.count, limit: limit)
+            }
+            return tokens
+        }
+
         /// One pass: the words in `samples` from `cut` on, the first of them forced to
-        /// read `prefix`, the text spoken from the cut. Times are from the utterance's
-        /// start, and the prefix's words come back first, timed over their own audio.
-        func hear(_ samples: [Float], from cut: Int, saying prefix: String) async throws -> [Transcript.Word] {
+        /// read `prefix`, the text spoken from the cut, with `prompt` as the text
+        /// before the utterance. Times are from the utterance's start, and the
+        /// prefix's words come back first, timed over their own audio.
+        func hear(_ samples: [Float], from cut: Int, saying prefix: String, told prompt: [Int]) async throws -> [Transcript.Word] {
             var options = Self.decodeOptions
             options.clipTimestamps = [Float(AudioClip.duration(for: cut))]
+            options.promptTokens = prompt
             options.prefixTokens = tokenizer.encode(text: prefix)
             let results = try await whisperKit.transcribe(audioArray: samples, decodeOptions: options)
             return try Transcript(whisperKit: results.flatMap(\.segments)).words
@@ -151,11 +186,15 @@ public enum WhisperKitTranscriberError: Error, CustomStringConvertible {
     case wordEndsBeforeStart(WordTiming)
     /// WhisperKit loaded the model but holds no tokenizer for it.
     case tokenizerNotLoaded(ModelName)
+    /// The vocabulary encodes to more prompt tokens than WhisperKit keeps.
+    case vocabularyTooLong(tokens: Int, limit: Int)
 
     public var description: String {
         switch self {
         case .tokenizerNotLoaded(let model):
             "WhisperKit loaded \(model) without its tokenizer"
+        case .vocabularyTooLong(let tokens, let limit):
+            "the vocabulary is \(tokens) prompt tokens and WhisperKit keeps at most \(limit)"
         case .speechWithoutWords(let text):
             "WhisperKit returned segment \"\(text)\" without word timings"
         case .probabilityOutsideUnitInterval(let word):
@@ -163,6 +202,20 @@ public enum WhisperKitTranscriberError: Error, CustomStringConvertible {
         case .wordEndsBeforeStart(let word):
             "WhisperKit gave word \"\(word.word)\" end \(word.end) before start \(word.start)"
         }
+    }
+}
+
+extension Vocabulary {
+    /// The terms as the text of a segment said before the utterance: each with the
+    /// leading space a spoken word carries and nothing between them, so
+    /// " Brynleigh Fryslie Jaxxon". Commas between the terms read back into the
+    /// transcript: told " Brynleigh, Fryslie", Whisper wrote "Brynleigh," for the
+    /// name spoken mid-sentence, while the bare list biased the same names as well
+    /// or better and punctuated nothing. No terms is no text and so no prompt at
+    /// all, which is what WhisperKit makes of no tokens; a prompt of nothing but
+    /// its start token leans the decoder toward ending the segment early.
+    var whisperPrompt: String {
+        terms.map { " " + $0.text }.joined()
     }
 }
 

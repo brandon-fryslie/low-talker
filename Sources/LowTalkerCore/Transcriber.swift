@@ -11,12 +11,16 @@ public protocol Transcriber: Sendable {
     /// in the order they were captured, ending when the key comes up; the engine
     /// decodes as they arrive and tells `partial` what it has heard so far, so a HUD
     /// can show text before the key is released. The transcript returned once
-    /// `audio` ends is the final one: it replaces every partial.
+    /// `audio` ends is the final one: it replaces every partial. `vocabulary` is
+    /// what the speaker is expected to say beyond ordinary speech, told to the
+    /// engine before it hears anything, so the mode that started the utterance
+    /// biases every reading of it.
     ///
     /// [LAW:types-are-the-program] One final and any number of partials: the final
     /// is the return value, so a caller cannot miss it or receive two.
     func transcribe(
         _ audio: some AsyncSequence<AudioClip, Never> & Sendable,
+        expecting vocabulary: Vocabulary,
         partial: @escaping @Sendable (Partial) -> Void
     ) async throws -> Transcript
 }
@@ -27,11 +31,11 @@ extension Transcriber {
     ///
     /// [LAW:one-type-per-behavior] Batch decoding is the one-clip utterance, not a
     /// second path through the engine.
-    public func transcribe(_ clip: AudioClip) async throws -> Transcript {
+    public func transcribe(_ clip: AudioClip, expecting vocabulary: Vocabulary) async throws -> Transcript {
         try await transcribe(AsyncStream { continuation in
             continuation.yield(clip)
             continuation.finish()
-        }) { _ in }
+        }, expecting: vocabulary) { _ in }
     }
 }
 
