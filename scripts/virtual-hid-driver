@@ -34,6 +34,10 @@ PKG_VERSION=8.4.0
 PKG_SHA256=8e6c433f4e3aaa0403f6f3c72849cfcd054d52d83b53d7408771ade54f1d49a1
 DEXT_VERSION=1.8.0
 BUNDLE_ID=org.pqrs.Karabiner-DriverKit-VirtualHIDDevice
+# Karabiner-Elements is a separate product that ships this same driver and writes its
+# own receipt beside ours. `remove` refuses while this one is present, because the two
+# share the payload paths below and nothing here could put back what it deleted.
+ELEMENTS_RECEIPT=org.pqrs.Karabiner-Elements
 TEAM_ID=G43BCU2T37
 SIGNING_AUTHORITY="Developer ID Installer: Fumihiko Takayama ($TEAM_ID)"
 # The three spaces are pkgutil's own indent. Matched whole-line below: a chain entry
@@ -148,11 +152,14 @@ installed_files() {
   esac
 }
 
-# The installer receipt's version, or `none`. The receipt outlives the files, because
-# the package's own uninstall scripts never call `pkgutil --forget`.
+# The version of one installer receipt, or `none`. The receipt outlives the files,
+# because the package's own uninstall scripts never call `pkgutil --forget`.
+#
+# The id is a parameter because two products leave receipts this script cares about and
+# reading them differs in nothing else. [LAW:one-type-per-behavior]
 receipt_version() {
-  local out status
-  out=$(pkgutil --pkg-info "$BUNDLE_ID" 2>&1) && status=0 || status=$?
+  local id=$1 out status
+  out=$(pkgutil --pkg-info "$id" 2>&1) && status=0 || status=$?
 
   # pkgutil exits non-zero for two unrelated reasons: this Mac holds no such receipt,
   # which is a normal answer, and pkgutil could not run, which is not. Sending both
@@ -162,7 +169,7 @@ receipt_version() {
   case "$status:$out" in
     0:*)                echo "$out" | sed -n 's/^version: //p' ;;
     *"No receipt for"*) echo none ;;
-    *)                  probe_failure "pkgutil could not read the receipt for $BUNDLE_ID (exit $status): $out" ;;
+    *)                  probe_failure "pkgutil could not read the receipt for $id (exit $status): $out" ;;
   esac
 }
 
@@ -174,7 +181,7 @@ receipt_version() {
 # sentinel rather than collapsed into "present", which would have `remove` forget a
 # receipt on the strength of a reading nobody took. [LAW:no-silent-failure]
 receipts_present() {
-  case "$(receipt_version)" in
+  case "$(receipt_version "$BUNDLE_ID")" in
     none)         ;;
     probe-failed) echo probe-failed ;;
     *)            echo "$BUNDLE_ID" ;;
@@ -233,7 +240,7 @@ verdict_for() {
 report_state() {
   local files receipt reg io result
   files=$(installed_files)
-  receipt=$(receipt_version)
+  receipt=$(receipt_version "$BUNDLE_ID")
   reg=$(dext_registration)
   io=$(io_node_present)
   result=$(verdict_for "$files" "$receipt" "$reg" "$io")
@@ -371,7 +378,7 @@ INSTRUCTION
 }
 
 cmd_remove() {
-  local id receipts result withdrawn
+  local id receipts result withdrawn elements
 
   # A machine already at the end of removal has nothing left to withdraw, and the
   # Manager that would do the withdrawing is the thing removal deletes. Reading the
@@ -380,6 +387,21 @@ cmd_remove() {
   result=$(report_state)
   case "$result" in
     absent|pending-reboot) remove_outcome "$result" ;;
+  esac
+
+  # Karabiner-Elements ships this same driver and shares the Manager app, the support
+  # directory and the receipt id, so everything below would take it down with it. The
+  # refusal comes before the deactivation as well as before the deletion, because
+  # withdrawing the extension already stops the driver Karabiner-Elements is using.
+  #
+  # A receipt that could not be read refuses too. "I could not tell" is not "it is not
+  # installed", and this is the one verb whose mistake cannot be walked back.
+  # [LAW:no-silent-failure]
+  elements=$(receipt_version "$ELEMENTS_RECEIPT")
+  case "$elements" in
+    none) ;;
+    probe-failed) die "could not tell whether $ELEMENTS_RECEIPT is installed, and removal deletes files the two products share; refusing to guess" ;;
+    *) die "Karabiner-Elements $elements is installed and shares $MANAGER_APP and $SUPPORT_DIR with the driver package, so removing the driver would break it and nothing here could put it back; remove Karabiner-Elements first if that is what you want" ;;
   esac
 
   # [LAW:no-ambient-temporal-coupling] Deactivation must precede file removal, and the
