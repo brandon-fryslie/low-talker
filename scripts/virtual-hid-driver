@@ -93,7 +93,11 @@ registration_word() {
 
 dext_registration() {
   local listing pattern lines status live
-  listing=$(systemextensionsctl list)
+  listing=$(systemextensionsctl list) && status=0 || status=$?
+  if (( status != 0 )); then
+    probe_failure "could not list the system extensions (systemextensionsctl exit $status)"
+    return 0
+  fi
   pattern=$(printf '\t%s\t%s (' "$TEAM_ID" "$BUNDLE_ID")
 
   # grep exits 1 for "found nothing" and 2 or more for "could not look". Collapsing
@@ -155,8 +159,16 @@ receipt_version() {
 # The receipt id when the machine holds one and nothing when it does not, so removal
 # runs over a collection instead of around a condition.
 # [LAW:dataflow-not-control-flow]
+#
+# A receipt that could not be read is neither of those answers and is forwarded as the
+# sentinel rather than collapsed into "present", which would have `remove` forget a
+# receipt on the strength of a reading nobody took. [LAW:no-silent-failure]
 receipts_present() {
-  [[ $(receipt_version) == none ]] || echo "$BUNDLE_ID"
+  case "$(receipt_version)" in
+    none)         ;;
+    probe-failed) echo probe-failed ;;
+    *)            echo "$BUNDLE_ID" ;;
+  esac
 }
 
 # Whether the driver has matched and published its node in the IORegistry. This is
@@ -251,8 +263,22 @@ cmd_expect() {
 }
 
 cmd_install() {
-  local pkg result signature
+  local pkg result signature scratch_owner
+
+  # The scratch path is fixed and its parent is shared, and `sudo installer` re-reads
+  # the package after the checksum and signature have already passed. A local attacker
+  # holding this directory could swap the bytes in that gap and be installed as root,
+  # so the directory is proven ours and narrowed before anything is written into it.
+  # Ownership is read before `chmod` on purpose: chmod on somebody else's directory
+  # fails, and under `set -e` that aborts with no sentence naming who owns it.
+  # [LAW:no-silent-failure]
   mkdir -p "$VHID_SCRATCH"
+  scratch_owner=$(stat -f '%u' "$VHID_SCRATCH") \
+    || die "could not read the ownership of $VHID_SCRATCH"
+  [ "$scratch_owner" = "$(id -u)" ] \
+    || die "$VHID_SCRATCH is owned by uid $scratch_owner and not by you, so nothing downloaded into it can be trusted; remove it, or set TMPDIR and run again"
+  chmod 700 "$VHID_SCRATCH"
+
   pkg="$VHID_SCRATCH/driver.pkg"
 
   # Clear the previous run's package before fetching. A download that dies partway
@@ -271,7 +297,10 @@ cmd_install() {
   # trusted, so a forged self-signed certificate survives either check taken alone.
   echo "$PKG_SHA256  $pkg" | shasum -a 256 --check --status \
     || die "the downloaded package does not match the checksum pinned for $PKG_VERSION"
-  signature=$(pkgutil --check-signature "$pkg")
+  # Captured rather than piped, so pkgutil's own refusal is its exit status and not a
+  # discarded one. Without the die it would abort under `set -e` holding the reason.
+  signature=$(pkgutil --check-signature "$pkg") \
+    || die "pkgutil refused the downloaded package: $signature"
   echo "$signature" | grep -qxF "$TRUSTED_STATUS" \
     || die "the downloaded package has no signature macOS trusts; pkgutil did not report '$TRUSTED_STATUS'"
   echo "$signature" | grep -qF "$SIGNING_AUTHORITY" \
@@ -305,8 +334,43 @@ INSTRUCTION
   esac
 }
 
+# What `remove` says about a machine standing in one of the two states removal can end
+# in. Shared by the early exit and the closing report, so the two cannot come to
+# describe the same state differently. [LAW:one-source-of-truth]
+#
+# Every arm is terminal, which is what lets the call read the same in both positions.
+remove_outcome() {
+  case "$1" in
+    absent)
+      echo "virtual-hid-driver: the driver is gone." >&2
+      exit 0 ;;
+    pending-reboot)
+      cat >&2 <<'INSTRUCTION'
+
+virtual-hid-driver: the files and the receipt are gone, but macOS keeps the
+extension registered as "terminated waiting to uninstall on reboot" until the
+machine restarts. That entry is not a failure, and nothing else clears it.
+
+  Restart the Mac
+
+Then confirm with:  scripts/virtual-hid-driver expect absent
+INSTRUCTION
+      exit 2 ;;
+    *) die "after removal, the driver is '$1', which is not a state removing can leave behind" ;;
+  esac
+}
+
 cmd_remove() {
-  local id result withdrawn
+  local id receipts result withdrawn
+
+  # A machine already at the end of removal has nothing left to withdraw, and the
+  # Manager that would do the withdrawing is the thing removal deletes. Reading the
+  # state first is what lets a second `remove` say where the machine actually stands,
+  # instead of demanding a reinstall to reach a state it is already in.
+  result=$(report_state)
+  case "$result" in
+    absent|pending-reboot) remove_outcome "$result" ;;
+  esac
 
   # [LAW:no-ambient-temporal-coupling] Deactivation must precede file removal, and the
   # order is not a preference. Only the Manager can withdraw the extension, and
@@ -332,29 +396,19 @@ cmd_remove() {
 
   # What the package's own uninstall scripts leave behind. `pkgutil --forget` fails on
   # a receipt that is not there, so the receipts are read first and the removal runs
-  # over what was actually found.
-  receipts_present | while read -r id; do
+  # over what was actually found. Read in the main shell rather than piped into the
+  # loop: a subshell is a place where neither the refusal below nor a failing `forget`
+  # could stop the verb. [LAW:no-silent-failure]
+  receipts=$(receipts_present)
+  case "$receipts" in
+    probe-failed) die "the installer receipt for $BUNDLE_ID could not be read, so whether to forget it is unknown; the payload is already deleted, and re-running 'remove' once the cause is fixed will finish the job" ;;
+  esac
+  for id in $receipts; do
     echo "==> forgetting installer receipt $id (sudo)" >&2
     sudo pkgutil --forget "$id"
   done
 
-  result=$(report_state)
-  case "$result" in
-    absent) echo "virtual-hid-driver: the driver is gone." >&2 ;;
-    pending-reboot)
-      cat >&2 <<'INSTRUCTION'
-
-virtual-hid-driver: the files and the receipt are gone, but macOS keeps the
-extension registered as "terminated waiting to uninstall on reboot" until the
-machine restarts. That entry is not a failure, and nothing else clears it.
-
-  Restart the Mac
-
-Then confirm with:  scripts/virtual-hid-driver expect absent
-INSTRUCTION
-      exit 2 ;;
-    *) die "after removal, the driver is '$result', which is not a state removing can leave behind" ;;
-  esac
+  remove_outcome "$(report_state)"
 }
 
 case "${1:-}" in
