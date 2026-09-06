@@ -25,13 +25,17 @@ struct DextCommand: AsyncParsableCommand {
     )
 }
 
-/// Types text into the frontmost app as the virtual keyboard and reads it back off the
+/// Types text into a named app as the virtual keyboard and reads it back off that app's
 /// focused element through Accessibility, so what it prints is measured, not assumed.
+/// Naming the app is what keeps a window that steals focus from swallowing the text.
 struct DextTypeCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "type",
-        abstract: "Type text through the driver extension into the frontmost app (needs sudo)."
+        abstract: "Type text through the driver extension into a named app (needs sudo)."
     )
+
+    @Argument(help: "The bundle id of the app to type into, e.g. com.apple.TextEdit.")
+    var into: String
 
     @Argument(help: "The text to type: printable ASCII, newline, and tab.")
     var text: String
@@ -48,8 +52,11 @@ struct DextTypeCommand: AsyncParsableCommand {
         let readyAfter = try daemon.awaitKeyboardReady(within: .seconds(2))
         print("daemon answered in \((readyAfter.answered - connecting).milliseconds) ms, keyboard ready after \((readyAfter.ready - connecting).milliseconds) ms")
 
-        let screen = FocusedText()
-        let app = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "<no frontmost app>"
+        // [LAW:no-ambient-temporal-coupling] The target is stated, not discovered, and
+        // every read re-checks it, so a window that steals focus mid-run is a named
+        // failure rather than text delivered somewhere nobody asked for.
+        let screen = TargetApp(bundleID: into)
+        try await screen.raise(within: .seconds(5))
         let before = try screen.read()
 
         // One character alone, so its latency is the driver's and not the queue's.
@@ -57,7 +64,7 @@ struct DextTypeCommand: AsyncParsableCommand {
         let firstPosted = clock.now
         _ = try daemon.press(first)
         let firstSeen = try await screen.wait(within: .seconds(3)) { $0.count(of: first.character) > before.count(of: first.character) }
-        print("first character on screen in \(app) after \((clock.now - firstPosted).milliseconds) ms\(firstSeen ? "" : " (NEVER SEEN)")")
+        print("first character on screen in \(into) after \((clock.now - firstPosted).milliseconds) ms\(firstSeen ? "" : " (NEVER SEEN)")")
 
         let restPosted = clock.now
         var last: UInt64 = 0
@@ -404,15 +411,36 @@ struct UntypeableCharacters: Error, CustomStringConvertible {
 
 // MARK: - Reading the screen back
 
-/// The text of the frontmost app's focused element, through Accessibility: the
-/// document in TextEdit, the screen in Terminal.
+/// The one app this run types into: raised so the keystrokes land there, then read
+/// back through Accessibility — the document in TextEdit, the screen in Terminal.
 @MainActor
-struct FocusedText {
+struct TargetApp {
+    /// The app the caller means to type into; anything else in front is a refusal.
+    let bundleID: String
+
+    /// Brings the target to the front and waits for macOS to agree it is there.
+    /// [LAW:no-ambient-temporal-coupling] Focus is a state this command drives and
+    /// confirms, never a condition it hopes the shell arranged beforehand.
+    func raise(within limit: Duration) async throws {
+        guard let target = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) else {
+            throw ScreenUnreadable.notRunning(bundleID)
+        }
+        let clock = ContinuousClock()
+        let start = clock.now
+        repeat {
+            target.activate()
+            try await Task.sleep(for: .milliseconds(100))
+            if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID { return }
+        } while clock.now - start < limit
+        throw ScreenUnreadable.wrongApp(wanted: bundleID, frontmost: NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nothing")
+    }
+
     /// [LAW:no-silent-failure] A screen that cannot be read is said so, never reported
     /// as an empty one: empty is what the verdict compares against.
     func read() throws -> String {
         guard let app = NSWorkspace.shared.frontmostApplication else { throw ScreenUnreadable.noFrontmostApp }
         let name = app.bundleIdentifier ?? "pid \(app.processIdentifier)"
+        guard name == bundleID else { throw ScreenUnreadable.wrongApp(wanted: bundleID, frontmost: name) }
         var focused: CFTypeRef?
         guard AXUIElementCopyAttributeValue(AXUIElementCreateApplication(app.processIdentifier), kAXFocusedUIElementAttribute as CFString, &focused) == .success, let element = focused else { throw ScreenUnreadable.noFocus(name) }
         var value: CFTypeRef?
@@ -435,12 +463,16 @@ struct FocusedText {
 
 enum ScreenUnreadable: Error, CustomStringConvertible {
     case noFrontmostApp
+    case notRunning(String)
+    case wrongApp(wanted: String, frontmost: String)
     case noFocus(String)
     case noText(String)
 
     var description: String {
         switch self {
         case .noFrontmostApp: "no app is frontmost, so there is no focused element to read"
+        case .notRunning(let app): "\(app) is not running, so there is nothing to type into"
+        case .wrongApp(let wanted, let frontmost): "\(frontmost) is frontmost, not \(wanted); nothing was typed"
         case .noFocus(let app): "\(app) has no focused element; is this process allowed under Accessibility?"
         case .noText(let app): "the focused element in \(app) carries no text value"
         }
