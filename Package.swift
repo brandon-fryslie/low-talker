@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [
         .library(name: "LowTalkerCore", targets: ["LowTalkerCore"]),
+        .library(name: "VirtualKeyboard", targets: ["VirtualKeyboard"]),
         .executable(name: "lowtalker", targets: ["lowtalker"]),
     ],
     dependencies: [
@@ -22,10 +23,15 @@ let package = Package(
                 .product(name: "WhisperKit", package: "argmax-oss-swift"),
             ]
         ),
+        // [LAW:one-way-deps] Everything about the virtual keyboard and nothing about
+        // low-talker: no dependency on LowTalkerCore, so it leaves for its own package by
+        // a move rather than by an untangling.
+        .target(name: "VirtualKeyboard"),
         .executableTarget(
             name: "lowtalker",
             dependencies: [
                 "LowTalkerCore",
+                "VirtualKeyboard",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
@@ -39,10 +45,16 @@ let package = Package(
             ],
             resources: [.copy("Fixtures")]
         ),
+        // The wire protocol against a fake daemon on the other end of a socketpair, so
+        // the framing is proven without root and without the driver.
+        .testTarget(
+            name: "VirtualKeyboardTests",
+            dependencies: ["VirtualKeyboard"]
+        ),
         // The CLI's table shape is its contract; this pins column names to fields.
         .testTarget(
             name: "lowtalkerTests",
-            dependencies: ["lowtalker", "LowTalkerCore"]
+            dependencies: ["lowtalker", "LowTalkerCore", "VirtualKeyboard"]
         ),
     ]
 )

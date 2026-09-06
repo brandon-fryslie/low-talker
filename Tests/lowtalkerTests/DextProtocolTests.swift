@@ -1,135 +1,11 @@
 import Foundation
 import Testing
+import VirtualKeyboard
 @testable import lowtalker
 
-/// The two byte layouts the dext spike speaks, and the character table it types from.
-/// All three are pure and all three fail silently when they are wrong: a byte order
-/// guessed the wrong way round still produces a well-formed frame, a transposed pair in
-/// the usage table still types a character. Only the daemon and the driver would ever
-/// have said so, and only by typing the wrong thing.
-@Suite struct DaemonFramingTests {
-    /// The header is big-endian, and it is the length of the body alone. Read the other
-    /// way round, 256 is 65536 and 1 is 16777216 - both plausible, neither refused by
-    /// anything but this.
-    @Test func theHeaderIsTheBodyLengthBigEndian() throws {
-        #expect(try DaemonConnection.bodyLength(header: [0, 0, 1, 0]) == 256)
-        #expect(try DaemonConnection.bodyLength(header: [0, 0, 0, 1]) == 1)
-        #expect(try DaemonConnection.bodyLength(header: [0, 0, 0x0f, 0xff]) == 4095)
-    }
-
-    /// A frame of nothing at all is refused rather than read as a type byte that is not
-    /// there. [LAW:no-silent-failure]
-    @Test func anEmptyFrameIsRefused() {
-        #expect(throws: DaemonError.self) { try DaemonConnection.bodyLength(header: [0, 0, 0, 0]) }
-    }
-
-    /// A header claiming more than any frame this protocol carries is refused before
-    /// anything allocates against it. Unrefused, four bytes of noise ask for four
-    /// gigabytes and end the process instead of naming what arrived.
-    @Test func aLengthPastTheLargestFrameIsRefused() {
-        #expect(throws: DaemonError.self) { try DaemonConnection.bodyLength(header: [0xff, 0xff, 0xff, 0xff]) }
-        #expect(throws: DaemonError.self) { try DaemonConnection.bodyLength(header: [0, 0, 0x10, 0x01]) }
-        #expect(throws: Never.self) { try DaemonConnection.bodyLength(header: [0, 0, 0x10, 0x00]) }
-    }
-
-    /// Every byte of a request frame, written out: the id is eight bytes, big-endian,
-    /// most significant first. Reversed, this frame is still well formed and answers to
-    /// an id no one is waiting on.
-    @Test func aRequestFrameIsLengthThenTypeThenAnEightByteBigEndianID() {
-        let bytes = DaemonConnection.frame(.request, id: 0x0102_0304_0506_0708, [0xaa, 0xbb])
-        #expect(bytes == [0, 0, 0, 11, 4, 1, 2, 3, 4, 5, 6, 7, 8, 0xaa, 0xbb])
-    }
-
-    /// A frame type that carries no id carries no id bytes either, so its payload starts
-    /// one byte after the type.
-    @Test func aFrameWithoutAnIDCarriesNoIDBytes() {
-        #expect(DaemonConnection.frame(.healthCheckResponse, id: nil, []) == [0, 0, 0, 1, 3])
-    }
-
-    /// What is written is what is read: the whole point of holding both halves in one
-    /// place is that one of them cannot drift from the other. [FRAMING:representation]
-    @Test func everyFrameTypeRoundTripsThroughItsOwnParse() throws {
-        for type in [DaemonConnection.FrameType.request, .response] {
-            let bytes = DaemonConnection.frame(type, id: 0xdead_beef_cafe_0001, [7, 8, 9])
-            let (read, id, payload) = try DaemonConnection.parse(body: Array(bytes.dropFirst(4)))
-            #expect(read == type)
-            #expect(id == 0xdead_beef_cafe_0001)
-            #expect(payload == [7, 8, 9])
-        }
-        for type in [DaemonConnection.FrameType.heartbeat, .userData, .healthCheck, .healthCheckResponse] {
-            let bytes = DaemonConnection.frame(type, id: nil, [7, 8, 9])
-            let (read, id, payload) = try DaemonConnection.parse(body: Array(bytes.dropFirst(4)))
-            #expect(read == type)
-            #expect(id == 0)
-            #expect(payload == [7, 8, 9])
-        }
-    }
-
-    /// A request frame too short to hold the id it promises is named, not read past.
-    @Test func aRequestFrameTooShortForItsIDIsRefused() {
-        #expect(throws: DaemonError.self) { try DaemonConnection.parse(body: [4, 0, 0, 0]) }
-    }
-
-    /// A type byte this side was not written for is a refusal, not a default.
-    @Test func anUnknownFrameTypeIsRefused() {
-        #expect(throws: DaemonError.self) { try DaemonConnection.parse(body: [99]) }
-    }
-
-    /// The daemon's status payload is pairs of (status, value) in the order it sent
-    /// them, and any non-zero value is true. Transposed, a pair records the wrong status
-    /// and nothing about it looks wrong at runtime.
-    @Test func aStatusPayloadDecodesAsOrderedPairs() throws {
-        let pairs = try DaemonConnection.statusPairs([1, 1, 4, 0, 2, 0xff])
-        #expect(pairs.map(\.0) == [.driverActivated, .keyboardReady, .driverConnected])
-        #expect(pairs.map(\.1) == [true, false, true])
-        #expect(try DaemonConnection.statusPairs([]).isEmpty)
-    }
-
-    /// A payload that is not pairs, and a status byte this side was not written for, are
-    /// both named rather than read past. [LAW:no-silent-failure]
-    @Test func aStatusPayloadThatIsNotPairsIsRefused() {
-        #expect(throws: DaemonError.self) { try DaemonConnection.statusPairs([1, 1, 4]) }
-        #expect(throws: DaemonError.self) { try DaemonConnection.statusPairs([99, 1]) }
-    }
-
-    /// The three parameters are uint64 each, little-endian, in the order vendor,
-    /// product, country. The plausible reading - two 16-bit ids and a byte - is 5 bytes
-    /// long, well formed, and initializes a keyboard that is not the one asked for.
-    @Test func theKeyboardParametersAreThreeLittleEndianUInt64s() {
-        #expect(DaemonConnection.keyboardParameters.count == 24)
-        #expect(DaemonConnection.keyboardParameters == [
-            0xc0, 0x16, 0, 0, 0, 0, 0, 0,
-            0xdb, 0x27, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0,
-        ])
-    }
-}
-
-@Suite struct KeyboardReportTests {
-    /// 67 bytes: report id, modifiers, a reserved byte, then 32 usages of two bytes.
-    /// The driver reads a fixed-width struct, so a report of any other length is read
-    /// as whatever happens to follow it.
-    @Test func aReportIsAlwaysSixtySevenBytes() {
-        #expect(KeyboardReport(modifiers: 0, keys: []).bytes.count == 67)
-        #expect(KeyboardReport(modifiers: 0x02, keys: [0x04]).bytes.count == 67)
-        #expect(KeyboardReport(modifiers: 0, keys: Array(repeating: 0x04, count: 32)).bytes.count == 67)
-    }
-
-    /// The usages are little-endian, unlike the frame around them, which is big-endian.
-    /// The two orders sit within a few lines of each other and neither one announces
-    /// itself in the bytes.
-    @Test func theUsagesAreLittleEndianAndTheHeaderIsIDModifiersReserved() {
-        let bytes = KeyboardReport(modifiers: KeyboardReport.leftShift, keys: [0x0102, 0x04]).bytes
-        #expect(Array(bytes.prefix(7)) == [1, 0x02, 0, 0x02, 0x01, 0x04, 0x00])
-        #expect(Array(bytes.dropFirst(7)).allSatisfy { $0 == 0 })
-    }
-
-    /// The release report holds no keys and no modifiers: it is what ends every press,
-    /// and a stray bit in it is a key the driver goes on reporting as held.
-    @Test func theReleasedReportHoldsNothingButItsReportID() {
-        #expect(KeyboardReport.released.bytes == [1] + Array(repeating: 0, count: 66))
-    }
-}
+/// The character table the spike types from, and the report a stopped run makes. The wire
+/// protocol these used to sit beside now lives in the VirtualKeyboard module and is tested
+/// there, against a fake daemon on a real socket.
 
 @Suite struct USLayoutTests {
     /// The letters run from usage 0x04 in alphabetical order. Written out rather than
@@ -229,5 +105,20 @@ import Testing
     @Test func aDaemonFailureCarriesTheCountToo() {
         let stopped = TypingStopped(typed: 7, of: 40, cause: DaemonError.silent)
         #expect("\(stopped)".hasPrefix("the daemon did not answer in time. 7 of 40"))
+    }
+}
+
+/// Which failures a poll may ride out. A wait exists because an app answers when it
+/// answers, so a moment's silence from the target is the case polling is for - but an app
+/// that is not in front will not come back on its own, and riding that out would deliver a
+/// late verdict about the wrong window.
+@Suite struct ScreenUnreadableTests {
+    @Test func onlyTheFailuresTimeCanChangeAreRiddenOut() {
+        #expect(ScreenUnreadable.noFocus("com.apple.TextEdit").mayPassWithTime)
+        #expect(ScreenUnreadable.noText("com.apple.TextEdit").mayPassWithTime)
+        #expect(!ScreenUnreadable.noFrontmostApp.mayPassWithTime)
+        #expect(!ScreenUnreadable.notRunning("com.apple.TextEdit").mayPassWithTime)
+        #expect(!ScreenUnreadable.wouldNotComeForward(wanted: "a", frontmost: "b").mayPassWithTime)
+        #expect(!ScreenUnreadable.wrongApp(wanted: "a", frontmost: "b").mayPassWithTime)
     }
 }
