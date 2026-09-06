@@ -4,7 +4,7 @@ DERIVED_DATA := DerivedData
 CONFIGURATION := Debug
 APP := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/LowTalker.app
 
-.PHONY: app run test cli clean signing-identity
+.PHONY: app run test check-docs cli clean signing-identity
 
 # Regeneration is unconditional: xcodegen is idempotent and sub-second, and a
 # timestamp rule cannot see removed sources or in-place rewrites of the project.
@@ -17,9 +17,21 @@ app:
 run: app
 	open "$(APP)"
 
-test:
+test: check-docs
 	swift build
 	swift test
+
+# [LAW:one-source-of-truth] scripts/virtual-hid-driver pins the driver package version;
+# README.md quotes that number for a reader who is following the runbook by hand. The
+# script is the source and the README is the copy, so this is what keeps the copy from
+# drifting quietly the next time the pin moves.
+check-docs:
+	@set -euo pipefail; \
+	pinned=$$(sed -n 's/^PKG_VERSION=//p' scripts/virtual-hid-driver); \
+	[ -n "$$pinned" ] || { echo "check-docs: scripts/virtual-hid-driver defines no PKG_VERSION" >&2; exit 1; }; \
+	grep -qF "$$pinned" README.md \
+	  || { echo "check-docs: scripts/virtual-hid-driver pins driver package $$pinned, which README.md never mentions" >&2; exit 1; }; \
+	echo "check-docs: README.md agrees with the pinned driver package $$pinned"
 
 # The CLI for engine work. The Neural Engine keeps its compiled model per signing
 # identifier, and `swift build` links a fresh identifier into every binary, so a
