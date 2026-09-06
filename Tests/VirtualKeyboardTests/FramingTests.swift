@@ -58,7 +58,10 @@ import Testing
         }
     }
 
-    @Test func aFrameTooShortForTheIDItsTypePromisesIsRefused() {
+    /// A body of no bytes has no type byte, so there is no frame to name - and the read
+    /// that produced it saw a length this side already refuses. [LAW:no-silent-failure]
+    @Test func aFrameShorterThanTheTypeAndIDItsBytesPromiseIsRefused() {
+        #expect(throws: DaemonError.self) { try Frame.decode(body: []) }
         #expect(throws: DaemonError.self) { try Frame.decode(body: [4, 0, 0, 0]) }
         #expect(throws: DaemonError.self) { try Frame.decode(body: [99]) }
     }
