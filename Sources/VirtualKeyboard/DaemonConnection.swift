@@ -116,13 +116,10 @@ final class DaemonConnection {
     /// readiness is *discovered* on the next tick rather than when it happened, and this
     /// takes up to a second however fast the device really was. That is why a connection
     /// is meant to be held open rather than made per insert.
-    func awaitKeyboardReady(by deadline: ContinuousClock.Instant) throws -> (answered: ContinuousClock.Instant, ready: ContinuousClock.Instant) {
-        var answered: ContinuousClock.Instant?
+    func awaitKeyboardReady(by deadline: ContinuousClock.Instant) throws {
         while status[.keyboardReady] != true {
             try handle(try readFrame(by: deadline))
-            answered = answered ?? ContinuousClock.now
         }
-        return (answered ?? ContinuousClock.now, ContinuousClock.now)
     }
 
     /// What every frame means to this side: a pushed status is recorded and answered with
