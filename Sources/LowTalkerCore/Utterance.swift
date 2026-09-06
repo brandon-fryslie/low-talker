@@ -14,24 +14,37 @@
 /// [LAW:no-ambient-temporal-coupling] The wait is on data, not on time: a pass
 /// starts when the speech has grown past a sample count, whatever the clock says.
 actor Utterance {
-    /// A clip whose peak reaches this held speech. Three seconds of room noise on an
-    /// M2 Max's built-in microphone peaked at 0.0034 (-50 dBFS) and the quietest
-    /// speech in the bench fixtures, LibriSpeech read at a murmur, at 0.03 to 0.05
-    /// per tenth of a second, so -34 dBFS sits between them. A clip under it is
-    /// silence, and an utterance that never reaches it is heard as nothing said.
-    static let speechPeak: Float = 0.02
+    /// The least an utterance's loudest clip can peak at and still be a speaker
+    /// rather than a room: 0.01, -40 dBFS. Room noise on an M2 Max's built-in
+    /// microphone peaks at -49 to -54 dBFS per tenth of a second, and the bench
+    /// fixtures attenuated by 20 dB peak at -33 or louder. Whisper normalizes each
+    /// window's log-mel, so it reads audio this soft as it reads loud audio; what
+    /// the floor refuses is a hold with nothing in it, which Whisper would read
+    /// words into. Level is all a peak knows, so a click this loud is a speaker too.
+    static let audible: Float = 0.01
+    /// A clip holds speech when its peak stands within this factor of the loudest
+    /// clip so far: 16, 24 dB, one speaker's spread from a stressed vowel to a soft
+    /// consonant per tenth of a second. A ratio does not move when the level does,
+    /// so a soft speaker or a low-gain microphone is cut into the same speech and
+    /// quiet as a loud one. On the bench fixtures it names the same last clip of
+    /// speech as the absolute -34 dBFS gate it replaces, differing on 18 of some
+    /// 800 clip judgements, all mid-utterance.
+    static let dynamicRange: Float = 16
     /// Audio kept past the last clip with speech in it, so a word's soft tail rides
     /// with the word. Silence to the encoder either way, so it costs the pass nothing.
     static let hangover = AudioClip.sampleCount(for: 0.3)
 
     private var samples: [Float] = []
     /// Samples through the end of the last clip that held speech, once one has.
+    /// Each clip is judged as it arrives, against the loudest so far, and never
+    /// again: a louder clip later may put an earlier one outside the range, but
+    /// the speech only ever grows, which is what a pass waiting on it relies on.
     /// [LAW:types-are-the-program] No speech yet is its own state, not a count of
     /// zero: the hangover rides on speech, so with none there is no audio to hand a
     /// pass, and an utterance that ends in this state is refused rather than heard.
     private var spoken: Int?
-    /// The loudest sample so far, what an utterance that never reached the gate
-    /// is refused with.
+    /// The loudest clip peak so far: what every clip is judged against, and what an
+    /// utterance that never reached the floor is refused with.
     private var loudest: Float = 0
     private var ended = false
     private var waiting: [CheckedContinuation<Void, Never>] = []
@@ -40,7 +53,10 @@ actor Utterance {
         samples += clip.samples
         let peak = clip.peak
         loudest = max(loudest, peak)
-        spoken = peak >= Self.speechPeak ? samples.count : spoken
+        // [LAW:dataflow-not-control-flow] One judgement for every clip, the loudest
+        // included: it stands within range of itself, so the clip that lifts the
+        // loudest past the floor is the first speech.
+        spoken = loudest >= Self.audible && peak * Self.dynamicRange > loudest ? samples.count : spoken
         wake()
     }
 
@@ -52,9 +68,9 @@ actor Utterance {
 
     /// Appends every clip of `audio` as it arrives, then ends the utterance.
     ///
-    /// [LAW:parse-dont-validate] An utterance no clip of which reached the gate is
+    /// [LAW:parse-dont-validate] An utterance no clip of which reached the floor is
     /// refused here, with its loudest peak: an empty transcript would not say
-    /// whether nothing was said or the speech was too soft for the gate.
+    /// whether nothing was said or the audio was too soft to be a speaker.
     func fill(from audio: some AsyncSequence<AudioClip, Never> & Sendable) async throws {
         for await clip in audio {
             append(clip)
@@ -64,7 +80,7 @@ actor Utterance {
     }
 
     /// How much audio the speech so far is worth a pass over: none until a clip
-    /// has reached the gate.
+    /// has reached the floor.
     private var speechCount: Int {
         spoken.map { $0 + Self.hangover } ?? 0
     }
@@ -92,13 +108,13 @@ actor Utterance {
 /// the measurement that decided it, so a quiet file or a silent hold is never an
 /// empty answer.
 public enum UtteranceError: Error, Equatable, CustomStringConvertible {
-    /// No clip reached the speech gate; `peak` is the loudest sample heard.
+    /// No clip reached the audible floor; `peak` is the loudest sample heard.
     case nothingSpoken(peak: Float)
 
     public var description: String {
         switch self {
         case .nothingSpoken(let peak):
-            "nothing spoken: the loudest sample was \(peak), under the speech gate \(Utterance.speechPeak)"
+            "nothing spoken: the loudest sample was \(peak), under the audible floor \(Utterance.audible)"
         }
     }
 }
