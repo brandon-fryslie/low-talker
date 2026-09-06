@@ -139,6 +139,62 @@ Pressing another app's menu item needs Accessibility, charged to the terminal fo
 
 `scripts/live-paste-check` pastes into TextEdit and Terminal, checks what landed (the file TextEdit writes when its window is closed, the text Terminal echoes, read through Accessibility), and compares the pasteboard before and after. It needs an unlocked screen and uses no AppleScript, because an Automation prompt nobody answers becomes a denial.
 
+## The virtual keyboard driver
+
+LowTalker types by driving a virtual keyboard macOS treats as real hardware: the driver extension `Karabiner-DriverKit-VirtualHIDDevice`, a public-domain pqrs-org package that ships its own installer. Karabiner-Elements is a separate, much larger application by the same author; this project uses only the driver package and never installs or requires it.
+
+`scripts/virtual-hid-driver` does the work, in four verbs:
+
+    scripts/virtual-hid-driver state             # the machine's driver state
+    scripts/virtual-hid-driver expect <verdict>  # assert that state
+    scripts/virtual-hid-driver install           # download, verify, install, activate
+    scripts/virtual-hid-driver remove            # deactivate, delete, forget receipt
+
+`state` prints a fact table to stderr for a reader and one verdict word to stdout, so `$(scripts/virtual-hid-driver state)` is exactly the verdict. The verdicts are `absent`, `installed-inactive`, `awaiting-approval`, `disabled`, `enabled`, `running`, `pending-reboot`, `residue`, and `unknown`. `enabled` means macOS has the extension switched on; `running` means that and the driver has published its node in the IORegistry. `running` is the fully working state.
+
+Run it as the logged-in user, never under `sudo`; it takes sudo itself for the file steps. macOS attributes the activation request to whoever makes it, and your approval answers that request.
+
+Two version numbers travel together and are not the same. The package is 8.4.0 and carries the Manager and Daemon helper apps; the driver extension inside it is 1.8.0, which is what `systemextensionsctl` reports. It has not moved across many package releases, so a package upgrade that leaves `systemextensionsctl` still reading 1.8.0 has not failed. The script is authoritative for both numbers, and pins the package's SHA-256 checksum besides. This file quotes the versions, not the checksum, and `make check-docs` fails when a number quoted here disagrees with the script.
+
+### Installing
+
+    scripts/virtual-hid-driver install
+
+The download is checked twice before installing: against the pinned SHA-256, and against the signature, which must be `Developer ID Installer: Fumihiko Takayama (G43BCU2T37)`.
+
+The package lands in one fixed directory under the machine's temp area and stays there. The script removes no directories: it deletes that single downloaded file before fetching again, so a download that dies partway cannot leave older bytes behind for the checksum to approve.
+
+On a Mac that has never approved this driver, activation stops and waits for you:
+
+    Open  System Settings > General > Login Items & Extensions
+    Click the (i) beside "Driver Extensions"
+    Turn ON  org.pqrs.Karabiner-DriverKit-VirtualHIDDevice
+    Authenticate when macOS asks
+
+Then `scripts/virtual-hid-driver expect enabled` confirms it. macOS remembers the approval per developer team and bundle identifier, so a Mac that has ever approved this driver activates silently on reinstall: the extension comes up already switched on, and the missing prompt is expected, not a skipped step.
+
+Each step is confirmed by probing the machine, not by an exit status: the driver Manager exits 0 even when its own output says the request failed, or when handed a bare usage error.
+
+### Removing takes a restart
+
+`remove` deactivates the extension, deletes both installed trees, and forgets the installer receipt. macOS still lists it as `[terminated waiting to uninstall on reboot]`: the files and receipt are gone, but the registration persists. Only restarting the Mac clears it; `sudo systemextensionsctl uninstall` prints "Success" and changes nothing. The verdict in this window is `pending-reboot`, not a failure; after the restart, `scripts/virtual-hid-driver expect absent` confirms removal.
+
+The package installs its own uninstall scripts, `deactivate_driver.sh` and `remove_files.sh`, under its support directory. Neither is used here: the first opens an AppleScript dialog box, so it cannot run unattended, and neither runs `pkgutil --forget`, so the receipt survives. `remove` does that work without the dialog, and forgets the receipt.
+
+### Karabiner-Elements on this Mac
+
+Brandon's MacBook already had Karabiner-Elements 15.5.0. Its installer wrote both receipts, `org.pqrs.Karabiner-Elements` and `org.pqrs.Karabiner-DriverKit-VirtualHIDDevice`, in one transaction at the same second. The two products share one Manager app path, one support directory, and one receipt identifier; there is no arrangement where both own the driver. Installing the pinned package upgraded that shared Manager from 6.0.0 to 8.4.0; Karabiner-Elements.app, Karabiner-EventViewer.app, its own support directory and receipt were untouched and remain 15.5.0.
+
+Because those paths are shared, `remove` refuses to run at all while an `org.pqrs.Karabiner-Elements` receipt is present: it would delete the Manager and support tree Karabiner-Elements depends on, and nothing in this script could put them back. It names the product and both paths and stops before deactivating anything. Removing Karabiner-Elements first is the way through, and there is deliberately no flag to skip the check. `install` is not blocked, because it replaces files rather than deleting them.
+
+If Karabiner-Elements is ever launched and repairs its driver, it will install its own bundled copy over the pinned one. On this Mac it is disabled and no Karabiner processes are running, so nothing is competing today. The background task entries `org.pqrs.service.daemon.Karabiner-VirtualHIDDevice-Daemon` and `karabiner_grabber` are children of Karabiner-Elements' privileged-daemons bundle, not of the driver package; LowTalker needs no pqrs daemon, its own helper opening the extension directly, so they were left alone.
+
+### What has been verified
+
+On Brandon's MacBook Pro (Mac14,5, macOS 26.3, System Integrity Protection disabled): the stale 1.8.0 registration was deactivated, the files and receipt removed, the state reached `pending-reboot`, package 8.4.0 installed, and the extension activated with no approval click, this Mac having approved it before, reaching `running` with the IORegistry node `org_pqrs_Karabiner_DriverKit_VirtualHIDDeviceRoot` present and no client running. `absent` has not been confirmed here, because it needs a restart.
+
+On inferno.local (Mac16,6, macOS 26.5.1, System Integrity Protection enabled): `absent` was confirmed on a clean machine, and the script runs on the stock `/bin/bash` 3.2 that ships there. The install has not been run there: it needs an administrator password typed at that machine, and the approval click above.
+
 ## One-time setup: signing identity
 
 Run once after cloning:
