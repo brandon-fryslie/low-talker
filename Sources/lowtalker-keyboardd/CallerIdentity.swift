@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Security
 
@@ -13,15 +14,24 @@ import Security
 /// identity mid-connection is not a thing that exists, and re-asking per report would put
 /// a code-signature check in front of every key.
 struct CallerIdentity {
-    /// The code-signing requirement a caller must satisfy.
+    /// The code-signing requirement a caller must satisfy: signed by the certificate that
+    /// signed this helper.
     ///
-    /// Read at startup rather than compiled in, so the requirement this daemon enforces is
-    /// a fact of the installation and not of the build. [LAW:one-source-of-truth] A build
-    /// that hard-coded it would give the dev path and the shipped path two different
-    /// binaries, and the one an agent can verify would not be the one that ships.
+    /// [LAW:one-source-of-truth] Read off this process's own signature rather than
+    /// compiled in or handed over by whoever installed the job. The app, the CLI and this
+    /// helper are signed together - by the dev identity `make signing-identity` makes, or
+    /// by the Developer ID that ships them - so "whoever signed me" is the one statement
+    /// of who may call that is true of every installation without anyone writing it down.
+    /// A helper signed ad hoc has no certificate to name and does not start; an
+    /// unidentified root keystroke service is the failure this exists to make impossible.
     let requirement: SecRequirement
+    /// The requirement as text, for the log: an operator refused by it needs to know what
+    /// it says.
+    let text: String
 
     enum Refused: Error, CustomStringConvertible {
+        case unsigned(OSStatus)
+        case adHoc
         case malformedRequirement(String, OSStatus)
         case unidentified(OSStatus)
         case noAuditToken
@@ -29,6 +39,10 @@ struct CallerIdentity {
 
         var description: String {
             switch self {
+            case .unsigned(let status):
+                "this helper's own code signature could not be read (OSStatus \(status))"
+            case .adHoc:
+                "this helper is signed ad hoc, with no certificate to require of its callers; sign it with an identity (make helper)"
             case .malformedRequirement(let text, let status):
                 "the caller requirement \(text.debugDescription) is not a code signing requirement (OSStatus \(status))"
             case .noAuditToken:
@@ -36,9 +50,27 @@ struct CallerIdentity {
             case .unidentified(let status):
                 "the calling process could not be identified (OSStatus \(status))"
             case .wrongIdentity(let status):
-                "the calling process does not satisfy this helper's caller requirement (OSStatus \(status))"
+                "the calling process is not signed by this helper's certificate (OSStatus \(status))"
             }
         }
+    }
+
+    /// The identity of whoever signed this process, as a requirement of its callers.
+    static func sameSignerAsThisProcess() throws -> CallerIdentity {
+        var running: SecCode?
+        let found = SecCodeCopySelf([], &running)
+        guard found == errSecSuccess, let running else { throw Refused.unsigned(found) }
+        var code: SecStaticCode?
+        let pinned = SecCodeCopyStaticCode(running, [], &code)
+        guard pinned == errSecSuccess, let code else { throw Refused.unsigned(pinned) }
+        var information: CFDictionary?
+        let read = SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information)
+        guard read == errSecSuccess, let information = information as? [CFString: Any] else { throw Refused.unsigned(read) }
+        // An ad hoc signature has no certificate chain at all, so the leaf is absent
+        // rather than empty. [LAW:no-silent-failure]
+        guard let chain = information[kSecCodeInfoCertificates] as? [SecCertificate], let leaf = chain.first else { throw Refused.adHoc }
+        let fingerprint = Insecure.SHA1.hash(data: SecCertificateCopyData(leaf) as Data)
+        return try CallerIdentity(requirement: "certificate leaf = H\"\(fingerprint.map { String(format: "%02x", $0) }.joined())\"")
     }
 
     init(requirement text: String) throws {
@@ -48,6 +80,7 @@ struct CallerIdentity {
             throw Refused.malformedRequirement(text, status)
         }
         requirement = parsed
+        self.text = text
     }
 
     /// Answers for the process the audit token names, and nothing else.

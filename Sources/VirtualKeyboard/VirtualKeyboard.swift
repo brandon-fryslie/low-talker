@@ -64,8 +64,14 @@ public final class VirtualKeyboard: KeyPress {
 
     /// Connects to the daemon and takes nothing else on faith. The device is not up until
     /// `start` says so.
-    public convenience init(reportTimeout: Duration = .seconds(2)) throws {
-        self.init(daemon: try DaemonConnection(), reportTimeout: reportTimeout)
+    ///
+    /// `whenLost` is told, once and from another thread, when the daemon's connection ends
+    /// underneath this device: the daemon exited, or the socket failed. Every call after
+    /// that throws the same failure, so a caller that presses keys and stops can leave the
+    /// default; a process holding the device open across silences is the one that needs to
+    /// hear, because nothing it does in between would tell it.
+    public convenience init(reportTimeout: Duration = .seconds(2), whenLost: @escaping @Sendable (DaemonError) -> Void = { _ in }) throws {
+        self.init(daemon: try DaemonConnection(whenLost: whenLost), reportTimeout: reportTimeout)
     }
 
     init(daemon: DaemonConnection, reportTimeout: Duration = .seconds(2)) {

@@ -2,6 +2,7 @@ import Foundation
 import Keystrokes
 import KeyboardService
 import VirtualKeyboard
+import os
 
 /// The keyboard, held open for the life of the daemon and served to one client at a time.
 ///
@@ -55,10 +56,10 @@ final class Keyboard: NSObject, KeyboardService, @unchecked Sendable {
     /// key the driver believes is down is one macOS repeats into whatever comes forward
     /// next - the failure this whole epic exists to avoid. The client cannot clean up
     /// after itself in precisely the case that matters, so the helper does it, on every
-    /// way a connection can end.
-    func releaseEverything() {
+    /// way a connection can end - and on its own way out, for the same reason.
+    func releaseEverything(because reason: String) {
         attempt({ try $0.releaseAll() }) { error in
-            if let error { log("a client went away and the keyboard would not release: \(error)") }
+            log(error.map { "\(reason), and the keyboard would not release: \($0)" } ?? "\(reason); every key is up")
         }
     }
 }
@@ -72,7 +73,7 @@ final class Keyboard: NSObject, KeyboardService, @unchecked Sendable {
 final class Failure: NSError, @unchecked Sendable {
     init(_ error: any Error) {
         super.init(
-            domain: "com.lowtalker.keyboardd",
+            domain: Helper.machServiceName,
             code: 1,
             userInfo: [NSLocalizedDescriptionKey: "\(error)"]
         )
@@ -97,7 +98,7 @@ final class Listener: NSObject, NSXPCListenerDelegate {
             guard let token = connection.callerAuditToken else { throw CallerIdentity.Refused.noAuditToken }
             try callers.check(auditToken: token)
         } catch {
-            log("refused a connection: \(error)")
+            log("refused a connection from pid \(connection.processIdentifier): \(error)")
             return false
         }
         connection.exportedInterface = NSXPCInterface(with: KeyboardService.self)
@@ -106,44 +107,67 @@ final class Listener: NSObject, NSXPCListenerDelegate {
         // interrupted, and a client killed mid-burst can take either path. The release is
         // idempotent, so running it twice costs a report and running it never costs the
         // operator a held key.
-        connection.invalidationHandler = { [keyboard] in keyboard.releaseEverything() }
-        connection.interruptionHandler = { [keyboard] in keyboard.releaseEverything() }
+        connection.invalidationHandler = { [keyboard] in keyboard.releaseEverything(because: "a client went away") }
+        connection.interruptionHandler = { [keyboard] in keyboard.releaseEverything(because: "a client was interrupted") }
         connection.resume()
-        log("accepted a connection")
+        log("accepted a connection from pid \(connection.processIdentifier)")
         return true
     }
 }
 
-/// Said where launchd will keep it. A daemon's only voice is its log, and a daemon that
-/// fails silently at startup looks exactly like one that is working.
+/// Said where `log show` will find it, under this service's name. A daemon's only voice
+/// is its log, and a daemon that fails silently at startup looks exactly like one that
+/// is working. Public on purpose: nothing here is the user's data, and a redacted reason
+/// is no reason.
+///
+///     log show --last 10m --predicate 'subsystem == "com.lowtalker.keyboardd"'
+private let logger = Logger(subsystem: Helper.machServiceName, category: "helper")
 func log(_ message: String) {
-    FileHandle.standardError.write("lowtalker-keyboardd: \(message)\n".data(using: .utf8)!)
+    logger.notice("\(message, privacy: .public)")
 }
 
-/// The requirement callers must satisfy, named by the job rather than compiled in.
-///
-/// There is no default. A helper that fell back to accepting anything when its
-/// configuration was missing would be a root keystroke service open to every process on
-/// the machine, arrived at by omission - the failure mode a default exists to hide.
-/// [LAW:no-silent-failure]
-guard let requirementText = ProcessInfo.processInfo.environment["LOWTALKER_CALLER_REQUIREMENT"] else {
-    log("LOWTALKER_CALLER_REQUIREMENT is not set: the job must name the code signing requirement its callers have to satisfy")
-    exit(78) // EX_CONFIG
+/// Leaves the keys up and the daemon this process started stopped, then ends. The way out
+/// for every reason this process ends on purpose. [LAW:single-enforcer]
+func shutDown(_ keyboard: Keyboard, _ daemon: DaemonProcess.Origin, because reason: String, status: Int32) -> Never {
+    keyboard.releaseEverything(because: reason)
+    DaemonProcess.stop(daemon)
+    log("\(reason); exiting \(status)")
+    exit(status)
 }
 
 do {
-    let callers = try CallerIdentity(requirement: requirementText)
-    let device = try VirtualKeyboard()
-    let startup = try device.start(within: .seconds(10))
+    let callers = try CallerIdentity.sameSignerAsThisProcess()
+    log("callers must satisfy: \(callers.text)")
+
+    // The connection is lost on the reading thread, and there is no keyboard to release
+    // by then: the device went with the daemon. Ending is the whole answer; launchd keeps
+    // this job alive and the next start reaches or restarts the daemon. [LAW:no-silent-failure]
+    let reached = try DaemonProcess.reach(within: .seconds(10)) { lost in
+        log("the daemon's connection was lost (\(lost)); exiting for launchd to start this again")
+        exit(1)
+    }
+    let startup = try reached.keyboard.start(within: .seconds(10))
     log("the keyboard is up: the daemon answered in \(startup.answered), ready after \(startup.ready)")
+    let keyboard = Keyboard(keyboard: reached.keyboard)
+
+    // launchd stops a job with SIGTERM. Taken as an event rather than the default
+    // disposition, which would end the process with whatever was held still held.
+    signal(SIGTERM, SIG_IGN)
+    let termination = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+    termination.setEventHandler { shutDown(keyboard, reached.daemon, because: "asked to stop", status: 0) }
+    termination.resume()
 
     let listener = NSXPCListener(machServiceName: Helper.machServiceName)
-    let delegate = Listener(keyboard: Keyboard(keyboard: device), callers: callers)
+    let delegate = Listener(keyboard: keyboard, callers: callers)
     listener.delegate = delegate
     listener.resume()
     log("listening on \(Helper.machServiceName)")
-    // Held so the delegate outlives this scope; `resume` does not retain it.
-    withExtendedLifetime(delegate) { dispatchMain() }
+    // Held so the delegate and the signal source outlive this scope; `resume` retains
+    // neither.
+    withExtendedLifetime((delegate, termination)) { dispatchMain() }
+} catch let refused as CallerIdentity.Refused {
+    log("will not start: \(refused)")
+    exit(78) // EX_CONFIG: the installation is wrong, and starting again will not fix it.
 } catch {
     log("could not start: \(error)")
     exit(1)

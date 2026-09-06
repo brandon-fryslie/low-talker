@@ -1,47 +1,45 @@
 #!/usr/bin/env bash
 # The root keyboard helper, installed and removed on this Mac by an agent alone.
 #
+#   keyboard-helper install    register .build/debug/lowtalker-keyboardd as a LaunchDaemon
+#   keyboard-helper uninstall  stop it and remove the job
+#   keyboard-helper state      what launchd says about the job
+#   keyboard-helper log        what the helper has said in the last ten minutes
+#
 # Two registration paths exist and this is the one that needs nobody: a plist in
 # /Library/LaunchDaemons bootstrapped with launchctl runs as root with no approval
 # anywhere. SMAppService.daemon is the shipped app's path, and it leaves the job
 # .requiresApproval until a person clicks it in Login Items - which is 3ti.7's problem and
 # cannot be an agent's. Same binary either way; only who registers it differs.
 #
-# [LAW:one-source-of-truth] The caller requirement is computed here from the client binary
-# that will actually call, and written into the job. Nothing hard-codes an identity: a
-# requirement compiled into the daemon would name whatever was true when it was built.
+# Nothing here says who may call the helper. It admits whoever is signed by the
+# certificate that signed it, which `make helper` and `make cli` make the same one.
 set -euo pipefail
 
 LABEL="com.lowtalker.keyboardd"
 PLIST="/Library/LaunchDaemons/${LABEL}.plist"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HELPER="${ROOT}/.build/debug/lowtalker-keyboardd"
-CLIENT="${ROOT}/.build/debug/lowtalker"
 
 die() { echo "keyboard-helper: $*" >&2; exit 1; }
 
-# The client's own code directory hash, which is what the daemon will require of whoever
-# connects. It pins this exact binary: an ad-hoc signature can be forged by anyone, so
-# requiring "identifier lowtalker" alone would let any process claim to be the client. A
-# Developer ID requirement replaces this in 3ti.8; until then the hash is the honest one,
-# and it is why re-signing the client means re-installing the job.
-client_requirement() {
-  [ -x "$CLIENT" ] || die "no client at $CLIENT - run 'make cli' first"
-  local hash
-  hash=$(codesign -d -vvv "$CLIENT" 2>&1 | awk -F= '/^CDHash=/ { print $2; exit }')
-  [ -n "$hash" ] || die "could not read the client's code directory hash - is $CLIENT signed?"
-  echo "cdhash H\"${hash}\""
-}
-
 install_helper() {
-  [ -x "$HELPER" ] || die "no helper at $HELPER - run 'swift build' first"
-  local requirement
-  requirement=$(client_requirement)
-  echo "keyboard-helper: callers must satisfy: ${requirement}"
+  [ -x "$HELPER" ] || die "no helper at $HELPER - run 'make helper' first"
+  # An ad hoc helper refuses to start, for a reason it logs; said here as well, before
+  # a job is registered that will only ever exit 78. [LAW:no-silent-failure]
+  # Captured rather than piped: grep -q closes the pipe at its first match, and under
+  # pipefail codesign's resulting SIGPIPE would fail a signature that passed.
+  signature=$(codesign -dvv "$HELPER" 2>&1) || die "codesign could not read $HELPER: $signature"
+  grep -q '^Authority=' <<<"$signature" \
+    || die "$HELPER is signed ad hoc and would admit no caller - run 'make helper', which signs it with the dev identity"
 
   # KeepAlive, not RunAtLoad alone: this owns a device whose readiness costs a second, and
   # a helper that stayed dead after one bad start would answer nothing until someone
-  # noticed. Restarting is the behaviour that fails loudly instead of quietly.
+  # noticed. Restarting is the behaviour that fails loudly instead of quietly - and it is
+  # how the helper comes back after the daemon it holds open goes away.
+  #
+  # The helper speaks through the unified log; stderr is kept for what it cannot route
+  # there, which is a crash.
   sudo tee "$PLIST" >/dev/null <<PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -50,34 +48,43 @@ install_helper() {
     <key>Label</key><string>${LABEL}</string>
     <key>ProgramArguments</key><array><string>${HELPER}</string></array>
     <key>MachServices</key><dict><key>${LABEL}</key><true/></dict>
-    <key>EnvironmentVariables</key>
-    <dict><key>LOWTALKER_CALLER_REQUIREMENT</key><string>${requirement}</string></dict>
     <key>KeepAlive</key><true/>
-    <key>StandardErrorPath</key><string>/tmp/${LABEL}.log</string>
+    <key>StandardErrorPath</key><string>/tmp/${LABEL}.crash.log</string>
 </dict>
 </plist>
 PLIST_EOF
   sudo chown root:wheel "$PLIST"
   sudo chmod 644 "$PLIST"
 
-  sudo launchctl bootout "system/${LABEL}" 2>/dev/null || true
+  # A job already loaded is replaced. bootout refuses a job that is not there, and that
+  # is the ordinary case for a first install, so its answer is read rather than obeyed.
+  if sudo launchctl print "system/${LABEL}" >/dev/null 2>&1; then
+    sudo launchctl bootout "system/${LABEL}"
+  fi
   sudo launchctl bootstrap system "$PLIST"
-  echo "keyboard-helper: installed. Log: /tmp/${LABEL}.log"
+  echo "keyboard-helper: installed. Read it with: $0 log"
 }
 
 uninstall_helper() {
-  sudo launchctl bootout "system/${LABEL}" 2>/dev/null || true
+  if sudo launchctl print "system/${LABEL}" >/dev/null 2>&1; then
+    sudo launchctl bootout "system/${LABEL}"
+  fi
   sudo rm -f "$PLIST"
   echo "keyboard-helper: removed"
+}
+
+state_helper() {
+  sudo launchctl print "system/${LABEL}" | awk '/state|pid|program|path|last exit/ { print }'
+}
+
+log_helper() {
+  log show --last 10m --style compact --predicate "subsystem == \"${LABEL}\""
 }
 
 case "${1:-}" in
   install)   install_helper ;;
   uninstall) uninstall_helper ;;
-  state)
-    sudo launchctl print "system/${LABEL}" 2>/dev/null | awk '/state|pid|program|path/ { print }' \
-      || echo "keyboard-helper: not installed"
-    ;;
-  requirement) client_requirement ;;
-  *) die "usage: keyboard-helper install|uninstall|state|requirement" ;;
+  state)     state_helper ;;
+  log)       log_helper ;;
+  *) die "usage: keyboard-helper install|uninstall|state|log" ;;
 esac

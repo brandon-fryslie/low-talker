@@ -43,6 +43,7 @@ let package = Package(
         // read one, and not the device, because a client must never open one.
         // [LAW:one-way-deps]
         .target(name: "KeyboardService", dependencies: ["Keystrokes"]),
+        .testTarget(name: "KeyboardServiceTests", dependencies: ["KeyboardService"]),
         // The root daemon that owns the device. It links VirtualKeyboard and the seam, and
         // deliberately not KeyboardLayout: text never reaches this process.
         .executableTarget(

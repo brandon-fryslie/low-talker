@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- The keyboard helper as the shipped app registers it, through SMAppService, which
+         reads this from Contents/Library/LaunchDaemons and runs the program named here
+         from inside the bundle. The service name is the one every client connects to;
+         a test holds it to the constant in KeyboardService. -->
+    <key>Label</key><string>com.lowtalker.keyboardd</string>
+    <key>BundleProgram</key><string>Contents/MacOS/lowtalker-keyboardd</string>
+    <key>MachServices</key><dict><key>com.lowtalker.keyboardd</key><true/></dict>
+    <key>KeepAlive</key><true/>
+</dict>
+</plist>
