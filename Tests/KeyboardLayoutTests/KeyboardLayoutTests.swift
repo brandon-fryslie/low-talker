@@ -11,6 +11,9 @@ import Testing
 @Suite struct KeyboardLayoutTests {
     static let us = try! KeyboardLayout.named("com.apple.keylayout.US")
     static let dvorak = try! KeyboardLayout.named("com.apple.keylayout.Dvorak")
+    /// The layout with the most dead keys macOS ships, and so the one that exercises the
+    /// composed half of the walk properly rather than through US's five accents.
+    static let extended = try! KeyboardLayout.named("com.apple.keylayout.USExtended")
 
     /// The alphabet the 3ti.2 spike typed, with the usages it typed them as.
     ///
@@ -120,6 +123,35 @@ import Testing
         #expect(try Self.us.keystrokes(for: "\r\n") == [Keystroke(.returnKey)])
         #expect(throws: Never.self) { try Self.us.keystrokes(for: "line one\r\nline two") }
         #expect(try Self.us.keystrokes(for: "a\r\nb").count == 3)
+    }
+
+    /// The characters a caller gets back are the ones the keys put on screen, which is not
+    /// always what it asked for. A Return writes one line break whatever spelling asked for
+    /// it, so a caller that reads the screen back against `typing`'s characters matches a
+    /// run that typed correctly - where reading it back against its own argument would
+    /// report a mismatch over a character no keyboard can produce.
+    @Test func theCharactersReturnedAreWhatLandsAndNotWhatWasAsked() throws {
+        #expect(try Self.us.typing("a\r\nb").map(\.character) == ["a", "\n", "b"])
+        #expect(try Self.us.typing("a\rb").map(\.character) == ["a", "\n", "b"])
+        #expect(try Self.us.typing("a\rb").flatMap(\.keystrokes) == [
+            Keystroke(Usage(rawValue: 0x04)), Keystroke(.returnKey), Keystroke(Usage(rawValue: 0x05)),
+        ])
+    }
+
+    /// The dead-key half of the walk, on the layout that has the most of them. Every one of
+    /// these is two keys on ABC Extended and no keys at all on US, so a walk that only ever
+    /// asked the bare keys - or that asked after a dead key and stopped following - would
+    /// leave them out and the layout would refuse a character it plainly types.
+    @Test func aLayoutBuiltOnDeadKeysReachesWhatItsKeysCompose() throws {
+        // caron, macron, ogonek, dot-below: four separate compositions, none of them in US.
+        for character in ["\u{1ce}", "\u{101}", "\u{119}", "\u{1e0d}"] {
+            #expect(try Self.extended.keystrokes(for: character).count == 2,
+                    "ABC Extended should compose \(character) from a dead key and a letter")
+            #expect(!Self.us.canType(character), "US should not reach \(character) at all")
+        }
+        // The walk ends. A layout is finitely many compositions and each is expanded once,
+        // so this suite loading at all is the termination check - it would hang otherwise.
+        #expect(Self.extended.canType("the quick brown fox"))
     }
 
     /// [LAW:parse-dont-validate] Refused whole, at one boundary, naming every character

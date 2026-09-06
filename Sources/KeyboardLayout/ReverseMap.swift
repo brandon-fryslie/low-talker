@@ -21,32 +21,46 @@ extension KeyboardLayout {
 
     /// Every character this layout can type, and what it costs.
     ///
-    /// Two passes, because a dead key types nothing by itself. The first asks every key
-    /// what it types and collects the keys that answer with a pending accent instead; the
-    /// second asks every key what it types *after* each of those, which is where `é` and
-    /// the curly quotes come from. A character reached both ways keeps the shorter, since
-    /// the first pass runs first and nothing overwrites.
+    /// One walk, breadth-first, because a dead key types nothing by itself. Each entry is
+    /// a sequence of keystrokes already pressed and the composition it left pending; the
+    /// walk asks every key what it types after that sequence, records the characters, and
+    /// pushes back any key that answered with a pending composition of its own. A layout
+    /// whose dead keys chain is followed the whole way rather than one key in, and it is
+    /// not a case bolted on for that: it is the same loop every un-composed key goes
+    /// through, entered with the empty sequence. [LAW:parse-dont-validate]
+    ///
+    /// Nothing installed on this Mac chains. ABC Extended is the deepest layout here - 26
+    /// pending compositions, more than a thousand characters - and every one of them is
+    /// reached one key past a dead key. The walk is written this way because it is less
+    /// code than the two passes it replaces, not for a layout that was measured and found.
+    ///
+    /// Breadth-first is the preference order, not an implementation detail. Shorter
+    /// sequences are expanded first, so the first sequence to reach a character is the
+    /// cheapest one, and nothing after it overwrites: `a` stays the A key rather than some
+    /// dead-key sequence that composes to the same letter.
+    ///
+    /// The walk terminates on the states, not on a depth limit. A layout has finitely many
+    /// pending compositions and each is expanded once, so a layout whose dead keys cycle
+    /// is walked out rather than followed forever. [LAW:no-silent-failure]
     static func reverseMap(of layout: UnsafePointer<UCKeyboardLayout>) -> [Character: [Keystroke]] {
         var map: [Character: [Keystroke]] = [:]
-        var deadKeys: [(keystroke: Keystroke, state: UInt32)] = []
+        var pending: [(pressed: [Keystroke], state: UInt32)] = [([], 0)]
+        var walked: Set<UInt32> = [0]
         let keyboardType = UInt32(LMGetKbdType())
 
-        for (keystroke, code, state) in everyKey {
-            var deadKeyState: UInt32 = 0
-            let typed = translate(layout, code, state, keyboardType, &deadKeyState)
-            if typed.isEmpty {
-                if deadKeyState != 0 { deadKeys.append((keystroke, deadKeyState)) }
-            } else if let character = one(typed), map[character] == nil {
-                map[character] = [keystroke]
-            }
-        }
-
-        for dead in deadKeys {
+        var next = 0
+        while next < pending.count {
+            let sequence = pending[next]
+            next += 1
             for (keystroke, code, state) in everyKey {
-                var deadKeyState = dead.state
+                var deadKeyState = sequence.state
                 let typed = translate(layout, code, state, keyboardType, &deadKeyState)
-                guard let character = one(typed), map[character] == nil else { continue }
-                map[character] = [dead.keystroke, keystroke]
+                if typed.isEmpty {
+                    guard deadKeyState != 0, walked.insert(deadKeyState).inserted else { continue }
+                    pending.append((sequence.pressed + [keystroke], deadKeyState))
+                } else if let character = one(typed), map[character] == nil {
+                    map[character] = sequence.pressed + [keystroke]
+                }
             }
         }
 
@@ -54,10 +68,6 @@ extension KeyboardLayout {
         // the same intent, and a document that took every character except its line breaks
         // would be the kind of near-miss that reads as working.
         map["\n"] = [Keystroke(.returnKey)]
-        // A Windows line break is one grapheme cluster to Swift, so it is one key here and
-        // not two. Left out, a file with CRLF endings is refused whole - and refused for a
-        // character the layout can plainly type. [LAW:parse-dont-validate]
-        map["\r\n"] = [Keystroke(.returnKey)]
         return map
     }
 

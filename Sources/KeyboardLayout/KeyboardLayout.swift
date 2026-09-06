@@ -17,8 +17,8 @@ import Keystrokes
 /// bytes that came back. [LAW:effects-at-boundaries] That is also what lets a test type
 /// through Dvorak without switching the machine's keyboard out from under the user.
 public struct KeyboardLayout: Sendable {
-    /// The keystrokes for each character, one for most and two for a character that is
-    /// typed as a dead key followed by the key it accents.
+    /// The keystrokes for each character: one for most, and as many as the layout takes
+    /// for a character reached through dead keys.
     private let byCharacter: [Character: [Keystroke]]
     /// What the layout calls itself, for a failure that has to name it.
     public let name: String
@@ -106,7 +106,16 @@ public struct KeyboardLayout: Sendable {
         // while `\u{e9}` types. Canonically equivalent strings compare equal in Swift, so
         // this changes what is typed for nobody and a caller reading the screen back
         // against its own text still matches. [LAW:parse-dont-validate]
+        // Line breaks next, and for the same reason one step further on: Return is one
+        // key, and a document that receives it holds one line break however the text asked
+        // for it. A CRLF is a single grapheme cluster to Swift and a lone CR is what the
+        // layout itself answers with, and both come back from the screen as a newline - so
+        // a caller comparing what it asked for against what it reads would find a mismatch
+        // in a run that typed perfectly. Normalised here, the characters returned below are
+        // what the keys put on screen. [LAW:parse-dont-validate]
         let text = text.precomposedStringWithCanonicalMapping
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
         let untypeable = text.filter { byCharacter[$0] == nil }
         guard untypeable.isEmpty else {
             throw UntypeableCharacters(characters: String(Set(untypeable).sorted()), layout: name)
