@@ -1,0 +1,359 @@
+#!/usr/bin/env bash
+# Installs, removes, and reports the Karabiner-DriverKit-VirtualHIDDevice driver
+# extension, from the public pqrs-org package alone. Karabiner-Elements is never
+# involved and is never a requirement.
+#
+#   virtual-hid-driver state             the machine's driver state
+#   virtual-hid-driver expect <verdict>  assert that state, or fail loudly
+#   virtual-hid-driver install           download, install, activate
+#   virtual-hid-driver remove            deactivate, delete files, forget receipt
+#
+# `state` writes the fact table to stderr for a reader and the one-word verdict to
+# stdout for a caller, so `$(virtual-hid-driver state)` is exactly the verdict.
+#
+# Run as the console user, not under sudo: the driver Manager must be the logged-in
+# user, because macOS attributes the activation request to whoever asks and the
+# approval the user gives answers that request. The file steps take sudo themselves.
+#
+# Held to bash 3.2, the newest /bin/bash Apple ships, so no arrays and no associative
+# arrays: this has to run on a Mac with nothing installed on it yet.
+#
+# Two version numbers travel together and are not the same number. The *package* is
+# versioned 8.4.0 and carries the Manager and Daemon apps; the *driver extension*
+# inside it is versioned 1.8.0, which is what `systemextensionsctl` reports. The
+# extension version has not moved across many package releases, so a package upgrade
+# that leaves `systemextensionsctl` still reading 1.8.0 has not failed.
+set -euo pipefail
+
+# [LAW:one-source-of-truth] Every fact about which artifact we install lives here and
+# nowhere else. README.md quotes PKG_VERSION for a human reader; `make check-docs`
+# fails if the two disagree, so the human copy cannot drift in silence.
+PKG_VERSION=8.4.0
+PKG_SHA256=8e6c433f4e3aaa0403f6f3c72849cfcd054d52d83b53d7408771ade54f1d49a1
+DEXT_VERSION=1.8.0
+BUNDLE_ID=org.pqrs.Karabiner-DriverKit-VirtualHIDDevice
+TEAM_ID=G43BCU2T37
+SIGNING_AUTHORITY="Developer ID Installer: Fumihiko Takayama ($TEAM_ID)"
+PKG_URL="https://github.com/pqrs-org/Karabiner-DriverKit-VirtualHIDDevice/releases/download/v$PKG_VERSION/Karabiner-DriverKit-VirtualHIDDevice-$PKG_VERSION.pkg"
+
+MANAGER_APP=/Applications/.Karabiner-VirtualHIDDevice-Manager.app
+MANAGER="$MANAGER_APP/Contents/MacOS/Karabiner-VirtualHIDDevice-Manager"
+SUPPORT_DIR="/Library/Application Support/org.pqrs/Karabiner-DriverKit-VirtualHIDDevice"
+IO_NODE=org_pqrs_Karabiner_DriverKit_VirtualHIDDeviceRoot
+
+die() { echo "virtual-hid-driver: $*" >&2; exit 1; }
+
+# Where the downloaded package lands: one fixed directory under the machine's own temp
+# area, holding one fixed filename.
+#
+# This script deletes no directories. It keeps a stable path instead of a per-run
+# temporary one, so the only thing it ever removes here is that single named file, and
+# clearing the directory itself is left to whoever reaps the temp area.
+VHID_SCRATCH="${TMPDIR:-/tmp}/low-talker-virtual-hid-driver"
+
+# How a probe reports that it could not read the machine, as opposed to reading it and
+# finding nothing. The reason goes to stderr and the word goes to stdout.
+#
+# Probes cannot use `die`. Every one of them is reached through a command
+# substitution, and bash swallows a fatal error raised in there: the caller receives an
+# empty string, carries on, and the run ends 0. So each probe is total, returns a word
+# for every outcome including its own failure, and the verbs below - which do run in
+# the main shell, where exiting works - refuse to act on that word.
+# [LAW:no-silent-failure]
+probe_failure() { echo "virtual-hid-driver: $*" >&2; echo probe-failed; }
+
+# ---------------------------------------------------------------------------
+# The facts
+#
+# Four probes. They are the authoritative reading of the machine, and the verdict
+# below is derived from them and from nothing else.
+# ---------------------------------------------------------------------------
+
+# The driver extension's registration state, as one canonical word.
+#
+# [LAW:parse-dont-validate] The bracket text `systemextensionsctl` prints is parsed
+# once, here, into a word the rest of the script matches exactly. No caller greps that
+# listing again, so no caller can come to a different conclusion about what it said.
+#
+# The mapping is total: text nobody here has seen becomes `unknown` rather than the
+# nearest familiar word. Misfiling an unseen state is how `remove` would come to report
+# success on a machine it did not understand. [LAW:no-silent-failure]
+registration_word() {
+  case "$1" in
+    'activated enabled')                           echo enabled ;;
+    'activated disabled')                          echo disabled ;;
+    'activated waiting for user')                  echo waiting ;;
+    'terminated waiting to uninstall on reboot')   echo pending-reboot ;;
+    *)                                             echo unknown ;;
+  esac
+}
+
+dext_registration() {
+  local listing pattern lines status live
+  listing=$(systemextensionsctl list)
+  pattern=$(printf '\t%s\t%s (' "$TEAM_ID" "$BUNDLE_ID")
+
+  # grep exits 1 for "found nothing" and 2 or more for "could not look". Collapsing
+  # those together is how a broken probe comes to read as "no driver installed", so
+  # they are told apart here. [LAW:no-silent-failure]
+  lines=$(grep -F "$pattern" <<<"$listing") && status=0 || status=$?
+  if (( status > 1 )); then
+    probe_failure "could not search the systemextensionsctl listing (grep exit $status)"
+    return 0
+  fi
+
+  # A Mac that has been upgraded but not yet restarted lists the bundle twice: the
+  # incoming registration, and the outgoing one still waiting on a reboot. The
+  # outgoing entry governs nothing, so it is dropped and what remains is the answer.
+  live=$(sed -n 's/.*\[\(.*\)\]$/\1/p' <<<"$lines" \
+         | sed '/^terminated waiting to uninstall on reboot$/d')
+
+  if [[ -z $lines ]]; then
+    echo unregistered
+  elif [[ -z $live ]]; then
+    echo pending-reboot
+  elif [[ $live == *$'\n'* ]]; then
+    echo ambiguous
+  else
+    registration_word "$live"
+  fi
+}
+
+# Which of the package's two payload trees are on disk.
+installed_files() {
+  local manager=no support=no
+  [[ -d $MANAGER_APP ]] && manager=yes
+  [[ -d $SUPPORT_DIR ]] && support=yes
+  case "$manager$support" in
+    yesyes) echo both ;;
+    nono)   echo none ;;
+    *)      echo partial ;;
+  esac
+}
+
+# The installer receipt's version, or `none`. The receipt outlives the files, because
+# the package's own uninstall scripts never call `pkgutil --forget`.
+receipt_version() {
+  local out status
+  out=$(pkgutil --pkg-info "$BUNDLE_ID" 2>&1) && status=0 || status=$?
+
+  # pkgutil exits non-zero for two unrelated reasons: this Mac holds no such receipt,
+  # which is a normal answer, and pkgutil could not run, which is not. Sending both
+  # down the "no receipt" path is how a broken probe would come to read as a clean
+  # machine, so the two are told apart by what pkgutil actually said.
+  # [LAW:no-silent-failure]
+  case "$status:$out" in
+    0:*)                echo "$out" | sed -n 's/^version: //p' ;;
+    *"No receipt for"*) echo none ;;
+    *)                  probe_failure "pkgutil could not read the receipt for $BUNDLE_ID (exit $status): $out" ;;
+  esac
+}
+
+# The receipt id when the machine holds one and nothing when it does not, so removal
+# runs over a collection instead of around a condition.
+# [LAW:dataflow-not-control-flow]
+receipts_present() {
+  [[ $(receipt_version) == none ]] || echo "$BUNDLE_ID"
+}
+
+# Whether the driver has matched and published its node in the IORegistry. This is
+# loading, not enabling: the extension can be enabled and still absent here until
+# some client opens it.
+io_node_present() {
+  local out status
+  out=$(ioreg -r -n "$IO_NODE" -d 1) && status=0 || status=$?
+  if (( status != 0 )); then
+    probe_failure "could not query the IORegistry for $IO_NODE (ioreg exit $status)"
+    return 0
+  fi
+  [[ -n ${out//[[:space:]]/} ]] && echo yes || echo no
+}
+
+# ---------------------------------------------------------------------------
+# The verdict
+# ---------------------------------------------------------------------------
+
+# One word for the whole machine, derived from the four facts and composed into a key
+# so the mapping reads as a table to check against rather than a chain of conditions
+# to simulate. The default arm names the key it could not place, which is the
+# difference between a bug report and a mystery.
+verdict_for() {
+  local files=$1 receipt=$2 reg=$3 io=$4
+  local held=yes
+
+  # A probe that could not read the machine says so, and that answer is never blended
+  # into a verdict about the driver. The reason is already on stderr; this only keeps
+  # the unread fact from being reported as a fact. [LAW:no-silent-failure]
+  case "$files $receipt $reg $io" in
+    *probe-failed*) echo unknown; return 0 ;;
+  esac
+
+  [[ $receipt == none ]] && held=no
+
+  case "files=$files;receipt=$held;reg=$reg;io=$io" in
+    'files=none;receipt=no;reg=unregistered;io=no')   echo absent ;;
+    'files=both;receipt=yes;reg=unregistered;io=no')  echo installed-inactive ;;
+    'files=both;receipt=yes;reg=waiting;io=no')       echo awaiting-approval ;;
+    'files=both;receipt=yes;reg=disabled;io=no')      echo disabled ;;
+    'files=both;receipt=yes;reg=enabled;io=no')       echo enabled ;;
+    'files=both;receipt=yes;reg=enabled;io=yes')      echo running ;;
+    *'reg=pending-reboot'*)                           echo pending-reboot ;;
+    # A registration this script cannot name, or two live ones at once. Kept apart
+    # from `residue` because residue is a mess we understand and this is not.
+    *'reg=unknown'*|*'reg=ambiguous'*)                echo unknown ;;
+    *)                                                echo residue ;;
+  esac
+}
+
+report_state() {
+  local files receipt reg io result
+  files=$(installed_files)
+  receipt=$(receipt_version)
+  reg=$(dext_registration)
+  io=$(io_node_present)
+  result=$(verdict_for "$files" "$receipt" "$reg" "$io")
+
+  {
+    echo "pinned package     $PKG_VERSION (driver extension $DEXT_VERSION)"
+    echo "payload on disk    $files"
+    echo "installer receipt  $receipt"
+    echo "extension state    $reg"
+    echo "IORegistry node    $io"
+    echo "verdict            $result"
+  } >&2
+
+  echo "$result"
+}
+
+# ---------------------------------------------------------------------------
+# The verbs
+# ---------------------------------------------------------------------------
+
+cmd_state() {
+  local result
+  result=$(report_state)
+  echo "$result"
+  # Exit non-zero when a probe could not read the machine. `state` succeeds when it has
+  # taken a reading; claiming success for a reading it never took is the one thing it
+  # must not do, and a caller testing this command deserves to hear about it.
+  [[ $result != unknown ]]
+}
+
+cmd_expect() {
+  local want=${1:?usage: virtual-hid-driver expect <verdict>}
+  local got
+  got=$(report_state)
+  [[ $got == "$want" ]] || die "expected the driver to be '$want' but it is '$got'"
+  echo "virtual-hid-driver: confirmed '$want'" >&2
+}
+
+cmd_install() {
+  local pkg result
+  mkdir -p "$VHID_SCRATCH"
+  pkg="$VHID_SCRATCH/driver.pkg"
+
+  # Clear the previous run's package before fetching. A download that dies partway
+  # would otherwise leave an older file sitting here for the checksum below to approve,
+  # and this would install the wrong bytes while reporting success.
+  # [LAW:no-silent-failure]
+  rm -f "$pkg"
+
+  echo "==> downloading $PKG_URL" >&2
+  curl --fail --show-error --silent --location --output "$pkg" "$PKG_URL"
+
+  # [LAW:no-silent-failure] Two different lies get caught here. The checksum catches
+  # bytes that are not the pinned release, a moved tag included; the signature catches
+  # bytes that are not from pqrs at all, and goes on meaning something after somebody
+  # bumps PKG_VERSION and its checksum together.
+  echo "$PKG_SHA256  $pkg" | shasum -a 256 --check --status \
+    || die "the downloaded package does not match the checksum pinned for $PKG_VERSION"
+  pkgutil --check-signature "$pkg" | grep -qF "$SIGNING_AUTHORITY" \
+    || die "the downloaded package is not signed by '$SIGNING_AUTHORITY'"
+
+  echo "==> installing (sudo)" >&2
+  sudo installer -pkg "$pkg" -target /
+
+  echo "==> activating the driver extension" >&2
+  "$MANAGER" activate
+
+  # The Manager exits 0 even when handed a bare usage error, so its exit status proves
+  # nothing at all and the state probe is the only honest report. [LAW:verifiable-goals]
+  result=$(report_state)
+  case "$result" in
+    enabled|running) echo "virtual-hid-driver: the driver is active." >&2 ;;
+    awaiting-approval|disabled)
+      cat >&2 <<'INSTRUCTION'
+
+virtual-hid-driver: the driver is installed and waiting for you.
+
+  Open  System Settings > General > Login Items & Extensions
+  Click the (i) beside "Driver Extensions"
+  Turn ON  org.pqrs.Karabiner-DriverKit-VirtualHIDDevice
+  Authenticate when macOS asks
+
+Then confirm with:  scripts/virtual-hid-driver expect enabled
+INSTRUCTION
+      exit 2 ;;
+    *) die "after installing, the driver is '$result', which is not a state installing can leave behind" ;;
+  esac
+}
+
+cmd_remove() {
+  local id result withdrawn
+
+  # [LAW:no-ambient-temporal-coupling] Deactivation must precede file removal, and the
+  # order is not a preference. Only the Manager can withdraw the extension, and
+  # removing the files deletes the Manager; do it the other way round and the
+  # registration is stranded with nothing left on the machine able to retract it.
+  echo "==> deactivating the driver extension" >&2
+  [[ -x $MANAGER ]] || die "$MANAGER is missing, so the extension cannot be withdrawn; run 'install' first, then 'remove'"
+  "$MANAGER" deactivate
+
+  # The Manager prints "request ... is failed" and still exits 0, so the withdrawal is
+  # confirmed against the registration itself and never against that exit status.
+  # Deleting the files while the extension is still registered is the one ordering
+  # mistake this verb can make, and it is unrecoverable without reinstalling, so it is
+  # checked here rather than trusted. [LAW:no-ambient-temporal-coupling]
+  withdrawn=$(dext_registration)
+  case "$withdrawn" in
+    pending-reboot|unregistered) ;;
+    *) die "the extension is still registered as '$withdrawn' after deactivation; refusing to delete the Manager that is the only thing able to withdraw it" ;;
+  esac
+
+  echo "==> removing files (sudo)" >&2
+  sudo rm -rf "$MANAGER_APP" "$SUPPORT_DIR"
+
+  # What the package's own uninstall scripts leave behind. `pkgutil --forget` fails on
+  # a receipt that is not there, so the receipts are read first and the removal runs
+  # over what was actually found.
+  receipts_present | while read -r id; do
+    echo "==> forgetting installer receipt $id (sudo)" >&2
+    sudo pkgutil --forget "$id"
+  done
+
+  result=$(report_state)
+  case "$result" in
+    absent) echo "virtual-hid-driver: the driver is gone." >&2 ;;
+    pending-reboot)
+      cat >&2 <<'INSTRUCTION'
+
+virtual-hid-driver: the files and the receipt are gone, but macOS keeps the
+extension registered as "terminated waiting to uninstall on reboot" until the
+machine restarts. That entry is not a failure, and nothing else clears it.
+
+  Restart the Mac
+
+Then confirm with:  scripts/virtual-hid-driver expect absent
+INSTRUCTION
+      exit 2 ;;
+    *) die "after removal, the driver is '$result', which is not a state removing can leave behind" ;;
+  esac
+}
+
+case "${1:-}" in
+  state)   cmd_state ;;
+  expect)  shift; cmd_expect "$@" ;;
+  install) cmd_install ;;
+  remove)  cmd_remove ;;
+  *) die "usage: virtual-hid-driver state|expect <verdict>|install|remove" ;;
+esac
