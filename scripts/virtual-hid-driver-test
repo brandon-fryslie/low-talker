@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+# The decision logic in scripts/virtual-hid-driver, exercised against stubbed probes.
+#
+# Nothing here touches the machine's driver. The script is sourced for its function
+# definitions and every probe that reads the Mac - pkgutil, systemextensionsctl, ioreg
+# - is shadowed by a shell function, so no privileged or destructive command can run
+# even if a guard under test were wrong. `install` and `remove` are never invoked.
+#
+# [LAW:behavior-not-structure] The assertions are on the contract: the verdict words
+# README.md documents and `expect` consumes, the probe sentinels, and the exit codes.
+# Nothing here pins an internal call shape, so the implementation stays free to move.
+#
+# Held to bash 3.2 like the script it tests, so no arrays.
+set -uo pipefail
+
+SCRIPT="$(dirname "$0")/virtual-hid-driver"
+
+# Sourcing runs the verb dispatch at the foot of the script, and `state` is the
+# read-only one. Its exit status reports the machine, not this suite, so it is not the
+# signal here - what has to be true is that the definitions arrived, and that is
+# checked directly rather than inferred from it. [LAW:no-silent-failure]
+sourced_status=0
+# shellcheck source=/dev/null
+source "$SCRIPT" state >/dev/null 2>&1 || sourced_status=$?
+set +e
+declare -f verdict_for >/dev/null && declare -f dext_registration >/dev/null \
+  || { echo "virtual-hid-driver-test: sourcing $SCRIPT left its functions undefined (exit $sourced_status)" >&2; exit 1; }
+
+pass=0
+fail=0
+
+check() {
+  local what=$1 want=$2 got=$3
+  if [[ $got == "$want" ]]; then
+    pass=$((pass + 1))
+  else
+    fail=$((fail + 1))
+    echo "FAIL  $what" >&2
+    echo "        want: $want" >&2
+    echo "        got:  $got" >&2
+  fi
+}
+
+check_contains() {
+  local what=$1 needle=$2 hay=$3
+  case "$hay" in
+    *"$needle"*) pass=$((pass + 1)) ;;
+    *) fail=$((fail + 1))
+       echo "FAIL  $what" >&2
+       echo "        wanted text containing: $needle" >&2
+       echo "        got: $hay" >&2 ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# registration_word - the bracket text systemextensionsctl prints, as one word
+# ---------------------------------------------------------------------------
+
+check "registration_word enabled"        enabled        "$(registration_word 'activated enabled')"
+check "registration_word disabled"       disabled       "$(registration_word 'activated disabled')"
+check "registration_word waiting"        waiting        "$(registration_word 'activated waiting for user')"
+check "registration_word pending-reboot" pending-reboot "$(registration_word 'terminated waiting to uninstall on reboot')"
+# Text nobody here has seen becomes `unknown` rather than the nearest familiar word:
+# misfiling an unseen state is how `remove` would report success on a machine it did
+# not understand.
+check "registration_word unseen text"    unknown        "$(registration_word 'activated something new')"
+
+# ---------------------------------------------------------------------------
+# verdict_for - the whole table, one case per verdict
+# ---------------------------------------------------------------------------
+
+check "verdict absent"             absent             "$(verdict_for none    none   unregistered no)"
+check "verdict installed-inactive" installed-inactive "$(verdict_for both    1.8.0  unregistered no)"
+check "verdict awaiting-approval"  awaiting-approval  "$(verdict_for both    1.8.0  waiting      no)"
+check "verdict disabled"           disabled           "$(verdict_for both    1.8.0  disabled     no)"
+check "verdict enabled"            enabled            "$(verdict_for both    1.8.0  enabled      no)"
+check "verdict running"            running            "$(verdict_for both    1.8.0  enabled      yes)"
+check "verdict pending-reboot"     pending-reboot     "$(verdict_for none    none   pending-reboot no)"
+check "verdict residue"            residue            "$(verdict_for partial 1.8.0  unregistered no)"
+check "verdict unknown registration" unknown          "$(verdict_for both    1.8.0  unknown      no)"
+check "verdict two live registrations" unknown        "$(verdict_for both    1.8.0  ambiguous    no)"
+
+# A probe that could not read the machine is never blended into a verdict about the
+# driver, whichever fact carries the sentinel.
+check "verdict probe-failed files"   unknown "$(verdict_for probe-failed none  unregistered no)"
+check "verdict probe-failed receipt" unknown "$(verdict_for both probe-failed enabled      no)"
+check "verdict probe-failed reg"     unknown "$(verdict_for both 1.8.0       probe-failed no)"
+check "verdict probe-failed io"      unknown "$(verdict_for both 1.8.0       enabled      probe-failed)"
+
+# A removal interrupted after the files went but before the receipt was forgotten is
+# not "done, waiting on a restart" - it is residue. `remove` reads `pending-reboot` as
+# "nothing left to do", so matching this verdict on the registration alone reported a
+# machine with a live receipt as finished and stranded that receipt forever.
+check "receipt left behind is residue, not pending-reboot" residue "$(verdict_for none 1.8.0 pending-reboot no)"
+check "files left behind is residue, not pending-reboot"   residue "$(verdict_for both none  pending-reboot no)"
+
+# ---------------------------------------------------------------------------
+# receipt_version - pkgutil's exits, told apart by what it actually said
+# ---------------------------------------------------------------------------
+
+STUB_PKGUTIL_OUT=""
+STUB_PKGUTIL_STATUS=0
+pkgutil() { printf '%s\n' "$STUB_PKGUTIL_OUT"; return "$STUB_PKGUTIL_STATUS"; }
+
+STUB_PKGUTIL_OUT="package-id: org.pqrs.test
+version: 1.8.0
+volume: /"
+STUB_PKGUTIL_STATUS=0
+check "receipt_version reads the version" 1.8.0 "$(receipt_version org.pqrs.test)"
+
+# "No receipt" is a normal answer; anything else pkgutil says is not.
+STUB_PKGUTIL_OUT="No receipt for 'org.pqrs.test' on '/'."
+STUB_PKGUTIL_STATUS=1
+check "receipt_version absent receipt" none "$(receipt_version org.pqrs.test)"
+
+STUB_PKGUTIL_OUT="pkgutil: cannot open the receipt database"
+STUB_PKGUTIL_STATUS=2
+# stderr carries probe_failure's reason and is asserted below, so it is set aside here
+# rather than discarded: the word on stdout is what this case is about.
+check "receipt_version unreadable receipt" probe-failed "$(receipt_version org.pqrs.test 2>/dev/null)"
+check_contains "receipt_version says why it could not read" \
+  "pkgutil could not read the receipt" "$(receipt_version org.pqrs.test 2>&1 >/dev/null)"
+
+# ---------------------------------------------------------------------------
+# receipts_present - the receipt to forget, or nothing, or the sentinel
+# ---------------------------------------------------------------------------
+
+# receipt_version is stubbed from here on, so its own cases above run first.
+STUB_RECEIPT=none
+receipt_version() { echo "$STUB_RECEIPT"; }
+
+STUB_RECEIPT=none
+check "receipts_present finds nothing to forget" "" "$(receipts_present)"
+STUB_RECEIPT=1.8.0
+check "receipts_present names the receipt" "$BUNDLE_ID" "$(receipts_present)"
+# Collapsing the sentinel into "present" would have `remove` forget a receipt on the
+# strength of a reading nobody took.
+STUB_RECEIPT=probe-failed
+check "receipts_present forwards the sentinel" probe-failed "$(receipts_present)"
+
+# ---------------------------------------------------------------------------
+# dext_registration - the listing, parsed once into a word
+# ---------------------------------------------------------------------------
+
+# Built from the script's own constants rather than a second copy of them.
+# [LAW:one-source-of-truth]
+dext_line() { printf '*\t*\t%s\t%s (1.8.0/1.8.0)\tKarabiner-VirtualHIDDevice [%s]' "$TEAM_ID" "$BUNDLE_ID" "$1"; }
+
+STUB_LIST=""
+STUB_LIST_STATUS=0
+systemextensionsctl() { printf '%s\n' "$STUB_LIST"; return "$STUB_LIST_STATUS"; }
+
+STUB_LIST="$(dext_line 'activated enabled')"
+check "dext_registration reads an enabled registration" enabled "$(dext_registration)"
+
+STUB_LIST="$(dext_line 'activated waiting for user')"
+check "dext_registration reads a waiting registration" waiting "$(dext_registration)"
+
+STUB_LIST="--- extensions
+no driver here"
+check "dext_registration reports an unlisted bundle" unregistered "$(dext_registration)"
+
+# A Mac upgraded but not yet restarted lists the bundle twice; the outgoing entry
+# governs nothing.
+STUB_LIST="$(dext_line 'terminated waiting to uninstall on reboot')
+$(dext_line 'activated enabled')"
+check "dext_registration drops the outgoing entry mid-upgrade" enabled "$(dext_registration)"
+
+STUB_LIST="$(dext_line 'terminated waiting to uninstall on reboot')"
+check "dext_registration reads a pending-reboot registration" pending-reboot "$(dext_registration)"
+
+STUB_LIST="$(dext_line 'activated enabled')
+$(dext_line 'activated disabled')"
+check "dext_registration refuses to pick between two live registrations" ambiguous "$(dext_registration)"
+
+# Listed, but no line carried a bracketed state: a listing this probe cannot parse is
+# not an empty machine.
+STUB_LIST="$(printf '*\t*\t%s\t%s (1.8.0/1.8.0)\tno bracket here' "$TEAM_ID" "$BUNDLE_ID")"
+check "dext_registration refuses an unparseable listing" probe-failed "$(dext_registration 2>/dev/null)"
+
+STUB_LIST=""
+STUB_LIST_STATUS=4
+check "dext_registration survives a failing listing" probe-failed "$(dext_registration 2>/dev/null)"
+check_contains "dext_registration says why it could not list" \
+  "could not list the system extensions" "$(dext_registration 2>&1 >/dev/null)"
+STUB_LIST_STATUS=0
+
+# ---------------------------------------------------------------------------
+# io_node_present - the IORegistry node
+# ---------------------------------------------------------------------------
+
+STUB_IOREG=""
+STUB_IOREG_STATUS=0
+ioreg() { printf '%s' "$STUB_IOREG"; return "$STUB_IOREG_STATUS"; }
+
+STUB_IOREG="+-o ${IO_NODE}  <class IOService>"
+check "io_node_present finds the node" yes "$(io_node_present)"
+# ioreg prints whitespace for a node that is not there, which is not a node.
+STUB_IOREG="
+
+"
+check "io_node_present reads whitespace as absent" no "$(io_node_present)"
+STUB_IOREG=""
+STUB_IOREG_STATUS=1
+check "io_node_present survives a failing query" probe-failed "$(io_node_present 2>/dev/null)"
+STUB_IOREG_STATUS=0
+
+# ---------------------------------------------------------------------------
+# remove_outcome - the exit codes a caller scripts against
+# ---------------------------------------------------------------------------
+
+# Run in subshells: every arm is terminal.
+( remove_outcome absent ) >/dev/null 2>&1
+check "remove_outcome absent exits 0" 0 "$?"
+( remove_outcome pending-reboot ) >/dev/null 2>&1
+check "remove_outcome pending-reboot exits 2" 2 "$?"
+# A state removal cannot end in is a refusal, not a success with a caveat.
+( remove_outcome residue ) >/dev/null 2>&1
+check "remove_outcome refuses an unfinished state" 1 "$?"
+
+# ---------------------------------------------------------------------------
+
+echo "virtual-hid-driver-test: $pass passed, $fail failed" >&2
+[ "$fail" -eq 0 ]
