@@ -420,7 +420,11 @@ struct TargetApp {
         let clock = ContinuousClock()
         let start = clock.now
         var unanswered: ScreenUnreadable?
-        while clock.now - start < limit {
+        // The deadline is checked after the read, not before it, so the last read lands on
+        // the tick past the limit and the app gets that tick - and so the screen is read in
+        // one place. A second read outside the loop is a second place to remember the catch
+        // below, and the poll that happens to see the popup decides whether the wait fails.
+        while true {
             try interrupt.check()
             do {
                 if condition(try read()) { return true }
@@ -434,13 +438,14 @@ struct TargetApp {
                 // something that lasts to the deadline is raised there, by name.
                 unanswered = unreadable
             }
+            guard clock.now - start < limit else { break }
             // Far below the 10-35 ms being measured, and far above a rate that would load
             // the target app's main thread with synchronous Accessibility calls and skew
             // the number this command exists to report.
             try await Task.sleep(for: .milliseconds(2))
         }
         if let unanswered { throw unanswered }
-        return condition(try read())
+        return false
     }
 }
 
