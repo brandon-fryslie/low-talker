@@ -1,4 +1,5 @@
 import Foundation
+import Testing
 @testable import VirtualKeyboard
 
 /// Karabiner-VirtualHIDDevice-Daemon, faked at the only place worth faking it: the far end
@@ -18,7 +19,6 @@ final class FakeDaemon: @unchecked Sendable {
     private let lock = NSLock()
     private var log: [Frame] = []
     private var pushID: UInt64 = 10_000
-    private var running = true
 
     /// `handling` runs on the daemon's own thread for every frame the client sends. The
     /// default answers each request with an empty response, which is what the daemon does
@@ -28,15 +28,33 @@ final class FakeDaemon: @unchecked Sendable {
         precondition(socketpair(AF_UNIX, SOCK_STREAM, 0, &pair) == 0, "socketpair")
         clientDescriptor = pair[0]
         descriptor = pair[1]
+        // Both halves of the pair refuse SIGPIPE by the same rule the client keeps: the
+        // peer closing while this thread is mid-write would otherwise end the whole test
+        // binary rather than fail one test. [LAW:single-enforcer]
+        try! refuseSIGPIPE(descriptor)
         let answer: @Sendable (Frame, FakeDaemon) throws -> Void = handling ?? { frame, daemon in
             if case .request(let id, _) = frame { try daemon.send(.response(id: id, payload: [])) }
         }
+        // The thread ends when the client closes its end, which every test does when its
+        // `DaemonConnection` deallocates. There is deliberately no other stop: the loop
+        // calls methods on `self`, so `deinit` cannot run while it is blocked in a read,
+        // and a flag saying otherwise would be a stop path that cannot fire.
         let thread = Thread { [self] in
             while true {
-                guard let frame = try? readFrame() else { break }
-                lock.lock(); log.append(frame); lock.unlock()
-                guard isRunning else { break }
-                do { try answer(frame, self) } catch { break }
+                do {
+                    let frame = try readFrame()
+                    lock.lock(); log.append(frame); lock.unlock()
+                    try answer(frame, self)
+                } catch is Closed {
+                    break
+                } catch {
+                    // The framing is what this suite exists to check, so a frame this
+                    // cannot decode is the finding, not a detail to swallow: dropped, it
+                    // reaches the test as an unrelated timeout on the client's next read.
+                    // [LAW:no-silent-failure]
+                    Issue.record("the fake daemon stopped: \(error)")
+                    break
+                }
             }
         }
         thread.stackSize = 1 << 20
@@ -44,13 +62,7 @@ final class FakeDaemon: @unchecked Sendable {
     }
 
     deinit {
-        lock.lock(); running = false; lock.unlock()
         close(descriptor)
-    }
-
-    private var isRunning: Bool {
-        lock.lock(); defer { lock.unlock() }
-        return running
     }
 
     /// Every frame the client has sent, in order.
@@ -79,13 +91,7 @@ final class FakeDaemon: @unchecked Sendable {
     }
 
     func send(_ frame: Frame) throws {
-        let bytes = frame.bytes
-        var offset = 0
-        while offset < bytes.count {
-            let written = bytes[offset...].withUnsafeBytes { Darwin.write(descriptor, $0.baseAddress, $0.count) }
-            guard written > 0 else { throw Failed(what: "write") }
-            offset += written
-        }
+        try sendRaw(frame.bytes)
     }
 
     /// A status push, which the daemon sends as a request of its own and the client is
@@ -99,7 +105,7 @@ final class FakeDaemon: @unchecked Sendable {
     func sendRaw(_ bytes: [UInt8]) throws {
         var offset = 0
         while offset < bytes.count {
-            let written = bytes[offset...].withUnsafeBytes { Darwin.write(descriptor, $0.baseAddress, $0.count) }
+            let written = uninterrupted { bytes[offset...].withUnsafeBytes { Darwin.write(descriptor, $0.baseAddress, $0.count) } }
             guard written > 0 else { throw Failed(what: "write") }
             offset += written
         }
@@ -114,13 +120,17 @@ final class FakeDaemon: @unchecked Sendable {
         var bytes = [UInt8](repeating: 0, count: count)
         var offset = 0
         while offset < count {
-            let got = bytes[offset...].withUnsafeMutableBytes { Darwin.read(descriptor, $0.baseAddress, $0.count) }
+            let got = uninterrupted { bytes[offset...].withUnsafeMutableBytes { Darwin.read(descriptor, $0.baseAddress, $0.count) } }
+            guard got != 0 else { throw Closed() }
             guard got > 0 else { throw Failed(what: "read") }
             offset += got
         }
         return bytes
     }
 
+    /// The client hung up. How the thread is meant to end, so it is its own type rather
+    /// than a failure the loop has to recognise by its message. [LAW:types-are-the-program]
+    struct Closed: Error {}
     struct Failed: Error { let what: String }
 }
 
