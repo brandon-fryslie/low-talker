@@ -2,6 +2,8 @@ import AppKit
 import ApplicationServices
 import ArgumentParser
 import Foundation
+import KeyboardLayout
+import Keystrokes
 import LowTalkerCore
 import VirtualKeyboard
 
@@ -38,14 +40,36 @@ struct DextTypeCommand: AsyncParsableCommand {
     @Argument(help: "The bundle id of the app to type into, e.g. com.apple.TextEdit.")
     var into: BundleID
 
-    @Argument(help: "The text to type: printable ASCII, newline, and tab.")
+    @Argument(help: "The text to type. Anything the current keyboard layout has keys for, dead-key sequences included.")
     var text: String
+
+    @Option(name: .customLong("layout"), help: "The keyboard layout to type through, by input source id (com.apple.keylayout.Dvorak). Defaults to this process's own, which under sudo is root's US and not the console user's - so a machine on any other layout needs this said.")
+    var layoutID: String?
 
     @MainActor
     func run() async throws {
+        // Named rather than discovered when it has to be. This command runs as root, and
+        // root is answered with root's own layout: on a machine switched to Dvorak, the
+        // console user is told Dvorak and this process is told US. Typing US keys under
+        // Dvorak types something else entirely and every check here would still pass, so
+        // the layout is printed whether it was named or found. [LAW:no-silent-failure]
+        let layout = try layoutID.map { try KeyboardLayout.named($0) } ?? KeyboardLayout.current()
+        // Printed here, where the fact becomes known, and not alongside the focus report
+        // below: a run that never raises the app throws before that line, and the layout is
+        // exactly what an operator needs told when the machine is not on root's US.
+        print("typing through \(layout.name)")
+        // After the print and not before it, so that "the layout it used" holds for a run
+        // that types nothing too. Resolving a layout cannot fail differently for an empty
+        // string, so the cheap check has no claim on going first.
         // [LAW:parse-dont-validate] The text is proven typeable before the daemon is
         // touched, so a refusal leaves no half-typed line behind.
-        let keystrokes = try USLayout.keystrokes(for: text)
+        guard !text.isEmpty else { throw ValidationError("there is nothing to type") }
+        let typing = try layout.typing(text)
+        // What the keys will put on screen, which is not always what was asked for: a CRLF
+        // is one Return, and the app writes one line break for it. Compared against this
+        // rather than the argument, so a run that typed correctly is not reported as a
+        // mismatch over a character no keyboard can produce. [LAW:one-source-of-truth]
+        let expected = String(typing.map(\.character))
         let clock = ContinuousClock()
         let connecting = clock.now
         // Watched before a single report goes out, so there is no window where an
@@ -67,25 +91,17 @@ struct DextTypeCommand: AsyncParsableCommand {
         let startup = try keyboard.start(within: .seconds(3))
         print("connected in \((opened - connecting).milliseconds) ms, daemon answered in \(startup.answered.milliseconds) ms, keyboard ready after \(startup.ready.milliseconds) ms")
 
-        // A press in the device's own vocabulary: shift is a key like any other, held
-        // around the one it shifts. Three reports for a shifted character where the spike
-        // sent two, and that is the more faithful count - a modifier and the key it
-        // modifies do not go down in the same scan on real hardware either.
-        var typed = 0
-        func press(_ keystroke: USLayout.Keystroke) throws {
-            if keystroke.shift { try keyboard.down(.leftShift) }
-            try keyboard.down(Usage(rawValue: keystroke.usage))
-            // Counted here, on the key-down the daemon has acknowledged, not after the
-            // release: a failure between the two still put the character on screen, and a
-            // count taken after the release would report one fewer than is really there.
-            typed += 1
-            try keyboard.releaseAll()
-        }
-
+        // A press in the device's own vocabulary: a modifier is a key like any other, held
+        // around the one it modifies. So a keystroke costs one report per modifier held,
+        // one for the key, and one for the release - two for a bare letter, four for the
+        // em dash, which holds Shift and Option. That is the faithful count: a modifier and
+        // the key it modifies do not go down in the same scan on real hardware either.
         // [LAW:no-ambient-temporal-coupling] The target is stated, not discovered, and
         // every read re-checks it, so a window that steals focus mid-run is a named
         // failure rather than text delivered somewhere nobody asked for.
         let screen = TargetApp(bundleID: into, interrupt: interrupt)
+        var scribe = Scribe(keyboard: GuardedKeyboard(keyboard: keyboard, interrupt: interrupt, screen: screen))
+
         try interrupt.check()
         try await screen.raise(within: .seconds(5))
         let start = try screen.focus()
@@ -100,31 +116,23 @@ struct DextTypeCommand: AsyncParsableCommand {
         // ScreenUnreadable let a daemon timeout mid-burst walk past it, and leaving the
         // first press outside the block let its own failure past as well. What throws
         // does not change what the operator needs to be told. [LAW:single-enforcer]
-        let first = keystrokes[0]
+        let first = typing[0]
         let firstPosted = clock.now
         do {
-            try interrupt.check()
             // One character alone, so its latency is the driver's and not the queue's.
-            try press(first)
+            try scribe.press(first.character, first.keystrokes)
             let firstSeen = try await screen.wait(within: .seconds(3)) { $0.occurrences(of: String(first.character)) > before.occurrences(of: String(first.character)) }
             print("first character on screen in \(into.rawValue) after \((clock.now - firstPosted).milliseconds) ms\(firstSeen ? "" : " (NEVER SEEN)")")
 
-            // Focus is re-checked before every keystroke, not once before the burst. A
-            // keystroke is irrevocable the moment it is posted, so the window in which
-            // focus may move has to be one keystroke wide; anything wider delivers the
-            // rest of the text to whatever app took the front.
-            // [LAW:no-ambient-temporal-coupling]
-            let rest = Array(keystrokes.dropFirst())
+            let rest = Array(typing.dropFirst())
             let restPosted = clock.now
-            for keystroke in rest {
-                try interrupt.check()
-                try screen.requireFrontmost()
-                try press(keystroke)
+            for character in rest {
+                try scribe.press(character.character, character.keystrokes)
             }
             let acknowledged = clock.now - restPosted
             // Against a baseline, like the first character's check: an app already holding
             // this text would otherwise confirm a run that delivered nothing.
-            let allSeen = try await screen.wait(within: .seconds(5)) { $0.occurrences(of: text) > before.occurrences(of: text) }
+            let allSeen = try await screen.wait(within: .seconds(5)) { $0.occurrences(of: expected) > before.occurrences(of: expected) }
             let settled = clock.now - restPosted
             // The count is the one the clock actually covers: the first character was
             // posted and timed above, on its own, and is not in this window.
@@ -133,7 +141,7 @@ struct DextTypeCommand: AsyncParsableCommand {
             // 0.1 ms" is measured from after the character had already landed and reads
             // as a claim about it, which the line above has already made properly.
             if !rest.isEmpty {
-                print("\(rest.count) more characters posted and acknowledged in \(acknowledged.milliseconds) ms, all \(keystrokes.count) on screen after \(settled.milliseconds) ms")
+                print("\(rest.count) more characters posted and acknowledged in \(acknowledged.milliseconds) ms, all \(typing.count) on screen after \(settled.milliseconds) ms")
             }
             if allSeen {
                 print("the screen holds the text, complete and in order")
@@ -145,7 +153,7 @@ struct DextTypeCommand: AsyncParsableCommand {
                 catch { print("MISMATCH, and the screen would not be read afterwards: \(error)") }
             }
         } catch {
-            throw TypingStopped(typed: typed, of: keystrokes.count, cause: error)
+            throw TypingStopped(typed: scribe.typed, of: typing.count, halfTyped: scribe.halfTyped, cause: error)
         }
     }
 }
@@ -180,54 +188,25 @@ struct DextWatchCommand: AsyncParsableCommand {
     }
 }
 
-// MARK: - Characters to keystrokes
-
-/// The spike's alphabet: printable ASCII plus newline and tab, as the US layout types
-/// them. The layout's own map, dead keys included, is low-keyboard-3ti.4's work.
-enum USLayout {
-    struct Keystroke {
-        let character: Character
-        let usage: UInt16
-        let shift: Bool
-    }
-
-    private typealias Row = (usage: UInt16, plain: Character, shifted: Character?)
-
-    /// Usages that run in the order of the characters they type: letters from 0x04,
-    /// digits from 0x1e.
-    private static func run(from usage: UInt16, _ plain: String, _ shifted: String) -> [Row] {
-        zip(plain, shifted).enumerated().map { Row(usage + UInt16($0.offset), $0.element.0, $0.element.1) }
-    }
-
-    /// Keyboard page 0x07, from the HID Usage Tables: each usage with the character
-    /// it types bare and the one it types under Shift.
-    private static let punctuation: [Row] = [
-        (0x28, "\n", nil), (0x2b, "\t", nil), (0x2c, " ", nil),
-        (0x2d, "-", "_"), (0x2e, "=", "+"), (0x2f, "[", "{"), (0x30, "]", "}"), (0x31, "\\", "|"),
-        (0x33, ";", ":"), (0x34, "'", "\""), (0x35, "`", "~"), (0x36, ",", "<"), (0x37, ".", ">"), (0x38, "/", "?"),
-    ]
-
-    private static let table: [Row] =
-        run(from: 0x04, "abcdefghijklmnopqrstuvwxyz", "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-        + run(from: 0x1e, "1234567890", "!@#$%^&*()")
-        + punctuation
-
-    private static let keystrokes: [Character: Keystroke] = Dictionary(uniqueKeysWithValues: table.flatMap { row in
-        [(row.plain, Keystroke(character: row.plain, usage: row.usage, shift: false))]
-            + (row.shifted.map { [($0, Keystroke(character: $0, usage: row.usage, shift: true))] } ?? [])
-    })
-
-    /// [LAW:parse-dont-validate] The one place text becomes keystrokes; a character
-    /// outside the alphabet is refused here, by name, and nothing downstream checks.
-    static func keystrokes(for text: String) throws -> [Keystroke] {
-        let untypeable = text.filter { keystrokes[$0] == nil }
-        guard untypeable.isEmpty else { throw UntypeableCharacters(characters: String(untypeable)) }
-        guard !text.isEmpty else { throw ValidationError("there is nothing to type") }
-        return text.map { keystrokes[$0]! }
-    }
-}
-
 extension BundleID: ExpressibleByArgument {}
+
+/// The virtual keyboard, refusing any keystroke this run has lost the right to post.
+/// [LAW:decomposition] The three things a keystroke depends on - the device, the
+/// operator's interrupt, and the app in front - meet here and nowhere else, so `Scribe`
+/// presses keys without knowing what a window server is.
+struct GuardedKeyboard: Keyboard {
+    let keyboard: VirtualKeyboard
+    let interrupt: Interrupt
+    let screen: TargetApp
+
+    func check() throws {
+        try interrupt.check()
+        try screen.requireFrontmost()
+    }
+
+    func down(_ usage: Usage) throws { try keyboard.down(usage) }
+    func releaseAll() throws { try keyboard.releaseAll() }
+}
 
 /// A run that stopped once text was already in the target: focus moved, the daemon went
 /// quiet, the operator interrupted it. What stopped it is the cause; how much is in the
@@ -236,6 +215,10 @@ extension BundleID: ExpressibleByArgument {}
 struct TypingStopped: Error, CustomStringConvertible {
     let typed: Int
     let of: Int
+    /// The character whose first keystroke landed and whose last did not, when the run
+    /// stopped inside one. It is not in the count, because it is not on screen; it is in
+    /// the target app as a pending accent, which is a different thing to act on.
+    var halfTyped: Character?
     let cause: any Error
     var description: String {
         // "Posted and acknowledged", not "typed", and the difference is this spike's
@@ -245,7 +228,11 @@ struct TypingStopped: Error, CustomStringConvertible {
         let progress = typed < of
             ? "\(typed) of \(of) characters had been posted and acknowledged before this, and the rest were not sent"
             : "all \(of) characters had been posted and acknowledged before this"
-        return "\(cause). \(progress)"
+        // A dead key posted without the letter after it leaves the app mid-composition,
+        // which no reset here can clear and which silently changes the next character
+        // that app receives. [LAW:no-silent-failure]
+        let pending = halfTyped.map { ", and \(String($0).debugDescription) was left half typed: its accent is pending in the app and will combine with whatever it receives next" } ?? ""
+        return "\(cause). \(progress)\(pending)"
     }
 }
 
@@ -298,11 +285,6 @@ final class Interrupt: @unchecked Sendable {
 struct Interrupted: Error, CustomStringConvertible {
     let number: Int32
     var description: String { "interrupted by signal \(number)" }
-}
-
-struct UntypeableCharacters: Error, CustomStringConvertible {
-    let characters: String
-    var description: String { "the US layout spike cannot type \(characters.debugDescription); it knows printable ASCII, newline, and tab" }
 }
 
 // MARK: - Reading the screen back
