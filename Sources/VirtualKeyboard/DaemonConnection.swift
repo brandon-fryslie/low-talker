@@ -45,7 +45,7 @@ final class DaemonConnection {
 
     /// Connects to the daemon at the path above.
     convenience init() throws {
-        guard FileManager.default.fileExists(atPath: Self.socketPath) else { throw DaemonError.noSocket }
+        guard FileManager.default.fileExists(atPath: Self.socketPath) else { throw DaemonError.noSocket(path: Self.socketPath) }
         let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw DaemonError.socket("socket", errno) }
         try self.init(fileDescriptor: descriptor)

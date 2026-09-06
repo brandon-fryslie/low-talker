@@ -2,8 +2,10 @@ import Foundation
 
 /// The two rules every socket in this module keeps, in the one place that keeps them.
 ///
-/// Both sides of a socketpair need them and only one of them is a `DaemonConnection`, so
-/// living on that type is what let the test fake be born without either. [LAW:single-enforcer]
+/// They used to live on `DaemonConnection`, which is why a socket born anywhere else got
+/// neither: the fake daemon on the other end of a socketpair is not a connection and had
+/// no way to reach them. Here, neither side of the pair owns the other's rule.
+/// [LAW:single-enforcer]
 
 /// A write to a closed peer raises SIGPIPE, which ends the process without a word. Every
 /// descriptor this module reads or writes refuses it at the moment it is created, and a
