@@ -1,4 +1,5 @@
 import Foundation
+@testable import LowTalkerCore
 import Keystrokes
 import Testing
 import VirtualKeyboard
@@ -46,6 +47,33 @@ import VirtualKeyboard
     @Test func aRunStoppedBetweenCharactersSaysNothingAboutPendingAccents() {
         let stopped = TypingStopped(typed: 12, of: 40, cause: DaemonError.silent)
         #expect(!"\(stopped)".contains("half typed"))
+    }
+}
+
+/// The two hand-transcribed key code tables in this repo, checked against each other.
+///
+/// `Usage(virtualKeyCode:)` was written from the ADB and HID tables for this epic;
+/// `Modifier.hardware.keyCode` was written for the hotkey and the event poster, long
+/// before it, and is exercised every time the hotkey works. Neither is derived from the
+/// other, so where they overlap they are two witnesses rather than one repeated.
+/// [LAW:one-source-of-truth] The character rows are checked against the spike's
+/// driver-proven table in KeyboardLayoutTests; this is the modifier row, which types no
+/// character and so appears in no layout map at all.
+@Suite struct VirtualKeyCodeTests {
+    @Test func theModifierRowAgreesWithTheTableTheHotkeyUses() {
+        let expected: [Modifier: Usage] = [
+            .leftShift: .leftShift, .rightShift: .rightShift,
+            .leftControl: .leftControl, .rightControl: .rightControl,
+            .leftOption: .leftOption, .rightOption: .rightOption,
+            .leftCommand: .leftCommand, .rightCommand: .rightCommand,
+        ]
+        for (modifier, usage) in expected {
+            #expect(Usage(virtualKeyCode: modifier.hardware.keyCode) == usage, "\(modifier) disagrees")
+        }
+        // Every side-specific modifier is covered; `function` has no HID keyboard usage,
+        // and saying so here is what keeps this from silently covering seven of nine.
+        #expect(Set(expected.keys).union([.function]) == Set(Modifier.allCases))
+        #expect(Usage(virtualKeyCode: Modifier.function.hardware.keyCode) == nil)
     }
 }
 

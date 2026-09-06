@@ -108,6 +108,20 @@ import Testing
         }
     }
 
+    /// Swift reads a grapheme cluster as one character where macOS types several keys, and
+    /// the two disagreements that reach real text are these. Both are refusals of something
+    /// plainly typeable, which is the worst kind: the layout can type it and says it cannot.
+    @Test func theTextSwiftCountsDifferentlyFromTheKeysStillTypes() throws {
+        // A decomposed accented letter is one Character to Swift and was never a key to
+        // this map, which is filled with what the keys type - the composed form.
+        #expect(try Self.us.keystrokes(for: "e\u{301}") == Self.us.keystrokes(for: "\u{e9}"))
+        #expect(Self.us.canType("nai\u{308}ve"))
+        // A Windows line break is one Character, so it is one Return and not two keys.
+        #expect(try Self.us.keystrokes(for: "\r\n") == [Keystroke(.returnKey)])
+        #expect(throws: Never.self) { try Self.us.keystrokes(for: "line one\r\nline two") }
+        #expect(try Self.us.keystrokes(for: "a\r\nb").count == 3)
+    }
+
     /// [LAW:parse-dont-validate] Refused whole, at one boundary, naming every character
     /// that cannot be typed rather than the first - an operator who fixes one and runs
     /// again to be told about the next is being told the truth one character at a time.

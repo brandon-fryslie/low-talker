@@ -79,10 +79,19 @@ struct DextTypeCommand: AsyncParsableCommand {
         let startup = try keyboard.start(within: .seconds(3))
         print("connected in \((opened - connecting).milliseconds) ms, daemon answered in \(startup.answered.milliseconds) ms, keyboard ready after \(startup.ready.milliseconds) ms")
 
-        // A press in the device's own vocabulary: shift is a key like any other, held
-        // around the one it shifts. Three reports for a shifted character where the spike
-        // sent two, and that is the more faithful count - a modifier and the key it
-        // modifies do not go down in the same scan on real hardware either.
+        // A press in the device's own vocabulary: a modifier is a key like any other, held
+        // around the one it modifies. So a keystroke costs one report per modifier held,
+        // one for the key, and one for the release - two for a bare letter, four for the
+        // em dash, which holds Shift and Option. That is the faithful count: a modifier and
+        // the key it modifies do not go down in the same scan on real hardware either.
+        // [LAW:no-ambient-temporal-coupling] The target is stated, not discovered, and
+        // every read re-checks it, so a window that steals focus mid-run is a named
+        // failure rather than text delivered somewhere nobody asked for. Declared above
+        // `press`, which reads it: a nested function may name a local declared after it,
+        // but only until someone moves the call, and then it traps rather than failing to
+        // build.
+        let screen = TargetApp(bundleID: into, interrupt: interrupt)
+
         var typed = 0
         // A character left with its dead key posted and the letter after it not. Only a
         // run that stopped inside a character has one, and the target app is holding a
@@ -101,6 +110,12 @@ struct DextTypeCommand: AsyncParsableCommand {
                 try interrupt.check()
                 try screen.requireFrontmost()
                 for modifier in keystroke.modifiers.usages { try keyboard.down(modifier) }
+                let last = index == character.keystrokes.count - 1
+                // Recorded BEFORE the key goes down, and cleared after the last one comes
+                // back. A request that throws may still have reached the driver, so a dead
+                // key whose post failed is assumed to be pending in the app rather than
+                // assumed away - the same bias `keysDown` keeps, for the same reason.
+                if !last { halfTyped = character.character }
                 try keyboard.down(keystroke.usage)
                 // Counted on the key-down the daemon has acknowledged, not after the
                 // release: a failure between the two still put the character on screen,
@@ -108,16 +123,18 @@ struct DextTypeCommand: AsyncParsableCommand {
                 // really there. It is the LAST key-down of the character, because a
                 // character typed as a dead key and then the letter it accents is not on
                 // screen until the second of them.
-                halfTyped = index == character.keystrokes.count - 1 ? nil : character.character
-                if halfTyped == nil { typed += 1 }
+                //
+                // The opposite bias to `halfTyped` above, and deliberately: this count says
+                // "posted and acknowledged", which a throw means did not happen, while that
+                // says "may be pending", which a throw means it might be.
+                if last {
+                    typed += 1
+                    halfTyped = nil
+                }
                 try keyboard.releaseAll()
             }
         }
 
-        // [LAW:no-ambient-temporal-coupling] The target is stated, not discovered, and
-        // every read re-checks it, so a window that steals focus mid-run is a named
-        // failure rather than text delivered somewhere nobody asked for.
-        let screen = TargetApp(bundleID: into, interrupt: interrupt)
         try interrupt.check()
         try await screen.raise(within: .seconds(5))
         let start = try screen.focus()

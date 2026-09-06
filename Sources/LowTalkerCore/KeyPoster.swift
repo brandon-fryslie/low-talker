@@ -32,9 +32,9 @@ public struct SystemKeyPoster: KeyPoster {
 
 /// One event of a chord press, as the window server will see it.
 ///
-/// Not a event: a single press is several of these - each modifier going down, the
-/// key down and up, the modifiers back up - and the seam that carries a event to the
-/// virtual keyboard names one press. [LAW:one-type-per-behavior]
+/// Not a `Keystroke`: a single press is several of these - each modifier going down, the
+/// key down and up, the modifiers back up - and `Keystroke`, the seam that carries a press
+/// to the virtual keyboard, names the whole press. [LAW:one-type-per-behavior]
 public struct ChordEvent: Equatable, Sendable {
     public let key: CGKeyCode
     public let type: CGEventType

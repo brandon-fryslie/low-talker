@@ -62,6 +62,12 @@ let package = Package(
             name: "VirtualKeyboardTests",
             dependencies: ["VirtualKeyboard", "Keystrokes"]
         ),
+        // The vocabulary stands on its own, so its tests do too: nothing here imports a
+        // layout or a device. [LAW:decomposition]
+        .testTarget(
+            name: "KeystrokesTests",
+            dependencies: ["Keystrokes"]
+        ),
         // The reverse map is built from a real layout's own data, so these read the
         // installed US and Dvorak layouts rather than a fixture that could agree with a
         // wrong reading of them.

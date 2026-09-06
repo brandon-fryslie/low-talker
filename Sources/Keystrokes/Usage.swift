@@ -29,7 +29,9 @@ public extension Usage {
     static let rightOption = Usage(rawValue: 0xE6)
     static let rightCommand = Usage(rawValue: 0xE7)
 
-    /// Keys that carry no character, named because a chord names them.
+    /// Named here because a chord names keys by name rather than by the character they
+    /// type. Three of these do type one - Return, Tab and Space - and Escape and Delete
+    /// do not; what they have in common is being asked for by name.
     static let returnKey = Usage(rawValue: 0x28)
     static let escape = Usage(rawValue: 0x29)
     static let delete = Usage(rawValue: 0x2A)

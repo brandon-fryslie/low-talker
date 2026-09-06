@@ -54,6 +54,10 @@ extension KeyboardLayout {
         // the same intent, and a document that took every character except its line breaks
         // would be the kind of near-miss that reads as working.
         map["\n"] = [Keystroke(.returnKey)]
+        // A Windows line break is one grapheme cluster to Swift, so it is one key here and
+        // not two. Left out, a file with CRLF endings is refused whole - and refused for a
+        // character the layout can plainly type. [LAW:parse-dont-validate]
+        map["\r\n"] = [Keystroke(.returnKey)]
         return map
     }
 

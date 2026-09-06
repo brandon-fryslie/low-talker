@@ -99,6 +99,14 @@ public struct KeyboardLayout: Sendable {
     /// the first one - half a sentence in a document is worse than none, because only one
     /// of the two is obviously wrong.
     public func typing(_ text: String) throws -> [(character: Character, keystrokes: [Keystroke])] {
+        // Composed first. The map is keyed by what Swift calls a character - a grapheme
+        // cluster - and filled with what the keys type, which is the composed form; text
+        // that arrives decomposed is the same string to Swift and a different key to a
+        // dictionary, so `e` followed by a combining acute would be refused as untypeable
+        // while `\u{e9}` types. Canonically equivalent strings compare equal in Swift, so
+        // this changes what is typed for nobody and a caller reading the screen back
+        // against its own text still matches. [LAW:parse-dont-validate]
+        let text = text.precomposedStringWithCanonicalMapping
         let untypeable = text.filter { byCharacter[$0] == nil }
         guard untypeable.isEmpty else {
             throw UntypeableCharacters(characters: String(Set(untypeable).sorted()), layout: name)
@@ -113,7 +121,7 @@ public struct KeyboardLayout: Sendable {
 
     /// Whether this layout can type every character of `text`, without building anything.
     public func canType(_ text: String) -> Bool {
-        text.allSatisfy { byCharacter[$0] != nil }
+        text.precomposedStringWithCanonicalMapping.allSatisfy { byCharacter[$0] != nil }
     }
 }
 
