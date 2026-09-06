@@ -178,7 +178,7 @@ The daemon is a prerequisite and nothing starts it. The public package installs 
 
 Once typing has begun that promise is no longer available to make. A keystroke cannot be recalled, so an app that takes the front mid-run leaves a fragment in the target, and the refusal says how long it is rather than claiming the run posted nothing:
 
-    com.googlecode.iterm2 is frontmost, not com.apple.TextEdit. 34 of 500 characters were already typed; the rest were not
+    com.googlecode.iterm2 is frontmost, not com.apple.TextEdit. 34 of 500 characters had been posted and acknowledged before this, and the rest were not sent
 
 That is deliberate. An earlier version typed into whatever happened to be frontmost, and once delivered its text into the operator's own terminal.
 
