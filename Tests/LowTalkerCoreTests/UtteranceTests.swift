@@ -126,17 +126,30 @@ import Testing
         feed.finish()
     }
 
-    /// An utterance no clip of which reached the gate is refused with its loudest
-    /// peak, not heard as nothing said.
-    @Test func nothingReachingTheGateIsRefused() async {
+    /// An utterance no clip of which reached the audible floor is refused with its
+    /// loudest peak, not heard as nothing said.
+    @Test func nothingReachingTheFloorIsRefused() async {
         let utterance = Utterance()
         let clips = AsyncStream<AudioClip> { continuation in
             continuation.yield(Self.quiet(1_600))
-            continuation.yield(AudioClip(samples: [0.01, -0.015]))
+            continuation.yield(AudioClip(samples: [0.005, -0.008]))
             continuation.finish()
         }
-        await #expect(throws: UtteranceError.nothingSpoken(peak: 0.015)) {
+        await #expect(throws: UtteranceError.nothingSpoken(peak: 0.008)) {
             try await utterance.fill(from: clips)
         }
+    }
+
+    /// Speech is judged against the utterance's own loudest clip, not a level: a
+    /// clip within the range of the loudest is speech and one under it is not, at
+    /// full level and at a tenth of it alike, so a soft speaker is cut into speech
+    /// and quiet where a loud one is.
+    @Test(arguments: [Float(1), 0.1]) func speechStandsWithinRangeOfTheLoudest(scale: Float) async {
+        let utterance = Utterance()
+        await utterance.append(AudioClip(samples: Array(repeating: 0.5 * scale, count: 1_600)))
+        await utterance.append(AudioClip(samples: Array(repeating: 0.04 * scale, count: 1_600)))
+        await utterance.append(AudioClip(samples: Array(repeating: 0.03 * scale, count: 1_600)))
+        let (samples, _) = await utterance.audio(beyond: 0)
+        #expect(samples.count == 3_200 + Utterance.hangover)
     }
 }
