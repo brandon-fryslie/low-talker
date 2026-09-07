@@ -1,30 +1,6 @@
 import Keystrokes
 import Testing
-@testable import lowtalker
-
-/// A keyboard that records what it was asked to do and refuses after a given number of
-/// calls, so a run can be stopped at any point inside a character.
-///
-/// One knob and not three: every call goes through the same counter, so "throw on the
-/// second key-down of a two-keystroke character" and "throw on the release after it" are
-/// the same test with a different number. [LAW:no-mode-explosion]
-@MainActor
-final class RefusingKeyboard: Keyboard {
-    private(set) var log: [String] = []
-    /// How many calls to let through before refusing every one after.
-    var allow = Int.max
-
-    private func record(_ what: String) throws {
-        guard log.count < allow else { throw Refused() }
-        log.append(what)
-    }
-
-    func check() throws { try record("check") }
-    func down(_ usage: Usage) throws { try record("down \(String(usage.rawValue, radix: 16))") }
-    func releaseAll() throws { try record("up") }
-}
-
-struct Refused: Error {}
+import Typing
 
 /// What a run reports when it stops inside a character.
 ///
@@ -46,7 +22,7 @@ struct Refused: Error {}
 
     @Test func aCharacterIsCheckedPressedAndReleasedInThatOrder() throws {
         var (scribe, keyboard) = scribe()
-        try scribe.press("a", [Keystroke(Usage(rawValue: 0x04))])
+        try scribe.type("a", [Keystroke(Usage(rawValue: 0x04))])
         #expect(keyboard.log == ["check", "down 4", "up"])
         #expect(scribe.typed == 1)
         #expect(scribe.halfTyped == nil)
@@ -56,9 +32,19 @@ struct Refused: Error {}
     /// takes them all back up together.
     @Test func theModifiersOfAKeystrokeGoDownBeforeIt() throws {
         var (scribe, keyboard) = scribe()
-        try scribe.press("\u{2014}", Self.emDash)
+        try scribe.type("\u{2014}", Self.emDash)
         #expect(keyboard.log == ["check", "down e1", "check", "down e2", "check", "down 2d", "up"])
         #expect(scribe.typed == 1)
+    }
+
+    /// A chord is one keystroke pressed the same way a character's is, and it composes
+    /// nothing: pressed, it counts, and nothing is pending.
+    @Test func aChordIsPressedLikeAKeystrokeAndLeavesNothingPending() throws {
+        var (scribe, keyboard) = scribe()
+        try scribe.press(Keystroke(Usage(rawValue: 0x04), [.leftCommand, .leftShift]))
+        #expect(keyboard.log == ["check", "down e1", "check", "down e3", "check", "down 4", "up"])
+        #expect(scribe.typed == 1)
+        #expect(scribe.halfTyped == nil)
     }
 
     /// The check runs before every key that goes down, and not once a character or even
@@ -71,7 +57,7 @@ struct Refused: Error {}
     /// run leaves a key held for macOS to repeat.
     @Test func everyKeyThatGoesDownIsCheckedAndNotJustEveryKeystroke() throws {
         var (scribe, keyboard) = scribe()
-        try scribe.press("\u{e9}", Self.acute)
+        try scribe.type("\u{e9}", Self.acute)
         #expect(keyboard.log.filter { $0 == "check" }.count == keyboard.log.filter { $0.hasPrefix("down") }.count)
         #expect(keyboard.log == ["check", "down e2", "check", "down 8", "up", "check", "down 8", "up"])
     }
@@ -80,7 +66,7 @@ struct Refused: Error {}
     /// both counts stay where they were.
     @Test func aRunRefusedBeforeItsFirstKeystrokeLeavesNothingBehind() {
         var (scribe, _) = scribe(allowing: 0)
-        #expect(throws: Refused.self) { try scribe.press("\u{e9}", Self.acute) }
+        #expect(throws: Refused.self) { try scribe.type("\u{e9}", Self.acute) }
         #expect(scribe.typed == 0)
         #expect(scribe.halfTyped == nil)
     }
@@ -92,7 +78,7 @@ struct Refused: Error {}
     @Test func aCharacterStoppedBeforeItsLastKeystrokeIsHalfTyped() {
         for stoppedAfter in [3, 4, 5, 6] {
             var (scribe, _) = scribe(allowing: stoppedAfter)
-            #expect(throws: Refused.self) { try scribe.press("\u{e9}", Self.acute) }
+            #expect(throws: Refused.self) { try scribe.type("\u{e9}", Self.acute) }
             #expect(scribe.typed == 0, "stopped after \(stoppedAfter) calls")
             #expect(scribe.halfTyped == "\u{e9}", "stopped after \(stoppedAfter) calls")
         }
@@ -104,7 +90,7 @@ struct Refused: Error {}
     /// told to clear a composition that is not there will clear something else.
     @Test func aCharacterRefusedBeforeItsDeadKeyWasPostedLeavesNothingPending() {
         var (scribe, _) = scribe(allowing: 2)
-        #expect(throws: Refused.self) { try scribe.press("\u{e9}", Self.acute) }
+        #expect(throws: Refused.self) { try scribe.type("\u{e9}", Self.acute) }
         #expect(scribe.typed == 0)
         #expect(scribe.halfTyped == nil)
     }
@@ -113,7 +99,7 @@ struct Refused: Error {}
     /// release that follows it failed. Counted, and no longer pending.
     @Test func aCharacterStoppedAfterItsLastKeystrokeIsTypedAndNotPending() {
         var (scribe, _) = scribe(allowing: 7)
-        #expect(throws: Refused.self) { try scribe.press("\u{e9}", Self.acute) }
+        #expect(throws: Refused.self) { try scribe.type("\u{e9}", Self.acute) }
         #expect(scribe.typed == 1)
         #expect(scribe.halfTyped == nil)
     }
@@ -124,12 +110,12 @@ struct Refused: Error {}
     /// between the modifiers and the key, which is where the pending accent begins.
     @Test func aKeystrokeStoppedAmongItsModifiersLeavesNothingPending() {
         var (dash, _) = scribe(allowing: 3)
-        #expect(throws: Refused.self) { try dash.press("\u{2014}", Self.emDash) }
+        #expect(throws: Refused.self) { try dash.type("\u{2014}", Self.emDash) }
         #expect(dash.typed == 0)
         #expect(dash.halfTyped == nil)
 
         var (accent, _) = scribe(allowing: 1)
-        #expect(throws: Refused.self) { try accent.press("\u{e9}", Self.acute) }
+        #expect(throws: Refused.self) { try accent.type("\u{e9}", Self.acute) }
         #expect(accent.typed == 0)
         #expect(accent.halfTyped == nil)
     }
@@ -138,10 +124,10 @@ struct Refused: Error {}
     /// posted rather than starting over.
     @Test func theCountIsOfTheRunAndNotOfOneCharacter() throws {
         var (scribe, keyboard) = scribe()
-        for character in "abc" { try scribe.press(character, [Keystroke(Usage(rawValue: 0x04))]) }
+        for character in "abc" { try scribe.type(character, [Keystroke(Usage(rawValue: 0x04))]) }
         #expect(scribe.typed == 3)
         keyboard.allow = keyboard.log.count + 3
-        #expect(throws: Refused.self) { try scribe.press("\u{e9}", Self.acute) }
+        #expect(throws: Refused.self) { try scribe.type("\u{e9}", Self.acute) }
         #expect(scribe.typed == 3)
         #expect(scribe.halfTyped == "\u{e9}")
     }

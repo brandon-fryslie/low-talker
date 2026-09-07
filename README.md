@@ -130,7 +130,27 @@ Each press prints `began` as the key goes down. A release after the threshold (2
 
 The tap needs Input Monitoring and Accessibility. macOS charges a terminal command's tap to the terminal, so the command fails with `the session refused an event tap` until the terminal has both under System Settings > Privacy & Security; the app asks on its own behalf.
 
+## Acting on a route
+
+    make cli
+    .build/debug/lowtalker route --context '{"chord":{"modifiers":["rightOption"]},"press":"hold","frontmostApp":"com.apple.TextEdit","focusedElementRole":"AXTextArea"}' --text "hello from the typist" \
+      | .build/debug/lowtalker act --context '{"chord":{"modifiers":["rightOption"]},"press":"hold","frontmostApp":"com.apple.TextEdit","focusedElementRole":"AXTextArea"}'
+
+`route` prints the actions it decided as a JSON array, and `act` reads that array on stdin and performs it through the installed keyboard helper, the way the app will. The context is given to both because the router and the executor each read it and neither hands it on. `act` first raises the context's frontmost app, waiting up to 5 s for macOS to agree it is in front, and refuses the run if it will not come. Then the actions are performed in order: `insertText` is typed into the app its target names, where `focus` is the context's frontmost app and `app` names one by bundle id; `sendKeys` is pressed in the context's frontmost app. Text becomes keystrokes in this process, on the console user's layout, and one key report per XPC call crosses to the helper.
+
+Each performed action prints one line:
+
+    typed 21 characters into com.apple.TextEdit, key-up to acknowledged 312 ms
+
+The count is the characters typed and the app is the one they went into; a `sendKeys` line reads `pressed` and the chord instead. The time runs from the moment the actions were handed over, which stands in for the hotkey's key-up, to the helper's acknowledgement of the last release. It is the number the app has to keep under its latency target, not a claim that the text is on screen: the daemon acknowledges reports the driver can still drop, and reading the screen back is `dext type`'s measurement, below.
+
+A list that cannot be performed whole is refused before any key goes down, so nothing is typed. `activateApp`, `openURL`, `runShortcut`, and `pipe` are refused by name, because the keyboard cannot perform them. A chord that would press the hotkey, Right Option by default, is refused, because the keyboard is hardware to macOS and the app's own tap would take the press. Text the layout cannot type is refused whole, not typed up to the first character no key can reach. Ctrl-C releases every key before the command exits, so an interrupted run leaves nothing held for macOS to repeat.
+
+It needs the helper installed (`scripts/keyboard-helper install`, under "The keyboard helper" below) and, like `dext type --through helper`, no sudo. It needs no Accessibility either: which app is in front is read from the workspace, and `act` reads nothing back off the screen.
+
 ## Paste
+
+Paste is a CLI command, kept as it stands, and not the path the app inserts through; the app types through the keyboard helper (`lowtalker act` above).
 
     swift run lowtalker paste "hello there"            # paste into the frontmost app now
     swift run lowtalker paste "hello there" --delay 3  # three seconds to bring the receiving app forward
