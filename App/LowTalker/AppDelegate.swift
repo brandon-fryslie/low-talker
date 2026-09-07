@@ -124,16 +124,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// in reaches `terminate` from the run loop, and so does this - in the common modes,
     /// so an open menu is not a signal ignored. [LAW:no-ambient-temporal-coupling]
     ///
-    /// Watched from the moment the delegate exists, which is before the run loop starts:
-    /// a signal arriving in that window is answered as the first thing the running app does.
-    private let signals: [any DispatchSourceSignal] = [SIGINT, SIGTERM].map { number in
-        signal(number, SIG_IGN)
-        let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
-        source.setEventHandler {
-            RunLoop.main.perform(inModes: [.common]) { MainActor.assumeIsolated { NSApp.terminate(nil) } }
-        }
-        source.resume()
-        return source
+    /// Held from the moment the delegate exists, which is before the run loop starts: a
+    /// signal arriving in that window is answered as the first thing the running app does.
+    private let signals = SignalWatch { _ in
+        RunLoop.main.perform(inModes: [.common]) { MainActor.assumeIsolated { NSApp.terminate(nil) } }
     }
 
     /// The engine, from the moment launch starts loading it. Awaiting the task is how
