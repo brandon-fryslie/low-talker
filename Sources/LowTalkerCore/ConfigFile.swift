@@ -113,8 +113,9 @@ private struct MatchEntry: Decodable {
     }
 }
 
-/// `then = { insert = "focus" }`: a table naming exactly one thing to do, so a route can
-/// neither ask for two at once nor for none.
+/// `then = { insert = "focus" }`: a table naming exactly one thing to do. The key is
+/// required and strict decoding refuses any other, so neither asking for none nor
+/// asking for two is representable; command mode adds to this by adding keys.
 private struct EmitEntry: Decodable {
     let emit: Route.Emit
 
@@ -122,9 +123,6 @@ private struct EmitEntry: Decodable {
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        guard container.allKeys.count == 1 else {
-            throw decoder.fault("a route's then names exactly one thing to do")
-        }
         emit = .insertTranscript(target: try container.decode(TargetEntry.self, forKey: .insert).target)
     }
 }
