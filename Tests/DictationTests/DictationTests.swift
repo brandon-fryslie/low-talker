@@ -172,6 +172,33 @@ extension Result {
         #expect(rig.keyboard.log == Self.typed("a"))
     }
 
+    /// A press with nothing to type into is refused at key-down, before anything is
+    /// heard, so it is the one outcome that could be ready before an earlier press's.
+    /// It waits its turn all the same: outcomes are reported in the order the presses
+    /// came, whatever each one costs.
+    @Test func aRefusedPressIsReportedAfterAnEarlierPressStillBeingHeard() async throws {
+        let gate = Gate()
+        let refusing = Mutex(false)
+        let rig = try Rig(transcriber: {
+            FakeTranscriber { _ in
+                await gate.wait()
+                return Transcript(typed: "a")
+            }
+        }) {
+            if refusing.withLock({ $0 }) { throw NoApp() }
+            return Rig.textEdit
+        }
+        rig.hold()
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { gate.waiting == 1 })
+        refusing.withLock { $0 = true }
+        rig.hold()
+        gate.open()
+        let first = await rig.report()
+        let second = await rig.report()
+        #expect(try first.get().transcript.text == "a")
+        #expect(second.failure is NoApp)
+    }
+
     @Test func anEngineThatFailsIsReportedAndTheNextPressTypes() async throws {
         let failing = Mutex(true)
         let rig = try Rig(hearing: FakeTranscriber { _ in

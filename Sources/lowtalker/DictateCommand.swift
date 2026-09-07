@@ -53,9 +53,17 @@ struct DictateCommand: AsyncParsableCommand {
         // The tap runs on the main run loop; this keeps the command on it until the
         // operator's interrupt, which is read rather than let end the process, so a
         // session it lands in still releases its keys.
-        while true {
-            try interrupt.check()
-            try await Task.sleep(for: .milliseconds(100))
+        do {
+            while true {
+                try interrupt.check()
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        } catch {
+            // The release happens on the session's own way out, so the process may not
+            // go before the session has: returning here at the speed of the poll would
+            // beat a burst to its release and leave a key down.
+            await dictation.finish()
+            throw error
         }
     }
 }
