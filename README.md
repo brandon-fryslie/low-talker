@@ -382,13 +382,14 @@ the focused element is and whether it will say what it holds, and always writes 
 screenshot. The picture is not optional because for some apps it is the only true answer,
 and because a `see` before a click and a `see` after it are then comparable pictures.
 
-The virtual mouse refuses to post a report while a system alert is up - `click`, the
-routed `clickElement` below, and a bare move alike, because the refusal lives in the mouse
-rather than in whichever command started the click. An alert sits at the same screen
-centre every dialog does, so a frame located in the app underneath one has somebody else's
-button over it, and a click at that frame's centre would answer their prompt instead. It
-is asked again before every report, so an alert that opens while the cursor is still
-travelling is caught too. The count is read from `com.apple.UserNotificationCenter`
+The virtual mouse refuses to press while a system alert is up - `click` and the routed
+`clickElement` below alike, because the refusal lives in the mouse rather than in whichever
+command started the click. An alert sits at the same screen centre every dialog does, so a
+frame located in the app underneath one has somebody else's button over it, and a click at
+that frame's centre would answer their prompt instead. It is asked at the press rather than
+at every motion report, because a move cannot answer anybody's prompt and a press can, so
+an alert that opens while the cursor is still travelling is still caught at the press. The
+count is read from `com.apple.UserNotificationCenter`
 through Accessibility with a half-second messaging timeout, deliberately not through
 System Events, which a modal SecurityAgent dialog can leave waiting rather than answering.
 

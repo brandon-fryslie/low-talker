@@ -7,7 +7,7 @@ import ApplicationServices
 /// app underneath it is a frame with somebody else's Allow button over it, and a click at
 /// that frame's centre answers their prompt instead of the one it was aimed at. A person
 /// driving the machine sees the alert appear; an agent working it alone does not, so this
-/// is asked before every report the pointer posts rather than explained after it.
+/// is asked before every press the pointer makes rather than explained after it.
 ///
 /// Read through Accessibility with the bounded messaging timeout every read here uses,
 /// and deliberately **not** through System Events: a modal SecurityAgent dialog can leave
@@ -58,8 +58,8 @@ public enum SystemAlerts {
         }
     }
 
-    /// Proves the screen carries no system alert, for a caller about to post a pointer
-    /// report at a point it computed from an Accessibility frame. [LAW:parse-dont-validate]
+    /// Proves the screen carries no system alert, for a caller about to press a button at
+    /// a point it computed from an Accessibility frame. [LAW:parse-dont-validate]
     /// Derived from `showing` rather than asking again, so there is one reading of the
     /// screen and one rule about it. [LAW:one-source-of-truth]
     public static func requireNone() throws {

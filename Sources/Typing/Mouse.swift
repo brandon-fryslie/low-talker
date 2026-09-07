@@ -12,10 +12,9 @@ import Pointing
 /// only the main actor may ask.
 @MainActor
 public protocol Mouse {
-    /// Throws rather than let the next report be posted: the operator interrupted, the
-    /// target app is no longer frontmost, or macOS has put an alert over everything. One
-    /// member and not two, for the reason `Keyboard.check` gives.
-    /// [LAW:one-type-per-behavior]
+    /// Throws rather than let the next report be posted: the operator interrupted, or the
+    /// target app is no longer frontmost. One member and not two, for the reason
+    /// `Keyboard.check` gives. [LAW:one-type-per-behavior]
     func check() throws
     func down(_ button: Button) throws
     func releaseAll() throws
@@ -37,21 +36,22 @@ public struct GuardedMouse: Mouse {
         self.screen = screen
     }
 
-    /// [LAW:single-enforcer] The alert refusal lives here rather than in whichever command
-    /// happened to start the click. `Pointer` calls this before every motion report and
-    /// again immediately before the button goes down, so an alert that opens while the
-    /// cursor is still travelling - the several seconds an element search and a move can
-    /// take - is caught at the last report instead of only at the first. And every caller
-    /// of the mechanism inherits it: `act`'s routed `clickElement` reaches the same
-    /// `Pointer.click`, and a guard sitting in one CLI command would have left that door
-    /// open.
+    /// [LAW:single-enforcer] The interrupt and the frontmost app are proven here rather
+    /// than in whichever command started the click, so every caller inherits them.
     public func check() throws {
         try interrupt.check()
         try screen.requireFrontmost()
-        try SystemAlerts.requireNone()
     }
 
-    public func down(_ button: Button) throws { try pointing.down(button) }
+    /// [LAW:single-enforcer] The alert refusal sits at the press and not in `check`: a
+    /// motion or wheel report cannot answer somebody else's prompt, and a button going
+    /// down can. `Pointer.click` calls `check` and then this, so it is still asked at the
+    /// last instant before the press, without a move paying for it once per motion report.
+    public func down(_ button: Button) throws {
+        try SystemAlerts.requireNone()
+        try pointing.down(button)
+    }
+
     public func releaseAll() throws { try pointing.releaseAll() }
     public func move(by delta: Move) throws { try pointing.move(by: delta) }
     public func scroll(by delta: Scroll) throws { try pointing.scroll(by: delta) }
