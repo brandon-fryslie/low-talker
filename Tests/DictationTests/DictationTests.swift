@@ -199,6 +199,27 @@ extension Result {
         #expect(second.failure is NoApp)
     }
 
+    /// What `lowtalker dictate` awaits before it goes. A session holds keys down while
+    /// it types and releases them on its way out, so a surface that went while one was
+    /// still in flight would leave a key down for macOS to repeat into whatever came
+    /// forward next. The session is held at the engine with nothing typed yet, so a
+    /// `finish` that did not wait is caught by the empty keyboard log.
+    @Test func finishReturnsOnlyAfterASessionStillInFlightHasTyped() async throws {
+        let gate = Gate()
+        let rig = try Rig(transcriber: {
+            FakeTranscriber { _ in
+                await gate.wait()
+                return Transcript(typed: "a")
+            }
+        })
+        rig.hold()
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { gate.waiting == 1 })
+        #expect(rig.keyboard.log.isEmpty)
+        gate.open()
+        await rig.dictation.finish()
+        #expect(rig.keyboard.log == Self.typed("a"))
+    }
+
     @Test func anEngineThatFailsIsReportedAndTheNextPressTypes() async throws {
         let failing = Mutex(true)
         let rig = try Rig(hearing: FakeTranscriber { _ in
