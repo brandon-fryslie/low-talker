@@ -88,7 +88,22 @@ public struct WheelCounts: RawRepresentable, Hashable, Codable, Sendable {
 }
 
 /// Where inserted text goes: the focused element, or a named app regardless of focus.
-public enum InsertTarget: Hashable, Codable, Sendable {
+public enum InsertTarget: Hashable, Codable, Sendable, CustomStringConvertible {
     case focus
     case app(bundleID: BundleID)
+
+    public var description: String {
+        switch self {
+        case .focus: "the focused element"
+        case .app(let bundleID): bundleID.rawValue
+        }
+    }
+
+    /// The apps this target names: the one it is, or none when it follows the focus.
+    public var appsNamed: [BundleID] {
+        switch self {
+        case .focus: []
+        case .app(let bundleID): [bundleID]
+        }
+    }
 }
