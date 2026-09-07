@@ -68,7 +68,11 @@ import Testing
         let service: Service
     }
 
-    private func keyboard(_ answer: Answer, replyTimeout: Duration = .seconds(2)) -> (HelperKeyboard, FarEnd) {
+    /// The default bound is far above any round trip: it ends a test whose far end is
+    /// broken, and never measures one that is not. Measured on the CI runner, the whole
+    /// test process stalls for up to 3.6 seconds soon after it starts, and a two-second
+    /// bound timed out an answer that was on its way. [LAW:no-ambient-temporal-coupling]
+    private func keyboard(_ answer: Answer, replyTimeout: Duration = .seconds(20)) -> (HelperKeyboard, FarEnd) {
         let service = Service(answer)
         let listener = NSXPCListener.anonymous()
         listener.delegate = service
