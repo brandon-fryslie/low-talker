@@ -1,5 +1,6 @@
 import DriverExtension
 import Foundation
+import KeyboardService
 
 /// Reading this Mac for the two facts onboarding takes for itself: which launchd job
 /// holds the helper's Mach service, and whether Keyboard Setup Assistant already has an
@@ -81,6 +82,50 @@ public enum OnboardingProbe {
     /// The same thing as a file. `defaults` takes the domain and
     /// `PropertyListSerialization` takes the file, and they are one path.
     public static let keyboardTypePlist = keyboardTypeDomain + ".plist"
+}
+
+public extension OnboardingProbe {
+    /// Everything that must hold before low-talker can type, read off this Mac now.
+    ///
+    /// The list is assembled here and nowhere else. `lowtalker onboard` and the menu-bar
+    /// app are two views of one list rather than two lists that happen to agree, and a
+    /// surface that built its own would drift the first time a requirement was added to
+    /// only one of them - which is exactly what low-hotkey-a6m.2 is about to do.
+    /// [LAW:one-source-of-truth]
+    ///
+    /// - Parameter approvalPending: what `SMAppService` told the app that owns the
+    ///   helper's registration, and nil from a caller that owns none. See
+    ///   `HelperStanding.sharpenedByTheAppsOwnRegistration(approvalPending:)`.
+    static func readiness(approvalPending: Bool?) -> Readiness {
+        Readiness(driverRow() + helperRow(approvalPending: approvalPending) + keyboardSetupAssistantRow())
+    }
+
+    /// Each reading is taken and turned into its row here, at the edge, and a reading
+    /// that failed becomes a row saying so rather than ending the report: three
+    /// requirements a reader could have acted on are worth more than one error.
+    /// [LAW:effects-at-boundaries]
+    private static func driverRow() -> [Requirement] {
+        do { return [.driverExtension(DriverState(try DriverProbe.facts()))] }
+        catch { return [.unreadable("Driver extension", error)] }
+    }
+
+    private static func helperRow(approvalPending: Bool?) -> [Requirement] {
+        do {
+            let standing = try helperStanding(label: Helper.launchdLabel, service: Helper.machServiceName)
+                .sharpenedByTheAppsOwnRegistration(approvalPending: approvalPending)
+            return [.keyboardHelper(standing, serviceName: Helper.machServiceName, developmentLabel: Helper.developmentLabel)]
+        } catch { return [.unreadable("Keyboard helper", error)] }
+    }
+
+    private static func keyboardSetupAssistantRow() -> [Requirement] {
+        do {
+            return [.keyboardSetupAssistant(
+                answered: try keyboardSetupAssistantAnswered(),
+                key: VirtualKeyboardIdentity.keyboardTypeKey,
+                path: keyboardTypeDomain
+            )]
+        } catch { return [.unreadable("Keyboard Setup Assistant", error)] }
+    }
 }
 
 /// Why a reading onboarding needed could not be taken. Never a standing: "I could not
