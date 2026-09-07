@@ -17,8 +17,10 @@ private final class StepClock: Clock, @unchecked Sendable {
     private(set) var now = Instant(since: .zero)
     let minimumResolution: Duration = .zero
 
-    /// The whole of the fake: sleeping is the only thing that moves time.
-    func sleep(until deadline: Instant, tolerance: Duration?) async throws { now = deadline }
+    func sleep(until deadline: Instant, tolerance: Duration?) async throws {
+        try Task.checkCancellation()
+        now = deadline
+    }
 }
 
 @Suite struct HoldsTests {
@@ -61,6 +63,18 @@ private final class StepClock: Clock, @unchecked Sendable {
         await #expect(throws: Unaskable.self) {
             try await holds(within: .seconds(1), askingEvery: .milliseconds(5), on: clock) { throw Unaskable() }
         }
+    }
+
+    /// Cancellation reaches the caller through the sleep, the loop's only suspension.
+    /// The task is enqueued rather than run inline, so the cancel lands before the
+    /// first ask.
+    @Test func aCancelledAskThrowsRatherThanAnswering() async throws {
+        let clock = StepClock()
+        let asking = Task {
+            try await holds(within: .seconds(1), askingEvery: .milliseconds(5), on: clock) { false }
+        }
+        asking.cancel()
+        await #expect(throws: CancellationError.self) { try await asking.value }
     }
 
     /// The default clock is the real one, which is what every caller outside a test
