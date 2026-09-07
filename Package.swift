@@ -10,6 +10,7 @@ let package = Package(
         .library(name: "KeyboardLayout", targets: ["KeyboardLayout"]),
         .library(name: "VirtualKeyboard", targets: ["VirtualKeyboard"]),
         .library(name: "KeyboardService", targets: ["KeyboardService"]),
+        .library(name: "Typing", targets: ["Typing"]),
         .executable(name: "lowtalker", targets: ["lowtalker"]),
         .executable(name: "lowtalker-keyboardd", targets: ["lowtalker-keyboardd"]),
     ],
@@ -44,6 +45,15 @@ let package = Package(
         // [LAW:one-way-deps]
         .target(name: "KeyboardService", dependencies: ["Keystrokes"]),
         .testTarget(name: "KeyboardServiceTests", dependencies: ["KeyboardService", "Keystrokes"]),
+        // The app's one inserter: text and chords lowered to keystrokes and pressed on a
+        // keyboard, with the hotkey refused and the target app re-proven in front before
+        // every key. It links the core for the actions and chords it performs, the layout
+        // and the vocabulary, and takes the keyboard as a value, so the same typist runs
+        // against the helper in the app and against the driver under sudo. [LAW:composability]
+        .target(name: "Typing", dependencies: ["LowTalkerCore", "KeyboardLayout", "Keystrokes"]),
+        // Driven against a keyboard the test plays, so a run can be stopped inside any
+        // keystroke and its report read back.
+        .testTarget(name: "TypingTests", dependencies: ["Typing", "LowTalkerCore", "KeyboardLayout", "Keystrokes"]),
         // The root daemon that owns the device. It links VirtualKeyboard and the seam, and
         // deliberately not KeyboardLayout: text never reaches this process.
         .executableTarget(
@@ -64,6 +74,7 @@ let package = Package(
                 "KeyboardLayout",
                 "KeyboardService",
                 "Keystrokes",
+                "Typing",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),

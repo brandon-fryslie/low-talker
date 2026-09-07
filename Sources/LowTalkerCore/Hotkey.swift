@@ -7,6 +7,10 @@
 @MainActor
 public final class Hotkey {
     nonisolated public static let defaultTapThreshold: Duration = .milliseconds(250)
+    /// Right Option, the chord the app listens for until a config file says otherwise.
+    /// Named once: the tap listens for it and the typist refuses to press it, and two
+    /// spellings of it would be a hotkey the typist could type. [LAW:one-source-of-truth]
+    nonisolated public static let defaultChord = KeyChord(modifiers: .rightOption)
 
     private let tap: any KeyboardTap
     private var detector: HotkeyDetector
