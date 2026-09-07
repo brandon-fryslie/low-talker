@@ -29,11 +29,11 @@ struct SeeCommand: AsyncParsableCommand {
     @MainActor
     func run() async throws {
         // Every reading is taken and reported whatever the readings before it did, and a
-        // failure travels as a value rather than as an early return. The picture is the
-        // reading that always works, and the runs where the others cannot answer - a
-        // screen mid-transition, an app with no bundle id, a modal dialog - are exactly
-        // the runs where it is the only evidence there will be, so nothing above it may
-        // cost the caller it. [LAW:dataflow-not-control-flow]
+        // failure travels as a value rather than as an early return. The runs where the
+        // others cannot answer - a screen mid-transition, an app with no bundle id, a
+        // modal dialog - are exactly the runs where the picture is the only evidence there
+        // will be, so nothing above it may cost the caller the attempt at one.
+        // [LAW:dataflow-not-control-flow]
         let front = Self.reading { try TargetApp.frontmost() }
         print("frontmost \(Self.told(front.map(\.rawValue)))")
 
@@ -51,8 +51,12 @@ struct SeeCommand: AsyncParsableCommand {
         }
         print("focus \(Self.told(focus.map { "\($0.role) holds \($0.text)" }))")
 
-        let screenshot = try Screenshot.capture(to: Self.destination(shot))
-        print("screenshot \(screenshot.path.path) (\(screenshot.bytes) bytes)")
+        // Reported like the readings above it and then charged to the exit code: the
+        // picture is the artefact this command exists to produce, so a run that could not
+        // take one has failed, whatever it managed to print. [LAW:no-silent-failure]
+        let picture = Self.reading { try Screenshot.capture(to: Self.destination(shot)) }
+        print("screenshot \(Self.told(picture.map { "\($0.path.path) (\($0.bytes) bytes)" }))")
+        guard case .success = picture else { throw ExitCode.failure }
     }
 
     /// One reading, kept whichever way it went, so the caller can report it and carry on.

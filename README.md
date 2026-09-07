@@ -378,9 +378,11 @@ picture goes so a before and an after can be kept side by side.
     screenshot /var/folders/.../lowtalker-see-1788771558021.png (1084155 bytes)
 
 `see` reports the frontmost app, how many system alerts macOS has over everything, what
-the focused element is and whether it will say what it holds, and always writes a
-screenshot. The picture is not optional because for some apps it is the only true answer,
-and because a `see` before a click and a `see` after it are then comparable pictures.
+the focused element is and whether it will say what it holds, and then takes a screenshot.
+The picture is attempted whatever the readings above it did, and a run that cannot take one
+says so on the screenshot line and exits non-zero. It is not optional because for some apps
+it is the only true answer, and because a `see` before a click and a `see` after it are
+then comparable pictures.
 
 The virtual mouse refuses to press while a system alert is up - `click` and the routed
 `clickElement` below alike, because the refusal lives in the mouse rather than in whichever
