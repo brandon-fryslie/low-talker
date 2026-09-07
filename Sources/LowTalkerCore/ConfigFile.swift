@@ -41,22 +41,51 @@ public extension Config {
         )
     }
 
-    /// The config the app runs on: what the file says, or the defaults when there is no
-    /// file.
+    /// The config the app runs on and where it came from: what the file says, or the
+    /// defaults when there is no file.
     ///
     /// [LAW:no-silent-failure] Only a file that is not there yields the defaults. One
     /// that exists and cannot be read, or cannot be understood, throws - so a config the
     /// user wrote is never quietly replaced by one they did not.
-    static func load(from url: URL = fileURL) throws(ConfigError) -> Config {
+    static func load(from url: URL = fileURL) throws(ConfigError) -> Loaded {
         let text: String
         do {
             text = try String(contentsOf: url, encoding: .utf8)
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
-            return .default
+            return .noFile(at: url)
         } catch {
             throw ConfigError.unreadable(path: url.path, why: error.localizedDescription)
         }
-        return try Config(toml: text)
+        return .file(try Config(toml: text), at: url)
+    }
+
+    /// A config and where it came from.
+    ///
+    /// [LAW:types-are-the-program] A Config cannot tell a file that says exactly what
+    /// the defaults say from no file at all, and `lowtalker config check` has to say
+    /// which - printing the defaults as though someone had written them is a report
+    /// that lies about its own subject. The defaults live in the case that means them,
+    /// so a `noFile` carrying settings somebody chose is unrepresentable.
+    enum Loaded: Hashable, Sendable, CustomStringConvertible {
+        case file(Config, at: URL)
+        case noFile(at: URL)
+
+        /// What the app runs on either way, which is the only thing most callers want.
+        public var config: Config {
+            switch self {
+            case .file(let config, _): config
+            case .noFile: .default
+            }
+        }
+
+        /// The line a report opens with, naming the file it read or the one it looked
+        /// for.
+        public var description: String {
+            switch self {
+            case .file(_, let url): url.path
+            case .noFile(let url): "no file at \(url.path), so these are the defaults"
+            }
+        }
     }
 }
 
