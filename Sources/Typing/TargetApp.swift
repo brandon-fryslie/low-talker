@@ -85,7 +85,7 @@ public struct TargetApp {
         let element = try focusedElement()
         var role: CFTypeRef?
         _ = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
-        return Focus(role: role as? String ?? "an element that will not name its role", text: Self.text(of: element))
+        return Focus(role: role as? String ?? "an element that will not name its role", text: try Self.text(of: element))
     }
 
     /// The value alone. [LAW:decomposition] `wait` polls this every 2 ms for seconds at a
@@ -93,16 +93,38 @@ public struct TargetApp {
     /// main thread the poll rate was chosen to leave alone - the reading would have been
     /// loading the very thing it measures.
     public func read() throws -> ScreenText {
-        Self.text(of: try focusedElement())
+        try Self.text(of: try focusedElement())
     }
 
     /// The focused element's text, classified. [LAW:single-enforcer] The one place a
     /// `kAXValue` answer becomes a value, so nothing downstream re-derives what an empty
     /// answer means.
-    private static func text(of element: AXUIElement) -> ScreenText {
+    ///
+    /// The effectful edge only: it asks, and hands the raw answer to `text(from:value:)`
+    /// to be read. [LAW:effects-at-boundaries]
+    private static func text(of element: AXUIElement) throws -> ScreenText {
         var value: CFTypeRef?
-        let answered = AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success
-        return ScreenText(answer: answered ? value as? String : nil)
+        let result = AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value)
+        return try text(from: result, value: value)
+    }
+
+    /// What one `kAXValue` answer means, as a value.
+    ///
+    /// Pure, and the whole of the rule, for the reason `SystemAlerts.count(from:value:)`
+    /// is pure: a test has to be able to ask it without a window server.
+    ///
+    /// [LAW:no-silent-failure] An element that will not answer is not read as an element
+    /// holding nothing. Only the two `AXError`s that mean the attribute is absent count as
+    /// absence - the same two `SystemAlerts` and `PasteMenuItem` count that way - because
+    /// every other one means the read failed, and folding those into "no text" would hand
+    /// `shows` a baseline of zero for an element that may have been holding the very text
+    /// about to be typed.
+    nonisolated static func text(from result: AXError, value: CFTypeRef?) throws -> ScreenText {
+        switch result {
+        case .success: return ScreenText(answer: value as? String)
+        case .noValue, .attributeUnsupported: return .noValue
+        case let failure: throw ScreenUnreadable.textUnreadable(failure)
+        }
     }
 
     /// The focused element, with the app re-proven frontmost first. Both readings come
@@ -255,6 +277,10 @@ public enum ScreenUnreadable: Error, CustomStringConvertible {
     /// half the time it fired.
     case wrongApp(wanted: String, frontmost: String)
     case noFocus(String)
+    /// The focused element would not say what it holds. Not the same as an element that
+    /// holds nothing: this is the read failing, and a caller that spent it as "no text"
+    /// would be reading a failure as evidence about the screen. [LAW:no-silent-failure]
+    case textUnreadable(AXError)
     /// No element with that role and title, among the ones read - and whether this
     /// process was allowed to look at all, captured where it is known rather than guessed
     /// at by the reader. An untrusted process finds nothing in every app, and a message
@@ -272,7 +298,7 @@ public enum ScreenUnreadable: Error, CustomStringConvertible {
     /// difference, so nothing has to inspect a message to find it.
     public var mayPassWithTime: Bool {
         switch self {
-        case .noFocus, .noElement: true
+        case .noFocus, .noElement, .textUnreadable: true
         case .noFrontmostApp, .frontmostWithoutBundleID, .notRunning, .wouldNotComeForward, .wrongApp, .elementWithoutFrame, .tooManyElements, .searchTooSlow: false
         }
     }
@@ -285,6 +311,7 @@ public enum ScreenUnreadable: Error, CustomStringConvertible {
         case .wouldNotComeForward(let wanted, let frontmost): "\(wanted) would not come to the front, \(frontmost) is there; nothing was typed"
         case .wrongApp(let wanted, let frontmost): "\(frontmost) is frontmost, not \(wanted)"
         case .noFocus(let app): "\(app) has no focused element; is this process allowed under Accessibility?"
+        case .textUnreadable(let status): "the focused element would not say what it holds (AXError \(status.rawValue)); whether it holds text is unknown"
         case .noElement(let role, let title, let app, let trusted):
             trusted
                 ? "\(app) has no \(role) titled \(title.debugDescription) among the elements read"

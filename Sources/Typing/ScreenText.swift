@@ -28,8 +28,9 @@ public enum ScreenText: Equatable, Sendable {
     /// string.
     case noValue
 
-    /// The classification, from the answer an Accessibility read came back with: nil
-    /// where the call failed or the value was not a string, the string otherwise.
+    /// The classification, from the answer an Accessibility read came back with: nil where
+    /// the element carries no such value or answered with something that is not a string,
+    /// the string otherwise. A read that failed does not arrive here at all.
     ///
     /// Pure, and the whole of the rule. [LAW:effects-at-boundaries] The AX call is the
     /// caller's; what its answer means is decided here, where a test can ask without a
@@ -55,6 +56,11 @@ public enum ScreenText: Equatable, Sendable {
     /// never reports its contents at all - in which case no later reading is ever `reads`
     /// and this cannot fire on it. Reading the empty baseline as a zero is what keeps an
     /// empty TextEdit document verifiable. [LAW:types-are-the-program]
+    ///
+    /// Both branches describe an element that answered, and they are exhaustive only
+    /// because a read that failed never becomes a `ScreenText` at all - it is thrown by
+    /// `TargetApp.text(from:value:)`. A baseline that folded a failed read into a silence
+    /// would confirm text as typed that the element was already holding.
     public func shows(_ text: String, moreThan baseline: ScreenText) -> Bool {
         guard case .reads(let now) = self else { return false }
         return now.value.occurrences(of: text) > baseline.alreadyHeld(text)
