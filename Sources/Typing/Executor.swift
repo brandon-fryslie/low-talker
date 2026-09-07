@@ -37,8 +37,8 @@ public struct Executor {
     /// under its latency target and not a claim that the text is on screen: the daemon
     /// acknowledges reports the driver then drops, and reading the screen back is the
     /// CLI's measurement.
-    public struct Performed: CustomStringConvertible {
-        public enum What {
+    public struct Performed: CustomStringConvertible, Sendable {
+        public enum What: Sendable {
             case typed(characters: Int)
             case pressed(KeyChord)
         }
@@ -58,18 +58,21 @@ public struct Executor {
 
     /// Performs every action in order, each logged as it completes, and answers with
     /// what was done. Throws before the first key when any action is not a keystroke,
-    /// cannot be typed on the layout, or would press the hotkey; throws `TypingStopped`
-    /// or `ChordStopped` from the action that stopped, with the earlier ones done.
+    /// cannot be typed on the layout, or would press the hotkey; throws `RouteStopped`
+    /// from the action that stopped, carrying the earlier ones, which are done.
     @discardableResult
     public func perform(_ actions: [Action], in context: Context, on layout: KeyboardLayout, since keyUp: ContinuousClock.Instant) throws -> [Performed] {
         let lowered = try actions.map { try lower($0, in: context, on: layout) }
         let clock = ContinuousClock()
-        return try lowered.map { keystrokes in
-            let what = try keystrokes.perform()
-            let performed = Performed(what: what, into: keystrokes.into, acknowledged: clock.now - keyUp)
-            log.info("\(performed.description, privacy: .public)")
-            return performed
+        var performed: [Performed] = []
+        for keystrokes in lowered {
+            let what: Performed.What
+            do { what = try keystrokes.perform() } catch { throw RouteStopped(performed: performed, cause: error) }
+            let done = Performed(what: what, into: keystrokes.into, acknowledged: clock.now - keyUp)
+            log.info("\(done.description, privacy: .public)")
+            performed.append(done)
         }
+        return performed
     }
 
     /// An action as keystrokes on the typist for its target, proven before any is pressed.
@@ -102,6 +105,24 @@ public struct Executor {
         case .activateApp, .openURL, .runShortcut, .pipe:
             throw NotAKeystroke(action: action)
         }
+    }
+}
+
+/// A list that stopped part way: the action that stopped is the cause, and the actions
+/// before it are done and cannot be taken back, so they travel with it. Text is in the
+/// document either way; what this adds is which of it, so a retry does not type it twice.
+public struct RouteStopped: Error, CustomStringConvertible {
+    public let performed: [Executor.Performed]
+    public let cause: any Error
+
+    public init(performed: [Executor.Performed], cause: any Error) {
+        self.performed = performed
+        self.cause = cause
+    }
+
+    public var description: String {
+        let before = performed.isEmpty ? "" : ". Performed before it: " + performed.map(\.description).joined(separator: "; ")
+        return "\(cause)\(before)"
     }
 }
 

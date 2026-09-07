@@ -107,21 +107,25 @@ import Typing
         #expect(keyboards.log(Self.textEdit).isEmpty)
     }
 
-    /// An action that stops mid-run throws its own report; the actions before it are
-    /// done and the ones after it are not started.
+    /// An action that stops mid-run throws its own report with the actions before it,
+    /// which are done; the ones after it are not started.
     @Test func anActionThatStopsThrowsItsReportAndEndsTheList() throws {
         let keyboards = Keyboards()
         _ = keyboards.keyboard(for: Self.textEdit)
         keyboards.byApp[Self.textEdit]!.allow = 4
-        let stopped = try #require(throws: TypingStopped.self) {
+        let stopped = try #require(throws: RouteStopped.self) {
             try executor(keyboards).perform([
                 .insertText(text: "a", target: .focus),
                 .insertText(text: "bc", target: .focus),
                 .insertText(text: "d", target: .focus),
             ], in: Self.context, on: Self.us, since: .now)
         }
-        #expect(stopped.typed == 0)
-        #expect(stopped.of == 2)
+        let cause = try #require(stopped.cause as? TypingStopped)
+        #expect(cause.typed == 0)
+        #expect(cause.of == 2)
+        #expect(stopped.performed.count == 1)
+        #expect("\(stopped.performed[0])".hasPrefix("typed 1 characters into com.apple.TextEdit"))
+        #expect("\(stopped)".contains(". Performed before it: typed 1 characters into com.apple.TextEdit"))
         #expect(keyboards.log(Self.textEdit) == ["check", "down 4", "up", "check"])
     }
 }
