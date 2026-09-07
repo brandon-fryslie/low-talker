@@ -171,5 +171,18 @@ import Typing
         #expect(!ScreenUnreadable.notRunning("com.apple.TextEdit").mayPassWithTime)
         #expect(!ScreenUnreadable.wouldNotComeForward(wanted: "a", frontmost: "b").mayPassWithTime)
         #expect(!ScreenUnreadable.wrongApp(wanted: "a", frontmost: "b").mayPassWithTime)
+        // A process does not grow a bundle id while a poll waits, so riding this one out
+        // would retry against something that can never answer.
+        #expect(!ScreenUnreadable.frontmostWithoutBundleID(pid: 0).mayPassWithTime)
+    }
+
+    /// The untrusted case states the fact instead of offering "no such element" as the
+    /// explanation - the hour that costs is what this message exists to save, so it is
+    /// asserted rather than assumed.
+    @Test func anUntrustedProcessSaysSoRatherThanBlamingTheElement() {
+        let untrusted = ScreenUnreadable.noElement(role: "AXButton", title: "Cancel", app: "com.apple.SecurityAgent", trusted: false)
+        let trusted = ScreenUnreadable.noElement(role: "AXButton", title: "Cancel", app: "com.apple.SecurityAgent", trusted: true)
+        #expect("\(untrusted)" != "\(trusted)")
+        #expect("\(untrusted)".contains("Accessibility"))
     }
 }
