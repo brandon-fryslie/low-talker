@@ -43,18 +43,7 @@ struct ActCommand: AsyncParsableCommand {
         // lazy connection's first call after launchd has started the job, and that is a
         // cost to pay once and not per action.
         let helper = HelperConnection()
-        // The one app a device is guarded by, for both devices: the keyboard refuses a
-        // key and the pointer refuses a report on the same reading of the front.
-        // [LAW:single-enforcer]
-        let screen = { (app: BundleID) in TargetApp(bundleID: app, interrupt: interrupt) }
-        let executor = Executor(
-            keyboard: { GuardedKeyboard(keyboard: helper.keyboard, interrupt: interrupt, screen: screen($0)) },
-            mouse: {
-                let target = screen($0)
-                return Pointer(mouse: GuardedMouse(pointing: helper.mouse, interrupt: interrupt, screen: target), cursor: Pointer.screenCursor, locate: target.frame(ofRole:titled:))
-            },
-            hotkeys: [Hotkey.defaultChord]
-        )
+        let executor = Executor.guarding(keyboard: helper.keyboard, mouse: helper.mouse, interrupt: interrupt, hotkeys: [Hotkey.defaultChord])
         // The app types into whatever was in front when the hotkey went down. Here the
         // shell was, so the context's app is brought forward first, and a run whose app
         // will not come is refused before a key goes down.
