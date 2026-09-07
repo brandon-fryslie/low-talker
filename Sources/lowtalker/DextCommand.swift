@@ -124,7 +124,7 @@ struct DextTypeCommand: AsyncParsableCommand {
         let firstPosted = clock.now
         do {
             typed += try typist.type(first)
-            let firstSeen = try await screen.wait(within: .seconds(3)) { $0.occurrences(of: String(expected.prefix(1))) > before.occurrences(of: String(expected.prefix(1))) }
+            let firstSeen = try await screen.wait(within: .seconds(3)) { $0.shows(String(expected.prefix(1)), moreThan: before) }
             print("first character on screen in \(into.rawValue) after \((clock.now - firstPosted).milliseconds) ms\(firstSeen ? "" : " (NEVER SEEN)")")
 
             let restPosted = clock.now
@@ -132,7 +132,7 @@ struct DextTypeCommand: AsyncParsableCommand {
             let acknowledged = clock.now - restPosted
             // Against a baseline, like the first character's check: an app already holding
             // this text would otherwise confirm a run that delivered nothing.
-            let allSeen = try await screen.wait(within: .seconds(5)) { $0.occurrences(of: expected) > before.occurrences(of: expected) }
+            let allSeen = try await screen.wait(within: .seconds(5)) { $0.shows(expected, moreThan: before) }
             let settled = clock.now - restPosted
             // The count is the one the clock actually covers: the first character was
             // posted and timed above, on its own, and is not in this window.
@@ -149,7 +149,7 @@ struct DextTypeCommand: AsyncParsableCommand {
                 // The mismatch report is the entire output of a bad run, so it is not
                 // allowed to fail on its own account. A screen that will not be read is
                 // part of the report, not a reason to lose it. [LAW:no-silent-failure]
-                do { print("MISMATCH: the screen holds [\(try screen.read())]") }
+                do { print("MISMATCH: the screen holds \(try screen.read())") }
                 catch { print("MISMATCH, and the screen would not be read afterwards: \(error)") }
             }
         } catch let stopped as TypingStopped {

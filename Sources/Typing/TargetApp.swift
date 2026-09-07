@@ -39,6 +39,16 @@ public struct TargetApp {
         throw ScreenUnreadable.wouldNotComeForward(wanted: bundleID.rawValue, frontmost: NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nothing")
     }
 
+    /// Which app is in front, for a caller that has not been told and has to ask - an
+    /// agent aiming at whatever dialog macOS has just put on the screen. [LAW:decomposition]
+    /// `requireFrontmost` answers "is it mine"; this answers "whose is it", and both read
+    /// the one thing that knows. [LAW:one-source-of-truth]
+    public static func frontmost() throws -> BundleID {
+        guard let app = NSWorkspace.shared.frontmostApplication else { throw ScreenUnreadable.noFrontmostApp }
+        guard let id = app.bundleIdentifier else { throw ScreenUnreadable.frontmostWithoutBundleID(pid: app.processIdentifier) }
+        return BundleID(rawValue: id)
+    }
+
     /// [LAW:parse-dont-validate] The one place focus is decided. It returns the target
     /// app only when the target is the app in front, so a caller holding the result holds
     /// the proof and nothing downstream asks again. [LAW:single-enforcer]
@@ -56,43 +66,53 @@ public struct TargetApp {
     /// into the wrong one reads its own text back and calls itself correct.
     public struct Focus {
         public let role: String
-        public let text: String
+        /// What the read established, which on some apps is that it established nothing.
+        /// [LAW:types-are-the-program] A `String` here would make VS Code's empty answer
+        /// indistinguishable from an empty document, which is the bug `ScreenText` exists
+        /// to make unrepresentable.
+        public let text: ScreenText
     }
 
     /// [LAW:no-silent-failure] A screen that cannot be read is said so, never reported
     /// as an empty one: empty is what the verdict compares against.
+    ///
+    /// An app that will not report its text does not fail this call. The role still
+    /// answers, and on those apps it is the most useful thing there is - VS Code focused
+    /// on its file tree answers `AXRow`, which says the keystrokes are about to go to the
+    /// sidebar and not the editor. Refusing the whole reading would throw that away and
+    /// stop a run that is going to work.
     public func focus() throws -> Focus {
-        let (element, name) = try focusedElement()
+        let element = try focusedElement()
         var role: CFTypeRef?
         _ = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
-        return Focus(role: role as? String ?? "an element that will not name its role", text: try Self.text(of: element, in: name))
+        return Focus(role: role as? String ?? "an element that will not name its role", text: Self.text(of: element))
     }
 
     /// The value alone. [LAW:decomposition] `wait` polls this every 2 ms for seconds at a
     /// time, and the role it does not use is another synchronous call into the app whose
     /// main thread the poll rate was chosen to leave alone - the reading would have been
     /// loading the very thing it measures.
-    public func read() throws -> String {
-        let (element, name) = try focusedElement()
-        return try Self.text(of: element, in: name)
+    public func read() throws -> ScreenText {
+        Self.text(of: try focusedElement())
     }
 
-    private static func text(of element: AXUIElement, in name: String) throws -> String {
+    /// The focused element's text, classified. [LAW:single-enforcer] The one place a
+    /// `kAXValue` answer becomes a value, so nothing downstream re-derives what an empty
+    /// answer means.
+    private static func text(of element: AXUIElement) -> ScreenText {
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success, let text = value as? String else { throw ScreenUnreadable.noText(name) }
-        return text
+        let answered = AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success
+        return ScreenText(answer: answered ? value as? String : nil)
     }
 
     /// The focused element, with the app re-proven frontmost first. Both readings come
     /// through here, so neither can quietly read an app the caller did not name.
-    private func focusedElement() throws -> (AXUIElement, String) {
-        let app = try requireFrontmost()
-        let name = bundleID.rawValue
-        let application = Self.application(of: app)
+    private func focusedElement() throws -> AXUIElement {
+        let application = Self.application(of: try requireFrontmost())
         var focused: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(application, kAXFocusedUIElementAttribute as CFString, &focused) == .success, let element = Self.element(focused) else { throw ScreenUnreadable.noFocus(name) }
+        guard AXUIElementCopyAttributeValue(application, kAXFocusedUIElementAttribute as CFString, &focused) == .success, let element = Self.element(focused) else { throw ScreenUnreadable.noFocus(bundleID.rawValue) }
         AXUIElementSetMessagingTimeout(element, Self.messagingTimeout)
-        return (element, name)
+        return element
     }
 
     /// A bound this code states is a bound it has to keep. An Accessibility read is a
@@ -103,7 +123,7 @@ public struct TargetApp {
     /// match its territory. Half a second is far above the 10-35 ms an answer takes here
     /// and far below any budget it is polled inside. Set on every element this reads,
     /// because the timeout is per element and a child does not inherit its parent's.
-    private static let messagingTimeout: Float = 0.5
+    static let messagingTimeout: Float = 0.5
 
     private static func application(of app: NSRunningApplication) -> AXUIElement {
         let application = AXUIElementCreateApplication(app.processIdentifier)
@@ -139,7 +159,7 @@ public struct TargetApp {
             guard clock.now - start < Self.searchBudget else { throw ScreenUnreadable.searchTooSlow(name, within: Self.searchBudget) }
             return Self.children(of: element)
         }, where: { Self.string(kAXRoleAttribute, of: $0) == role.rawValue && Self.string(kAXTitleAttribute, of: $0) == title })
-        guard let found else { throw ScreenUnreadable.noElement(role: role.rawValue, title: title, app: name) }
+        guard let found else { throw ScreenUnreadable.noElement(role: role.rawValue, title: title, app: name, trusted: AXIsProcessTrusted()) }
         guard let origin = Self.value(kAXPositionAttribute, of: found, as: .cgPoint, CGPoint.zero),
               let size = Self.value(kAXSizeAttribute, of: found, as: .cgSize, CGSize.zero) else {
             throw ScreenUnreadable.elementWithoutFrame(role: role.rawValue, title: title, app: name)
@@ -187,7 +207,7 @@ public struct TargetApp {
 
     /// Polls the focused text until `condition` holds or `limit` passes: an app paints
     /// when it paints, so the wait is on the state and the bound is the verdict.
-    public func wait(within limit: Duration, until condition: (String) -> Bool) async throws -> Bool {
+    public func wait(within limit: Duration, until condition: (ScreenText) -> Bool) async throws -> Bool {
         let clock = ContinuousClock()
         let start = clock.now
         var unanswered: ScreenUnreadable?
@@ -222,6 +242,8 @@ public struct TargetApp {
 
 public enum ScreenUnreadable: Error, CustomStringConvertible {
     case noFrontmostApp
+    /// Something is in front that macOS gives no bundle id, so there is no name to aim at.
+    case frontmostWithoutBundleID(pid: pid_t)
     case notRunning(String)
     /// Raising the target failed, which happens before a single report is posted. This
     /// is the only case that can promise nothing was typed, so it is the only one that
@@ -233,9 +255,12 @@ public enum ScreenUnreadable: Error, CustomStringConvertible {
     /// half the time it fired.
     case wrongApp(wanted: String, frontmost: String)
     case noFocus(String)
-    case noText(String)
-    /// No element with that role and title, among the ones read.
-    case noElement(role: String, title: String, app: String)
+    /// No element with that role and title, among the ones read - and whether this
+    /// process was allowed to look at all, captured where it is known rather than guessed
+    /// at by the reader. An untrusted process finds nothing in every app, and a message
+    /// that offered "no such element" as the explanation would send somebody hunting for a
+    /// button that is on the screen in front of them. [FRAMING:representation]
+    case noElement(role: String, title: String, app: String, trusted: Bool)
     case elementWithoutFrame(role: String, title: String, app: String)
     case tooManyElements(String, limit: Int)
     case searchTooSlow(String, within: Duration)
@@ -247,20 +272,23 @@ public enum ScreenUnreadable: Error, CustomStringConvertible {
     /// difference, so nothing has to inspect a message to find it.
     public var mayPassWithTime: Bool {
         switch self {
-        case .noFocus, .noText, .noElement: true
-        case .noFrontmostApp, .notRunning, .wouldNotComeForward, .wrongApp, .elementWithoutFrame, .tooManyElements, .searchTooSlow: false
+        case .noFocus, .noElement: true
+        case .noFrontmostApp, .frontmostWithoutBundleID, .notRunning, .wouldNotComeForward, .wrongApp, .elementWithoutFrame, .tooManyElements, .searchTooSlow: false
         }
     }
 
     public var description: String {
         switch self {
         case .noFrontmostApp: "no app is frontmost, so there is no focused element to read"
+        case .frontmostWithoutBundleID(let pid): "the app in front (pid \(pid)) has no bundle id, so there is no name to aim at"
         case .notRunning(let app): "\(app) is not running, so there is nothing to type into"
         case .wouldNotComeForward(let wanted, let frontmost): "\(wanted) would not come to the front, \(frontmost) is there; nothing was typed"
         case .wrongApp(let wanted, let frontmost): "\(frontmost) is frontmost, not \(wanted)"
         case .noFocus(let app): "\(app) has no focused element; is this process allowed under Accessibility?"
-        case .noText(let app): "the focused element in \(app) carries no text value"
-        case .noElement(let role, let title, let app): "\(app) has no \(role) titled \(title.debugDescription); is this process allowed under Accessibility?"
+        case .noElement(let role, let title, let app, let trusted):
+            trusted
+                ? "\(app) has no \(role) titled \(title.debugDescription) among the elements read"
+                : "this process is not allowed under Accessibility, so it cannot see any app's elements - including the \(role) titled \(title.debugDescription) it was asked for in \(app)"
         case .elementWithoutFrame(let role, let title, let app): "the \(role) titled \(title.debugDescription) in \(app) has no position or size"
         case .tooManyElements(let app, let limit): "\(app) exposes more than \(limit) elements, which is more than one search reads"
         case .searchTooSlow(let app, let limit): "\(app) did not answer an element search within \(limit)"

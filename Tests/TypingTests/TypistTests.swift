@@ -167,7 +167,6 @@ import Typing
 @Suite struct ScreenUnreadableTests {
     @Test func onlyTheFailuresTimeCanChangeAreRiddenOut() {
         #expect(ScreenUnreadable.noFocus("com.apple.TextEdit").mayPassWithTime)
-        #expect(ScreenUnreadable.noText("com.apple.TextEdit").mayPassWithTime)
         #expect(!ScreenUnreadable.noFrontmostApp.mayPassWithTime)
         #expect(!ScreenUnreadable.notRunning("com.apple.TextEdit").mayPassWithTime)
         #expect(!ScreenUnreadable.wouldNotComeForward(wanted: "a", frontmost: "b").mayPassWithTime)

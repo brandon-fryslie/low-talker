@@ -89,7 +89,7 @@ final class FakeMouse: Mouse {
 
     func locate(_ role: AccessibilityRole, _ title: String) throws -> CGRect {
         guard let frame = elements["\(role.rawValue)/\(title)"] else {
-            throw ScreenUnreadable.noElement(role: role.rawValue, title: title, app: "the fake screen")
+            throw ScreenUnreadable.noElement(role: role.rawValue, title: title, app: "the fake screen", trusted: true)
         }
         return frame
     }
