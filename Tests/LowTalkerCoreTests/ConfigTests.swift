@@ -218,7 +218,7 @@ import Testing
     /// A misspelling beside a valid `insert` is named, because the decode completes and
     /// leaves the stray key for strict decoding to find.
     @Test func aThenWithAKeyBesideInsertNamesIt() {
-        #expect(throws: ConfigError.unknownKeys(["emit"])) {
+        #expect(throws: ConfigError.unknownKeys(["modes[0].routes[0].then.emit"])) {
             try Config(toml: Self.mode(routes: #"[{ when = "always", then = { insert = "focus", emit = "focus" } }]"#))
         }
     }
@@ -247,13 +247,13 @@ import Testing
     /// for `then` and `insert`, so a typo nested that deep is named rather than quietly
     /// dropped. Pinned by test because the guarantee is TOMLKit's, not this package's.
     @Test func aTypoBesideAValidInsertIsNamed() {
-        #expect(throws: ConfigError.unknownKeys(["isnert"])) {
+        #expect(throws: ConfigError.unknownKeys(["modes[0].routes[0].then.isnert"])) {
             try Config(toml: Self.mode(routes: #"[{ when = "always", then = { insert = "focus", isnert = "y" } }]"#))
         }
     }
 
     @Test func aTypoInsideInsertIsNamed() {
-        #expect(throws: ConfigError.unknownKeys(["typo"])) {
+        #expect(throws: ConfigError.unknownKeys(["modes[0].routes[0].then.insert.typo"])) {
             try Config(toml: Self.mode(routes: #"[{ when = "always", then = { insert = { app = "com.tinyspeck.slackmacgap", typo = 1 } } }]"#))
         }
     }
@@ -298,6 +298,51 @@ import Testing
                 chord = { modifiers = ["banana"] }
                 """)
         }
+    }
+
+    /// A typo is placed like every other fault, so two of them in different modes are
+    /// each named where they sit rather than as bare words.
+    @Test func typosInDifferentModesAreEachPlaced() {
+        #expect(throws: ConfigError.unknownKeys(["modes[0].chrod", "modes[1].vocabualry"])) {
+            try Config(toml: """
+                [[modes]]
+                name = "a"
+                chord = { modifiers = ["rightOption"] }
+                chrod = 1
+
+                [[modes]]
+                name = "b"
+                chord = { modifiers = ["rightCommand"] }
+                vocabualry = ["x"]
+                """)
+        }
+    }
+
+    /// [LAW:no-silent-failure] TOMLKit keys its unexpected-key report by name, so one
+    /// misspelling made twice arrives as a single entry - the second is lost before this
+    /// package sees it. The file is still refused and the entry that survives says
+    /// exactly where it is, so the other surfaces on the next run. Pinned so that a
+    /// TOMLKit that starts reporting both fails here rather than going unnoticed.
+    @Test func oneMisspellingRepeatedArrivesOncePlaced() {
+        let error = #expect(throws: ConfigError.self) {
+            try Config(toml: """
+                [[modes]]
+                name = "a"
+                chord = { modifiers = ["rightOption"] }
+                chrod = 1
+
+                [[modes]]
+                name = "b"
+                chord = { modifiers = ["rightCommand"] }
+                chrod = 2
+                """)
+        }
+        guard case .unknownKeys(let keys)? = error else {
+            Issue.record("expected .unknownKeys, got \(String(describing: error))")
+            return
+        }
+        #expect(keys.count == 1)
+        #expect(keys.first?.hasSuffix(".chrod") == true)
     }
 
     private static func mode(routes: String) -> String {

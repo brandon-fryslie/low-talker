@@ -92,9 +92,11 @@ public struct Mode: Hashable, Sendable {
 public enum ConfigError: Error, Equatable, CustomStringConvertible {
     /// The file is not TOML at all, at the line where reading it stopped.
     case notTOML(String, line: Int)
-    /// A key the schema has no place for, named so the typo can be found.
+    /// A key the schema has no place for, named with where it sits so the typo can be
+    /// found.
     case unknownKeys([String])
-    /// The file is TOML, but a value is not the kind its key takes.
+    /// The file is TOML, but something in it was refused: where, and why, in the words
+    /// of whichever decoder did the refusing.
     case wrongShape(String)
     case noModes
     case modeUnnamed
