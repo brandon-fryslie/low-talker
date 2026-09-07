@@ -24,9 +24,9 @@ public extension Config {
         } catch let error as TOMLParseError {
             throw ConfigError.notTOML(error.description, line: error.source.begin.line)
         } catch let error as UnexpectedKeysError {
-            // Sorted here rather than where they are printed, so two runs over one bad
-            // file name the same keys in the same order. [LAW:one-source-of-truth]
-            throw ConfigError.unknownKeys(error.keys.keys.sorted())
+            // Placed and sorted here rather than where they are printed, so two runs over
+            // one bad file name the same keys the same way. [LAW:one-source-of-truth]
+            throw ConfigError.unknownKeys(error.keys.values.map(path).sorted())
         } catch let error as DecodingError {
             throw ConfigError.wrongShape(error.sentence)
         } catch {
@@ -156,30 +156,31 @@ private extension DecodingError {
         // TOMLKit's context already ends with the key it could not find; naming it
         // again here would spell it twice.
         case .keyNotFound(_, let context):
-            "\(Self.path(context.codingPath)) is missing"
+            "\(path(context.codingPath)) is missing"
         case .typeMismatch(_, let context):
-            "\(Self.path(context.codingPath)) is not the kind of value that key takes"
+            "\(path(context.codingPath)) is not the kind of value that key takes"
         case .valueNotFound(_, let context):
-            "\(Self.path(context.codingPath)) has no value"
+            "\(path(context.codingPath)) has no value"
         // The one case a hand-written decoder puts its own reason in, such as KeyChord
         // refusing a chord with nothing in it. That sentence is better than any this
         // file could invent, so it is carried through rather than replaced.
         case .dataCorrupted(let context):
-            "\(Self.path(context.codingPath)): \(context.debugDescription)"
+            "\(path(context.codingPath)): \(context.debugDescription)"
         @unknown default:
             "the config could not be read"
         }
     }
 
-    /// `modes[0].chord`, the way the file's author wrote it: `[[modes]]` is
-    /// positional, so an index is a coordinate they can count to, where Swift's own
-    /// "Index 0" names a CodingKey they have never heard of.
-    static func path(_ keys: [any CodingKey]) -> String {
-        let path = keys.reduce(into: "") { path, key in
-            if let index = key.intValue { path += "[\(index)]" }
-            else if path.isEmpty { path += key.stringValue }
-            else { path += ".\(key.stringValue)" }
-        }
-        return path.isEmpty ? "the config" : path
+}
+
+/// `modes[0].chord`, the way the file's author wrote it: `[[modes]]` is positional, so
+/// an index is a coordinate they can count to, where Swift's own "Index 0" names a
+/// CodingKey they have never heard of.
+private func path(_ keys: [any CodingKey]) -> String {
+    let path = keys.reduce(into: "") { path, key in
+        if let index = key.intValue { path += "[\(index)]" }
+        else if path.isEmpty { path += key.stringValue }
+        else { path += ".\(key.stringValue)" }
     }
+    return path.isEmpty ? "the config" : path
 }
