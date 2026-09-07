@@ -29,10 +29,7 @@ public struct ModelName: RawRepresentable, Hashable, Codable, Sendable, Expressi
     public init(from decoder: any Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
         guard let name = ModelName(rawValue: raw) else {
-            throw DecodingError.dataCorrupted(.init(
-                codingPath: decoder.codingPath,
-                debugDescription: "\"\(raw)\" is not a model name: one folder in the model repo, such as base.en"
-            ))
+            throw decoder.fault("\"\(raw)\" is not a model name: one folder in the model repo, such as base.en")
         }
         self = name
     }

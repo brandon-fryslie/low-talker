@@ -47,10 +47,7 @@ public enum Modifier: String, Hashable, Codable, CaseIterable, Sendable {
     public init(from decoder: any Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
         guard let modifier = Modifier(rawValue: raw) else {
-            throw DecodingError.dataCorrupted(.init(
-                codingPath: decoder.codingPath,
-                debugDescription: "\"\(raw)\" is not a modifier: \(Modifier.allCases.map(\.rawValue).joined(separator: ", "))"
-            ))
+            throw decoder.fault("\"\(raw)\" is not a modifier: \(Modifier.allCases.map(\.rawValue).joined(separator: ", "))")
         }
         self = modifier
     }
