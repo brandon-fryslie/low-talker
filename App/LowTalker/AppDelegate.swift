@@ -107,8 +107,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Kept for the app's life so the XPC connection to the helper stays open: launchd
     /// starts the job on the first call, and that is a cost to pay once, not per press.
     private let helper = HelperConnection()
-    /// Nothing raises it yet; a cancel from the HUD will, through the same release every
-    /// other stop takes.
+    /// Raised on the way out, so a session still typing stops short of its remaining
+    /// keys rather than being waited out in full.
     private let interrupt = Interrupt()
 
     /// The engine, from the moment launch starts loading it. Awaiting the task is how
@@ -150,10 +150,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try hotkey.start { [unowned self] in dictation.press($0) }
             showHotkeyStatus("hold \(Hotkey.defaultChord.spelled) to dictate")
         } catch {
+            // Whatever got as far as starting is put back: a tap that failed after
+            // capture began would otherwise leave the microphone open with nothing
+            // reading it, under a menu saying dictation is off. Stopping is idempotent,
+            // so both failures leave by this one path. [LAW:dataflow-not-control-flow]
+            capture.stop()
             // [LAW:no-silent-failure] An app that cannot listen must say so on the
             // one surface it has, in the words the user can act on.
             showHotkeyStatus("off — \(error)")
         }
+    }
+
+    /// Quitting waits for the sessions, the way `lowtalker dictate` waits on its
+    /// interrupt. A session holds keys down while it types and releases them on its way
+    /// out, so a process that goes while one is in flight leaves a key down for macOS to
+    /// repeat into whatever comes forward next; the interrupt is what cuts a long session
+    /// short, and the wait is what lets it reach its release.
+    /// [LAW:no-ambient-temporal-coupling] The quit has an owner, rather than a race.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        interrupt.raise(SIGTERM)
+        Task {
+            // A refused wait is reported and the quit still granted: an app that cannot
+            // be quit would be the worse failure of the two. [LAW:no-silent-failure]
+            do { try await dictation.finish() } catch { report(.failure(error)) }
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 
     /// Off the main path from the first await: the download and the Core ML load
