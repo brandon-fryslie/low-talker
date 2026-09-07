@@ -202,8 +202,24 @@ import Testing
     /// A `then` that names nothing would be a route that claims an utterance and drops
     /// it.
     @Test func aThenNamingNothingIsRefused() {
-        #expect(throws: ConfigError.wrongShape("modes[0].routes[0].then: a route's then names exactly one thing to do")) {
+        #expect(throws: ConfigError.wrongShape("modes[0].routes[0].then.insert is missing")) {
             try Config(toml: Self.mode(routes: #"[{ when = "always", then = {} }]"#))
+        }
+    }
+
+    /// A `then` whose one key is misspelled named exactly one thing, so it is told which
+    /// key is absent rather than that it named nothing.
+    @Test func aThenWhoseOnlyKeyIsMisspelledIsToldWhatIsMissing() {
+        #expect(throws: ConfigError.wrongShape("modes[0].routes[0].then.insert is missing")) {
+            try Config(toml: Self.mode(routes: #"[{ when = "always", then = { emit = "focus" } }]"#))
+        }
+    }
+
+    /// A misspelling beside a valid `insert` is named, because the decode completes and
+    /// leaves the stray key for strict decoding to find.
+    @Test func aThenWithAKeyBesideInsertNamesIt() {
+        #expect(throws: ConfigError.unknownKeys(["emit"])) {
+            try Config(toml: Self.mode(routes: #"[{ when = "always", then = { insert = "focus", emit = "focus" } }]"#))
         }
     }
 
