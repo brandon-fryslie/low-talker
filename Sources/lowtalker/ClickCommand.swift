@@ -13,9 +13,9 @@ import Typing
 /// Context it is handed, while this aims at whatever macOS has just put on the screen -
 /// a driver approval, a login item prompt - which nothing routed and nobody can name in
 /// advance. The clicking itself is `Pointer`'s, unchanged and not repeated here, so both
-/// paths land through one mechanism - including the refusal to post a report while macOS
-/// has an alert over everything, which `GuardedMouse.check` owns for every caller rather
-/// than this command owning it for itself. [LAW:single-enforcer]
+/// paths land through one mechanism - including the refusal to press while macOS has an
+/// alert over everything, which `GuardedMouse.down` owns for every caller rather than this
+/// command owning it for itself. [LAW:single-enforcer]
 ///
 /// **The virtual mouse and not a CGEvent**, because that is the whole reason this line of
 /// work exists: a report from the driver extension is hardware to the OS and reaches

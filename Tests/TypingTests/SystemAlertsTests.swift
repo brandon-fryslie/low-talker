@@ -5,8 +5,8 @@ import Testing
 /// The rule that decides whether a click may fire, asked without a window server.
 ///
 /// `SystemAlerts.count(from:value:)` is the pure half of the reading `GuardedMouse` makes
-/// before every pointer report, so these are the branches that stand between an agent's
-/// click and somebody else's Allow button.
+/// before every press, so these are the branches that stand between an agent's click and
+/// somebody else's Allow button.
 @Suite struct SystemAlertsTests {
     /// The usual state: the owner is launched to show an alert and exits again, and one
     /// that is running but has not finished launching has no windows attribute yet.
