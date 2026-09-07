@@ -150,7 +150,7 @@ It needs the helper installed (`scripts/keyboard-helper install`, under "The key
 
 ## Paste
 
-Paste is a CLI command, kept as it stands, and not the path the app inserts through; the app types through the keyboard helper (`lowtalker act` above).
+Paste is a CLI command, kept as it stands, and not the app's inserter. That is the keyboard helper, which `lowtalker act` above drives the way the app will.
 
     swift run lowtalker paste "hello there"            # paste into the frontmost app now
     swift run lowtalker paste "hello there" --delay 3  # three seconds to bring the receiving app forward
