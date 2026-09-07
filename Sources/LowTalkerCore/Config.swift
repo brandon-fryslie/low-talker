@@ -89,7 +89,7 @@ public struct Mode: Hashable, Sendable {
 /// understood. None of them is answered with the defaults: "there is no config" and
 /// "there is a config I could not read" are different facts, and collapsing them
 /// would run the app on settings its owner never chose.
-public enum ConfigError: Error, Equatable, CustomStringConvertible {
+public enum ConfigError: Error, Equatable, Sendable, CustomStringConvertible {
     /// The file is not TOML at all, at the line where reading it stopped.
     case notTOML(String, line: Int)
     /// A key the schema has no place for, named with where it sits so the typo can be

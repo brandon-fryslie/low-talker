@@ -78,6 +78,16 @@ public extension Config {
             }
         }
 
+        /// The file this was read from, or looked for and did not find. Both cases know
+        /// it, so a caller that wants to read the same file again - a watch, above all -
+        /// takes it from here rather than being handed a path of its own that could name
+        /// somewhere else. [LAW:one-source-of-truth]
+        public var url: URL {
+            switch self {
+            case .file(_, let url), .noFile(let url): url
+            }
+        }
+
         /// The line a report opens with, naming the file it read or the one it looked
         /// for.
         public var description: String {
