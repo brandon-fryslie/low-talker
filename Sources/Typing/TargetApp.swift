@@ -118,7 +118,10 @@ public struct TargetApp {
     public static let searchLimit = 2000
     /// The most time one search is given. The element cap bounds the reads and the
     /// messaging timeout bounds each one, and an app that answers slowly stays under both
-    /// for minutes; this is the bound a caller is actually promised.
+    /// for minutes, so this is the bound that binds. Polled once per element, so the
+    /// element in hand finishes its three reads past it: the promise is this plus 1.5 s at
+    /// the messaging timeout, and saying only the number would be a bound the code does
+    /// not keep. [FRAMING:representation]
     public static let searchBudget: Duration = .seconds(5)
 
     /// The screen frame of the first element, breadth first from the app, with this role
@@ -137,8 +140,8 @@ public struct TargetApp {
             read += 1
             guard read <= Self.searchLimit else { throw ScreenUnreadable.tooManyElements(name, limit: Self.searchLimit) }
             guard clock.now - start < Self.searchBudget else { throw ScreenUnreadable.searchTooSlow(name, within: Self.searchBudget) }
-            return Self.children(of: element)
-        }, where: { Self.string(kAXRoleAttribute, of: $0) == role.rawValue && Self.string(kAXTitleAttribute, of: $0) == title })
+            return try Self.children(of: element, in: name)
+        }, where: { try Self.string(kAXRoleAttribute, of: $0, in: name) == role.rawValue && Self.string(kAXTitleAttribute, of: $0, in: name) == title })
         guard let found else { throw ScreenUnreadable.noElement(role: role.rawValue, title: title, app: name) }
         guard let origin = Self.value(kAXPositionAttribute, of: found, as: .cgPoint, CGPoint.zero),
               let size = Self.value(kAXSizeAttribute, of: found, as: .cgSize, CGSize.zero) else {
@@ -147,20 +150,58 @@ public struct TargetApp {
         return CGRect(origin: origin, size: size)
     }
 
-    /// The element's children, each bounded like everything else read here. An element
-    /// that answers with no children is a leaf, which is what a leaf is.
-    private static func children(of element: AXUIElement) -> [AXUIElement] {
+    /// The three things an Accessibility read can come back as. The distinction the search
+    /// turns on is the middle one against the last: an app saying it has no such attribute
+    /// has answered, and an app that did not answer has not. [LAW:types-are-the-program]
+    /// A `Bool` or an optional would collapse those two, which is the collapse this exists
+    /// to prevent.
+    enum AXAnswer: Equatable {
+        /// The app answered, with whatever it had.
+        case answered
+        /// The app answered that there is no such attribute here: a leaf has no children,
+        /// an untitled element has no title. Absence is the answer, not a failure.
+        case absent
+        /// The app did not answer, most often the messaging timeout set above.
+        case unanswered
+    }
+
+    /// What a read's outcome means, decided apart from the read itself so it can be
+    /// checked with no app to read from. [LAW:effects-at-boundaries]
+    nonisolated static func answer(to outcome: AXError) -> AXAnswer {
+        switch outcome {
+        case .success: .answered
+        case .noValue, .attributeUnsupported: .absent
+        default: .unanswered
+        }
+    }
+
+    /// One Accessibility read, and the one place a read's outcome is acted on.
+    /// [LAW:single-enforcer] An absent attribute is `nil`; an app that would not answer is
+    /// thrown, never folded into absence. [LAW:no-silent-failure] Folding a timeout into
+    /// "no children" prunes a subtree out of a search and then reports the element
+    /// missing, which sends whoever reads that to the Accessibility pane for a permission
+    /// they already have.
+    private static func attribute(_ name: String, of element: AXUIElement, in app: String) throws -> CFTypeRef? {
         var value: CFTypeRef?
-        AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value)
-        let children = (value as? [CFTypeRef] ?? []).compactMap(Self.element)
+        let outcome = AXUIElementCopyAttributeValue(element, name as CFString, &value)
+        switch Self.answer(to: outcome) {
+        case .answered: return value
+        case .absent: return nil
+        case .unanswered: throw ScreenUnreadable.unreadableElement(app, attribute: name, code: outcome.rawValue)
+        }
+    }
+
+    /// The element's children, each bounded like everything else read here. An element
+    /// that answers with no children is a leaf, which is what a leaf is; one that does not
+    /// answer is not a leaf, and `attribute` is where those part company.
+    private static func children(of element: AXUIElement, in app: String) throws -> [AXUIElement] {
+        let children = (try attribute(kAXChildrenAttribute, of: element, in: app) as? [CFTypeRef] ?? []).compactMap(Self.element)
         children.forEach { AXUIElementSetMessagingTimeout($0, messagingTimeout) }
         return children
     }
 
-    private static func string(_ attribute: String, of element: AXUIElement) -> String? {
-        var value: CFTypeRef?
-        AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
-        return value as? String
+    private static func string(_ name: String, of element: AXUIElement, in app: String) throws -> String? {
+        try attribute(name, of: element, in: app) as? String
     }
 
     /// A geometry attribute unboxed from its `AXValue`, when the app answered with one of
@@ -239,6 +280,10 @@ public enum ScreenUnreadable: Error, CustomStringConvertible {
     case elementWithoutFrame(role: String, title: String, app: String)
     case tooManyElements(String, limit: Int)
     case searchTooSlow(String, within: Duration)
+    /// An element in a search would not answer for one of its attributes. Distinct from
+    /// `noElement`, which says the app answered for every element it was asked about and
+    /// none of them matched: this one says the search never saw the whole tree.
+    case unreadableElement(String, attribute: String, code: Int32)
 
     /// Whether waiting could still change the answer. An app that will not answer right
     /// now may answer in two milliseconds; an app that is not in front is not going to
@@ -247,7 +292,7 @@ public enum ScreenUnreadable: Error, CustomStringConvertible {
     /// difference, so nothing has to inspect a message to find it.
     public var mayPassWithTime: Bool {
         switch self {
-        case .noFocus, .noText, .noElement: true
+        case .noFocus, .noText, .noElement, .unreadableElement: true
         case .noFrontmostApp, .notRunning, .wouldNotComeForward, .wrongApp, .elementWithoutFrame, .tooManyElements, .searchTooSlow: false
         }
     }
@@ -264,6 +309,7 @@ public enum ScreenUnreadable: Error, CustomStringConvertible {
         case .elementWithoutFrame(let role, let title, let app): "the \(role) titled \(title.debugDescription) in \(app) has no position or size"
         case .tooManyElements(let app, let limit): "\(app) exposes more than \(limit) elements, which is more than one search reads"
         case .searchTooSlow(let app, let limit): "\(app) did not answer an element search within \(limit)"
+        case .unreadableElement(let app, let attribute, let code): "\(app) would not answer \(attribute) for an element the search reached; Accessibility error \(code)"
         }
     }
 }

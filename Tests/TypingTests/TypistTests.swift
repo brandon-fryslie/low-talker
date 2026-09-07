@@ -1,8 +1,9 @@
+import ApplicationServices
 import KeyboardLayout
 import Keystrokes
 import LowTalkerCore
 import Testing
-import Typing
+@testable import Typing
 
 /// The typist against a keyboard the test plays, on the installed US layout.
 @Suite @MainActor struct TypistTests {
@@ -172,5 +173,42 @@ import Typing
         #expect(!ScreenUnreadable.notRunning("com.apple.TextEdit").mayPassWithTime)
         #expect(!ScreenUnreadable.wouldNotComeForward(wanted: "a", frontmost: "b").mayPassWithTime)
         #expect(!ScreenUnreadable.wrongApp(wanted: "a", frontmost: "b").mayPassWithTime)
+        // An element that would not answer is the same kind of moment's silence: the app
+        // is there and busy, which is what a poll is for.
+        #expect(ScreenUnreadable.unreadableElement("com.apple.TextEdit", attribute: "AXChildren", code: -25204).mayPassWithTime)
+    }
+
+    /// An element that would not answer says so, and says it apart from an element that
+    /// answered and did not match. Both used to come out as `noElement`, whose words send
+    /// the reader to the Accessibility pane for a permission they already have.
+    @Test func anElementThatWouldNotAnswerReadsDifferentlyFromOneThatDidNotMatch() {
+        let unreadable = ScreenUnreadable.unreadableElement("com.apple.TextEdit", attribute: "AXChildren", code: -25204).description
+        #expect(unreadable.contains("com.apple.TextEdit"))
+        #expect(unreadable.contains("AXChildren"))
+        #expect(unreadable.contains("-25204"))
+        #expect(!unreadable.contains("Accessibility?"))
+        #expect(ScreenUnreadable.noElement(role: "AXButton", title: "Cancel", app: "com.apple.TextEdit").description.contains("Accessibility?"))
+    }
+}
+
+/// What the search does with each way an Accessibility read can come back. The whole
+/// point of the type is that an app answering "no such attribute" and an app not
+/// answering at all are different facts: the first is a leaf, the second is a subtree the
+/// search never saw. Folding the second into the first prunes the tree silently and then
+/// reports the element missing. [LAW:no-silent-failure]
+@Suite struct AXAnswerTests {
+    @Test func anAppThatSaysItHasNoSuchAttributeHasAnswered() {
+        #expect(TargetApp.answer(to: .success) == .answered)
+        #expect(TargetApp.answer(to: .noValue) == .absent)
+        #expect(TargetApp.answer(to: .attributeUnsupported) == .absent)
+    }
+
+    /// `cannotComplete` is what the messaging timeout this file sets comes back as, and it
+    /// is the case the whole distinction exists for.
+    @Test func anAppThatWouldNotAnswerIsNotALeaf() {
+        #expect(TargetApp.answer(to: .cannotComplete) == .unanswered)
+        #expect(TargetApp.answer(to: .apiDisabled) == .unanswered)
+        #expect(TargetApp.answer(to: .invalidUIElement) == .unanswered)
+        #expect(TargetApp.answer(to: .notImplemented) == .unanswered)
     }
 }

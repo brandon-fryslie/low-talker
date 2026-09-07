@@ -69,9 +69,10 @@ public struct Clicks: RawRepresentable, Hashable, Codable, Sendable {
 }
 
 /// How far a scroll rolls the wheel on one axis, in the wheel's own counts, within a
-/// bound no gesture crosses: a thousand counts is eight full reports. The bound is here,
-/// where the number is made and decoded, so a Pipe program handing back a huge value is
-/// refused before a report goes out rather than posting reports until it is killed.
+/// bound no gesture crosses: a thousand counts is eight reports, the last one short. The
+/// bound is here, where the number is made and decoded, so a Pipe program handing back a
+/// huge value is refused before a report goes out rather than posting reports until it is
+/// killed.
 /// [LAW:parse-dont-validate]
 public struct WheelCounts: RawRepresentable, Hashable, Codable, Sendable {
     public static let limit = 1000
