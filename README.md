@@ -368,7 +368,8 @@ Clicking by hand:
     .build/debug/lowtalker click AXButton Cancel
 
 `click` aims at whatever is in front. It is the hands half of a pair: `lowtalker see` is
-the eyes, and takes no arguments.
+the eyes, and takes no positional arguments - only `--shot <path>`, to name where the
+picture goes so a before and an after can be kept side by side.
 
     .build/debug/lowtalker see
     frontmost com.apple.SecurityAgent
@@ -381,12 +382,22 @@ the focused element is and whether it will say what it holds, and always writes 
 screenshot. The picture is not optional because for some apps it is the only true answer,
 and because a `see` before a click and a `see` after it are then comparable pictures.
 
-`click` refuses to aim while a system alert is up. An alert sits at the same screen centre
-every dialog does, so a frame located in the app underneath one has somebody else's button
-over it, and a click at that frame's centre would answer their prompt instead. The count
-is read from `com.apple.UserNotificationCenter` through Accessibility with a half-second
-messaging timeout, deliberately not through System Events, which a modal SecurityAgent
-dialog can leave waiting rather than answering.
+The virtual mouse refuses to post a report while a system alert is up - `click`, the
+routed `clickElement` below, and a bare move alike, because the refusal lives in the mouse
+rather than in whichever command started the click. An alert sits at the same screen
+centre every dialog does, so a frame located in the app underneath one has somebody else's
+button over it, and a click at that frame's centre would answer their prompt instead. It
+is asked again before every report, so an alert that opens while the cursor is still
+travelling is caught too. The count is read from `com.apple.UserNotificationCenter`
+through Accessibility with a half-second messaging timeout, deliberately not through
+System Events, which a modal SecurityAgent dialog can leave waiting rather than answering.
+
+The picture is of the main display: `screencapture` is run with `-m`, because without it
+a Mac with two monitors gets one file per display and none at the path that was asked
+for. And the process must hold Screen Recording, which a binary run from a terminal that
+holds it does - TCC attributes the grant to the responsible parent - so `see` checks
+rather than assumes: without it `screencapture` writes a blank picture that looks exactly
+like a real one.
 
 The same click is still reachable as a routed action, for a route that decides one:
 

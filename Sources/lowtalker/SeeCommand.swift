@@ -28,32 +28,44 @@ struct SeeCommand: AsyncParsableCommand {
 
     @MainActor
     func run() async throws {
-        let front = try TargetApp.frontmost()
-        print("frontmost \(front.rawValue)")
+        // Every reading is taken and reported whatever the readings before it did, and a
+        // failure travels as a value rather than as an early return. The picture is the
+        // reading that always works, and the runs where the others cannot answer - a
+        // screen mid-transition, an app with no bundle id, a modal dialog - are exactly
+        // the runs where it is the only evidence there will be, so nothing above it may
+        // cost the caller it. [LAW:dataflow-not-control-flow]
+        let front = Self.reading { try TargetApp.frontmost() }
+        print("frontmost \(Self.told(front.map(\.rawValue)))")
 
-        // Asked before the focus is read, so a screen this command cannot see past is the
-        // first thing it says rather than a footnote under a reading taken underneath one.
-        // Reported rather than raised: every line here stands or falls on its own, and a
-        // question this one cannot answer must not cost the caller the picture below,
-        // which is the reading that always works. `click` is where an unreadable alert is
-        // fatal, because that is where acting on it would be. [LAW:dataflow-not-control-flow]
-        do { print("alerts \(try SystemAlerts.showing())") }
-        catch { print("alerts unreadable: \(error)") }
+        // Asked before the focus is read, so a screen this command cannot see past is
+        // said before a reading taken underneath one. `click` is where an unreadable
+        // alert is fatal, because that is where acting on it would be.
+        print("alerts \(Self.told(Self.reading { try SystemAlerts.showing() }.map(\.description)))")
 
-        // A dialog that has taken the front often has no focused element at all, and that
-        // is a fact about the screen rather than a failure of this command: it reports the
-        // reading it got and carries on to the picture, which is the reading that always
-        // works. [LAW:no-silent-failure] What went wrong is printed, never swallowed.
-        let screen = TargetApp(bundleID: front, interrupt: Interrupt.watched())
-        do {
-            let focus = try screen.focus()
-            print("focus \(focus.role) holds \(focus.text)")
-        } catch {
-            print("focus unreadable: \(error)")
+        // Derived from the reading above rather than taken again: with no app named there
+        // is no focus to read, and saying so is the honest reading, not a skipped one.
+        let focus = front.flatMap { bundleID in
+            Self.reading { try TargetApp(bundleID: bundleID, interrupt: Interrupt.watched()).focus() }
         }
+        print("focus \(Self.told(focus.map { "\($0.role) holds \($0.text)" }))")
 
         let screenshot = try Screenshot.capture(to: Self.destination(shot))
         print("screenshot \(screenshot.path.path) (\(screenshot.bytes) bytes)")
+    }
+
+    /// One reading, kept whichever way it went, so the caller can report it and carry on.
+    @MainActor
+    private static func reading<T>(_ take: @MainActor () throws -> T) -> Result<T, any Error> {
+        do { return .success(try take()) } catch { return .failure(error) }
+    }
+
+    /// What a reading said, or why there is nothing to say. [LAW:no-silent-failure] The
+    /// failure is printed in the reading's own place rather than swallowed.
+    private static func told(_ reading: Result<String, any Error>) -> String {
+        switch reading {
+        case .success(let said): said
+        case .failure(let error): "unreadable: \(error)"
+        }
     }
 
     /// The file the picture goes to: the one named, or a fresh timestamped one.
