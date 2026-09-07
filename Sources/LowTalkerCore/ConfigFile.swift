@@ -13,7 +13,7 @@ public extension Config {
     ///
     /// [LAW:effects-at-boundaries] Pure. It opens nothing and reads no clock, so a test
     /// hands it a string rather than a filesystem.
-    init(toml: String) throws {
+    init(toml: String) throws(ConfigError) {
         var decoder = TOMLDecoder()
         // A key this schema has no place for is a typo the author wants told, not a
         // line quietly doing nothing. [LAW:no-silent-failure]
@@ -29,13 +29,15 @@ public extension Config {
             throw ConfigError.unknownKeys(error.keys.keys.sorted())
         } catch let error as DecodingError {
             throw ConfigError.wrongShape(error.sentence)
+        } catch {
+            throw ConfigError.notUnderstood("\(error)")
         }
         // [LAW:one-source-of-truth] A key the file leaves out falls back to the value in
         // Config.default, which is where the no-file behaviour is written; no default is
         // spelled a second time here to drift from it.
         try self.init(
             model: file.model ?? Config.default.model,
-            modes: file.modes?.map { try $0.mode() } ?? Config.default.modes
+            modes: file.modes?.map { $0.mode() } ?? Config.default.modes
         )
     }
 
@@ -45,12 +47,14 @@ public extension Config {
     /// [LAW:no-silent-failure] Only a file that is not there yields the defaults. One
     /// that exists and cannot be read, or cannot be understood, throws - so a config the
     /// user wrote is never quietly replaced by one they did not.
-    static func load(from url: URL = fileURL) throws -> Config {
+    static func load(from url: URL = fileURL) throws(ConfigError) -> Config {
         let text: String
         do {
             text = try String(contentsOf: url, encoding: .utf8)
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
             return .default
+        } catch {
+            throw ConfigError.unreadable(path: url.path, why: error.localizedDescription)
         }
         return try Config(toml: text)
     }
@@ -68,17 +72,17 @@ private struct ConfigFile: Decodable {
 private struct ModeEntry: Decodable {
     let name: String
     let chord: KeyChord
-    let vocabulary: [String]?
+    let vocabulary: [Vocabulary.Term]?
     let routes: [RouteEntry]?
 
-    /// [LAW:single-enforcer] The chord arrived through KeyChord's own decoder and each
-    /// term goes through Vocabulary.Term, so what a chord and a term may be is settled
-    /// where those types live and is not restated here.
-    func mode() throws -> Mode {
+    /// [LAW:single-enforcer] The chord, each term, and every route arrived through
+    /// their own decoders, so what each may be is settled where those types live and is
+    /// not restated here - which is why this can no longer fail.
+    func mode() -> Mode {
         Mode(
             name: name,
             chord: chord,
-            vocabulary: Vocabulary(try (vocabulary ?? []).map(Vocabulary.Term.init)),
+            vocabulary: Vocabulary(vocabulary ?? []),
             // A mode that names no routes dictates, which is the only thing it could
             // have meant; one that names an empty list claims nothing, and `lowtalker
             // config check` is where that gap is reported.
@@ -104,7 +108,7 @@ private struct MatchEntry: Decodable {
         let name = try decoder.singleValueContainer().decode(String.self)
         switch name {
         case "always": match = .always
-        default: throw ConfigError.noSuchMatch(name)
+        default: throw decoder.fault("\"\(name)\" is not something a route can match on")
         }
     }
 }
@@ -118,7 +122,9 @@ private struct EmitEntry: Decodable {
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        guard container.allKeys.count == 1 else { throw ConfigError.thenNamesNoOneThing }
+        guard container.allKeys.count == 1 else {
+            throw decoder.fault("a route's then names exactly one thing to do")
+        }
         emit = .insertTranscript(target: try container.decode(TargetEntry.self, forKey: .insert).target)
     }
 }
@@ -132,7 +138,9 @@ private struct TargetEntry: Decodable {
 
     init(from decoder: any Decoder) throws {
         if let name = try? decoder.singleValueContainer().decode(String.self) {
-            guard name == "focus" else { throw ConfigError.noSuchTarget(name) }
+            guard name == "focus" else {
+                throw decoder.fault("\"\(name)\" is not somewhere text can be inserted")
+            }
             target = .focus
         } else {
             let container = try decoder.container(keyedBy: CodingKeys.self)

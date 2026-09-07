@@ -177,7 +177,7 @@ import Testing
 
     /// [LAW:single-enforcer] Likewise the rule about what a vocabulary term may be.
     @Test func aVocabularyTermWithNoWordIsRefused() {
-        #expect(throws: VocabularyError.termSaysNothing("...")) {
+        #expect(throws: ConfigError.wrongShape(#"modes[0].vocabulary[0]: vocabulary term "..." has no word in it"#)) {
             try Config(toml: """
                 [[modes]]
                 name = "dictation"
@@ -188,13 +188,13 @@ import Testing
     }
 
     @Test func aRouteMatchingOnSomethingElseIsNamed() {
-        #expect(throws: ConfigError.noSuchMatch("sometimes")) {
+        #expect(throws: ConfigError.wrongShape(#"modes[0].routes[0].when: "sometimes" is not something a route can match on"#)) {
             try Config(toml: Self.mode(routes: #"[{ when = "sometimes", then = { insert = "focus" } }]"#))
         }
     }
 
     @Test func aTargetThatIsNowhereIsNamed() {
-        #expect(throws: ConfigError.noSuchTarget("wherever")) {
+        #expect(throws: ConfigError.wrongShape(#"modes[0].routes[0].then.insert: "wherever" is not somewhere text can be inserted"#)) {
             try Config(toml: Self.mode(routes: #"[{ when = "always", then = { insert = "wherever" } }]"#))
         }
     }
@@ -202,8 +202,28 @@ import Testing
     /// A `then` that names nothing would be a route that claims an utterance and drops
     /// it.
     @Test func aThenNamingNothingIsRefused() {
-        #expect(throws: ConfigError.thenNamesNoOneThing) {
+        #expect(throws: ConfigError.wrongShape("modes[0].routes[0].then: a route's then names exactly one thing to do")) {
             try Config(toml: Self.mode(routes: #"[{ when = "always", then = {} }]"#))
+        }
+    }
+
+    /// The position has to be counted, not assumed: the fault is in the second route
+    /// of the second mode, so a hardcoded `modes[0].routes[0]` would fail here.
+    @Test func aRouteFaultNamesWhichModeAndWhichRouteItIsIn() {
+        #expect(throws: ConfigError.wrongShape(#"modes[1].routes[1].when: "sometyme" is not something a route can match on"#)) {
+            try Config(toml: """
+                [[modes]]
+                name = "dictation"
+                chord = { modifiers = ["rightOption"] }
+
+                [[modes]]
+                name = "slack"
+                chord = { modifiers = ["rightCommand"] }
+                routes = [
+                  { when = "always", then = { insert = "focus" } },
+                  { when = "sometyme", then = { insert = "focus" } },
+                ]
+                """)
         }
     }
 
@@ -295,6 +315,21 @@ import Testing
         let directory = URL(filePath: NSTemporaryDirectory()).appending(path: "low-talker-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        #expect(throws: (any Error).self) { try Config.load(from: directory) }
+        #expect(throws: ConfigError.self) { try Config.load(from: directory) }
+    }
+
+    /// A file saved in some other encoding is a file whose owner needs to be told which
+    /// file, in the words the system used - not handed a Foundation error they have no
+    /// use for, and not quietly given somebody else's settings.
+    @Test func aFileThatCannotBeReadIsNamedRatherThanReplaced() throws {
+        let url = URL(filePath: NSTemporaryDirectory()).appending(path: "low-talker-\(UUID().uuidString).toml")
+        try Data([0xFF, 0xFE, 0xFD]).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let error = #expect(throws: ConfigError.self) { try Config.load(from: url) }
+        guard case .unreadable(let path, _)? = error else {
+            Issue.record("expected .unreadable, got \(String(describing: error))")
+            return
+        }
+        #expect(path == url.path)
     }
 }
