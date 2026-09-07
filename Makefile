@@ -52,10 +52,13 @@ check-docs:
 
 # The CLI for engine work, and the keyboard helper it types through. Both are signed
 # with the dev identity rather than ad hoc: the helper admits exactly the certificate
-# that signed it, so the CLI has to carry the same one to press a key. The identifier
-# is fixed as well, because the Neural Engine keeps its compiled model per signing
+# that signed it, so the CLI has to carry the same one to press a key. The CLI's
+# identifier is fixed because the Neural Engine keeps its compiled model per signing
 # identifier and `swift build` links a fresh one into every binary; a plain
-# `swift run` pays the minutes-long specialization after each rebuild.
+# `swift run` pays the minutes-long specialization after each rebuild. The helper's is
+# the identifier project.yml gives the app-embedded build, so the two builds of one
+# program are one code identity; who may call it is decided by the certificate, never
+# by the identifier.
 # [LAW:one-source-of-truth] scripts/signing-identity reads the identity name off
 # project.yml; the lookup runs in the recipe (not $(shell), which discards exit status)
 # so a failing tool aborts loudly.

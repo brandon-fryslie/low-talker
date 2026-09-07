@@ -57,6 +57,11 @@ jobs:
       - name: Create the dev signing identity
         run: make signing-identity
 
+      # The codesign recipes run here and nowhere else in CI: `make test` builds the
+      # package unsigned, and `make app` signs through Xcode.
+      - name: Sign the CLI and the helper
+        run: make cli helper
+
       - name: Build and test the package
         run: make test
 
