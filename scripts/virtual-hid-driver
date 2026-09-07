@@ -355,15 +355,18 @@ cmd_remove() {
   remove_outcome "$(report_state)"
 }
 
-# Every verb reads the machine, and every reading goes through the CLI, so the build is
-# proven present once here rather than discovered missing inside a command substitution
-# that would swallow the refusal.
-require_cli
+# Only when run as a program. Every verb reads the machine through the CLI, so the build
+# is proven present once here rather than discovered missing inside a command substitution
+# that would swallow the refusal - and that refusal is an `exit`, which from a sourced
+# file would end the caller's shell instead of returning to it.
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  require_cli
 
-case "${1:-}" in
-  state)   cmd_state ;;
-  expect)  shift; cmd_expect "$@" ;;
-  install) cmd_install ;;
-  remove)  cmd_remove ;;
-  *) die "usage: virtual-hid-driver state|expect <verdict>|install|remove" ;;
-esac
+  case "${1:-}" in
+    state)   cmd_state ;;
+    expect)  shift; cmd_expect "$@" ;;
+    install) cmd_install ;;
+    remove)  cmd_remove ;;
+    *) die "usage: virtual-hid-driver state|expect <verdict>|install|remove" ;;
+  esac
+fi

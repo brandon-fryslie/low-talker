@@ -20,13 +20,12 @@ set -uo pipefail
 
 SCRIPT="$(dirname "$0")/virtual-hid-driver"
 
-# Sourcing runs the verb dispatch at the foot of the script, and `state` is the
-# read-only one. Its exit status reports the machine, not this suite, so it is not the
-# signal here - what has to be true is that the definitions arrived, and that is checked
-# directly rather than inferred from it. [LAW:no-silent-failure]
+# Sourcing defines the functions and runs nothing: the verb dispatch is guarded to
+# direct execution. What has to be true is that the definitions arrived, and that is
+# checked directly rather than inferred from a status. [LAW:no-silent-failure]
 sourced_status=0
 # shellcheck source=/dev/null
-source "$SCRIPT" state >/dev/null 2>&1 || sourced_status=$?
+source "$SCRIPT" || sourced_status=$?
 set +e
 declare -f report_state >/dev/null && declare -f receipt_version >/dev/null \
   || { echo "virtual-hid-driver-test: sourcing $SCRIPT left its functions undefined (exit $sourced_status)" >&2; exit 1; }
