@@ -10,6 +10,7 @@ let package = Package(
         .library(name: "KeyboardLayout", targets: ["KeyboardLayout"]),
         .library(name: "Pointing", targets: ["Pointing"]),
         .library(name: "DriverExtension", targets: ["DriverExtension"]),
+        .library(name: "Onboarding", targets: ["Onboarding"]),
         .library(name: "VirtualKeyboard", targets: ["VirtualKeyboard"]),
         .library(name: "KeyboardService", targets: ["KeyboardService"]),
         .library(name: "Typing", targets: ["Typing"]),
@@ -55,7 +56,16 @@ let package = Package(
         // [LAW:one-way-deps] Everything about the virtual devices, the keyboard and the
         // pointing one, and nothing about low-talker: no dependency on LowTalkerCore, so
         // it leaves for its own package by a move rather than by an untangling.
-        .target(name: "VirtualKeyboard", dependencies: ["Keystrokes", "Pointing"]),
+        .target(name: "VirtualKeyboard", dependencies: ["DriverExtension", "Keystrokes", "Pointing"]),
+        // Everything that must hold before low-talker can type, as a list a reader can
+        // act on: what was read off this Mac, and the step for whatever is missing. It
+        // links the driver's vocabulary and the service seam and nothing else - no
+        // device and no window server - so both the CLI and the menu-bar app can show
+        // the same words. [LAW:one-source-of-truth]
+        .target(name: "Onboarding", dependencies: ["DriverExtension", "KeyboardService"]),
+        // The steps are what a person acts on, so they are asserted as values rather
+        // than scraped off a terminal.
+        .testTarget(name: "OnboardingTests", dependencies: ["Onboarding", "DriverExtension", "KeyboardService"]),
         // What crosses the privilege boundary, and the client's side of it. It links the
         // two vocabularies and nothing else: not the layout, because a root helper must
         // never read one, and not the device, because a client must never open one.
@@ -89,6 +99,7 @@ let package = Package(
             dependencies: [
                 "LowTalkerCore",
                 "DriverExtension",
+                "Onboarding",
                 "VirtualKeyboard",
                 "KeyboardLayout",
                 "KeyboardService",
@@ -111,7 +122,7 @@ let package = Package(
         // the framing is proven without root and without the driver.
         .testTarget(
             name: "VirtualKeyboardTests",
-            dependencies: ["VirtualKeyboard", "Keystrokes", "Pointing"]
+            dependencies: ["VirtualKeyboard", "DriverExtension", "Keystrokes", "Pointing"]
         ),
         // The vocabulary stands on its own, so its tests do too: nothing here imports a
         // layout or a device. [LAW:decomposition]
