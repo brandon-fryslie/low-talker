@@ -43,9 +43,11 @@ struct SeeCommand: AsyncParsableCommand {
         print("alerts \(Self.told(Self.reading { try SystemAlerts.showing() }.map(\.description)))")
 
         // Derived from the reading above rather than taken again: with no app named there
-        // is no focus to read, and saying so is the honest reading, not a skipped one.
+        // is no focus to read, and saying so is the honest reading, not a skipped one. The
+        // interrupt is a plain one: `see` presses nothing, and `Interrupt.watched` would
+        // take SIGINT from a command that never asks whether it was raised.
         let focus = front.flatMap { bundleID in
-            Self.reading { try TargetApp(bundleID: bundleID, interrupt: Interrupt.watched()).focus() }
+            Self.reading { try TargetApp(bundleID: bundleID, interrupt: Interrupt()).focus() }
         }
         print("focus \(Self.told(focus.map { "\($0.role) holds \($0.text)" }))")
 
