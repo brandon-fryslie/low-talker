@@ -56,7 +56,7 @@ let package = Package(
         // clicks and scrolls to pointing reports, with the hotkey refused and the target app
         // re-proven in front before each one. It links the core for the actions it performs,
         // the layout and both vocabularies, and takes the keyboard and the mouse as values,
-        // which is what lets the keyboard run against the helper in the app and against the
+        // which is what lets each run against the helper in the app and against the
         // driver under sudo. [LAW:composability]
         .target(name: "Typing", dependencies: ["LowTalkerCore", "KeyboardLayout", "Keystrokes", "Pointing"]),
         // Driven against a keyboard the test plays, so a run can be stopped inside any
