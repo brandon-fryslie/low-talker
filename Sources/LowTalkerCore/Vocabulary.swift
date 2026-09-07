@@ -28,13 +28,27 @@ public struct Vocabulary: Hashable, Sendable {
     public struct Term: Hashable, Sendable, CustomStringConvertible {
         public let text: String
 
-        public init(_ text: String) throws {
+        public init(_ text: String) throws(VocabularyError) {
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !SpokenWords(trimmed).words.isEmpty else { throw VocabularyError.termSaysNothing(text) }
             self.text = trimmed
         }
 
         public var description: String { text }
+    }
+}
+
+/// [LAW:single-enforcer] A term read from a file is a term made the one way terms are
+/// made; this only carries the refusal onto the channel a decoder's caller is
+/// listening on, so the position of the offending entry comes with it.
+extension Vocabulary.Term: Decodable {
+    public init(from decoder: any Decoder) throws {
+        let text = try decoder.singleValueContainer().decode(String.self)
+        do {
+            try self.init(text)
+        } catch {
+            throw decoder.fault(error.description)
+        }
     }
 }
 
