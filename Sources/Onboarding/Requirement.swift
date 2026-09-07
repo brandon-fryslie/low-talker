@@ -77,8 +77,9 @@ public struct Readiness: Sendable, CustomStringConvertible {
 
 // MARK: - the driver extension
 
-/// Where the two approvals live. Named once: it appears in three steps, and a reader
-/// following one of them to a pane that does not exist is a reader who stops.
+/// Where the two approvals live. Named once because every step that asks for a click
+/// ends up here, and a reader following one of them to a pane that does not exist is a
+/// reader who stops.
 private let loginItemsPane = "System Settings > General > Login Items & Extensions"
 
 public extension Requirement {
@@ -176,8 +177,14 @@ public enum HelperStanding: Sendable, Hashable {
     /// waiting for its click look identical: launchd holds no job either way. Only the
     /// app can put the question to `SMAppService`, so only the app can tell them apart -
     /// and the two want opposite steps, one a launch and one a click.
-    public func sharpenedByTheAppsOwnRegistration(approvalPending: Bool) -> HelperStanding {
-        self == .noJob && approvalPending ? .awaitingApproval : self
+    ///
+    /// - Parameter approvalPending: what the app's own registration says, and nil from a
+    ///   caller that has none to ask about. Nil rather than false, because "no, it is
+    ///   not waiting" and "I could never have asked" send a reader to different steps,
+    ///   and only one of them is true of a CLI. Total either way, so no caller has to
+    ///   ask whether it is the one that can sharpen. [LAW:dataflow-not-control-flow]
+    public func sharpenedByTheAppsOwnRegistration(approvalPending: Bool?) -> HelperStanding {
+        self == .noJob && approvalPending == true ? .awaitingApproval : self
     }
 }
 

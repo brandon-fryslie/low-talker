@@ -125,3 +125,28 @@ import Testing
         return path.path
     }
 }
+
+/// The list itself, as both surfaces get it. `lowtalker onboard` and the menu-bar app
+/// are two views of one assembly, and what is checked here is the part neither of them
+/// may quietly disagree about: which requirements are in the list, and in what order.
+/// [LAW:behavior-not-structure]
+@Suite struct ReadinessTests {
+    /// Every requirement, named, on any Mac in any state. A reading that failed keeps its
+    /// row and its name, so this holds on a machine with no driver package as surely as
+    /// on one that is fully set up - which is what makes it a check on the assembly and
+    /// not on the Mac it runs on.
+    @Test func theListIsTheSameThreeRequirementsInTheSameOrder() {
+        #expect(OnboardingProbe.readiness(approvalPending: nil).requirements.map(\.name)
+            == ["Driver extension", "Keyboard helper", "Keyboard Setup Assistant"])
+    }
+
+    /// The app's extra reading changes the helper's row and nothing else. A caller that
+    /// cannot ask `SMAppService` passes nil and gets launchd's answer unsharpened, which
+    /// is the difference between the CLI and the app and the whole of it.
+    @Test func onlyTheHelperCanDifferBetweenTheTwoSurfaces() {
+        let asTheCLISeesIt = OnboardingProbe.readiness(approvalPending: nil).requirements
+        let asAnUnapprovedAppSeesIt = OnboardingProbe.readiness(approvalPending: true).requirements
+        #expect(asTheCLISeesIt.filter { $0.name != "Keyboard helper" }
+            == asAnUnapprovedAppSeesIt.filter { $0.name != "Keyboard helper" })
+    }
+}
