@@ -82,36 +82,6 @@ final class Failure: NSError, @unchecked Sendable {
     required init?(coder: NSCoder) { super.init(coder: coder) }
 }
 
-/// Which connection has the keyboard. One at a time, because there is one keyboard: two
-/// clients typing through the same set of held keys would each post reports missing the
-/// other's, and the first to leave would release the keys the other was holding.
-/// [LAW:types-are-the-program] Refusal is the truthful answer to a second client, and a
-/// client that wants to share can connect per insert - the connection is lazy, and the
-/// helper paid for readiness once.
-final class Holder: @unchecked Sendable {
-    struct Busy: Error, CustomStringConvertible {
-        let pid: pid_t
-        var description: String { "pid \(pid) holds the keyboard" }
-    }
-
-    private let lock = NSLock()
-    private var holding: (connection: ObjectIdentifier, pid: pid_t)?
-
-    /// The keyboard is `connection`'s until it is released, or `Busy` names whose it is.
-    func claim(_ connection: NSXPCConnection) throws {
-        lock.lock(); defer { lock.unlock() }
-        if let holding { throw Busy(pid: holding.pid) }
-        holding = (ObjectIdentifier(connection), connection.processIdentifier)
-    }
-
-    /// The identifier and not the connection: a handler that holds its own connection
-    /// keeps it alive, and this runs from one.
-    func release(_ connection: ObjectIdentifier) {
-        lock.lock(); defer { lock.unlock() }
-        if holding?.connection == connection { holding = nil }
-    }
-}
-
 /// Accepts a connection when the caller is who the requirement says and nobody else has
 /// the keyboard, and refuses it otherwise, saying why.
 final class Listener: NSObject, NSXPCListenerDelegate {
@@ -128,7 +98,7 @@ final class Listener: NSObject, NSXPCListenerDelegate {
         do {
             guard let token = connection.callerAuditToken else { throw CallerIdentity.Refused.noAuditToken }
             try callers.check(auditToken: token)
-            try holder.claim(connection)
+            try holder.claim(ObjectIdentifier(connection), by: connection.processIdentifier)
         } catch {
             log("refused a connection from pid \(connection.processIdentifier): \(error)")
             return false
@@ -163,10 +133,10 @@ func log(_ message: String) {
     logger.notice("\(message, privacy: .public)")
 }
 
-/// Leaves the keys up and the daemon this process started stopped, then ends. The way out
-/// for every reason this process ends on purpose. [LAW:single-enforcer]
-func shutDown(_ keyboard: Keyboard, _ daemon: DaemonProcess.Origin, because reason: String, status: Int32) -> Never {
-    keyboard.releaseEverything(because: reason)
+/// Stops the daemon this process started and ends. The way out for every reason this
+/// process ends on purpose, reached only by whoever claimed the departure.
+/// [LAW:single-enforcer]
+func leave(_ daemon: DaemonProcess.Origin, because reason: String, status: Int32) -> Never {
     DaemonProcess.stop(daemon)
     log("\(reason); exiting \(status)")
     exit(status)
@@ -175,26 +145,34 @@ func shutDown(_ keyboard: Keyboard, _ daemon: DaemonProcess.Origin, because reas
 do {
     let callers = try CallerIdentity.sameSignerAsThisProcess()
     log("callers must satisfy: \(callers.text)")
+    let departure = Departure()
 
     // The connection is lost on the reading thread, and no key can be released over a
     // connection that is gone. What can be done is to stop the daemon this helper
     // started, which takes the device and whatever it held down with it; a daemon
     // somebody else runs stays theirs. Then end: launchd restarts this job after an
     // unsuccessful exit, and the next start reaches or restarts the daemon.
-    // [LAW:no-silent-failure]
+    // [LAW:no-silent-failure] A loss found while already leaving is that departure's to
+    // finish, with the status it chose.
     let reached = try DaemonProcess.reach(within: .seconds(10)) { lost, daemon in
-        log("the daemon's connection was lost (\(lost)); exiting for launchd to start this again")
-        DaemonProcess.stop(daemon)
-        exit(1)
+        guard departure.claim() else { return }
+        leave(daemon, because: "the daemon's connection was lost (\(lost)); exiting for launchd to start this again", status: 1)
     }
     log("the keyboard is up: the daemon answered in \(reached.startup.answered), ready after \(reached.startup.ready)")
     let keyboard = Keyboard(keyboard: reached.keyboard)
 
     // launchd stops a job with SIGTERM. Taken as an event rather than the default
-    // disposition, which would end the process with whatever was held still held.
+    // disposition, which would end the process with whatever was held still held. The
+    // departure is claimed before the keys are released: the release is a request, and
+    // a request that finds the daemon gone reports the loss on this thread, into the
+    // handler above, which must find the departure already taken. [LAW:no-ambient-temporal-coupling]
     signal(SIGTERM, SIG_IGN)
     let termination = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-    termination.setEventHandler { shutDown(keyboard, reached.daemon, because: "asked to stop", status: 0) }
+    termination.setEventHandler {
+        guard departure.claim() else { return }
+        keyboard.releaseEverything(because: "asked to stop")
+        leave(reached.daemon, because: "asked to stop", status: 0)
+    }
     termination.resume()
 
     let listener = NSXPCListener(machServiceName: Helper.machServiceName)

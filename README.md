@@ -295,7 +295,7 @@ Run once after cloning:
 
     make signing-identity
 
-Without it, `make app` fails with an xcodebuild error beginning `No certificate matching 'LowTalker Dev' found`. `make cli` and `make helper` stop the same way, with `No certificate matching`: both sign with the identity, which `scripts/signing-identity` reads off `project.yml`, so the app, the CLI and the helper cannot end up signed by different certificates.
+Without it, `make app` fails with an xcodebuild error beginning `No certificate matching 'LowTalker Dev' found`. `make cli` and `make helper` stop too, with codesign's `LowTalker Dev: no identity found`: both sign with the identity, which `scripts/signing-identity` reads off `project.yml`, so the app, the CLI and the helper cannot end up signed by different certificates.
 
 ### Why a certificate
 

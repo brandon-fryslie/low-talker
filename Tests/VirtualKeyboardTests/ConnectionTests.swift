@@ -41,6 +41,26 @@ import Testing
         #expect(lost.count == 1)
     }
 
+    /// A write that fails is the same loss as a stream that ends, found by the thread that
+    /// asked rather than the one that reads: told once, thrown from the request that found
+    /// it, and every later request fails by the same name. [LAW:single-enforcer]
+    ///
+    /// The write is made to fail by shutting this side's sending half, which makes the
+    /// next write fail with EPIPE while the reader goes on reading. Not the daemon's
+    /// receiving half: measured, a peer's SHUT_RD leaves this side's writes succeeding on
+    /// XNU, so that would test nothing.
+    @Test func aWriteThatFailsIsTheLossToldOnceAndThrownFromTheRequestThatFoundIt() throws {
+        let fake = FakeDaemon()
+        let lost = Lost()
+        let connection = try DaemonConnection(fileDescriptor: fake.clientDescriptor, whenLost: lost.record)
+        #expect(shutdown(fake.clientDescriptor, SHUT_WR) == 0)
+        let failed = DaemonError.socket("write", EPIPE)
+        #expect(throws: failed) { try connection.request(.keyboardInitialize, by: .now + .seconds(2)) }
+        #expect(lost.await() == failed)
+        #expect(throws: failed) { try connection.request(.keyboardReset, by: .now + .seconds(2)) }
+        #expect(lost.count == 1)
+    }
+
     /// A daemon that stops talking without hanging up - suspended, or wedged - is as gone
     /// as one that closed the stream, and is found out by its silence rather than waited
     /// on forever. [LAW:no-ambient-temporal-coupling]

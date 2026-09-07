@@ -83,7 +83,11 @@ public final class HelperKeyboard: KeyPress {
     private func call(_ body: (KeyboardService, @escaping (Error?) -> Void) -> Void) throws {
         let outcome = Outcome()
         let proxy = connection.remoteObjectProxyWithErrorHandler { error in
-            outcome.say(.failed(Unreachable(reason: "the keyboard helper could not be reached: \(error.localizedDescription)")))
+            // The domain and code alongside the words: NSXPC says "couldn't communicate"
+            // for an interrupted connection and an invalid one alike, and only the code
+            // tells a dead helper from one that refused the connection.
+            let failed = error as NSError
+            outcome.say(.failed(Unreachable(reason: "the keyboard helper could not be reached: \(failed.localizedDescription) (\(failed.domain) \(failed.code))")))
         }
         guard let service = proxy as? KeyboardService else {
             throw Unreachable(reason: "the keyboard helper answered with something that is not a keyboard")

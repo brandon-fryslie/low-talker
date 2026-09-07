@@ -118,10 +118,14 @@ extension NSXPCConnection {
     /// this arrangement must never have is a root keystroke service that starts accepting
     /// everyone because the identity check quietly stopped working.
     var callerAuditToken: audit_token_t? {
-        // The box is unpacked only when it says it holds an `audit_token_t` - eight
-        // unsigned ints - because `getValue` raises on a size it did not expect, and a
-        // raised exception in a root daemon is a crash and not a refusal.
-        guard let boxed = value(forKey: "auditToken") as? NSValue, String(cString: boxed.objCType) == "{?=[8I]}" else { return nil }
+        // Asked for only when the connection answers to the name, and the box unpacked
+        // only when it says it holds an `audit_token_t` - eight unsigned ints. Key-value
+        // coding raises for a key the object does not have, and `getValue` raises on a
+        // size it did not expect; a raised exception in a root daemon is a crash and not
+        // a refusal, and a private key is one a release can take away.
+        guard responds(to: Selector(("auditToken"))),
+              let boxed = value(forKey: "auditToken") as? NSValue,
+              String(cString: boxed.objCType) == "{?=[8I]}" else { return nil }
         var token = audit_token_t()
         withUnsafeMutableBytes(of: &token) { boxed.getValue($0.baseAddress!, size: $0.count) }
         return token

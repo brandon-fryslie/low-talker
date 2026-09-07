@@ -89,8 +89,11 @@ import Testing
     @Test func theHelpersRefusalIsThrown() throws {
         let (keyboard, far) = keyboard(.refuse(domain: "fake", code: 7))
         let refusal = #expect(throws: NSError.self) { try keyboard.down(.space) }
-        #expect(refusal?.domain == "fake")
-        #expect(refusal?.code == 7)
+        // The error itself when it is not the fake's, so a connection failure in its place
+        // is read by its reason and not just by its domain.
+        let heard = Comment(rawValue: refusal.map { "\($0 as Error)" } ?? "nothing was thrown")
+        #expect(refusal?.domain == "fake", heard)
+        #expect(refusal?.code == 7, heard)
         withExtendedLifetime(far) {}
     }
 
