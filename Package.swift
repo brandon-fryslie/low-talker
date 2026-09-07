@@ -66,7 +66,7 @@ let package = Package(
         .target(name: "Typing", dependencies: ["LowTalkerCore", "KeyboardLayout", "Keystrokes", "Pointing"]),
         // Driven against a keyboard the test plays, so a run can be stopped inside any
         // keystroke and its report read back.
-        .testTarget(name: "TypingTests", dependencies: ["Typing", "LowTalkerCore", "KeyboardLayout", "Keystrokes", "Pointing"]),
+        .testTarget(name: "TypingTests", dependencies: ["Typing", "LowTalkerCore", "KeyboardLayout", "Keystrokes", "Pointing", "TestProbes"]),
         // The loop from a press to typed text, with every collaborator taken as a value.
         // Its own target rather than app code so the loop runs under `swift test`; the
         // app links it and hands over the real microphone, engine and keyboard.
