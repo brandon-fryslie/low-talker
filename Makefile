@@ -4,7 +4,7 @@ DERIVED_DATA := DerivedData
 CONFIGURATION := Debug
 APP := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/LowTalker.app
 
-.PHONY: app run test check-docs cli clean signing-identity
+.PHONY: app run test check-docs cli helper clean signing-identity
 
 # Regeneration is unconditional: xcodegen is idempotent and sub-second, and a
 # timestamp rule cannot see removed sources or in-place rewrites of the project.
@@ -50,23 +50,34 @@ check-docs:
 	  || { echo "check-docs: verdict_for and README.md disagree about the verdicts (< script, > README)" >&2; exit 1; }; \
 	echo "check-docs: README.md names every verdict verdict_for emits"
 
-# The CLI for engine work. The Neural Engine keeps its compiled model per signing
-# identifier, and `swift build` links a fresh identifier into every binary, so a
-# plain `swift run` pays the minutes-long specialization after each rebuild. Signing
-# the built binary with a fixed identifier keeps the cache warm across rebuilds.
+# The CLI for engine work, and the keyboard helper it types through. Both are signed
+# with the dev identity rather than ad hoc: the helper admits exactly the certificate
+# that signed it, so the CLI has to carry the same one to press a key. The CLI's
+# identifier is fixed because the Neural Engine keeps its compiled model per signing
+# identifier and `swift build` links a fresh one into every binary; a plain
+# `swift run` pays the minutes-long specialization after each rebuild. The helper's is
+# the identifier project.yml gives the app-embedded build, so the two builds of one
+# program are one code identity; who may call it is decided by the certificate, never
+# by the identifier.
+# [LAW:one-source-of-truth] scripts/signing-identity reads the identity name off
+# project.yml; the lookup runs in the recipe (not $(shell), which discards exit status)
+# so a failing tool aborts loudly.
 CLI := .build/debug/lowtalker
 cli:
 	swift build --product lowtalker
-	codesign --force --sign - --identifier lowtalker "$(CLI)"
+	codesign --force --sign "$$(scripts/signing-identity)" --identifier lowtalker "$(CLI)"
 	@echo "$(CLI)"
 
-# Once per Mac. Until it has run, `make app` stops with "No certificate matching".
-# [LAW:one-source-of-truth] project.yml owns the identity name; the lookup runs in the
-# recipe (not $(shell), which discards exit status) so a failing tool aborts loudly.
+HELPER := .build/debug/lowtalker-keyboardd
+helper:
+	swift build --product lowtalker-keyboardd
+	codesign --force --sign "$$(scripts/signing-identity)" --identifier com.lowtalker.keyboardd "$(HELPER)"
+	@echo "$(HELPER)"
+
+# Once per Mac. Until it has run, `make app`, `make cli` and `make helper` stop with
+# "No certificate matching".
 signing-identity:
-	@set -euo pipefail; \
-	identity=$$(xcodegen dump --type json | jq -r '.targets.LowTalker.settings.base.CODE_SIGN_IDENTITY // error("project.yml sets no CODE_SIGN_IDENTITY for target LowTalker")'); \
-	scripts/make-signing-identity "$$identity"
+	scripts/make-signing-identity "$$(scripts/signing-identity)"
 
 clean:
 	rm -rf LowTalker.xcodeproj $(DERIVED_DATA) .build

@@ -65,6 +65,12 @@ final class FakeDaemon: @unchecked Sendable {
         close(descriptor)
     }
 
+    /// The daemon hangs up, as the real one does on a client silent for fifteen seconds,
+    /// or when it exits. The client sees the end of the stream at once.
+    func hangUp() {
+        shutdown(descriptor, SHUT_RDWR)
+    }
+
     /// Every frame the client has sent, in order.
     var received: [Frame] {
         lock.lock(); defer { lock.unlock() }

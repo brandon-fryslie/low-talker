@@ -8,12 +8,14 @@ You need Xcode 16 or later plus `xcodegen` and `jq`, both from Homebrew.
 
 - `make app` generates the Xcode project from `project.yml` with XcodeGen and builds `LowTalker.app` into `DerivedData/`, printing the path.
 - `make run` builds and launches it.
-- `make test` runs `swift build` and `swift test`.
+- `make cli` builds the command-line tool into `.build/debug/lowtalker` and signs it; "Trying the engine" below uses it.
+- `make helper` builds the root keyboard helper into `.build/debug/lowtalker-keyboardd` and signs it; "The keyboard helper" below says what it is.
+- `make test` runs `make check-docs`, `scripts/virtual-hid-driver-test`, `swift build`, and `swift test`.
 - `make clean` removes the generated project, `DerivedData/`, and `.build/`.
 
 CI runs `make signing-identity`, `make test`, and `make app` on a macos-15 runner for every pull request to master and every push to master; the workflow is `.github/workflows/ci.yml`.
 
-Before the first `make app`, do the one-time setup below.
+Before the first `make app`, `make cli`, or `make helper`, do the one-time setup below.
 
 ## Trying the engine
 
@@ -45,7 +47,7 @@ Loading the model means Core ML compiling it for this Mac's Neural Engine, which
 | Same signing identifier, model already compiled | 1.5 to 7 seconds |
 | A binary with a new signing identifier | 2 to 4 minutes again |
 
-`swift build` links a fresh identifier into every binary it produces, so a plain `swift run` pays the full compile after every rebuild. `make cli` re-signs the built binary with the fixed identifier `lowtalker`, which keeps the cache warm across rebuilds. The app's identifier is its bundle id, set by its certificate signature, so `make app` builds keep the cache warm on their own.
+`swift build` links a fresh identifier into every binary it produces, so a plain `swift run` pays the full compile after every rebuild. `make cli` re-signs the built binary with the fixed identifier `lowtalker`, which keeps the cache warm across rebuilds, and with the dev identity, for the keyboard helper's sake ("The keyboard helper" below). The app's identifier is its bundle id, set by its certificate signature, so `make app` builds keep the cache warm on their own.
 
 CI has no model cache, so the tests cover the mapping from WhisperKit's results onto `Transcript` with hand-built results and the manifest logic on scratch files; the real engine is only exercised through these commands.
 
@@ -178,7 +180,7 @@ The wire protocol is tested against a fake daemon on the other end of a `socketp
 
 `type` needs `sudo`, and not for the driver: it cannot open the driver extension's user client at all. Opening that user client takes the entitlement `com.apple.developer.driverkit.userclient-access`, which Apple grants per application identifier and which only pqrs's own `Karabiner-VirtualHIDDevice-Daemon` holds, so root does not help. `type` is therefore a client of that daemon, over a Unix domain socket at `/Library/Application Support/org.pqrs/tmp/rootonly/karabiner_virtual_hid_device_service.sock`, whose directory is mode 0700 owned by root. That socket is what the sudo is for.
 
-The daemon is a prerequisite and nothing starts it. The public package installs no launchd job for it, and `scripts/virtual-hid-driver state` reporting `running` describes the driver extension alone: it says nothing about whether anything can type. Start the daemon by hand:
+The daemon is a prerequisite, and through the device nothing starts it. The public package installs no launchd job for it, and `scripts/virtual-hid-driver state` reporting `running` describes the driver extension alone: it says nothing about whether anything can type. Through the keyboard helper (below) the helper starts it; for `sudo ... dext type` through the device, start the daemon by hand:
 
     sudo nohup "/Library/Application Support/org.pqrs/Karabiner-DriverKit-VirtualHIDDevice/Applications/Karabiner-VirtualHIDDevice-Daemon.app/Contents/MacOS/Karabiner-VirtualHIDDevice-Daemon" &
 
@@ -208,6 +210,45 @@ macOS raises the Keyboard Setup Assistant the first time the virtual keyboard ap
       keyboardtype -dict-add "10203-5824-0" -int 40      # 40 = ANSI
 
 `watch` runs as the logged-in user and needs the terminal's Input Monitoring and Accessibility, as `hotkey` does. It sees the synthetic keys too: the app's own tap observes the keys the app types, which is a thing anything built on this has to account for.
+
+### The keyboard helper
+
+`lowtalker-keyboardd` is a root launchd daemon that presses the keys, so that neither the app nor the CLI has to run as root. It is a client of pqrs's `Karabiner-VirtualHIDDevice-Daemon` over the root-only socket described above, and it serves one XPC Mach service, `com.lowtalker.keyboardd`. The protocol is key events, never text: a key goes down, or every key is released. Text becomes keystrokes on the user's side, for the per-process layout reason above, and only keystrokes cross to the helper.
+
+The certificate decides who may call it. At startup the helper reads the certificate off its own code signature and admits only callers signed by that certificate, checked against the connecting process's audit token; an ad hoc-signed copy of the CLI was refused. That is why `make cli` signs with the dev identity and not only the fixed identifier: the CLI has to carry the certificate that signed the helper to press a key. A helper that is itself signed ad hoc would admit no one, so it refuses to start - exiting 0 with the reason in its log, because launchd's KeepAlive restarts every other exit - and `scripts/keyboard-helper install` refuses to install one.
+
+A client that goes away leaves nothing held. When a client's connection ends the helper releases every key that is down: a client killed 69 characters into a burst left the document unchanged 3 s later, and the helper logged every key up.
+
+The helper looks after the daemon as well. If the pqrs daemon is not running the helper starts it, and stops it again when the helper is asked to stop. It holds one connection to the daemon open for its whole life and sends the daemon a heartbeat every 3 s: the daemon itself sends heartbeat frames every 3 s and hangs up on a client silent for 15 s, and answering its status pushes does not count. The pqrs daemon killed underneath the helper was restarted by the helper within 2 s.
+
+XPC costs about 1 ms per character. 1400 characters landed complete through the helper.
+
+### Two registrations, one Mach service
+
+The same helper is registered in two ways, and only one of them can be live at a time.
+
+The shipped app bundles the helper and a plist at `Contents/Library/LaunchDaemons/com.lowtalker.keyboardd.plist`, label `com.lowtalker.keyboardd`, and registers it with `SMAppService.daemon` on every launch. On the first launch of an install the menu item and the log read "Keyboard helper: waiting for approval in Login Items & Extensions"; the approval click is onboarding's job (ticket low-keyboard-3ti.7), and macOS's Login Items pane is where it happens. On this Mac the app-owned Background Task Management record appears in `sfltool dumpbtm` as type daemon parented to the app bundle, disposition disallowed until approved.
+
+`scripts/keyboard-helper` is the dev and agent path, which needs no approval from anyone:
+
+    scripts/keyboard-helper install    # register .build/debug/lowtalker-keyboardd as a LaunchDaemon
+    scripts/keyboard-helper uninstall  # stop it and remove the job
+    scripts/keyboard-helper state      # what launchd says about the job
+    scripts/keyboard-helper log        # what the helper has said in the last ten minutes
+
+`install` needs `make helper` to have run, refuses an ad hoc-signed helper, writes `/Library/LaunchDaemons/com.lowtalker.keyboardd.dev.plist` with KeepAlive, and bootstraps it with sudo. `uninstall` boots it out and removes the plist; the helper releases any keys and stops the daemon it started. `log` reads the unified log for subsystem `com.lowtalker.keyboardd`.
+
+The two jobs carry two labels, `com.lowtalker.keyboardd` for the app's and `com.lowtalker.keyboardd.dev` for the dev one, and serve one Mach service name. The labels are two because Background Task Management files jobs by label: when the dev job was installed under the app's label and the app was then launched, BTM treated the app's registration as an update of the dev record, the app's daemon was bound to the dev plist's path, launchd logged "Invalid path: Contents/MacOS/lowtalker-keyboardd" and it never spawned, and the approval was inherited instead of asked. BTM drops a record whose plist has been deleted about a minute later, on its own.
+
+Only one job holds the Mach service at a time, and launchd does not make the loser loud. Measured with a probe job: the second claimant bootstraps with exit 0, runs, and never gets the endpoint, and launchd writes one debug line ("already exists and is owned by"). So `install` reads back whether its job got the name and, if another job holds it, tears its own job down and exits 1 saying so. When the app's helper is registered and approved, `scripts/keyboard-helper install` therefore refuses. The app cannot do the same in the other direction: it reads back only `SMAppService`'s status, which says whether its job is registered and approved and nothing about who holds the Mach service, so an app whose helper is enabled while the dev job holds the name reports the helper as enabled and types nothing. Uninstall the dev job before enabling the app's helper. The app-side check is onboarding's (ticket low-keyboard-3ti.7).
+
+### Typing through the helper by hand
+
+    make cli
+    scripts/keyboard-helper install
+    .build/debug/lowtalker dext type com.apple.TextEdit "hello there" --through helper
+
+No sudo. `--through helper` sends the keystrokes to the installed helper instead of opening the daemon socket in this process; the default, `--through device`, is the sudo path above. Because the CLI now runs as the logged-in user, the layout it reads is the console user's own, so `--layout` is not needed the way it is under sudo.
 
 ### Installing
 
@@ -240,7 +281,7 @@ Brandon's MacBook already had Karabiner-Elements 15.5.0. Its installer wrote bot
 
 Because those paths are shared, `remove` refuses to run at all while an `org.pqrs.Karabiner-Elements` receipt is present: it would delete the Manager and support tree Karabiner-Elements depends on, and nothing in this script could put them back. It names the product and both paths and stops before deactivating anything. Removing Karabiner-Elements first is the way through, and there is deliberately no flag to skip the check. `install` is not blocked, because it replaces files rather than deleting them.
 
-If Karabiner-Elements is ever launched and repairs its driver, it will install its own bundled copy over the pinned one. On this Mac it is disabled and no Karabiner processes are running, so nothing is competing today. The background task entries `org.pqrs.service.daemon.Karabiner-VirtualHIDDevice-Daemon` and `karabiner_grabber` are children of Karabiner-Elements' privileged-daemons bundle, not of the driver package; LowTalker needs no pqrs daemon, its own helper opening the extension directly, so they were left alone.
+If Karabiner-Elements is ever launched and repairs its driver, it will install its own bundled copy over the pinned one. On this Mac it is disabled and no Karabiner processes are running, so nothing is competing today. The background task entries `org.pqrs.service.daemon.Karabiner-VirtualHIDDevice-Daemon` and `karabiner_grabber` are children of Karabiner-Elements' privileged-daemons bundle, not of the driver package. LowTalker's helper is a client of the driver package's own daemon, which it starts itself, and needs nothing from Karabiner-Elements' entries, so they were left alone.
 
 ### What has been verified
 
@@ -254,7 +295,7 @@ Run once after cloning:
 
     make signing-identity
 
-Without it, `make app` fails with an xcodebuild error beginning `No certificate matching 'LowTalker Dev' found`.
+Without it, `make app` fails with an xcodebuild error beginning `No certificate matching 'LowTalker Dev' found`. `make cli` and `make helper` stop too, with codesign's `LowTalker Dev: no identity found`: both sign with the identity, which `scripts/signing-identity` reads off `project.yml`, so the app, the CLI and the helper cannot end up signed by different certificates.
 
 ### Why a certificate
 

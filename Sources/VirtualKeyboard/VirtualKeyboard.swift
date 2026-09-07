@@ -49,7 +49,7 @@ public struct TooManyKeys: Error, CustomStringConvertible {
 /// paces a burst, because the pacing a burst needs is not a fact about the device.
 ///
 /// **The calling process must be root**, for the reason `DaemonConnection` gives.
-public final class VirtualKeyboard {
+public final class VirtualKeyboard: KeyPress {
     /// pqrs's own defaults for the virtual keyboard, three uint64 in this order. All
     /// three are `strong_typedef`s over `uint64_t`, so the payload is 24 bytes; the
     /// reasonable-looking reading - two 16-bit ids and a byte - is five bytes long, well
@@ -64,8 +64,14 @@ public final class VirtualKeyboard {
 
     /// Connects to the daemon and takes nothing else on faith. The device is not up until
     /// `start` says so.
-    public convenience init(reportTimeout: Duration = .seconds(2)) throws {
-        self.init(daemon: try DaemonConnection(), reportTimeout: reportTimeout)
+    ///
+    /// `whenLost` is told, once and from another thread, when the daemon's connection ends
+    /// underneath this device: the daemon exited, or the socket failed. Every call after
+    /// that throws the same failure, so a caller that presses keys and stops can leave the
+    /// default; a process holding the device open across silences is the one that needs to
+    /// hear, because nothing it does in between would tell it.
+    public convenience init(reportTimeout: Duration = .seconds(2), whenLost: @escaping @Sendable (DaemonError) -> Void = { _ in }) throws {
+        self.init(daemon: try DaemonConnection(whenLost: whenLost), reportTimeout: reportTimeout)
     }
 
     init(daemon: DaemonConnection, reportTimeout: Duration = .seconds(2)) {
@@ -78,6 +84,11 @@ public final class VirtualKeyboard {
         public let answered: Duration
         /// How long until it said the keyboard was ready.
         public let ready: Duration
+
+        public init(answered: Duration, ready: Duration) {
+            self.answered = answered
+            self.ready = ready
+        }
     }
 
     /// Brings the device up and waits for the daemon's word that it is ready, in at most

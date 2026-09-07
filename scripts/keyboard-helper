@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# The root keyboard helper, installed and removed on this Mac by an agent alone.
+#
+#   keyboard-helper install    register .build/debug/lowtalker-keyboardd as a LaunchDaemon
+#   keyboard-helper uninstall  stop it and remove the job
+#   keyboard-helper state      what launchd says about the job
+#   keyboard-helper log        what the helper has said in the last ten minutes
+#
+# Two registration paths exist and this is the one that needs nobody: a plist in
+# /Library/LaunchDaemons bootstrapped with launchctl runs as root with no approval
+# anywhere. SMAppService.daemon is the shipped app's path, and it leaves the job
+# .requiresApproval until a person clicks it in Login Items - which is 3ti.7's problem and
+# cannot be an agent's. Same binary either way; only who registers it differs.
+#
+# The two jobs carry two labels and serve one Mach service. Background Task Management
+# files every job under its label, so a dev job under the app's label is the app's
+# record: measured here, an app launched while that record stood had its daemon bound to
+# the dev plist's path and never spawned (launchd: "Invalid path: Contents/MacOS/..."),
+# and the approval the app must ask for was inherited instead of asked. Distinct labels
+# make them two records. [LAW:one-source-of-truth] The Mach service name is the one thing
+# clients dial, so it is the same on both, which means only one job holds it at a time -
+# and launchd does not make the loser loud. Measured with a probe job: the second claimant
+# bootstraps with exit 0, runs, and simply never gets the endpoint, while launchd writes
+# one debug line ("already exists and is owned by") that nobody reads. So install reads
+# back whether its job got the name, and says so when it did not.
+#
+# Nothing here says who may call the helper. It admits whoever is signed by the
+# certificate that signed it, which `make helper` and `make cli` make the same one.
+set -euo pipefail
+
+SERVICE="com.lowtalker.keyboardd"
+LABEL="${SERVICE}.dev"
+PLIST="/Library/LaunchDaemons/${LABEL}.plist"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HELPER="${ROOT}/.build/debug/lowtalker-keyboardd"
+
+# A path is any bytes and a plist is XML, so the four characters XML reserves are escaped
+# once, here, before the path is written into one. [LAW:parse-dont-validate]
+xml_escape() {
+  printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g'
+}
+
+die() { echo "keyboard-helper: $*" >&2; exit 1; }
+
+install_helper() {
+  [ -x "$HELPER" ] || die "no helper at $HELPER - run 'make helper' first"
+  # An ad hoc helper refuses to start, for a reason it logs; said here as well, before
+  # a job is registered that would only ever start and stop. [LAW:no-silent-failure]
+  # Captured rather than piped: grep -q closes the pipe at its first match, and under
+  # pipefail codesign's resulting SIGPIPE would fail a signature that passed.
+  signature=$(codesign -dvv "$HELPER" 2>&1) || die "codesign could not read $HELPER: $signature"
+  grep -q '^Authority=' <<<"$signature" \
+    || die "$HELPER is signed ad hoc and would admit no caller - run 'make helper', which signs it with the dev identity"
+
+  # KeepAlive after an unsuccessful exit, not RunAtLoad alone: this owns a device whose
+  # readiness costs a second, and a helper that stayed dead after a crash would answer
+  # nothing until someone noticed. Restarting is the behaviour that fails loudly instead
+  # of quietly - and it is how the helper comes back after the daemon it holds open goes
+  # away. A helper that will not start exits 0 on purpose, with the reason in its log,
+  # because 0 is the one exit launchd can be told not to restart.
+  #
+  # The helper speaks through the unified log; stderr is kept for what it cannot route
+  # there, which is a crash. Under /Library/Logs, which only root and admins may write:
+  # a fixed name under /tmp is a file anyone may plant for root to open.
+  helper_xml="$(xml_escape "$HELPER")"
+  sudo tee "$PLIST" >/dev/null <<PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>${LABEL}</string>
+    <key>ProgramArguments</key><array><string>${helper_xml}</string></array>
+    <key>MachServices</key><dict><key>${SERVICE}</key><true/></dict>
+    <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+    <key>StandardErrorPath</key><string>/Library/Logs/${LABEL}.crash.log</string>
+</dict>
+</plist>
+PLIST_EOF
+  sudo chown root:wheel "$PLIST"
+  sudo chmod 644 "$PLIST"
+
+  # A job already loaded is replaced. bootout refuses a job that is not there, and that
+  # is the ordinary case for a first install, so its answer is read rather than obeyed.
+  if sudo launchctl print "system/${LABEL}" >/dev/null 2>&1; then
+    sudo launchctl bootout "system/${LABEL}"
+  fi
+  sudo launchctl bootstrap system "$PLIST"
+
+  # The endpoint is handed out at load, so the answer is there before the helper runs.
+  # A job that did not get it is torn back down: left loaded it would be a root process
+  # nobody can reach, restarted by KeepAlive forever. [LAW:no-silent-failure]
+  record=$(sudo launchctl print "system/${LABEL}")
+  grep -q "\"${SERVICE}\" = {" <<<"$record" || {
+    sudo launchctl bootout "system/${LABEL}"
+    sudo rm -f "$PLIST"
+    die "launchd left ${SERVICE} with another job, so this one was not installed. If LowTalker.app's helper is registered and approved, that is the owner; launchd names it with:
+  log show --last 1m --predicate 'process == \"launchd\" AND eventMessage CONTAINS \"${SERVICE}\"'"
+  }
+  echo "keyboard-helper: installed. Read it with: $0 log"
+}
+
+uninstall_helper() {
+  if sudo launchctl print "system/${LABEL}" >/dev/null 2>&1; then
+    sudo launchctl bootout "system/${LABEL}"
+  fi
+  sudo rm -f "$PLIST"
+  echo "keyboard-helper: removed"
+}
+
+state_helper() {
+  sudo launchctl print "system/${LABEL}" | awk '/state|pid|program|path|last exit/ { print }'
+}
+
+log_helper() {
+  log show --last 10m --style compact --predicate "subsystem == \"${SERVICE}\""
+}
+
+case "${1:-}" in
+  install)   install_helper ;;
+  uninstall) uninstall_helper ;;
+  state)     state_helper ;;
+  log)       log_helper ;;
+  *) die "usage: keyboard-helper install|uninstall|state|log" ;;
+esac
