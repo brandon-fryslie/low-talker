@@ -22,6 +22,18 @@ public struct ModelName: RawRepresentable, Hashable, Codable, Sendable, Expressi
 
     public var description: String { rawValue }
 
+    /// [LAW:single-enforcer] What a name may be is this type's rule, so the sentence a
+    /// bad one earns is written here rather than by whatever is parsing it. The
+    /// synthesised decoder's sentence names Swift types, which mean nothing to someone
+    /// editing a config file.
+    public init(from decoder: any Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        guard let name = ModelName(rawValue: raw) else {
+            throw decoder.fault("\"\(raw)\" is not a model name: one folder in the model repo, such as base.en")
+        }
+        self = name
+    }
+
     /// Whisper large-v3-turbo (large-v3's encoder with a four-layer decoder) in the
     /// variant that ships a prefilled decoder context. Chosen by `lowtalker bench`
     /// on an M2 Max: it heard every bench fixture exactly as the plain 626 MB
