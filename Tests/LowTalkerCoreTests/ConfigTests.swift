@@ -207,6 +207,63 @@ import Testing
         }
     }
 
+    /// [LAW:no-silent-failure] Strict decoding reaches into the hand-written decoders
+    /// for `then` and `insert`, so a typo nested that deep is named rather than quietly
+    /// dropped. Pinned by test because the guarantee is TOMLKit's, not this package's.
+    @Test func aTypoBesideAValidInsertIsNamed() {
+        #expect(throws: ConfigError.unknownKeys(["isnert"])) {
+            try Config(toml: Self.mode(routes: #"[{ when = "always", then = { insert = "focus", isnert = "y" } }]"#))
+        }
+    }
+
+    @Test func aTypoInsideInsertIsNamed() {
+        #expect(throws: ConfigError.unknownKeys(["typo"])) {
+            try Config(toml: Self.mode(routes: #"[{ when = "always", then = { insert = { app = "com.tinyspeck.slackmacgap", typo = 1 } } }]"#))
+        }
+    }
+
+    /// A fault inside a route is placed the way the file writes routes: by position,
+    /// each key named once.
+    @Test func aFaultInsideARouteNamesWhereItIs() {
+        #expect(throws: ConfigError.wrongShape("modes[0].routes[0].when is missing")) {
+            try Config(toml: Self.mode(routes: #"[{ then = { insert = "focus" } }]"#))
+        }
+    }
+
+    /// Which `[[modes]]` entry is at fault, counted as the file lists them.
+    @Test func aMissingKeyNamesTheModeItIsIn() {
+        #expect(throws: ConfigError.wrongShape("modes[1].chord is missing")) {
+            try Config(toml: """
+                [[modes]]
+                name = "dictation"
+                chord = { modifiers = ["rightOption"] }
+
+                [[modes]]
+                name = "slack"
+                """)
+        }
+    }
+
+    /// [LAW:single-enforcer] The sentence is ModelName's own, so it speaks of model
+    /// names rather than of the Swift type the parser happened to be building.
+    @Test func aModelNameThatIsNotOneIsRefusedInItsOwnWords() {
+        #expect(throws: ConfigError.wrongShape(#"model: ".." is not a model name: one folder in the model repo, such as base.en"#)) {
+            try Config(toml: #"model = "..""#)
+        }
+    }
+
+    /// A modifier that is not one is answered with the ones that are.
+    @Test func aModifierThatIsNotOneIsNamedWithTheOnesThatAre() {
+        let modifiers = Modifier.allCases.map(\.rawValue).joined(separator: ", ")
+        #expect(throws: ConfigError.wrongShape(#"modes[0].chord.modifiers[0]: "banana" is not a modifier: "# + modifiers)) {
+            try Config(toml: """
+                [[modes]]
+                name = "dictation"
+                chord = { modifiers = ["banana"] }
+                """)
+        }
+    }
+
     private static func mode(routes: String) -> String {
         """
         [[modes]]
