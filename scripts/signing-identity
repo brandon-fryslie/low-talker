@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Prints the name of the identity that signs dev builds: the app, the CLI and the
+# keyboard helper alike.
+#
+# [LAW:one-source-of-truth] project.yml owns the name, as the project-wide CODE_SIGN_IDENTITY.
+# Everything else that signs reads it from here, so the CLI and the helper cannot come to
+# be signed by a different certificate than the app - which would leave the helper
+# refusing the CLI, since the helper admits exactly the certificate that signed it.
+set -euo pipefail
+
+xcodegen dump --type json \
+  | jq -er '.settings.base.CODE_SIGN_IDENTITY // error("project.yml sets no project-wide CODE_SIGN_IDENTITY")'
