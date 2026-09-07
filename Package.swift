@@ -47,9 +47,9 @@ let package = Package(
         .testTarget(name: "KeyboardServiceTests", dependencies: ["KeyboardService", "Keystrokes"]),
         // The app's one inserter: text and chords lowered to keystrokes and pressed on a
         // keyboard, with the hotkey refused and the target app re-proven in front before
-        // every key. It links the layout and the vocabulary and takes the keyboard as a
-        // value, so the same typist runs against the helper in the app and against the
-        // driver under sudo. [LAW:composability]
+        // every key. It links the core for the actions and chords it performs, the layout
+        // and the vocabulary, and takes the keyboard as a value, so the same typist runs
+        // against the helper in the app and against the driver under sudo. [LAW:composability]
         .target(name: "Typing", dependencies: ["LowTalkerCore", "KeyboardLayout", "Keystrokes"]),
         // Driven against a keyboard the test plays, so a run can be stopped inside any
         // keystroke and its report read back.
