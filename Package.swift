@@ -12,6 +12,7 @@ let package = Package(
         .library(name: "VirtualKeyboard", targets: ["VirtualKeyboard"]),
         .library(name: "KeyboardService", targets: ["KeyboardService"]),
         .library(name: "Typing", targets: ["Typing"]),
+        .library(name: "Dictation", targets: ["Dictation"]),
         .executable(name: "lowtalker", targets: ["lowtalker"]),
         .executable(name: "lowtalker-keyboardd", targets: ["lowtalker-keyboardd"]),
     ],
@@ -62,6 +63,12 @@ let package = Package(
         // Driven against a keyboard the test plays, so a run can be stopped inside any
         // keystroke and its report read back.
         .testTarget(name: "TypingTests", dependencies: ["Typing", "LowTalkerCore", "KeyboardLayout", "Keystrokes", "Pointing"]),
+        // The loop from a press to typed text, with every collaborator taken as a value.
+        // Its own target rather than app code so the loop runs under `swift test`; the
+        // app links it and hands over the real microphone, engine and keyboard.
+        // [LAW:decomposition]
+        .target(name: "Dictation", dependencies: ["LowTalkerCore", "Typing", "KeyboardLayout"]),
+        .testTarget(name: "DictationTests", dependencies: ["Dictation", "LowTalkerCore", "Typing", "KeyboardLayout", "Keystrokes", "Pointing"]),
         // The root daemon that owns the device. It links VirtualKeyboard and the seam, and
         // deliberately not KeyboardLayout: text never reaches this process.
         .executableTarget(
@@ -83,6 +90,7 @@ let package = Package(
                 "KeyboardService",
                 "Keystrokes",
                 "Typing",
+                "Dictation",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
