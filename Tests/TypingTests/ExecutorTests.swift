@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import KeyboardLayout
 import Keystrokes
@@ -29,8 +30,26 @@ import Typing
         func log(_ app: BundleID) -> [String] { byApp[app]?.log ?? [] }
     }
 
-    private func executor(_ keyboards: Keyboards) -> Executor {
-        Executor(keyboard: keyboards.keyboard(for:), hotkeys: [Hotkey.defaultChord])
+    /// One mouse per app, kept the same way. Each starts with the cursor at the origin
+    /// and a Cancel button on screen, so a click test reads as a dialog being answered.
+    @MainActor
+    final class Pointers {
+        static let cancel = CGRect(x: 641, y: 460, width: 113, height: 30)
+        private(set) var byApp: [BundleID: FakeMouse] = [:]
+
+        func pointer(for app: BundleID) -> Pointer {
+            if let mouse = byApp[app] { return mouse.pointer }
+            let mouse = FakeMouse(at: ScreenPoint(x: 0, y: 0))
+            mouse.elements["AXButton/Cancel"] = Self.cancel
+            byApp[app] = mouse
+            return mouse.pointer
+        }
+
+        func log(_ app: BundleID) -> [String] { byApp[app]?.log ?? [] }
+    }
+
+    private func executor(_ keyboards: Keyboards, _ pointers: Pointers = Pointers()) -> Executor {
+        Executor(keyboard: keyboards.keyboard(for:), mouse: pointers.pointer(for:), hotkeys: [Hotkey.defaultChord])
     }
 
     @Test func textAtTheFocusGoesIntoTheAppThatWasInFront() throws {
@@ -60,6 +79,35 @@ import Typing
         #expect("\(performed[0])".hasPrefix("pressed key 0x24 into com.apple.TextEdit"))
     }
 
+    /// A click goes to the app that was in front, on the mouse for that app: the cursor
+    /// is already at the point, so no motion report precedes the button.
+    @Test func aClickIsMadeInTheAppThatWasInFront() throws {
+        let keyboards = Keyboards()
+        let pointers = Pointers()
+        let performed = try executor(keyboards, pointers).perform([.click(at: ScreenPoint(x: 0, y: 0), button: .right, times: .double)], in: Self.context, on: Self.us, since: .now)
+        #expect(Set(pointers.byApp.keys) == [Self.textEdit])
+        #expect(keyboards.byApp.isEmpty)
+        #expect(pointers.log(Self.textEdit) == ["check", "down 2", "up", "check", "down 2", "up"])
+        #expect("\(performed[0])".hasPrefix("clicked right twice at (0, 0) after 0 move reports into com.apple.TextEdit"))
+    }
+
+    /// An element is clicked at the centre of its frame, and a scroll rolls the wheel
+    /// where it was asked; both report where the cursor went.
+    @Test func anElementIsClickedAtItsCentreAndAScrollRollsTheWheel() throws {
+        let keyboards = Keyboards()
+        let pointers = Pointers()
+        let centre = ScreenPoint(x: 697.5, y: 475)
+        _ = pointers.pointer(for: Self.textEdit)
+        pointers.byApp[Self.textEdit]!.position = centre
+        let performed = try executor(keyboards, pointers).perform([
+            .clickElement(role: AccessibilityRole(rawValue: "AXButton"), title: "Cancel"),
+            .scroll(at: centre, vertical: 3, horizontal: 0),
+        ], in: Self.context, on: Self.us, since: .now)
+        #expect(pointers.log(Self.textEdit) == ["check", "down 1", "up", "check", "scroll 3 0"])
+        #expect("\(performed[0])".hasPrefix("clicked left once at (697.5, 475) after 0 move reports into com.apple.TextEdit"))
+        #expect("\(performed[1])".hasPrefix("scrolled vertical 3 horizontal 0 at (697.5, 475) into com.apple.TextEdit"))
+    }
+
     @Test func actionsArePerformedInOrder() throws {
         let keyboards = Keyboards()
         let performed = try executor(keyboards).perform([
@@ -71,11 +119,11 @@ import Typing
         #expect(performed.count == 3)
     }
 
-    /// The whole list is refused before the first key: an action the keyboard cannot
-    /// perform anywhere in it means nothing before it is typed either.
-    @Test func aListWithAnActionThatIsNotAKeystrokeIsRefusedWhole() throws {
+    /// The whole list is refused before the first report: an action neither device can
+    /// perform anywhere in it means nothing before it is done either.
+    @Test func aListWithAnActionThatIsNotAnInputIsRefusedWhole() throws {
         let keyboards = Keyboards()
-        let refused = try #require(throws: NotAKeystroke.self) {
+        let refused = try #require(throws: NotAnInput.self) {
             try executor(keyboards).perform([
                 .insertText(text: "a", target: .focus),
                 .openURL(url: URL(string: "https://example.com")!),

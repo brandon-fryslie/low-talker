@@ -6,7 +6,8 @@ import LowTalkerCore
 import Typing
 
 /// Performs a list of actions the way the app will: text typed and chords pressed on the
-/// virtual keyboard through the installed helper, into the app the context names.
+/// virtual keyboard, clicks and scrolls made with the virtual mouse, both through the
+/// installed helper, into the app the context names.
 ///
 /// The actions come in on stdin as the JSON `lowtalker route` prints, so the two commands
 /// pipe: `route` decides and `act` performs, and the decision can be read in between.
@@ -41,9 +42,17 @@ struct ActCommand: AsyncParsableCommand {
         // One connection for every action, held open across them: the helper answers a
         // lazy connection's first call after launchd has started the job, and that is a
         // cost to pay once and not per action.
-        let helper = HelperKeyboard()
+        let helper = HelperConnection()
+        // The one app a device is guarded by, for both devices: the keyboard refuses a
+        // key and the pointer refuses a report on the same reading of the front.
+        // [LAW:single-enforcer]
+        let screen = { (app: BundleID) in TargetApp(bundleID: app, interrupt: interrupt) }
         let executor = Executor(
-            keyboard: { GuardedKeyboard(keyboard: helper, interrupt: interrupt, screen: TargetApp(bundleID: $0, interrupt: interrupt)) },
+            keyboard: { GuardedKeyboard(keyboard: helper.keyboard, interrupt: interrupt, screen: screen($0)) },
+            mouse: {
+                let target = screen($0)
+                return Pointer(mouse: GuardedMouse(pointing: helper.mouse, interrupt: interrupt, screen: target), cursor: Pointer.screenCursor, locate: target.frame(ofRole:titled:))
+            },
             hotkeys: [Hotkey.defaultChord]
         )
         // The app types into whatever was in front when the hotkey went down. Here the
