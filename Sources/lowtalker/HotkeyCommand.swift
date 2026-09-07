@@ -24,7 +24,7 @@ struct HotkeyCommand: AsyncParsableCommand {
     @MainActor
     func run() async throws {
         setvbuf(stdout, nil, _IOLBF, 0)
-        let hotkey = Hotkey(chords: [KeyChord(modifiers: .rightOption)], tapThreshold: .milliseconds(tapThreshold))
+        let hotkey = Hotkey(chords: [Hotkey.defaultChord], tapThreshold: .milliseconds(tapThreshold))
         let (transitions, continuation) = AsyncStream.makeStream(of: HotkeyDetector.Transition.self)
         try hotkey.start { continuation.yield($0) }
         print("watching Right Option")
