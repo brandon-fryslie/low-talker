@@ -1,4 +1,5 @@
 import LowTalkerCore
+import Synchronization
 import Testing
 
 /// Counts operations in flight and remembers the most it ever saw at once.
@@ -17,6 +18,45 @@ private actor Occupancy {
 }
 
 private struct Boom: Error {}
+
+/// Something a test holds shut, and whatever arrives at it waits until the test opens
+/// it, so an operation can be proven unfinished rather than assumed so because little
+/// time has passed. [LAW:no-ambient-temporal-coupling]
+private final class Gate: Sendable {
+    private struct State {
+        var open = false
+        var waiters: [CheckedContinuation<Void, Never>] = []
+    }
+
+    private let state = Mutex(State())
+
+    func open() {
+        let released = state.withLock { state in
+            state.open = true
+            defer { state.waiters = [] }
+            return state.waiters
+        }
+        released.forEach { $0.resume() }
+    }
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            let through = state.withLock { state in
+                if !state.open { state.waiters.append(continuation) }
+                return state.open
+            }
+            if through { continuation.resume() }
+        }
+    }
+}
+
+/// Raised by an operation as the last thing it does, so a drain that came back early is
+/// caught by what has not happened yet.
+private final class Flag: Sendable {
+    private let value = Mutex(false)
+    var raised: Bool { value.withLock { $0 } }
+    func raise() { value.withLock { $0 = true } }
+}
 
 @Suite struct SerialQueueTests {
     /// Many operations submitted at once, each yielding mid-flight so an unserialized
@@ -102,5 +142,54 @@ private struct Boom: Error {}
             Task.detached { try await queue.run { "later" } }
         }
         #expect(try await later.value == "later")
+    }
+
+    /// `drain` is what a caller waits on before it shuts down, so what it must not do is
+    /// come back while work the queue already accepted is still running. The operation is
+    /// held at a gate until the drain is asked for, and yields on its way out afterwards,
+    /// so a drain that did not wait is caught by the flag still being down.
+    @Test func drainReturnsOnlyAfterWorkAlreadySubmittedHasFinished() async throws {
+        let queue = SerialQueue()
+        let started = Gate()
+        let held = Gate()
+        let finished = Flag()
+        let submitted = Task {
+            try await queue.run {
+                started.open()
+                await held.wait()
+                for _ in 0..<50 { await Task.yield() }
+                finished.raise()
+            }
+        }
+        // Running, so the queue has accepted it and a drain owes it a wait.
+        await started.wait()
+        #expect(!finished.raised)
+        held.open()
+        await queue.drain()
+        #expect(finished.raised)
+        try await submitted.value
+    }
+
+    /// However it ended: a failed operation is waited for like any other, and its failure
+    /// stays with its own caller - draining is not a `try`.
+    @Test func drainWaitsForAFailedOperationAndDoesNotCarryItsFailure() async throws {
+        let queue = SerialQueue()
+        let started = Gate()
+        let held = Gate()
+        let finished = Flag()
+        let submitted = Task {
+            try await queue.run {
+                started.open()
+                await held.wait()
+                for _ in 0..<50 { await Task.yield() }
+                finished.raise()
+                throw Boom()
+            }
+        }
+        await started.wait()
+        held.open()
+        await queue.drain()
+        #expect(finished.raised)
+        await #expect(throws: Boom.self) { try await submitted.value }
     }
 }
