@@ -6,7 +6,7 @@ import LowTalkerCore
 import Typing
 
 /// The whole loop from the terminal: hold Right Option, speak, release, and what was
-/// said is typed into the app in front, one line per session on stdout.
+/// said is typed into the app in front.
 ///
 /// The CLI is not the app: macOS charges a terminal command's event tap to the
 /// terminal, so this runs under the terminal's Accessibility and Input Monitoring and

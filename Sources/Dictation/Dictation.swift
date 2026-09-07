@@ -74,7 +74,7 @@ public final class Dictation {
         router: Router,
         executor: Executor,
         layout: @escaping @Sendable @MainActor () throws -> KeyboardLayout = KeyboardLayout.current,
-        frontmost: @escaping @Sendable @MainActor () throws -> BundleID = FrontmostApp.read,
+        frontmost: @escaping @Sendable @MainActor () throws -> BundleID = TargetApp.frontmost,
         report: @escaping @Sendable @MainActor (Result<Session, any Error>) -> Void
     ) {
         self.capture = capture
@@ -131,26 +131,26 @@ public final class Dictation {
                 case .failed(let error): .failure(NoMicrophone.failed(error))
                 }
             }
-            Task { [sessions, report] in
-                do {
-                    // Reported from inside the operation, so the queue that orders the
-                    // typing orders the telling of it too, and a drain that waited for
-                    // the one has waited for the other. [LAW:single-enforcer]
-                    try await sessions.run {
-                        let outcome: Result<Session, any Error>
-                        do {
-                            let (clip, context) = try heard.get()
-                            outcome = .success(try await self.hear(clip, in: context, since: keyUp))
-                        } catch {
-                            outcome = .failure(error)
-                        }
-                        await report(outcome)
+            do {
+                // Handed over before key-up returns, so a `finish` that comes next
+                // cannot miss this press. Reported from inside the operation, so the
+                // queue that orders the typing orders the telling of it too, and a
+                // drain that waited for the one has waited for the other.
+                // [LAW:no-ambient-temporal-coupling] [LAW:single-enforcer]
+                try sessions.submit { [report] in
+                    let outcome: Result<Session, any Error>
+                    do {
+                        let (clip, context) = try heard.get()
+                        outcome = .success(try await self.hear(clip, in: context, since: keyUp))
+                    } catch {
+                        outcome = .failure(error)
                     }
-                } catch {
-                    // The operation reports its own outcome; only the queue's own
-                    // refusal to accept it reaches here. [LAW:no-silent-failure]
-                    report(.failure(error))
+                    await report(outcome)
                 }
+            } catch {
+                // The operation reports its own outcome; only the queue's own refusal
+                // to accept it reaches here. [LAW:no-silent-failure]
+                report(.failure(error))
             }
         }
     }
