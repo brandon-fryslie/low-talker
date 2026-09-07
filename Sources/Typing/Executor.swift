@@ -49,7 +49,7 @@ public struct Executor {
             /// `reports` is how many motion reports the cursor took to get there, which
             /// is the acceleration loop's cost and the number worth reading off a run.
             case clicked(at: ScreenPoint, button: MouseButton, times: Clicks, reports: Int)
-            case scrolled(at: ScreenPoint, vertical: Int, horizontal: Int)
+            case scrolled(at: ScreenPoint, vertical: WheelCounts, horizontal: WheelCounts)
         }
 
         public let what: What
@@ -61,7 +61,7 @@ public struct Executor {
             case .typed(let characters): "typed \(characters) characters"
             case .pressed(let chord): "pressed \(chord.spelled)"
             case .clicked(let at, let button, let times, let reports): "clicked \(button.rawValue) \(times.spelled) at \(at) after \(reports) move reports"
-            case .scrolled(let at, let vertical, let horizontal): "scrolled vertical \(vertical) horizontal \(horizontal) at \(at)"
+            case .scrolled(let at, let vertical, let horizontal): "scrolled vertical \(vertical.rawValue) horizontal \(horizontal.rawValue) at \(at)"
             }
             return "\(act) into \(into.rawValue), key-up to acknowledged \(Int(acknowledged / .milliseconds(1))) ms"
         }

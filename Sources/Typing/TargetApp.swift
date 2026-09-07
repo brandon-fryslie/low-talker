@@ -116,6 +116,10 @@ public struct TargetApp {
     /// all of it would outlast any budget it was made under; it stops here and says so. A
     /// dialog, which is what this is for, is a few dozen.
     public static let searchLimit = 2000
+    /// The most time one search is given. The element cap bounds the reads and the
+    /// messaging timeout bounds each one, and an app that answers slowly stays under both
+    /// for minutes; this is the bound a caller is actually promised.
+    public static let searchBudget: Duration = .seconds(5)
 
     /// The screen frame of the first element, breadth first from the app, with this role
     /// and title: global coordinates, top-left origin, points - the space the cursor is
@@ -125,10 +129,14 @@ public struct TargetApp {
     public func frame(ofRole role: AccessibilityRole, titled title: String) throws -> CGRect {
         let app = try requireFrontmost()
         let name = bundleID.rawValue
+        let clock = ContinuousClock()
+        let start = clock.now
         var read = 0
         let found = try breadthFirst(from: [Self.application(of: app)], children: { element in
+            try interrupt.check()
             read += 1
             guard read <= Self.searchLimit else { throw ScreenUnreadable.tooManyElements(name, limit: Self.searchLimit) }
+            guard clock.now - start < Self.searchBudget else { throw ScreenUnreadable.searchTooSlow(name, within: Self.searchBudget) }
             return Self.children(of: element)
         }, where: { Self.string(kAXRoleAttribute, of: $0) == role.rawValue && Self.string(kAXTitleAttribute, of: $0) == title })
         guard let found else { throw ScreenUnreadable.noElement(role: role.rawValue, title: title, app: name) }
@@ -226,11 +234,11 @@ public enum ScreenUnreadable: Error, CustomStringConvertible {
     case wrongApp(wanted: String, frontmost: String)
     case noFocus(String)
     case noText(String)
-    /// No element with that role and title, among the ones read. A dialog still coming up
-    /// has none yet, which is why this may pass with time.
+    /// No element with that role and title, among the ones read.
     case noElement(role: String, title: String, app: String)
     case elementWithoutFrame(role: String, title: String, app: String)
     case tooManyElements(String, limit: Int)
+    case searchTooSlow(String, within: Duration)
 
     /// Whether waiting could still change the answer. An app that will not answer right
     /// now may answer in two milliseconds; an app that is not in front is not going to
@@ -240,7 +248,7 @@ public enum ScreenUnreadable: Error, CustomStringConvertible {
     public var mayPassWithTime: Bool {
         switch self {
         case .noFocus, .noText, .noElement: true
-        case .noFrontmostApp, .notRunning, .wouldNotComeForward, .wrongApp, .elementWithoutFrame, .tooManyElements: false
+        case .noFrontmostApp, .notRunning, .wouldNotComeForward, .wrongApp, .elementWithoutFrame, .tooManyElements, .searchTooSlow: false
         }
     }
 
@@ -255,6 +263,7 @@ public enum ScreenUnreadable: Error, CustomStringConvertible {
         case .noElement(let role, let title, let app): "\(app) has no \(role) titled \(title.debugDescription); is this process allowed under Accessibility?"
         case .elementWithoutFrame(let role, let title, let app): "the \(role) titled \(title.debugDescription) in \(app) has no position or size"
         case .tooManyElements(let app, let limit): "\(app) exposes more than \(limit) elements, which is more than one search reads"
+        case .searchTooSlow(let app, let limit): "\(app) did not answer an element search within \(limit)"
         }
     }
 }

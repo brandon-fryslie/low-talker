@@ -87,7 +87,7 @@ import Typing
         let performed = try executor(keyboards, pointers).perform([.click(at: ScreenPoint(x: 0, y: 0), button: .right, times: .double)], in: Self.context, on: Self.us, since: .now)
         #expect(Set(pointers.byApp.keys) == [Self.textEdit])
         #expect(keyboards.byApp.isEmpty)
-        #expect(pointers.log(Self.textEdit) == ["check", "down 2", "up", "check", "down 2", "up"])
+        #expect(pointers.log(Self.textEdit) == ["check", "check", "down 2", "up", "check", "down 2", "up"])
         #expect("\(performed[0])".hasPrefix("clicked right twice at (0, 0) after 0 move reports into com.apple.TextEdit"))
     }
 
@@ -101,9 +101,9 @@ import Typing
         pointers.byApp[Self.textEdit]!.position = centre
         let performed = try executor(keyboards, pointers).perform([
             .clickElement(role: AccessibilityRole(rawValue: "AXButton"), title: "Cancel"),
-            .scroll(at: centre, vertical: 3, horizontal: 0),
+            .scroll(at: centre, vertical: WheelCounts(rawValue: 3)!, horizontal: .none),
         ], in: Self.context, on: Self.us, since: .now)
-        #expect(pointers.log(Self.textEdit) == ["check", "down 1", "up", "check", "scroll 3 0"])
+        #expect(pointers.log(Self.textEdit) == ["check", "check", "down 1", "up", "check", "check", "scroll 3 0"])
         #expect("\(performed[0])".hasPrefix("clicked left once at (697.5, 475) after 0 move reports into com.apple.TextEdit"))
         #expect("\(performed[1])".hasPrefix("scrolled vertical 3 horizontal 0 at (697.5, 475) into com.apple.TextEdit"))
     }

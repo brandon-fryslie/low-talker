@@ -10,11 +10,12 @@ import Testing
     static let origin = ScreenPoint(x: 0, y: 0)
     static let button = AccessibilityRole(rawValue: "AXButton")
 
-    /// One step is the remaining distance over the gain, clamped to the report: the whole
-    /// screen at gain one is a full report, the same at gain three is a third of it.
+    /// One step is the remaining distance over the gain, rounded toward zero and clamped to
+    /// the report: the whole screen at gain one is a full report, and 160.5 at gain three
+    /// asks for 53, not 54, so a known gain lands short and never past.
     @Test func aStepIsTheRemainingDistanceOverTheGainClampedToTheReport() {
         #expect(Pointer.step(from: Self.origin, to: ScreenPoint(x: 541.5, y: 375), gain: 1) == Move(x: Count(clamping: 127), y: Count(clamping: 127)))
-        #expect(Pointer.step(from: Self.origin, to: ScreenPoint(x: 160.5, y: -6), gain: 3) == Move(x: Count(clamping: 54), y: Count(clamping: -2)))
+        #expect(Pointer.step(from: Self.origin, to: ScreenPoint(x: 160.5, y: -6), gain: 3) == Move(x: Count(clamping: 53), y: Count(clamping: -2)))
         #expect(Pointer.step(from: ScreenPoint(x: 100, y: 100), to: ScreenPoint(x: 90, y: 100), gain: 1) == Move(x: Count(clamping: -10), y: .zero))
     }
 
@@ -34,13 +35,14 @@ import Testing
     }
 
     /// A move across the screen: the first full report is thrown by the curve, the loop
-    /// reads the gain off it and lands with the second, and a one-count nudge finishes.
+    /// reads the gain off it and lands short with the second, a one-count nudge finishes,
+    /// and the arrival round still asks the check.
     @Test func aMoveLearnsTheGainAndConvergesFromBelow() throws {
         let mouse = FakeMouse(at: ScreenPoint(x: 100, y: 100))
         let reports = try mouse.pointer.move(to: ScreenPoint(x: 641.5, y: 475))
         #expect(reports == 3)
-        #expect(mouse.position == ScreenPoint(x: 642, y: 475))
-        #expect(mouse.log == ["check", "move 127 127", "check", "move 54 -2", "check", "move -1 0"])
+        #expect(mouse.position == ScreenPoint(x: 641, y: 475))
+        #expect(mouse.log == ["check", "move 127 127", "check", "move 53 -2", "check", "move 1 0", "check"])
     }
 
     /// A cursor that will not move is given three reports, each asking for more than the
@@ -54,40 +56,42 @@ import Testing
         #expect(mouse.log == ["check", "move 50 0", "check", "move 100 0", "check", "move 127 0"])
     }
 
-    /// Each click is a button down and a release, each behind its own check.
+    /// Each click is a button down and a release, each behind its own check, after the
+    /// move's own check found the cursor already there.
     @Test func aClickPostsOneDownAndOneUpPerClick() throws {
         let mouse = FakeMouse(at: Self.origin)
         let click = try mouse.pointer.click(at: Self.origin, button: .middle, times: Clicks(rawValue: 3)!)
         #expect(click == Pointer.Click(at: Self.origin, reports: 0))
-        #expect(mouse.log == ["check", "down 3", "up", "check", "down 3", "up", "check", "down 3", "up"])
+        #expect(mouse.log == ["check", "check", "down 3", "up", "check", "down 3", "up", "check", "down 3", "up"])
     }
 
     /// A click that stops with the button down releases on the way out, and says so when
     /// the release was refused too. [LAW:no-silent-failure]
     @Test func aClickThatStopsReleasesAndReportsARefusedRelease() throws {
         let mouse = FakeMouse(at: Self.origin)
-        mouse.allow = 2
+        mouse.allow = 3
         let stopped = try #require(throws: PointingStopped.self) { try mouse.pointer.click(at: Self.origin, button: .left, times: .single) }
         #expect(stopped.cause is Refused)
         #expect(stopped.unreleased != nil)
         #expect("\(stopped)".contains("A button may be left held"))
-        #expect(mouse.log == ["check", "down 1", "up", "up"])
+        #expect(mouse.log == ["check", "check", "down 1", "up", "up"])
     }
 
     /// The wheel goes out in reports of at most 127 on an axis, the remainder last.
     @Test func aScrollIsChunkedToTheReportsRange() throws {
         let mouse = FakeMouse(at: Self.origin)
-        try mouse.pointer.scroll(at: Self.origin, vertical: 300, horizontal: -5)
-        #expect(mouse.log == ["check", "scroll 127 -5", "check", "scroll 127 0", "check", "scroll 46 0"])
+        try mouse.pointer.scroll(at: Self.origin, vertical: WheelCounts(rawValue: 300)!, horizontal: WheelCounts(rawValue: -5)!)
+        #expect(mouse.log == ["check", "check", "scroll 127 -5", "check", "scroll 127 0", "check", "scroll 46 0"])
     }
 
-    /// An element is clicked at the centre of its frame, after the cursor is brought there.
+    /// An element is clicked at the centre of its frame, after the cursor is brought there:
+    /// the first report overshoots before the gain is known, the second lands short.
     @Test func anElementIsClickedAtTheCentreOfItsFrame() throws {
         let mouse = FakeMouse(at: ScreenPoint(x: 600, y: 400))
         mouse.elements["AXButton/Cancel"] = CGRect(x: 641, y: 460, width: 113, height: 30)
         let click = try mouse.pointer.click(element: Self.button, title: "Cancel")
         #expect(click == Pointer.Click(at: ScreenPoint(x: 697.5, y: 475), reports: 3))
-        #expect(mouse.log == ["check", "move 98 75", "check", "move -66 -50", "check", "move 1 0", "check", "down 1", "up"])
+        #expect(mouse.log == ["check", "move 97 75", "check", "move -64 -50", "check", "move -1 0", "check", "check", "down 1", "up"])
     }
 
     /// An element with no area, or none at all, is refused before a report goes out.

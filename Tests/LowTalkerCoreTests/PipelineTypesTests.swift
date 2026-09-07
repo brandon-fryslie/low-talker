@@ -29,7 +29,7 @@ import Testing
         .runShortcut(name: "Toggle Lights", input: nil),
         .pipe(executable: "/usr/bin/env", arguments: ["rewrite", "--tone", "formal"]),
         .click(at: ScreenPoint(x: 697.5, y: 475), button: .right, times: .double),
-        .scroll(at: ScreenPoint(x: 100, y: 200), vertical: -3, horizontal: 0),
+        .scroll(at: ScreenPoint(x: 100, y: 200), vertical: WheelCounts(rawValue: -3)!, horizontal: .none),
         .clickElement(role: AccessibilityRole(rawValue: "AXButton"), title: "Cancel"),
     ]
 
@@ -82,7 +82,7 @@ import Testing
             .runShortcut(name: "Toggle Lights", input: nil),
             .pipe(executable: "/usr/bin/env", arguments: ["rewrite"]),
             .click(at: ScreenPoint(x: 697.5, y: 475), button: .left, times: .double),
-            .scroll(at: ScreenPoint(x: 100, y: 200), vertical: -3, horizontal: 0),
+            .scroll(at: ScreenPoint(x: 100, y: 200), vertical: WheelCounts(rawValue: -3)!, horizontal: .none),
             .clickElement(role: AccessibilityRole(rawValue: "AXButton"), title: "Cancel"),
         ])
     }
@@ -93,6 +93,19 @@ import Testing
         #expect(Clicks(rawValue: -1) == nil)
         #expect(Clicks(rawValue: 1) == .single)
         let json = Data(#"{"click": {"at": {"x": 1, "y": 2}, "button": "left", "times": 0}}"#.utf8)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(Action.self, from: json)
+        }
+    }
+
+    /// A click clicks at most three times and a scroll rolls at most a thousand counts, so
+    /// a Pipe program's huge number is refused when decoded and never reaches a device.
+    @Test func clicksAndWheelCountsAreBounded() {
+        #expect(Clicks(rawValue: 3)?.rawValue == 3)
+        #expect(Clicks(rawValue: 4) == nil)
+        #expect(WheelCounts(rawValue: -1000)?.rawValue == -1000)
+        #expect(WheelCounts(rawValue: 1001) == nil)
+        let json = Data(#"{"scroll": {"at": {"x": 1, "y": 2}, "vertical": 100000, "horizontal": 0}}"#.utf8)
         #expect(throws: DecodingError.self) {
             try JSONDecoder().decode(Action.self, from: json)
         }

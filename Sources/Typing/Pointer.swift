@@ -75,8 +75,8 @@ public struct Pointer {
     }
 
     /// The next report toward `to` from `from`, given that the OS moves the cursor `gain`
-    /// points per count: the remaining distance over the gain, rounded, and clamped to the
-    /// report's edge. Zero on an axis within half a point, which is arrived; otherwise at
+    /// points per count: the remaining distance over the gain, rounded toward zero so a
+    /// known gain never overshoots, and clamped to the report's edge. Zero on an axis within half a point, which is arrived; otherwise at
     /// least one count in the target's direction, so a gain estimate too high to ask for a
     /// whole count still asks for something. Pure. [LAW:decomposition]
     public nonisolated static func step(from: ScreenPoint, to: ScreenPoint, gain: Double) -> Move {
@@ -85,7 +85,7 @@ public struct Pointer {
 
     private nonisolated static func step(_ distance: Double, _ gain: Double) -> Count {
         guard abs(distance) > 0.5 else { return .zero }
-        let counts = min(Double(Count.limit), max(1, (abs(distance) / gain).rounded()))
+        let counts = min(Double(Count.limit), max(1, (abs(distance) / gain).rounded(.towardZero)))
         return Count(clamping: Int(distance < 0 ? -counts : counts))
     }
 
@@ -99,16 +99,18 @@ public struct Pointer {
     }
 
     /// Moves the cursor to `target`, within half a point on each axis, and answers with
-    /// how many reports it took. The target app is re-proven in front before every report.
+    /// how many reports it took. The target app is re-proven in front before every report
+    /// and once more on arrival, so a move that finds the cursor already there has still
+    /// asked. [LAW:dataflow-not-control-flow]
     @discardableResult
     public func move(to target: ScreenPoint) throws -> Int {
         var at = try cursor()
         var gain = 1.0
         var stalls = 0
         for reports in 0..<Self.rounds {
+            try mouse.check()
             let step = Self.step(from: at, to: target, gain: gain)
             guard step != .none else { return reports }
-            try mouse.check()
             try mouse.move(by: step)
             let landed = try settled(from: at)
             gain = Self.gain(after: step, from: at, to: landed, previous: gain)
@@ -147,10 +149,10 @@ public struct Pointer {
 
     /// Moves to `point` and rolls the wheel there, in as many reports as the counts take:
     /// a report carries at most 127 on an axis, so 300 is 127, 127 and 46.
-    public func scroll(at point: ScreenPoint, vertical: Int, horizontal: Int) throws {
+    public func scroll(at point: ScreenPoint, vertical: WheelCounts, horizontal: WheelCounts) throws {
         do {
             try move(to: point)
-            var remaining = (vertical: vertical, horizontal: horizontal)
+            var remaining = (vertical: vertical.rawValue, horizontal: horizontal.rawValue)
             while remaining != (0, 0) {
                 let chunk = Scroll(vertical: Count(clamping: remaining.vertical), horizontal: Count(clamping: remaining.horizontal))
                 try mouse.check()

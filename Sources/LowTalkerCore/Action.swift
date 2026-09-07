@@ -23,7 +23,7 @@ public enum Action: Hashable, Codable, Sendable {
     case click(at: ScreenPoint, button: MouseButton, times: Clicks)
     /// Moves the pointer to a point and rolls the wheel there, in wheel counts: vertical
     /// positive away from the hand, horizontal positive to the right.
-    case scroll(at: ScreenPoint, vertical: Int, horizontal: Int)
+    case scroll(at: ScreenPoint, vertical: WheelCounts, horizontal: WheelCounts)
     /// Clicks the centre of the first Accessibility element in the frontmost app with
     /// this role and title, wherever it is on the screen.
     case clickElement(role: AccessibilityRole, title: String)
@@ -51,19 +51,38 @@ public enum MouseButton: String, Hashable, Codable, Sendable {
     case left, right, middle
 }
 
-/// How many times a click clicks: one or more. A click that clicks zero times is not a
-/// click, so zero and below are refused where the number is made, and a decoded zero is
-/// refused there too - the same way a confidence outside 0...1 is. [LAW:parse-dont-validate]
+/// How many times a click clicks: one, two or three, the counts macOS gives a meaning.
+/// Zero is not a click and a fourth click means nothing more than a third, so both are
+/// refused where the number is made, and a decoded one is refused there too - the same
+/// way a confidence outside 0...1 is. [LAW:parse-dont-validate]
 public struct Clicks: RawRepresentable, Hashable, Codable, Sendable {
+    public static let limit = 3
     public let rawValue: Int
 
     public init?(rawValue: Int) {
-        guard rawValue >= 1 else { return nil }
+        guard (1...Self.limit).contains(rawValue) else { return nil }
         self.rawValue = rawValue
     }
 
     public static let single = Clicks(rawValue: 1)!
     public static let double = Clicks(rawValue: 2)!
+}
+
+/// How far a scroll rolls the wheel on one axis, in the wheel's own counts, within a
+/// bound no gesture crosses: a thousand counts is eight full reports. The bound is here,
+/// where the number is made and decoded, so a Pipe program handing back a huge value is
+/// refused before a report goes out rather than posting reports until it is killed.
+/// [LAW:parse-dont-validate]
+public struct WheelCounts: RawRepresentable, Hashable, Codable, Sendable {
+    public static let limit = 1000
+    public let rawValue: Int
+
+    public init?(rawValue: Int) {
+        guard abs(rawValue) <= Self.limit else { return nil }
+        self.rawValue = rawValue
+    }
+
+    public static let none = WheelCounts(rawValue: 0)!
 }
 
 /// Where inserted text goes: the focused element, or a named app regardless of focus.

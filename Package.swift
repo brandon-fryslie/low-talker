@@ -79,7 +79,6 @@ let package = Package(
                 "KeyboardLayout",
                 "KeyboardService",
                 "Keystrokes",
-                "Pointing",
                 "Typing",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]

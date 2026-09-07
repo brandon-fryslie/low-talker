@@ -38,10 +38,9 @@ import Foundation
 /// client's job. [LAW:one-way-deps]
 ///
 /// The integers are the wire's: a usage is the 16 bits of the report, a button is its
-/// number, a count is the signed byte the report carries. The wire is one value wider
-/// than the device on two of them - button 0 and 33 upward have no bit, and -128 is below
-/// the descriptor's minimum - and the helper refuses those by name rather than folding
-/// them. [LAW:parse-dont-validate]
+/// number, a count is the signed byte the report carries. The wire admits values the
+/// device has no bit or count for - button 0 and 33 upward, and -128 - and the helper
+/// refuses those by name rather than folding them. [LAW:parse-dont-validate]
 @objc public protocol HelperService {
     /// Holds `usage` down, and answers when the daemon has acknowledged the report.
     ///

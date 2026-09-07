@@ -2,7 +2,6 @@ import Foundation
 import Keystrokes
 import KeyboardService
 import Pointing
-import VirtualKeyboard
 
 /// The devices as the listener serves them: what a client is handed, and the release made
 /// on a client's behalf when it goes. [LAW:decomposition] Admitting and letting go are the
@@ -21,8 +20,10 @@ protocol ServedDevices: HelperService {
 /// a full second in front of the first keystroke of every dictation, for a reason that has
 /// nothing to do with the hardware. Paid once here, where nobody is waiting.
 final class Devices: NSObject, ServedDevices, @unchecked Sendable {
-    private let keyboard: VirtualKeyboard
-    private let mouse: VirtualPointing
+    /// The seams and not the drivers, so a test hands in devices of its own and the
+    /// daemon hands in the real ones. [LAW:composability]
+    private let keyboard: any KeyPress
+    private let mouse: any Pointing
     /// One report at a time, across both devices. [LAW:no-shared-mutable-globals] Each
     /// device derives every report from the set it believes is down, so two calls
     /// interleaving on one device would each post a report missing the other's - which
@@ -35,7 +36,7 @@ final class Devices: NSObject, ServedDevices, @unchecked Sendable {
     /// hop and take away the ability to answer on the thread that asked.
     private let device = NSLock()
 
-    init(keyboard: VirtualKeyboard, mouse: VirtualPointing) {
+    init(keyboard: any KeyPress, mouse: any Pointing) {
         self.keyboard = keyboard
         self.mouse = mouse
     }
