@@ -47,9 +47,9 @@ let package = Package(
         // Carbon lives here and not in VirtualKeyboard, so the privileged side that owns
         // the device never links a window server API. [LAW:one-way-deps]
         .target(name: "KeyboardLayout", dependencies: ["Keystrokes"]),
-        // [LAW:one-way-deps] Everything about the virtual keyboard and nothing about
-        // low-talker: no dependency on LowTalkerCore, so it leaves for its own package by
-        // a move rather than by an untangling.
+        // [LAW:one-way-deps] Everything about the virtual devices, the keyboard and the
+        // pointing one, and nothing about low-talker: no dependency on LowTalkerCore, so
+        // it leaves for its own package by a move rather than by an untangling.
         .target(name: "VirtualKeyboard", dependencies: ["Keystrokes", "Pointing"]),
         // What crosses the privilege boundary, and the client's side of it. It links the
         // two vocabularies and nothing else: not the layout, because a root helper must
@@ -61,8 +61,8 @@ let package = Package(
         // clicks and scrolls to pointing reports, with the hotkey refused and the target app
         // re-proven in front before each one. It links the core for the actions it performs,
         // the layout and both vocabularies, and takes the keyboard and the mouse as values,
-        // so the same typist runs against the helper in the app and against the driver under
-        // sudo. [LAW:composability]
+        // which is what lets each run against the helper in the app and against the
+        // driver under sudo. [LAW:composability]
         .target(name: "Typing", dependencies: ["LowTalkerCore", "KeyboardLayout", "Keystrokes", "Pointing"]),
         // Driven against a keyboard the test plays, so a run can be stopped inside any
         // keystroke and its report read back.
@@ -73,8 +73,8 @@ let package = Package(
         // [LAW:decomposition]
         .target(name: "Dictation", dependencies: ["LowTalkerCore", "Typing", "KeyboardLayout"]),
         .testTarget(name: "DictationTests", dependencies: ["Dictation", "LowTalkerCore", "Typing", "KeyboardLayout", "Keystrokes", "Pointing", "TestProbes"]),
-        // The root daemon that owns the device. It links VirtualKeyboard and the seam, and
-        // deliberately not KeyboardLayout: text never reaches this process.
+        // The root daemon that owns the devices. It links VirtualKeyboard, both vocabularies
+        // and the seam, and deliberately not KeyboardLayout: text never reaches this process.
         .executableTarget(
             name: "lowtalker-keyboardd",
             dependencies: ["KeyboardService", "VirtualKeyboard", "Keystrokes", "Pointing"]

@@ -1,8 +1,9 @@
+import ApplicationServices
 import KeyboardLayout
 import Keystrokes
 import LowTalkerCore
 import Testing
-import Typing
+@testable import Typing
 
 /// The typist against a keyboard the test plays, on the installed US layout.
 @Suite @MainActor struct TypistTests {
@@ -171,18 +172,120 @@ import Typing
         #expect(!ScreenUnreadable.notRunning("com.apple.TextEdit").mayPassWithTime)
         #expect(!ScreenUnreadable.wouldNotComeForward(wanted: "a", frontmost: "b").mayPassWithTime)
         #expect(!ScreenUnreadable.wrongApp(wanted: "a", frontmost: "b").mayPassWithTime)
+        // An element that would not answer is the same kind of moment's silence: the app
+        // is there and busy, which is what a poll is for.
+        #expect(ScreenUnreadable.unreadableElement("com.apple.TextEdit", attribute: "AXChildren", code: -25204).mayPassWithTime)
         // A process does not grow a bundle id while a poll waits, so riding this one out
         // would retry against something that can never answer.
         #expect(!ScreenUnreadable.frontmostWithoutBundleID(pid: 0).mayPassWithTime)
     }
 
+    /// An element that would not answer says so, and says it apart from an element that
+    /// answered and did not match: the message names the app, the attribute and the code,
+    /// and does not offer a permission the reader already holds.
+    @Test func anElementThatWouldNotAnswerReadsDifferentlyFromOneThatDidNotMatch() {
+        let unreadable = ScreenUnreadable.unreadableElement("com.apple.TextEdit", attribute: "AXChildren", code: -25204).description
+        #expect(unreadable.contains("com.apple.TextEdit"))
+        #expect(unreadable.contains("AXChildren"))
+        #expect(unreadable.contains("-25204"))
+        #expect(!unreadable.contains("Accessibility?"))
+    }
+
     /// The untrusted case states the fact instead of offering "no such element" as the
     /// explanation - the hour that costs is what this message exists to save, so it is
-    /// asserted rather than assumed.
+    /// asserted rather than assumed. A denied read is refused on the way in, so the search
+    /// never reaches its end untrusted and this is the one case that reports the
+    /// permission. [LAW:one-source-of-truth]
     @Test func anUntrustedProcessSaysSoRatherThanBlamingTheElement() {
-        let untrusted = ScreenUnreadable.noElement(role: "AXButton", title: "Cancel", app: "com.apple.SecurityAgent", trusted: false)
-        let trusted = ScreenUnreadable.noElement(role: "AXButton", title: "Cancel", app: "com.apple.SecurityAgent", trusted: true)
-        #expect("\(untrusted)" != "\(trusted)")
-        #expect("\(untrusted)".contains("Accessibility"))
+        let denied = "\(ScreenUnreadable.accessibilityDenied("com.apple.TextEdit"))"
+        let missing = "\(ScreenUnreadable.noElement(role: "AXButton", title: "Cancel", app: "com.apple.TextEdit"))"
+        #expect(denied != missing)
+        #expect(denied.contains("not allowed under Accessibility"))
+        #expect(!missing.contains("Accessibility"))
+    }
+}
+
+/// What the search does with each way an Accessibility read can come back. The whole
+/// point of the type is that an app answering "no such attribute" and an app not
+/// answering at all are different facts: the first is a leaf, the second is a subtree the
+/// search never saw. Folding the second into the first prunes the tree silently and then
+/// reports the element missing. [LAW:no-silent-failure]
+@Suite struct AXAnswerTests {
+    @Test func anAppThatSaysItHasNoSuchAttributeHasAnswered() {
+        #expect(TargetApp.answer(to: .success) == .answered)
+        #expect(TargetApp.answer(to: .noValue) == .absent)
+        #expect(TargetApp.answer(to: .attributeUnsupported) == .absent)
+    }
+
+    /// `cannotComplete` is what the messaging timeout this file sets comes back as, and it
+    /// is the case the whole distinction exists for.
+    @Test func anAppThatWouldNotAnswerIsNotALeaf() {
+        #expect(TargetApp.answer(to: .cannotComplete) == .unanswered)
+        #expect(TargetApp.answer(to: .invalidUIElement) == .unanswered)
+        #expect(TargetApp.answer(to: .notImplemented) == .unanswered)
+    }
+
+    /// A denied process and a busy app both fail every read, and the advice they want is
+    /// opposite: grant a permission, or try again. Reporting a busy app as a denied one
+    /// sends the reader to the Accessibility pane for a permission they already hold.
+    @Test func aProcessThatIsNotAllowedIsToldSo() {
+        #expect(TargetApp.answer(to: .apiDisabled) == .denied)
+        #expect(ScreenUnreadable.accessibilityDenied("com.apple.TextEdit").mayPassWithTime == false)
+        #expect(ScreenUnreadable.accessibilityDenied("com.apple.TextEdit").description.contains("allowed under Accessibility"))
+    }
+}
+
+/// The element search over a tree the test owns, so its three endings can be told apart
+/// with no app to read from. A busy element must not fail a search whose target is in
+/// another branch, and a search that did not read the whole tree must not come back
+/// saying the element is not there.
+@Suite struct ElementSearchTests {
+    /// A tree of named nodes. "busy" is the node that will not answer.
+    static func tree(_ node: String) throws -> [String] {
+        guard node != "busy" else { throw ScreenUnreadable.unreadableElement("app", attribute: "AXChildren", code: -25204) }
+        return ["root": ["busy", "panel"], "panel": ["target"]][node] ?? []
+    }
+
+    /// The regression this exists for: one element that will not answer used to abort the
+    /// whole walk, so a target sitting in a healthy branch was lost to a blip elsewhere.
+    @Test func anElementThatWillNotAnswerDoesNotLoseATargetInAnotherBranch() throws {
+        let outcome = try TargetApp.search(from: ["root"], children: Self.tree, matches: { $0 == "target" })
+        #expect(outcome.found == "target")
+        #expect(outcome.unreadable != nil)
+    }
+
+    /// The other half: nothing found and something unread is not the same fact as nothing
+    /// found having read it all, and only the second may be reported as a missing element.
+    @Test func aTargetBehindTheUnreadableElementComesBackAsUnreadableNotMissing() throws {
+        let outcome = try TargetApp.search(from: ["root"], children: Self.tree, matches: { $0 == "hidden" })
+        #expect(outcome.found == nil)
+        let unreadable = try #require(outcome.unreadable)
+        guard case .unreadableElement = unreadable else { Issue.record("expected unreadableElement"); return }
+    }
+
+    @Test func aTreeThatAnswersWholeAndHoldsNoMatchIsMissingAndNotUnreadable() throws {
+        let outcome = try TargetApp.search(from: ["panel"], children: Self.tree, matches: { $0 == "absent" })
+        #expect(outcome.found == nil)
+        #expect(outcome.unreadable == nil)
+    }
+
+    /// The caps travel as the same error type as an unreadable element, so a walk that
+    /// rode out every `ScreenUnreadable` would run straight past the bounds that exist to
+    /// stop it. Only the unreadable element is ridden out; the caps still abort.
+    @Test func theSearchCapsAreNotRiddenOut() {
+        #expect(throws: ScreenUnreadable.self) {
+            try TargetApp.search(
+                from: ["root"],
+                children: { _ in throw ScreenUnreadable.tooManyElements("app", limit: 2000) },
+                matches: { _ in false }
+            )
+        }
+        #expect(throws: ScreenUnreadable.self) {
+            try TargetApp.search(
+                from: ["root"],
+                children: { _ in [] },
+                matches: { _ in throw ScreenUnreadable.searchTooSlow("app", within: .seconds(5)) }
+            )
+        }
     }
 }
