@@ -22,7 +22,7 @@ import Foundation
 /// by the next write. So the reading is not part of asking; it is a lifecycle with its own
 /// owner, and asking is writing a request and waiting to be told the answer arrived.
 /// [LAW:no-ambient-temporal-coupling]
-final class DaemonConnection {
+final class DaemonConnection: Sendable {
     static let socketPath = "/Library/Application Support/org.pqrs/tmp/rootonly/karabiner_virtual_hid_device_service.sock"
     /// The version this side speaks, from `virtual_hid_device_service/client.hpp`. Two
     /// bytes, and native-endian unlike everything around it - the framing is big-endian
@@ -89,6 +89,7 @@ final class DaemonConnection {
         // it still closes exactly once, when the link goes.
         link = Link(socket: fileDescriptor, heartbeatEvery: interval, patience: patience, whenLost: whenLost)
         try refuseSIGPIPE(fileDescriptor)
+        try neverBlock(fileDescriptor)
         link.startReading()
     }
 
@@ -173,7 +174,13 @@ private final class Link: @unchecked Sendable {
     var status: [DaemonConnection.Status: Bool] = [:]
     /// When the daemon last sent a byte. Read and written by the reading thread alone, so
     /// it needs no lock: nothing else has a reason to know.
-    private var lastHeard = ContinuousClock.now
+    ///
+    /// On the clock that stops with the Mac: the silence that says anything about the
+    /// daemon is silence while both were awake, and a clock that ran on through the lid
+    /// being closed would find the daemon fifteen seconds gone the instant it opened.
+    /// Request deadlines stay on `ContinuousClock`; they are short and a caller's.
+    /// [LAW:no-ambient-temporal-coupling]
+    private var lastHeard = SuspendingClock.now
     /// Set once, by whichever side ended the connection, and never cleared: every wait
     /// after it throws this, because the daemon cannot answer on a stream that is gone.
     private var failure: DaemonError?
@@ -264,10 +271,10 @@ private final class Link: @unchecked Sendable {
     /// or the end of the patience, whichever comes first, then do whichever came.
     /// [LAW:dataflow-not-control-flow]
     private func readUntilTheEnd() throws {
-        var heartbeatDue = ContinuousClock.now + heartbeatInterval
+        var heartbeatDue = SuspendingClock.now + heartbeatInterval
         while true {
-            let readable = try readable(by: min(heartbeatDue, lastHeard + patience))
-            if ContinuousClock.now >= heartbeatDue {
+            let readable = try ready(POLLIN, by: min(heartbeatDue, lastHeard + patience))
+            if SuspendingClock.now >= heartbeatDue {
                 guarded.lock(); defer { guarded.unlock() }
                 try write(Frame.control(.heartbeat, payload: []).bytes)
                 heartbeatDue += heartbeatInterval
@@ -275,7 +282,7 @@ private final class Link: @unchecked Sendable {
             if readable {
                 try handle(try readFrame())
             }
-            guard ContinuousClock.now < lastHeard + patience else { throw DaemonError.silent }
+            guard SuspendingClock.now < lastHeard + patience else { throw DaemonError.silent }
         }
     }
 
@@ -353,10 +360,18 @@ private final class Link: @unchecked Sendable {
 
     /// Only ever called with the lock held: two writers interleaving would put half of
     /// one frame inside another.
+    ///
+    /// Each chunk is waited for within the patience, like a read: a peer that stops
+    /// draining without hanging up fills the kernel's buffer and then takes every writer
+    /// - and, through the lock, every waiter - with it, and that is the same silence a
+    /// stalled read is.
     private func write(_ bytes: [UInt8]) throws(DaemonError) {
         var offset = 0
         while offset < bytes.count {
+            guard try ready(POLLOUT, by: .now + patience) else { throw DaemonError.silent }
             let written = uninterrupted { bytes[offset...].withUnsafeBytes { Darwin.write(socket, $0.baseAddress, $0.count) } }
+            // Room reported and gone again before the call: back to waiting for it.
+            if written < 0, errno == EAGAIN { continue }
             guard written > 0 else { throw DaemonError.socket("write", errno) }
             offset += written
         }
@@ -368,22 +383,23 @@ private final class Link: @unchecked Sendable {
         var bytes = [UInt8](repeating: 0, count: count)
         var offset = 0
         while offset < count {
-            guard try readable(by: lastHeard + patience) else { throw DaemonError.silent }
+            guard try ready(POLLIN, by: lastHeard + patience) else { throw DaemonError.silent }
             let got = uninterrupted { bytes[offset...].withUnsafeMutableBytes { Darwin.read(socket, $0.baseAddress, $0.count) } }
+            if got < 0, errno == EAGAIN { continue }
             guard got > 0 else { throw got == 0 ? DaemonError.closed : DaemonError.socket("read", errno) }
             offset += got
-            lastHeard = ContinuousClock.now
+            lastHeard = SuspendingClock.now
         }
         return bytes
     }
 
-    /// Whether the socket has something to read by `deadline`. The one wait on the socket,
-    /// so the end of the stream, an interrupted call and a failed poll each have one
-    /// reading. [LAW:single-enforcer]
-    private func readable(by deadline: ContinuousClock.Instant) throws(DaemonError) -> Bool {
+    /// Whether the socket is ready for `events` - something to read, or room to write - by
+    /// `deadline`. The one wait on the socket, so the end of the stream, an interrupted
+    /// call and a failed poll each have one reading. [LAW:single-enforcer]
+    private func ready(_ events: Int32, by deadline: SuspendingClock.Instant) throws(DaemonError) -> Bool {
         while true {
-            var descriptor = pollfd(fd: socket, events: Int16(POLLIN), revents: 0)
-            let ready = poll(&descriptor, 1, max(0, (deadline - ContinuousClock.now).wholeMilliseconds))
+            var descriptor = pollfd(fd: socket, events: Int16(events), revents: 0)
+            let ready = poll(&descriptor, 1, max(0, (deadline - SuspendingClock.now).wholeMilliseconds))
             // Around the loop rather than retried in place, so the time actually left is
             // consulted again.
             if ready < 0, errno == EINTR { continue }

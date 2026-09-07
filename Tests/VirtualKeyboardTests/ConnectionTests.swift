@@ -98,6 +98,62 @@ import Testing
         #expect(lost.await() == .driverVersionMismatched)
     }
 
+    /// An answer to a request nobody waits on any more - it timed out and was forgotten -
+    /// is dropped, and the next request is answered as its own.
+    @Test func aLateAnswerToAForgottenRequestIsDroppedAndTheNextIsAnswered() throws {
+        // Initialize is left unanswered; everything else is answered at once.
+        let fake = FakeDaemon { frame, daemon in
+            guard case .request(let id, let payload) = frame, requestSent(payload).request != DaemonConnection.Request.keyboardInitialize.rawValue else { return }
+            try daemon.send(.response(id: id, payload: []))
+        }
+        let connection = try DaemonConnection(fileDescriptor: fake.clientDescriptor)
+        #expect(throws: DaemonError.silent) { try connection.request(.keyboardInitialize, by: .now + .milliseconds(50)) }
+        let forgotten = try #require(fake.received.compactMap { if case .request(let id, _) = $0 { id } else { nil } }.first)
+        try fake.send(.response(id: forgotten, payload: []))
+        #expect(throws: Never.self) { try connection.request(.keyboardReset, by: .now + .seconds(2)) }
+    }
+
+    /// A daemon that stops draining its socket without hanging up - and keeps talking, so
+    /// its silence never shows on the reading side - stalls a write once the kernel's
+    /// buffers are full. The write is bounded by the patience like a read, and past it the
+    /// request ends in the same loss, rather than blocking the writer and, through the
+    /// lock, every waiter, for good. [LAW:no-ambient-temporal-coupling]
+    ///
+    /// The frames are the largest this side sends, against 8 KB of send space and 8 KB of
+    /// receive space on a local stream socket (`sysctl net.local.stream`): the first few
+    /// are written and time out unanswered, and the one that finds the buffers full is the
+    /// loss. Sixteen would be four times the buffers, so one of them stalls.
+    @Test func aWriteThePeerStopsDrainingEndsAsSilenceWithinThePatience() throws {
+        // Reads one frame, then talks without listening: a heartbeat every 50 ms for two
+        // seconds, and not one more read. The loop ends early when the client has hung up.
+        let fake = FakeDaemon { _, daemon in
+            for _ in 0..<40 {
+                do { try daemon.send(.control(.heartbeat, payload: [])) } catch { return }
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+        }
+        let lost = Lost()
+        let connection = try DaemonConnection(fileDescriptor: fake.clientDescriptor, patience: .milliseconds(200), whenLost: lost.record)
+        #expect(throws: DaemonError.silent) { try connection.request(.keyboardInitialize, by: .now + .milliseconds(50)) }
+
+        let payload = [UInt8](repeating: 0, count: Frame.largestBody - 12)
+        let ended = DispatchSemaphore(value: 0)
+        let thrown = Lost()
+        Thread {
+            for _ in 0..<16 where lost.count == 0 {
+                do { try connection.request(.postKeyboardInputReport, payload, by: .now + .milliseconds(50)) }
+                catch let error as DaemonError { thrown.record(error) }
+                catch { Issue.record("a request threw \(error), which is not the daemon's") }
+            }
+            ended.signal()
+        }.start()
+        #expect(ended.wait(timeout: .now() + .seconds(2)) == .success, "the stalled write did not end within 2 s")
+        #expect(lost.await(within: .zero) == .silent)
+        #expect(lost.count == 1)
+        #expect(thrown.all.allSatisfy { $0 == .silent })
+        #expect((2...16).contains(thrown.count), "\(thrown.count) frames were written before one stalled")
+    }
+
     /// This side hanging up is not the daemon's doing, and is not reported as it.
     @Test func hangingUpOurselvesTellsNobody() throws {
         let fake = FakeDaemon()
@@ -122,18 +178,21 @@ private final class Lost: @unchecked Sendable {
         lock.lock(); errors.append(error); lock.unlock()
     }
 
-    var count: Int {
+    var all: [DaemonError] {
         lock.lock(); defer { lock.unlock() }
-        return errors.count
+        return errors
     }
 
+    var count: Int { all.count }
+
+    /// The first error, waited for within `limit`; a limit of zero reads what is there.
     func await(within limit: Duration = .seconds(2)) -> DaemonError? {
         let deadline = ContinuousClock.now + limit
-        while ContinuousClock.now < deadline {
+        repeat {
             lock.lock(); let first = errors.first; lock.unlock()
             if let first { return first }
             Thread.sleep(forTimeInterval: 0.002)
-        }
+        } while ContinuousClock.now < deadline
         return nil
     }
 }
