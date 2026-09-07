@@ -54,7 +54,7 @@ let package = Package(
         // test process's own identity and audit token: real code signing, no root.
         .testTarget(
             name: "lowtalker-keyboarddTests",
-            dependencies: ["lowtalker-keyboardd", "KeyboardService"]
+            dependencies: ["lowtalker-keyboardd", "KeyboardService", "VirtualKeyboard", "Keystrokes"]
         ),
         .executableTarget(
             name: "lowtalker",

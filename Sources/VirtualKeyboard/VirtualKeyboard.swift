@@ -84,6 +84,11 @@ public final class VirtualKeyboard: KeyPress {
         public let answered: Duration
         /// How long until it said the keyboard was ready.
         public let ready: Duration
+
+        public init(answered: Duration, ready: Duration) {
+            self.answered = answered
+            self.ready = ready
+        }
     }
 
     /// Brings the device up and waits for the daemon's word that it is ready, in at most
