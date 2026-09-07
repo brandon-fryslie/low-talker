@@ -42,18 +42,46 @@ public struct Command {
         let out = Pipe(), err = Pipe()
         process.standardOutput = out
         process.standardError = err
+        let outDrain = Drain(out.fileHandleForReading)
+        let errDrain = Drain(err.fileHandleForReading)
         try process.run()
-        // Both pipes are drained before the wait. A process whose pipe fills blocks in
-        // write and never exits, so a wait taken first would be a wait on a full buffer -
-        // and `systemextensionsctl list` on a Mac with fourteen extensions is well past
-        // the point where that stops being theoretical.
-        let outBytes = out.fileHandleForReading.readDataToEndOfFile()
-        let errBytes = err.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         return Output(
             status: process.terminationStatus,
-            stdout: String(decoding: outBytes, as: UTF8.self),
-            stderr: String(decoding: errBytes, as: UTF8.self)
+            stdout: outDrain.text(),
+            stderr: errDrain.text()
         )
+    }
+}
+
+/// One stream, read from before the child starts until the stream ends.
+///
+/// A command holds two of these at once, and that is the whole reason the type exists: a
+/// child whose pipe fills blocks in `write(2)` until someone reads it, so a stream that
+/// waits its turn is a stream whose turn can never come - the child cannot reach the exit
+/// that would end the read we are waiting on. [LAW:no-ambient-temporal-coupling] Both
+/// draining from the start leaves no order to get wrong, rather than an order to get right.
+private final class Drain: @unchecked Sendable {
+    // [LAW:no-shared-mutable-globals] `bytes` is written on the handler's queue and read on
+    // the caller's; the lock is the named owner of that crossing.
+    private let lock = NSLock()
+    private var bytes = Data()
+    private let ended = DispatchSemaphore(value: 0)
+
+    init(_ handle: FileHandle) {
+        handle.readabilityHandler = { [self] handle in
+            let chunk = handle.availableData
+            lock.withLock { bytes.append(chunk) }
+            // An empty read is EOF, and it is the only thing that says the stream ended.
+            if chunk.isEmpty {
+                handle.readabilityHandler = nil
+                ended.signal()
+            }
+        }
+    }
+
+    func text() -> String {
+        ended.wait()
+        return lock.withLock { String(decoding: bytes, as: UTF8.self) }
     }
 }
