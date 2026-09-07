@@ -49,7 +49,7 @@ enum Through: String, ExpressibleByArgument, CaseIterable {
                 return "connected in \(connected.milliseconds) ms, daemon answered in \(startup.answered.milliseconds) ms, keyboard ready after \(startup.ready.milliseconds) ms"
             }
         case .helper:
-            return Opened(keyboard: HelperKeyboard()) {
+            return Opened(keyboard: HelperConnection().keyboard) {
                 "keystrokes go to \(Helper.machServiceName); the first one asks whether it answers"
             }
         }

@@ -22,7 +22,11 @@ import Foundation
 /// by the next write. So the reading is not part of asking; it is a lifecycle with its own
 /// owner, and asking is writing a request and waiting to be told the answer arrived.
 /// [LAW:no-ambient-temporal-coupling]
-final class DaemonConnection: Sendable {
+///
+/// **One connection carries both devices.** The daemon keeps a keyboard and a pointing
+/// device per client connection and destroys both when the client hangs up, so a helper
+/// that owns a keyboard and a mouse holds one of these and hands it to each.
+public final class DaemonConnection: Sendable {
     static let socketPath = "/Library/Application Support/org.pqrs/tmp/rootonly/karabiner_virtual_hid_device_service.sock"
     /// The version this side speaks, from `virtual_hid_device_service/client.hpp`. Two
     /// bytes, and native-endian unlike everything around it - the framing is big-endian
@@ -43,7 +47,11 @@ final class DaemonConnection: Sendable {
         case keyboardInitialize = 0
         case keyboardTerminate = 1
         case keyboardReset = 2
+        case pointingInitialize = 3
+        case pointingTerminate = 4
+        case pointingReset = 5
         case postKeyboardInputReport = 6
+        case postPointingInputReport = 11
     }
 
     /// The status table, by index, from `virtual_hid_device_service/response.hpp`.
@@ -65,7 +73,7 @@ final class DaemonConnection: Sendable {
     /// the wire carried something this side cannot read. Every later request throws the
     /// same failure, so a caller that only ever asks can leave it be; a process that
     /// holds the connection open across long silences is the one that needs to hear.
-    convenience init(whenLost: @escaping @Sendable (DaemonError) -> Void = { _ in }) throws {
+    public convenience init(whenLost: @escaping @Sendable (DaemonError) -> Void = { _ in }) throws {
         guard FileManager.default.fileExists(atPath: Self.socketPath) else { throw DaemonError.noSocket(path: Self.socketPath) }
         let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw DaemonError.socket("socket", errno) }
@@ -129,14 +137,31 @@ final class DaemonConnection: Sendable {
         try link.wait(by: deadline) { $0.requests[id] == true }
     }
 
-    /// Waits until the daemon has said the keyboard is ready, however long ago it said so.
-    /// The wait is on the daemon's word, never a sleep - but note what the word costs: the
+    /// Waits until the daemon has said `status` holds, however long ago it said so. The
+    /// wait is on the daemon's word, never a sleep - but note what the word costs: the
     /// daemon asks the driver once a second, so readiness is *discovered* on the next tick
     /// rather than when it happened, and this takes up to a second however fast the device
     /// really was. That is why a connection is meant to be held open rather than made per
     /// insert.
-    func awaitKeyboardReady(by deadline: ContinuousClock.Instant) throws {
-        try link.wait(by: deadline) { $0.status[.keyboardReady] == true }
+    func wait(for status: Status, by deadline: ContinuousClock.Instant) throws {
+        try link.wait(by: deadline) { $0.status[status] == true }
+    }
+
+    /// Brings one device up: sends its initialize request with `payload`, then waits for
+    /// the daemon's word that the device is `ready`, in at most `limit` altogether. Both
+    /// devices start this way and differ only in the three values, so the bringing up is
+    /// one function of them. [LAW:one-type-per-behavior]
+    func initialize(_ request: Request, _ payload: [UInt8], until ready: Status, within limit: Duration) throws -> Startup {
+        let began = ContinuousClock.now
+        let deadline = began + limit
+        try self.request(request, payload, by: deadline)
+        // Taken here because `request` returns on the daemon's answer to it. Timing the
+        // first frame of the readiness wait instead - as this did, and the spike before
+        // it - reports the first status push under a name that says the daemon had not
+        // spoken yet, when answering the request is exactly what it just did.
+        let answered = ContinuousClock.now
+        try wait(for: ready, by: deadline)
+        return Startup(answered: answered - began, ready: ContinuousClock.now - began)
     }
 
     /// The daemon's status payload, decoded: pairs of (status, value). Pure, and separate

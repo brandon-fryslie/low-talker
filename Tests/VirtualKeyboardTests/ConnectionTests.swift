@@ -23,7 +23,7 @@ import Testing
         let fake = FakeDaemon()
         let connection = try DaemonConnection(fileDescriptor: fake.clientDescriptor)
         try fake.push([(.keyboardReady, true)])
-        #expect(throws: Never.self) { try connection.awaitKeyboardReady(by: .now + .seconds(2)) }
+        #expect(throws: Never.self) { try connection.wait(for: .keyboardReady, by: .now + .seconds(2)) }
         #expect(fake.awaitFrame(.response(id: 10_001, payload: [])))
     }
 
