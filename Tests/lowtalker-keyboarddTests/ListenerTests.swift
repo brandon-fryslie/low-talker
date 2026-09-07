@@ -5,13 +5,13 @@ import Testing
 @testable import lowtalker_keyboardd
 
 /// The listener as a client meets it: the real `Listener` on an anonymous listener in this
-/// process, with a requirement this process satisfies, and a keyboard of the test's own
+/// process, with a requirement this process satisfies, and devices of the test's own
 /// behind it. One client is admitted, a second is refused while the first holds the
-/// keyboard, and the first going away releases every key and frees it.
+/// devices, and the first going away releases everything and frees them.
 /// [LAW:behavior-not-structure]
 @Suite struct ListenerTests {
-    /// The keyboard served: remembers what it was asked, and says when it was released.
-    private final class FakeKeyboard: NSObject, ServedKeyboard, @unchecked Sendable {
+    /// The devices served: remember what they were asked, and say when they were released.
+    private final class FakeDevices: NSObject, ServedDevices, @unchecked Sendable {
         private let lock = NSLock()
         private var usages: [UInt16] = []
         private var reasons: [String] = []
@@ -32,9 +32,11 @@ import Testing
             reply(nil)
         }
 
-        func releaseAll(reply: @escaping (Error?) -> Void) {
-            reply(nil)
-        }
+        func releaseAll(reply: @escaping (Error?) -> Void) { reply(nil) }
+        func buttonDown(_ button: UInt8, reply: @escaping (Error?) -> Void) { reply(nil) }
+        func releaseButtons(reply: @escaping (Error?) -> Void) { reply(nil) }
+        func move(x: Int8, y: Int8, reply: @escaping (Error?) -> Void) { reply(nil) }
+        func scroll(vertical: Int8, horizontal: Int8, reply: @escaping (Error?) -> Void) { reply(nil) }
 
         func releaseEverything(because reason: String) {
             lock.lock(); reasons.append(reason); lock.unlock()
@@ -51,27 +53,27 @@ import Testing
     private struct Served {
         let listener: NSXPCListener
         let delegate: Listener
-        let keyboard: FakeKeyboard
+        let devices: FakeDevices
     }
 
     private func serve() throws -> Served {
-        let keyboard = FakeKeyboard()
-        let delegate = Listener(keyboard: keyboard, callers: try CallerIdentity(requirement: try OwnProcess.requirement()))
+        let devices = FakeDevices()
+        let delegate = Listener(devices: devices, callers: try CallerIdentity(requirement: try OwnProcess.requirement()))
         let listener = NSXPCListener.anonymous()
         listener.delegate = delegate
         listener.resume()
-        return Served(listener: listener, delegate: delegate, keyboard: keyboard)
+        return Served(listener: listener, delegate: delegate, devices: devices)
     }
 
     /// A client, with its connection alongside so the test can end it the way a client
     /// going away does.
-    private func client(of served: Served) -> (keyboard: HelperKeyboard, connection: NSXPCConnection) {
+    private func client(of served: Served) -> (helper: HelperConnection, connection: NSXPCConnection) {
         let connection = NSXPCConnection(listenerEndpoint: served.listener.endpoint)
-        return (HelperKeyboard(connection: connection, replyTimeout: .seconds(20)), connection)
+        return (HelperConnection(connection: connection, replyTimeout: .seconds(20)), connection)
     }
 
     /// Runs `body` on a thread of the test's own and awaits what it returned or threw:
-    /// `HelperKeyboard` blocks until the helper answers, and a wait on the cooperative
+    /// `HelperConnection` blocks until the helper answers, and a wait on the cooperative
     /// pool starves the reply it is waiting for. [LAW:no-ambient-temporal-coupling]
     private func blocking<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
@@ -82,11 +84,11 @@ import Testing
     /// Whether a fresh client pressing `usage` was admitted; a refused connection is
     /// unreachable from the client's side.
     private func admitted(_ served: Served, pressing usage: Usage) async throws -> Bool {
-        let (keyboard, _) = client(of: served)
+        let keyboard = client(of: served).helper.keyboard
         do {
             try await blocking { try keyboard.down(usage) }
             return true
-        } catch is HelperKeyboard.Unreachable {
+        } catch is HelperConnection.Unreachable {
             return false
         }
     }
@@ -94,26 +96,26 @@ import Testing
     @Test func theFirstClientIsAdmittedAndASecondIsRefusedWhileItHolds() async throws {
         let served = try serve()
         let first = client(of: served)
-        let keyboard = first.keyboard
+        let keyboard = first.helper.keyboard
         try await blocking { try keyboard.down(.leftShift) }
-        #expect(served.keyboard.asked == [Usage.leftShift.rawValue])
+        #expect(served.devices.asked == [Usage.leftShift.rawValue])
         #expect(try await admitted(served, pressing: .space) == false)
-        #expect(served.keyboard.asked == [Usage.leftShift.rawValue])
+        #expect(served.devices.asked == [Usage.leftShift.rawValue])
         withExtendedLifetime((served, first)) {}
     }
 
-    /// The first client going away releases every key, and the keyboard is then another
-    /// client's. The keys go up before the keyboard is let go, and the test can see only
-    /// the first of the two, so the next client's admission is asked for until it comes
-    /// or two seconds pass.
-    @Test func aClientGoingAwayReleasesEveryKeyAndFreesTheKeyboard() async throws {
+    /// The first client going away releases everything, and the devices are then another
+    /// client's. The release comes before the devices are let go, and the test can see
+    /// only the first of the two, so the next client's admission is asked for until it
+    /// comes or two seconds pass.
+    @Test func aClientGoingAwayReleasesEverythingAndFreesTheDevices() async throws {
         let served = try serve()
         let first = client(of: served)
-        let keyboard = first.keyboard
+        let keyboard = first.helper.keyboard
         try await blocking { try keyboard.down(.leftShift) }
         first.connection.invalidate()
-        #expect(served.keyboard.awaitRelease())
-        #expect(served.keyboard.releasedBecause.first == "a client went away")
+        #expect(served.devices.awaitRelease())
+        #expect(served.devices.releasedBecause.first == "a client went away")
 
         let deadline = ContinuousClock.now + .seconds(2)
         var next = try await admitted(served, pressing: .space)
@@ -121,7 +123,7 @@ import Testing
             next = try await admitted(served, pressing: .space)
         }
         #expect(next, "no client was admitted after the first went away")
-        #expect(served.keyboard.asked == [Usage.leftShift.rawValue, Usage.space.rawValue])
+        #expect(served.devices.asked == [Usage.leftShift.rawValue, Usage.space.rawValue])
         withExtendedLifetime((served, first)) {}
     }
 }

@@ -7,25 +7,25 @@ import VirtualKeyboard
 /// started when it does not, and stopped only when this helper started it and could not
 /// use it. Driven with answers of the test's own and no daemon. [LAW:behavior-not-structure]
 @Suite struct DaemonProcessTests {
-    /// A keyboard the policy hands back as it was given. Held by the test, so identity
+    /// The devices the policy hands back as it was given. Held by the test, so identity
     /// compares the object and not whatever is allocated at its address next.
     private final class Device {}
 
     /// What the world answered, and what was asked of it.
     private final class World {
         var connections: [Result<Device, DaemonError>]
-        var bringUp: Result<VirtualKeyboard.Startup, DaemonError>
+        var bringUp: Result<DaemonProcess.Startups, DaemonError>
         var launched = 0
         var terminated: [pid_t] = []
         var limitGiven: Duration?
         var lost: (@Sendable (DaemonError) -> Void)?
 
-        init(connections: [Result<Device, DaemonError>], bringUp: Result<VirtualKeyboard.Startup, DaemonError> = .success(World.up)) {
+        init(connections: [Result<Device, DaemonError>], bringUp: Result<DaemonProcess.Startups, DaemonError> = .success(World.up)) {
             self.connections = connections
             self.bringUp = bringUp
         }
 
-        static let up = VirtualKeyboard.Startup(answered: .milliseconds(4), ready: .seconds(1))
+        static let up = DaemonProcess.Startups(keyboard: Startup(answered: .milliseconds(4), ready: .seconds(1)), mouse: Startup(answered: .milliseconds(3), ready: .seconds(1)))
         static let pid: pid_t = 7
 
         /// Answers each connection in turn and the last one thereafter.
@@ -64,7 +64,7 @@ import VirtualKeyboard
         let device = Device()
         let world = World(connections: [.success(device)])
         let reached = try world.effects.reach(within: .seconds(1)) { _, _ in }
-        #expect(reached.keyboard === device)
+        #expect(reached.devices === device)
         #expect(reached.daemon == .alreadyRunning)
         #expect(reached.startup == World.up)
         #expect(world.launched == 0)
@@ -78,7 +78,7 @@ import VirtualKeyboard
         let world = World(connections: [.failure(.noSocket(path: "nowhere")), .failure(.socket("connect", ECONNREFUSED)), .success(device)])
         let told = Told()
         let reached = try world.effects.reach(within: .seconds(1), whenLost: told.record)
-        #expect(reached.keyboard === device)
+        #expect(reached.devices === device)
         #expect(reached.daemon == .startedHere(World.pid))
         #expect(world.launched == 1)
         #expect(world.terminated.isEmpty)
@@ -89,7 +89,7 @@ import VirtualKeyboard
         #expect(told.heard.first?.1 == .startedHere(World.pid))
     }
 
-    /// Connecting and bringing up wait on different things, so the keyboard is given the
+    /// Connecting and bringing up wait on different things, so the devices are given the
     /// whole limit however long the connection took of it.
     @Test func bringingUpIsGivenTheWholeLimit() throws {
         let world = World(connections: [.failure(.noSocket(path: "nowhere")), .success(Device())])
@@ -106,13 +106,13 @@ import VirtualKeyboard
         #expect(world.terminated == [World.pid])
     }
 
-    @Test func aKeyboardThatWillNotComeUpStopsTheDaemonThisStarted() throws {
+    @Test func aDeviceThatWillNotComeUpStopsTheDaemonThisStarted() throws {
         let world = World(connections: [.failure(.noSocket(path: "nowhere")), .success(Device())], bringUp: .failure(.silent))
         #expect(throws: DaemonError.silent) { try world.effects.reach(within: .seconds(1)) { _, _ in } }
         #expect(world.terminated == [World.pid])
     }
 
-    @Test func aKeyboardThatWillNotComeUpLeavesADaemonSomebodyElseRuns() throws {
+    @Test func aDeviceThatWillNotComeUpLeavesADaemonSomebodyElseRuns() throws {
         let world = World(connections: [.success(Device())], bringUp: .failure(.silent))
         #expect(throws: DaemonError.silent) { try world.effects.reach(within: .seconds(1)) { _, _ in } }
         #expect(world.launched == 0)

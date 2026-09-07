@@ -39,13 +39,14 @@ do {
         guard departure.claim() else { return }
         leave(daemon, because: "the daemon's connection was lost (\(lost)); exiting for launchd to start this again", status: 1)
     }
-    log("the keyboard is up: the daemon answered in \(reached.startup.answered), ready after \(reached.startup.ready)")
-    let keyboard = Keyboard(keyboard: reached.keyboard)
+    log("the keyboard is up: the daemon answered in \(reached.startup.keyboard.answered), ready after \(reached.startup.keyboard.ready)")
+    log("the mouse is up: the daemon answered in \(reached.startup.mouse.answered), ready after \(reached.startup.mouse.ready)")
+    let devices = Devices(keyboard: reached.devices.keyboard, mouse: reached.devices.mouse)
     // Whatever the daemon was holding for its last occupant - a helper that exited on a
     // lost connection while the daemon lived on, or a hand-run session - is up before
     // any client is served. Unconditionally: the daemon's origin says who started it,
     // not what it holds. [LAW:dataflow-not-control-flow]
-    keyboard.releaseEverything(because: "starting")
+    devices.releaseEverything(because: "starting")
 
     // launchd stops a job with SIGTERM. Taken as an event rather than the default
     // disposition, which would end the process with whatever was held still held. The
@@ -56,13 +57,13 @@ do {
     let termination = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
     termination.setEventHandler {
         guard departure.claim() else { return }
-        keyboard.releaseEverything(because: "asked to stop")
+        devices.releaseEverything(because: "asked to stop")
         leave(reached.daemon, because: "asked to stop", status: 0)
     }
     termination.resume()
 
     let listener = NSXPCListener(machServiceName: Helper.machServiceName)
-    let delegate = Listener(keyboard: keyboard, callers: callers)
+    let delegate = Listener(devices: devices, callers: callers)
     listener.delegate = delegate
     listener.resume()
     log("listening on \(Helper.machServiceName)")

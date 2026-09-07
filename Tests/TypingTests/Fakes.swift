@@ -1,4 +1,7 @@
+import CoreGraphics
 import Keystrokes
+import LowTalkerCore
+import Pointing
 import Typing
 
 /// A keyboard that records what it was asked to do and refuses after a given number of
@@ -38,3 +41,59 @@ final class StuckKeyboard: Keyboard {
 }
 
 struct Refused: Error {}
+
+/// A mouse on a screen of its own, recording every report. The cursor moves by what a
+/// report asks times a curve standing in for the OS's acceleration - three points a
+/// count when the report is fast, one when it is slow - so the pointer's loop is tested
+/// against the thing it exists for, and its steps can be read back one by one.
+///
+/// The refusal logs the call and then refuses it: the daemon takes the report and
+/// answers no, and the log says what was posted before it did. [LAW:no-silent-failure]
+@MainActor
+final class FakeMouse: Mouse {
+    private(set) var log: [String] = []
+    /// How many calls to accept before every one after is logged and refused.
+    var allow = Int.max
+    var position: ScreenPoint
+    /// What is on the screen, by "role/title".
+    var elements: [String: CGRect] = [:]
+    /// A cursor pinned in place: every report is posted and moves nothing.
+    var stuck = false
+
+    init(at position: ScreenPoint) { self.position = position }
+
+    private func record(_ what: String) throws {
+        log.append(what)
+        guard log.count <= allow else { throw Refused() }
+    }
+
+    func check() throws { try record("check") }
+    func down(_ button: Button) throws { try record("down \(button.rawValue)") }
+    func releaseAll() throws { try record("up") }
+
+    func move(by delta: Move) throws {
+        try record("move \(delta.x.value) \(delta.y.value)")
+        let gain = gain(of: delta)
+        position = ScreenPoint(x: position.x + Double(delta.x.value) * gain, y: position.y + Double(delta.y.value) * gain)
+    }
+
+    /// Points per count for one report: the curve's knee is at ten counts.
+    private func gain(of delta: Move) -> Double {
+        guard !stuck else { return 0 }
+        return max(abs(Int(delta.x.value)), abs(Int(delta.y.value))) > 10 ? 3 : 1
+    }
+
+    func scroll(by delta: Scroll) throws { try record("scroll \(delta.vertical.value) \(delta.horizontal.value)") }
+
+    func cursor() throws -> ScreenPoint { position }
+
+    func locate(_ role: AccessibilityRole, _ title: String) throws -> CGRect {
+        guard let frame = elements["\(role.rawValue)/\(title)"] else {
+            throw ScreenUnreadable.noElement(role: role.rawValue, title: title, app: "the fake screen")
+        }
+        return frame
+    }
+
+    /// The pointer over this mouse, reading this screen.
+    var pointer: Pointer { Pointer(mouse: self, cursor: cursor, locate: locate) }
+}
