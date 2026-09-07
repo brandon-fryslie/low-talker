@@ -28,6 +28,9 @@ import Testing
         .runShortcut(name: "Append to Journal", input: "hi"),
         .runShortcut(name: "Toggle Lights", input: nil),
         .pipe(executable: "/usr/bin/env", arguments: ["rewrite", "--tone", "formal"]),
+        .click(at: ScreenPoint(x: 697.5, y: 475), button: .right, times: .double),
+        .scroll(at: ScreenPoint(x: 100, y: 200), vertical: -3, horizontal: 0),
+        .clickElement(role: AccessibilityRole(rawValue: "AXButton"), title: "Cancel"),
     ]
 
     private func roundTrip<T: Codable & Equatable>(_ value: T) throws -> T {
@@ -63,7 +66,10 @@ import Testing
           {"activateApp": {"bundleID": "com.apple.Safari"}},
           {"openURL": {"url": "https://example.com/"}},
           {"runShortcut": {"name": "Toggle Lights"}},
-          {"pipe": {"executable": "/usr/bin/env", "arguments": ["rewrite"]}}
+          {"pipe": {"executable": "/usr/bin/env", "arguments": ["rewrite"]}},
+          {"click": {"at": {"x": 697.5, "y": 475}, "button": "left", "times": 2}},
+          {"scroll": {"at": {"x": 100, "y": 200}, "vertical": -3, "horizontal": 0}},
+          {"clickElement": {"role": "AXButton", "title": "Cancel"}}
         ]
         """
         let decoded = try JSONDecoder().decode([Action].self, from: Data(json.utf8))
@@ -75,7 +81,21 @@ import Testing
             .openURL(url: URL(string: "https://example.com/")!),
             .runShortcut(name: "Toggle Lights", input: nil),
             .pipe(executable: "/usr/bin/env", arguments: ["rewrite"]),
+            .click(at: ScreenPoint(x: 697.5, y: 475), button: .left, times: .double),
+            .scroll(at: ScreenPoint(x: 100, y: 200), vertical: -3, horizontal: 0),
+            .clickElement(role: AccessibilityRole(rawValue: "AXButton"), title: "Cancel"),
         ])
+    }
+
+    /// A click that clicks no times is not a click, from a number or from JSON.
+    @Test func clicksRejectZeroAndBelow() {
+        #expect(Clicks(rawValue: 0) == nil)
+        #expect(Clicks(rawValue: -1) == nil)
+        #expect(Clicks(rawValue: 1) == .single)
+        let json = Data(#"{"click": {"at": {"x": 1, "y": 2}, "button": "left", "times": 0}}"#.utf8)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(Action.self, from: json)
+        }
     }
 
     /// The Context shape the dry-run CLI will accept on `--context`.

@@ -88,19 +88,81 @@ public struct TargetApp {
     private func focusedElement() throws -> (AXUIElement, String) {
         let app = try requireFrontmost()
         let name = bundleID.rawValue
-        let application = AXUIElementCreateApplication(app.processIdentifier)
-        // A bound this code states is a bound it has to keep. An Accessibility read is a
-        // synchronous call into another process, and left at the system default one read
-        // of an app whose main thread is busy can outlast the whole `within` it was made
-        // under - so `wait(within: .seconds(3))` would quietly take longer than three
-        // seconds. [FRAMING:representation] A stated bound the code cannot hold is a map
-        // that does not match its territory. Half a second is far above the 10-35 ms an
-        // answer takes here and far below any budget it is polled inside.
-        AXUIElementSetMessagingTimeout(application, 0.5)
+        let application = Self.application(of: app)
         var focused: CFTypeRef?
         guard AXUIElementCopyAttributeValue(application, kAXFocusedUIElementAttribute as CFString, &focused) == .success, let element = Self.element(focused) else { throw ScreenUnreadable.noFocus(name) }
-        AXUIElementSetMessagingTimeout(element, 0.5)
+        AXUIElementSetMessagingTimeout(element, Self.messagingTimeout)
         return (element, name)
+    }
+
+    /// A bound this code states is a bound it has to keep. An Accessibility read is a
+    /// synchronous call into another process, and left at the system default one read of
+    /// an app whose main thread is busy can outlast the whole `within` it was made under -
+    /// so `wait(within: .seconds(3))` would quietly take longer than three seconds.
+    /// [FRAMING:representation] A stated bound the code cannot hold is a map that does not
+    /// match its territory. Half a second is far above the 10-35 ms an answer takes here
+    /// and far below any budget it is polled inside. Set on every element this reads,
+    /// because the timeout is per element and a child does not inherit its parent's.
+    private static let messagingTimeout: Float = 0.5
+
+    private static func application(of app: NSRunningApplication) -> AXUIElement {
+        let application = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(application, messagingTimeout)
+        return application
+    }
+
+    /// The most elements one search reads out of the app. A tree is read one synchronous
+    /// call per element and a browser's is tens of thousands wide, so a search that walked
+    /// all of it would outlast any budget it was made under; it stops here and says so. A
+    /// dialog, which is what this is for, is a few dozen.
+    public static let searchLimit = 2000
+
+    /// The screen frame of the first element, breadth first from the app, with this role
+    /// and title: global coordinates, top-left origin, points - the space the cursor is
+    /// read back in, so the centre of the frame is a click's target with no conversion.
+    /// The app is re-proven in front first, so the element is in the app the caller named
+    /// and not in whatever took the front.
+    public func frame(ofRole role: AccessibilityRole, titled title: String) throws -> CGRect {
+        let app = try requireFrontmost()
+        let name = bundleID.rawValue
+        var read = 0
+        let found = try breadthFirst(from: [Self.application(of: app)], children: { element in
+            read += 1
+            guard read <= Self.searchLimit else { throw ScreenUnreadable.tooManyElements(name, limit: Self.searchLimit) }
+            return Self.children(of: element)
+        }, where: { Self.string(kAXRoleAttribute, of: $0) == role.rawValue && Self.string(kAXTitleAttribute, of: $0) == title })
+        guard let found else { throw ScreenUnreadable.noElement(role: role.rawValue, title: title, app: name) }
+        guard let origin = Self.value(kAXPositionAttribute, of: found, as: .cgPoint, CGPoint.zero),
+              let size = Self.value(kAXSizeAttribute, of: found, as: .cgSize, CGSize.zero) else {
+            throw ScreenUnreadable.elementWithoutFrame(role: role.rawValue, title: title, app: name)
+        }
+        return CGRect(origin: origin, size: size)
+    }
+
+    /// The element's children, each bounded like everything else read here. An element
+    /// that answers with no children is a leaf, which is what a leaf is.
+    private static func children(of element: AXUIElement) -> [AXUIElement] {
+        var value: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value)
+        let children = (value as? [CFTypeRef] ?? []).compactMap(Self.element)
+        children.forEach { AXUIElementSetMessagingTimeout($0, messagingTimeout) }
+        return children
+    }
+
+    private static func string(_ attribute: String, of element: AXUIElement) -> String? {
+        var value: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        return value as? String
+    }
+
+    /// A geometry attribute unboxed from its `AXValue`, when the app answered with one of
+    /// the type asked for. The type id is the check, for the reason `element` gives.
+    private static func value<T>(_ attribute: String, of element: AXUIElement, as type: AXValueType, _ empty: T) -> T? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success, let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        var unboxed = empty
+        guard AXValueGetValue(value as! AXValue, type, &unboxed) else { return nil }
+        return unboxed
     }
 
     /// The answer as an element, when the app answered with one. A CoreFoundation value
@@ -164,6 +226,11 @@ public enum ScreenUnreadable: Error, CustomStringConvertible {
     case wrongApp(wanted: String, frontmost: String)
     case noFocus(String)
     case noText(String)
+    /// No element with that role and title, among the ones read. A dialog still coming up
+    /// has none yet, which is why this may pass with time.
+    case noElement(role: String, title: String, app: String)
+    case elementWithoutFrame(role: String, title: String, app: String)
+    case tooManyElements(String, limit: Int)
 
     /// Whether waiting could still change the answer. An app that will not answer right
     /// now may answer in two milliseconds; an app that is not in front is not going to
@@ -172,8 +239,8 @@ public enum ScreenUnreadable: Error, CustomStringConvertible {
     /// difference, so nothing has to inspect a message to find it.
     public var mayPassWithTime: Bool {
         switch self {
-        case .noFocus, .noText: true
-        case .noFrontmostApp, .notRunning, .wouldNotComeForward, .wrongApp: false
+        case .noFocus, .noText, .noElement: true
+        case .noFrontmostApp, .notRunning, .wouldNotComeForward, .wrongApp, .elementWithoutFrame, .tooManyElements: false
         }
     }
 
@@ -185,6 +252,9 @@ public enum ScreenUnreadable: Error, CustomStringConvertible {
         case .wrongApp(let wanted, let frontmost): "\(frontmost) is frontmost, not \(wanted)"
         case .noFocus(let app): "\(app) has no focused element; is this process allowed under Accessibility?"
         case .noText(let app): "the focused element in \(app) carries no text value"
+        case .noElement(let role, let title, let app): "\(app) has no \(role) titled \(title.debugDescription); is this process allowed under Accessibility?"
+        case .elementWithoutFrame(let role, let title, let app): "the \(role) titled \(title.debugDescription) in \(app) has no position or size"
+        case .tooManyElements(let app, let limit): "\(app) exposes more than \(limit) elements, which is more than one search reads"
         }
     }
 }

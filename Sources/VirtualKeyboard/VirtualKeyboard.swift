@@ -74,21 +74,10 @@ public final class VirtualKeyboard: KeyPress {
         self.init(daemon: try DaemonConnection(whenLost: whenLost), reportTimeout: reportTimeout)
     }
 
-    init(daemon: DaemonConnection, reportTimeout: Duration = .seconds(2)) {
+    /// Over a connection the mouse may share, for the reason `VirtualPointing` gives.
+    public init(daemon: DaemonConnection, reportTimeout: Duration = .seconds(2)) {
         self.daemon = daemon
         self.reportTimeout = reportTimeout
-    }
-
-    public struct Startup: Sendable, Equatable {
-        /// How long the daemon took to answer `keyboard_initialize`.
-        public let answered: Duration
-        /// How long until it said the keyboard was ready.
-        public let ready: Duration
-
-        public init(answered: Duration, ready: Duration) {
-            self.answered = answered
-            self.ready = ready
-        }
     }
 
     /// Brings the device up and waits for the daemon's word that it is ready, in at most
@@ -102,16 +91,7 @@ public final class VirtualKeyboard: KeyPress {
     /// pays it every time.
     @discardableResult
     public func start(within limit: Duration) throws -> Startup {
-        let began = ContinuousClock.now
-        let deadline = began + limit
-        try daemon.request(.keyboardInitialize, Self.parameters, by: deadline)
-        // Taken here because `request` returns on the daemon's answer to it. Timing the
-        // first frame of the readiness wait instead - as this did, and the spike before
-        // it - reports the first status push under a name that says the daemon had not
-        // spoken yet, when answering the request is exactly what it just did.
-        let answered = ContinuousClock.now
-        try daemon.awaitKeyboardReady(by: deadline)
-        return Startup(answered: answered - began, ready: ContinuousClock.now - began)
+        try daemon.initialize(.keyboardInitialize, Self.parameters, until: .keyboardReady, within: limit)
     }
 
     /// Holds `usage` down.

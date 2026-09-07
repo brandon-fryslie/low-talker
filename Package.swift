@@ -8,6 +8,7 @@ let package = Package(
         .library(name: "LowTalkerCore", targets: ["LowTalkerCore"]),
         .library(name: "Keystrokes", targets: ["Keystrokes"]),
         .library(name: "KeyboardLayout", targets: ["KeyboardLayout"]),
+        .library(name: "Pointing", targets: ["Pointing"]),
         .library(name: "VirtualKeyboard", targets: ["VirtualKeyboard"]),
         .library(name: "KeyboardService", targets: ["KeyboardService"]),
         .library(name: "Typing", targets: ["Typing"]),
@@ -32,39 +33,43 @@ let package = Package(
         // usage, the modifiers held with it, and the two names one key goes by. It links
         // nothing, so neither the layout nor the device has to link the other to speak.
         .target(name: "Keystrokes"),
+        // The same seam for the mouse: a button, a count of motion, a move and a scroll.
+        // Like Keystrokes it links nothing, so the device and the click decision share a
+        // vocabulary without sharing a dependency. [LAW:one-way-deps]
+        .target(name: "Pointing"),
         // Carbon lives here and not in VirtualKeyboard, so the privileged side that owns
         // the device never links a window server API. [LAW:one-way-deps]
         .target(name: "KeyboardLayout", dependencies: ["Keystrokes"]),
         // [LAW:one-way-deps] Everything about the virtual keyboard and nothing about
         // low-talker: no dependency on LowTalkerCore, so it leaves for its own package by
         // a move rather than by an untangling.
-        .target(name: "VirtualKeyboard", dependencies: ["Keystrokes"]),
+        .target(name: "VirtualKeyboard", dependencies: ["Keystrokes", "Pointing"]),
         // What crosses the privilege boundary, and the client's side of it. It links
         // Keystrokes and nothing else: not the layout, because a root helper must never
         // read one, and not the device, because a client must never open one.
         // [LAW:one-way-deps]
-        .target(name: "KeyboardService", dependencies: ["Keystrokes"]),
-        .testTarget(name: "KeyboardServiceTests", dependencies: ["KeyboardService", "Keystrokes"]),
+        .target(name: "KeyboardService", dependencies: ["Keystrokes", "Pointing"]),
+        .testTarget(name: "KeyboardServiceTests", dependencies: ["KeyboardService", "Keystrokes", "Pointing"]),
         // The app's one inserter: text and chords lowered to keystrokes and pressed on a
         // keyboard, with the hotkey refused and the target app re-proven in front before
         // every key. It links the core for the actions and chords it performs, the layout
         // and the vocabulary, and takes the keyboard as a value, so the same typist runs
         // against the helper in the app and against the driver under sudo. [LAW:composability]
-        .target(name: "Typing", dependencies: ["LowTalkerCore", "KeyboardLayout", "Keystrokes"]),
+        .target(name: "Typing", dependencies: ["LowTalkerCore", "KeyboardLayout", "Keystrokes", "Pointing"]),
         // Driven against a keyboard the test plays, so a run can be stopped inside any
         // keystroke and its report read back.
-        .testTarget(name: "TypingTests", dependencies: ["Typing", "LowTalkerCore", "KeyboardLayout", "Keystrokes"]),
+        .testTarget(name: "TypingTests", dependencies: ["Typing", "LowTalkerCore", "KeyboardLayout", "Keystrokes", "Pointing"]),
         // The root daemon that owns the device. It links VirtualKeyboard and the seam, and
         // deliberately not KeyboardLayout: text never reaches this process.
         .executableTarget(
             name: "lowtalker-keyboardd",
-            dependencies: ["KeyboardService", "VirtualKeyboard", "Keystrokes"]
+            dependencies: ["KeyboardService", "VirtualKeyboard", "Keystrokes", "Pointing"]
         ),
         // The authorization boundary of a root keystroke service, checked against the
         // test process's own identity and audit token: real code signing, no root.
         .testTarget(
             name: "lowtalker-keyboarddTests",
-            dependencies: ["lowtalker-keyboardd", "KeyboardService", "VirtualKeyboard", "Keystrokes"]
+            dependencies: ["lowtalker-keyboardd", "KeyboardService", "VirtualKeyboard", "Keystrokes", "Pointing"]
         ),
         .executableTarget(
             name: "lowtalker",
@@ -74,6 +79,7 @@ let package = Package(
                 "KeyboardLayout",
                 "KeyboardService",
                 "Keystrokes",
+                "Pointing",
                 "Typing",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
@@ -92,13 +98,17 @@ let package = Package(
         // the framing is proven without root and without the driver.
         .testTarget(
             name: "VirtualKeyboardTests",
-            dependencies: ["VirtualKeyboard", "Keystrokes"]
+            dependencies: ["VirtualKeyboard", "Keystrokes", "Pointing"]
         ),
         // The vocabulary stands on its own, so its tests do too: nothing here imports a
         // layout or a device. [LAW:decomposition]
         .testTarget(
             name: "KeystrokesTests",
             dependencies: ["Keystrokes"]
+        ),
+        .testTarget(
+            name: "PointingTests",
+            dependencies: ["Pointing"]
         ),
         // The reverse map is built from a real layout's own data, so these read the
         // installed US and Dvorak layouts rather than a fixture that could agree with a

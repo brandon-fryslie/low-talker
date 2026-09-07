@@ -3,13 +3,14 @@ import KeyboardLayout
 import LowTalkerCore
 import os
 
-/// Performs a route's actions as keystrokes: text typed into the app it names, chords
-/// pressed in the app in front.
+/// Performs a route's actions on the devices: text typed into the app it names, chords
+/// pressed in the app in front, clicks and scrolls made in the app in front.
 ///
 /// [LAW:effects-at-boundaries] The router hands back descriptions; this is the edge
-/// where they become key reports. The keyboard is a value it is given per target - the
-/// helper behind a focus check in the app, a refusing fake in a test - so the executor
-/// itself decides only which app each action means and how much of it was typed.
+/// where they become reports. The keyboard and the pointer are values it is given per
+/// target - the helper behind a focus check in the app, a refusing fake in a test - so
+/// the executor itself decides only which app each action means and how much of it was
+/// done.
 ///
 /// Every action is lowered before any is performed. An action list is a whole the same
 /// way a string is: a list that typed its first action and refused its second would
@@ -20,20 +21,24 @@ public struct Executor {
     /// The keyboard for one target app: pressed through the helper, and refusing every
     /// key once that app is no longer in front.
     public typealias Keyboards = @MainActor (BundleID) -> any Keyboard
+    /// The pointer for one target app, refusing every report the same way.
+    public typealias Pointers = @MainActor (BundleID) -> Pointer
 
     private let keyboard: Keyboards
+    private let mouse: Pointers
     private let hotkeys: Set<KeyChord>
     private let log: Logger
 
     /// `hotkeys` are the chords the tap listens for, which no action may press.
-    public init(keyboard: @escaping Keyboards, hotkeys: Set<KeyChord>, log: Logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "lowtalker", category: "typist")) {
+    public init(keyboard: @escaping Keyboards, mouse: @escaping Pointers, hotkeys: Set<KeyChord>, log: Logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "lowtalker", category: "typist")) {
         self.keyboard = keyboard
+        self.mouse = mouse
         self.hotkeys = hotkeys
         self.log = log
     }
 
     /// One action, done. The time is from the hotkey's key-up to the helper's
-    /// acknowledgement of the last release, which is the number the app has to keep
+    /// acknowledgement of the last report, which is the number the app has to keep
     /// under its latency target and not a claim that the text is on screen: the daemon
     /// acknowledges reports the driver then drops, and reading the screen back is the
     /// CLI's measurement.
@@ -41,6 +46,10 @@ public struct Executor {
         public enum What: Sendable {
             case typed(characters: Int)
             case pressed(KeyChord)
+            /// `reports` is how many motion reports the cursor took to get there, which
+            /// is the acceleration loop's cost and the number worth reading off a run.
+            case clicked(at: ScreenPoint, button: MouseButton, times: Clicks, reports: Int)
+            case scrolled(at: ScreenPoint, vertical: Int, horizontal: Int)
         }
 
         public let what: What
@@ -51,37 +60,40 @@ public struct Executor {
             let act = switch what {
             case .typed(let characters): "typed \(characters) characters"
             case .pressed(let chord): "pressed \(chord.spelled)"
+            case .clicked(let at, let button, let times, let reports): "clicked \(button.rawValue) \(times.spelled) at \(at) after \(reports) move reports"
+            case .scrolled(let at, let vertical, let horizontal): "scrolled vertical \(vertical) horizontal \(horizontal) at \(at)"
             }
             return "\(act) into \(into.rawValue), key-up to acknowledged \(Int(acknowledged / .milliseconds(1))) ms"
         }
     }
 
     /// Performs every action in order, each logged as it completes, and answers with
-    /// what was done. Throws before the first key when any action is not a keystroke,
-    /// cannot be typed on the layout, or would press the hotkey; throws `RouteStopped`
-    /// from the action that stopped, carrying the earlier ones, which are done.
+    /// what was done. Throws before the first report when any action is one the devices
+    /// cannot perform, cannot be typed on the layout, or would press the hotkey; throws
+    /// `RouteStopped` from the action that stopped, carrying the earlier ones, which are
+    /// done.
     @discardableResult
     public func perform(_ actions: [Action], in context: Context, on layout: KeyboardLayout, since keyUp: ContinuousClock.Instant) throws -> [Performed] {
         let lowered = try actions.map { try lower($0, in: context, on: layout) }
         let clock = ContinuousClock()
         var performed: [Performed] = []
-        for keystrokes in lowered {
+        for step in lowered {
             let what: Performed.What
-            do { what = try keystrokes.perform() } catch { throw RouteStopped(performed: performed, cause: error) }
-            let done = Performed(what: what, into: keystrokes.into, acknowledged: clock.now - keyUp)
+            do { what = try step.perform() } catch { throw RouteStopped(performed: performed, cause: error) }
+            let done = Performed(what: what, into: step.into, acknowledged: clock.now - keyUp)
             log.info("\(done.description, privacy: .public)")
             performed.append(done)
         }
         return performed
     }
 
-    /// An action as keystrokes on the typist for its target, proven before any is pressed.
-    private struct Keystrokes {
+    /// An action as reports on the device for its target, proven before any is posted.
+    private struct Step {
         let into: BundleID
         let perform: () throws -> Performed.What
     }
 
-    private func lower(_ action: Action, in context: Context, on layout: KeyboardLayout) throws -> Keystrokes {
+    private func lower(_ action: Action, in context: Context, on layout: KeyboardLayout) throws -> Step {
         switch action {
         case .insertText(let text, let target):
             // The focus is whatever app was in front when the hotkey went down, which
@@ -94,16 +106,44 @@ public struct Executor {
             }
             let typist = Typist(keyboard: keyboard(into), hotkeys: hotkeys)
             let lowered = try typist.lower(text, on: layout)
-            return Keystrokes(into: into) { .typed(characters: try typist.type(lowered)) }
+            return Step(into: into) { .typed(characters: try typist.type(lowered)) }
         case .sendKeys(let chord):
             let typist = Typist(keyboard: keyboard(context.frontmostApp), hotkeys: hotkeys)
             let lowered = try typist.lower(chord)
-            return Keystrokes(into: context.frontmostApp) {
+            return Step(into: context.frontmostApp) {
                 try typist.press(lowered)
                 return .pressed(chord)
             }
+        case .click(let at, let button, let times):
+            let pointer = mouse(context.frontmostApp)
+            return Step(into: context.frontmostApp) {
+                let click = try pointer.click(at: at, button: button, times: times)
+                return .clicked(at: click.at, button: button, times: times, reports: click.reports)
+            }
+        case .scroll(let at, let vertical, let horizontal):
+            let pointer = mouse(context.frontmostApp)
+            return Step(into: context.frontmostApp) {
+                try pointer.scroll(at: at, vertical: vertical, horizontal: horizontal)
+                return .scrolled(at: at, vertical: vertical, horizontal: horizontal)
+            }
+        case .clickElement(let role, let title):
+            let pointer = mouse(context.frontmostApp)
+            return Step(into: context.frontmostApp) {
+                let click = try pointer.click(element: role, title: title)
+                return .clicked(at: click.at, button: .left, times: .single, reports: click.reports)
+            }
         case .activateApp, .openURL, .runShortcut, .pipe:
-            throw NotAKeystroke(action: action)
+            throw NotAnInput(action: action)
+        }
+    }
+}
+
+private extension Clicks {
+    var spelled: String {
+        switch rawValue {
+        case 1: "once"
+        case 2: "twice"
+        default: "\(rawValue) times"
         }
     }
 }
@@ -126,12 +166,12 @@ public struct RouteStopped: Error, CustomStringConvertible {
     }
 }
 
-/// An action the keyboard cannot perform. Activating an app, opening a URL, running a
+/// An action neither device can perform. Activating an app, opening a URL, running a
 /// shortcut and piping are the command layer's work, and a route that emits one reaches
 /// an executor that does not have it yet. [LAW:no-silent-failure] Said by name rather
 /// than skipped, so a route is never half-performed without a word.
-public struct NotAKeystroke: Error, CustomStringConvertible {
+public struct NotAnInput: Error, CustomStringConvertible {
     public let action: Action
 
-    public var description: String { "the keyboard cannot perform \(action); nothing was typed" }
+    public var description: String { "neither the keyboard nor the mouse can perform \(action); nothing was done" }
 }
