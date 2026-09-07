@@ -131,9 +131,10 @@ public extension Requirement {
             """
         case .residue:
             """
-            Some of the driver package is here and some is not. See which,
-            then remove and install again:
-                scripts/virtual-hid-driver state
+            Part of the driver package is here and part is not.
+            Remove what is there, then install it again:
+                scripts/virtual-hid-driver remove
+                scripts/virtual-hid-driver install
             """
         // The probe said it could not read the machine, or read a registration it could
         // not name. Either way the reason is already on stderr, and pointing at it beats

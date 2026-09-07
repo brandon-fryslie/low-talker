@@ -49,6 +49,23 @@ import Testing
         #expect(step.contains("virtual-hid-driver state"))
     }
 
+    /// A state a command can repair names the command that repairs it. `state` takes a
+    /// reading and changes nothing, so a step promising a repair has to say it in the
+    /// verbs that perform one - which a step merely being non-empty cannot tell apart.
+    @Test func everyStateAScriptCanRepairNamesTheVerbsThatRepairIt() {
+        let repairs: [(DriverState, [String])] = [
+            (.absent, ["virtual-hid-driver install"]),
+            (.installedInactive, ["virtual-hid-driver install"]),
+            (.residue, ["virtual-hid-driver remove", "virtual-hid-driver install"]),
+        ]
+        for (state, verbs) in repairs {
+            let step = Requirement.driverExtension(state).step ?? ""
+            for verb in verbs {
+                #expect(step.contains(verb), "\(state.rawValue) never names `\(verb)`")
+            }
+        }
+    }
+
     /// The reading is shown whatever it is, so a report says what it saw and not only
     /// what it wants done.
     @Test func everyDriverStateReadsBackAsItsOwnWord() {
