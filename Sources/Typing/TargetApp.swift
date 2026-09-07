@@ -194,7 +194,7 @@ public struct TargetApp {
             guard clock.now - start < Self.searchBudget else { throw ScreenUnreadable.searchTooSlow(name, within: Self.searchBudget) }
             return try Self.children(of: element, in: name)
         }, matches: { try Self.string(kAXRoleAttribute, of: $0, in: name) == role.rawValue && Self.string(kAXTitleAttribute, of: $0, in: name) == title })
-        guard let found else { throw unreadable ?? ScreenUnreadable.noElement(role: role.rawValue, title: title, app: name, trusted: AXIsProcessTrusted()) }
+        guard let found else { throw unreadable ?? ScreenUnreadable.noElement(role: role.rawValue, title: title, app: name) }
         guard let origin = try Self.value(kAXPositionAttribute, of: found, as: .cgPoint, CGPoint.zero, in: name),
               let size = try Self.value(kAXSizeAttribute, of: found, as: .cgSize, CGSize.zero, in: name) else {
             throw ScreenUnreadable.elementWithoutFrame(role: role.rawValue, title: title, app: name)
@@ -365,12 +365,11 @@ public enum ScreenUnreadable: Error, CustomStringConvertible {
     /// holds nothing: this is the read failing, and a caller that spent it as "no text"
     /// would be reading a failure as evidence about the screen. [LAW:no-silent-failure]
     case textUnreadable(AXError)
-    /// No element with that role and title, among the ones read - and whether this
-    /// process was allowed to look at all, captured where it is known rather than guessed
-    /// at by the reader. An untrusted process finds nothing in every app, and a message
-    /// that offered "no such element" as the explanation would send somebody hunting for a
-    /// button that is on the screen in front of them. [FRAMING:representation]
-    case noElement(role: String, title: String, app: String, trusted: Bool)
+    /// No element with that role and title, among the ones read. A process that was not
+    /// allowed to look never gets here: its first read is refused and comes back as
+    /// `accessibilityDenied`, which is the one case that reports a missing permission.
+    /// [LAW:one-source-of-truth]
+    case noElement(role: String, title: String, app: String)
     case elementWithoutFrame(role: String, title: String, app: String)
     case tooManyElements(String, limit: Int)
     case searchTooSlow(String, within: Duration)
@@ -379,7 +378,9 @@ public enum ScreenUnreadable: Error, CustomStringConvertible {
     /// none of them matched: this one says the search never saw the whole tree.
     case unreadableElement(String, attribute: String, code: Int32)
     /// Every read will fail because this process is not allowed under Accessibility, which
-    /// is a permission to grant rather than a blip to ride out.
+    /// is a permission to grant rather than a blip to ride out. It states the fact rather
+    /// than offering "no such element" as the explanation, which would send somebody
+    /// hunting for a button that is on the screen in front of them.
     case accessibilityDenied(String)
 
     /// Whether waiting could still change the answer. An app that will not answer right
@@ -403,15 +404,12 @@ public enum ScreenUnreadable: Error, CustomStringConvertible {
         case .wrongApp(let wanted, let frontmost): "\(frontmost) is frontmost, not \(wanted)"
         case .noFocus(let app): "\(app) has no focused element; is this process allowed under Accessibility?"
         case .textUnreadable(let status): "the focused element would not say what it holds (AXError \(status.rawValue)); whether it holds text is unknown"
-        case .noElement(let role, let title, let app, let trusted):
-            trusted
-                ? "\(app) has no \(role) titled \(title.debugDescription) among the elements read"
-                : "this process is not allowed under Accessibility, so it cannot see any app's elements - including the \(role) titled \(title.debugDescription) it was asked for in \(app)"
+        case .noElement(let role, let title, let app): "\(app) has no \(role) titled \(title.debugDescription) among the elements read"
         case .elementWithoutFrame(let role, let title, let app): "the \(role) titled \(title.debugDescription) in \(app) has no position or size"
         case .tooManyElements(let app, let limit): "\(app) exposes more than \(limit) elements, which is more than one search reads"
         case .searchTooSlow(let app, let limit): "\(app) did not answer an element search within \(limit)"
         case .unreadableElement(let app, let attribute, let code): "\(app) would not answer \(attribute) for an element the search reached; Accessibility error \(code)"
-        case .accessibilityDenied(let app): "\(app) cannot be read; is this process allowed under Accessibility?"
+        case .accessibilityDenied(let app): "this process is not allowed under Accessibility, so it cannot see any app's elements - including the ones it was asked for in \(app)"
         }
     }
 }
