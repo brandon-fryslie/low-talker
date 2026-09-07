@@ -13,7 +13,10 @@ import Keystrokes
 /// next report goes out, because reports posted back to back are lost in the driver and a
 /// lost key-up leaves a key held for macOS to repeat. The waiting is not a sleep: the
 /// daemon answers every request, and the answer is what the pacing is built on.
-public final class HelperKeyboard: KeyPress {
+///
+/// Callable from any thread: the connection is, and each call keeps what it is waiting on
+/// in an `Outcome` of its own, so two callers on two threads share nothing but the wire.
+public final class HelperKeyboard: KeyPress, @unchecked Sendable {
     private let connection: NSXPCConnection
     private let replyTimeout: Duration
 
