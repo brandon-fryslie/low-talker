@@ -206,9 +206,8 @@ public struct TargetApp {
     /// would not answer. [LAW:decomposition] Held apart from `frame` and from every
     /// Accessibility call so the three outcomes can be checked with no app to read from.
     ///
-    /// Only `unreadableElement` is ridden out, and the `guard` says so rather than the
-    /// placement of a `catch`: the caps and the interrupt travel as the same error type,
-    /// and a walk that swallowed those would run past the very bounds they exist to keep.
+    /// Only `unreadableElement` is ridden out: the caps are `ScreenUnreadable` too, so the
+    /// `guard` re-throws them, and `Interrupted` is another type the `catch` never takes.
     nonisolated static func search<Element>(
         from roots: [Element],
         children: (Element) throws -> [Element],
