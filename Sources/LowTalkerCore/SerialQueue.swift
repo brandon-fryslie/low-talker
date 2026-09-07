@@ -1,38 +1,56 @@
+import Synchronization
+
 /// Runs operations one at a time: each waits for every earlier submission to finish,
 /// succeed or fail, before it starts.
 ///
 /// [LAW:no-ambient-temporal-coupling] Actor isolation alone does not give this: an
 /// actor is reentrant at every `await`, so two calls that each await something can
-/// interleave. This actor owns the order explicitly as a chain of tasks, and it is
+/// interleave. This queue owns the order explicitly as a chain of tasks, and it is
 /// the one place that fact lives for anything that wraps a non-reentrant resource.
+/// The chain is held under a lock rather than by an actor so that a submission can be
+/// made without awaiting anything: a caller that hands work over and then drains must
+/// not be able to fall between the two.
 ///
 /// An operation may neither submit to a queue it is running inside nor drain one,
 /// directly or through other queues, and neither may any task that inherits the
 /// operation's context: either wait would be a wait on itself, forever, so both are
 /// refused instead. A task that must come back later without waiting is spawned with
 /// `Task.detached`, which inherits nothing.
-public actor SerialQueue {
+public final class SerialQueue: Sendable {
     /// The latest submission, whatever its outcome. The next one awaits it.
-    private var tail: Task<Void, Never>?
+    private let tail = Mutex<Task<Void, Never>?>(nil)
 
     /// Every queue whose operation encloses the current task.
     @TaskLocal private static var enclosing: Set<ObjectIdentifier> = []
 
     public init() {}
 
-    public func run<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) async throws -> T {
+    /// Puts an operation on the chain and hands back the task that will run it, without
+    /// waiting for its turn to come. Nothing suspends between entering here and the
+    /// chain being extended, so an operation submitted is an operation every later
+    /// `drain` owes a wait to - there is no window in which the queue has taken the work
+    /// but cannot yet be seen to hold it. [LAW:no-ambient-temporal-coupling]
+    @discardableResult
+    public func submit<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) throws -> Task<T, any Error> {
         let id = ObjectIdentifier(self)
         // [LAW:no-silent-failure] The alternative is a hang with no diagnostics.
         guard !Self.enclosing.contains(id) else { throw SerialQueueError.reentrantWait }
-        let earlier = tail
-        let task = Task {
-            await earlier?.value
-            return try await Self.$enclosing.withValue(Self.enclosing.union([id])) { try await operation() }
+        return tail.withLock { tail in
+            let earlier = tail
+            let task = Task {
+                await earlier?.value
+                return try await Self.$enclosing.withValue(Self.enclosing.union([id])) { try await operation() }
+            }
+            // Only the order matters to the next submission; this one's outcome goes to
+            // whoever holds the task.
+            tail = Task { _ = await task.result }
+            return task
         }
-        // Only the order matters to the next submission; this one's outcome goes to
-        // its own caller below.
-        tail = Task { _ = await task.result }
-        return try await task.value
+    }
+
+    /// The operation's turn and its outcome, for a caller with nothing to do until then.
+    public func run<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) async throws -> T {
+        try await submit(operation).value
     }
 
     /// Returns once every operation submitted before this call has finished, however it
@@ -43,10 +61,11 @@ public actor SerialQueue {
     /// question of when the ordered work is done; a caller that timed a sleep against it
     /// instead would be betting on how long the work takes.
     public func drain() async throws {
-        // [LAW:single-enforcer] The same refusal `run` makes, read off the same set: from
-        // inside an operation the tail is that operation, so the wait would never return.
+        // [LAW:single-enforcer] The same refusal `submit` makes, read off the same set:
+        // from inside an operation the tail is that operation, so the wait would never
+        // return.
         guard !Self.enclosing.contains(ObjectIdentifier(self)) else { throw SerialQueueError.reentrantWait }
-        await tail?.value
+        await tail.withLock { $0 }?.value
     }
 }
 
