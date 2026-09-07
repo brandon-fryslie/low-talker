@@ -193,12 +193,15 @@ import Testing
 
     /// The untrusted case states the fact instead of offering "no such element" as the
     /// explanation - the hour that costs is what this message exists to save, so it is
-    /// asserted rather than assumed.
+    /// asserted rather than assumed. A denied read is refused on the way in, so the search
+    /// never reaches its end untrusted and this is the one case that reports the
+    /// permission. [LAW:one-source-of-truth]
     @Test func anUntrustedProcessSaysSoRatherThanBlamingTheElement() {
-        let untrusted = ScreenUnreadable.noElement(role: "AXButton", title: "Cancel", app: "com.apple.SecurityAgent", trusted: false)
-        let trusted = ScreenUnreadable.noElement(role: "AXButton", title: "Cancel", app: "com.apple.SecurityAgent", trusted: true)
-        #expect("\(untrusted)" != "\(trusted)")
-        #expect("\(untrusted)".contains("Accessibility"))
+        let denied = "\(ScreenUnreadable.accessibilityDenied("com.apple.TextEdit"))"
+        let missing = "\(ScreenUnreadable.noElement(role: "AXButton", title: "Cancel", app: "com.apple.TextEdit"))"
+        #expect(denied != missing)
+        #expect(denied.contains("not allowed under Accessibility"))
+        #expect(!missing.contains("Accessibility"))
     }
 }
 
