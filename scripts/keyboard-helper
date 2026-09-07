@@ -12,11 +12,24 @@
 # .requiresApproval until a person clicks it in Login Items - which is 3ti.7's problem and
 # cannot be an agent's. Same binary either way; only who registers it differs.
 #
+# The two jobs carry two labels and serve one Mach service. Background Task Management
+# files every job under its label, so a dev job under the app's label is the app's
+# record: measured here, an app launched while that record stood had its daemon bound to
+# the dev plist's path and never spawned (launchd: "Invalid path: Contents/MacOS/..."),
+# and the approval the app must ask for was inherited instead of asked. Distinct labels
+# make them two records. [LAW:one-source-of-truth] The Mach service name is the one thing
+# clients dial, so it is the same on both, which means only one job holds it at a time -
+# and launchd does not make the loser loud. Measured with a probe job: the second claimant
+# bootstraps with exit 0, runs, and simply never gets the endpoint, while launchd writes
+# one debug line ("already exists and is owned by") that nobody reads. So install reads
+# back whether its job got the name, and says so when it did not.
+#
 # Nothing here says who may call the helper. It admits whoever is signed by the
 # certificate that signed it, which `make helper` and `make cli` make the same one.
 set -euo pipefail
 
-LABEL="com.lowtalker.keyboardd"
+SERVICE="com.lowtalker.keyboardd"
+LABEL="${SERVICE}.dev"
 PLIST="/Library/LaunchDaemons/${LABEL}.plist"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HELPER="${ROOT}/.build/debug/lowtalker-keyboardd"
@@ -47,7 +60,7 @@ install_helper() {
 <dict>
     <key>Label</key><string>${LABEL}</string>
     <key>ProgramArguments</key><array><string>${HELPER}</string></array>
-    <key>MachServices</key><dict><key>${LABEL}</key><true/></dict>
+    <key>MachServices</key><dict><key>${SERVICE}</key><true/></dict>
     <key>KeepAlive</key><true/>
     <key>StandardErrorPath</key><string>/tmp/${LABEL}.crash.log</string>
 </dict>
@@ -62,6 +75,17 @@ PLIST_EOF
     sudo launchctl bootout "system/${LABEL}"
   fi
   sudo launchctl bootstrap system "$PLIST"
+
+  # The endpoint is handed out at load, so the answer is there before the helper runs.
+  # A job that did not get it is torn back down: left loaded it would be a root process
+  # nobody can reach, restarted by KeepAlive forever. [LAW:no-silent-failure]
+  record=$(sudo launchctl print "system/${LABEL}")
+  grep -q "\"${SERVICE}\" = {" <<<"$record" || {
+    sudo launchctl bootout "system/${LABEL}"
+    sudo rm -f "$PLIST"
+    die "launchd left ${SERVICE} with another job, so this one was not installed. If LowTalker.app's helper is registered and approved, that is the owner; launchd names it with:
+  log show --last 1m --predicate 'process == \"launchd\" AND eventMessage CONTAINS \"${SERVICE}\"'"
+  }
   echo "keyboard-helper: installed. Read it with: $0 log"
 }
 
@@ -78,7 +102,7 @@ state_helper() {
 }
 
 log_helper() {
-  log show --last 10m --style compact --predicate "subsystem == \"${LABEL}\""
+  log show --last 10m --style compact --predicate "subsystem == \"${SERVICE}\""
 }
 
 case "${1:-}" in

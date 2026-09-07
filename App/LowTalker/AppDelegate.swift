@@ -57,11 +57,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the pane.
     private func registerKeyboardHelper() {
         let service = SMAppService.daemon(plistName: "\(Helper.launchdLabel).plist")
+        // [LAW:dataflow-not-control-flow] On the first launch of every install register()
+        // throws "Operation not permitted": smd will not bootstrap a daemon nobody has
+        // approved yet. So the throw is not the readout; the status is, and it is read
+        // whether or not the call threw. The throw goes to the log as what smd said.
         do {
             try service.register()
         } catch {
-            showHelperStatus("failed to register — \(error.localizedDescription)")
-            return
+            log.notice("keyboard helper: register — \(error.localizedDescription, privacy: .public)")
         }
         showHelperStatus(Self.describe(service.status))
     }
