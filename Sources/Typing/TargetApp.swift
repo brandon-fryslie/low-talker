@@ -129,25 +129,63 @@ public struct TargetApp {
     /// read back in, so the centre of the frame is a click's target with no conversion.
     /// The app is re-proven in front first, so the element is in the app the caller named
     /// and not in whatever took the front.
+    ///
+    /// A search ends three ways, and they are three because two of them would be a lie:
+    /// found; not found with the whole tree read; not found with part of it unreadable.
+    /// So an element that will not answer is remembered and the walk goes on - the target
+    /// is usually in another branch, and one busy element must not fail a search that
+    /// would have found it. [LAW:dataflow-not-control-flow] Unreadability is a value the
+    /// walk carries, not an abort. Finding the element outranks it, because the caller
+    /// then has the right answer whatever else blipped; not finding it while something
+    /// went unread is that error and never `noElement`, which is a claim to have looked
+    /// everywhere.
     public func frame(ofRole role: AccessibilityRole, titled title: String) throws -> CGRect {
         let app = try requireFrontmost()
         let name = bundleID.rawValue
         let clock = ContinuousClock()
         let start = clock.now
         var read = 0
-        let found = try breadthFirst(from: [Self.application(of: app)], children: { element in
+        let (found, unreadable) = try Self.search(from: [Self.application(of: app)], children: { element in
             try interrupt.check()
             read += 1
             guard read <= Self.searchLimit else { throw ScreenUnreadable.tooManyElements(name, limit: Self.searchLimit) }
             guard clock.now - start < Self.searchBudget else { throw ScreenUnreadable.searchTooSlow(name, within: Self.searchBudget) }
             return try Self.children(of: element, in: name)
-        }, where: { try Self.string(kAXRoleAttribute, of: $0, in: name) == role.rawValue && Self.string(kAXTitleAttribute, of: $0, in: name) == title })
-        guard let found else { throw ScreenUnreadable.noElement(role: role.rawValue, title: title, app: name) }
+        }, matches: { try Self.string(kAXRoleAttribute, of: $0, in: name) == role.rawValue && Self.string(kAXTitleAttribute, of: $0, in: name) == title })
+        guard let found else { throw unreadable ?? ScreenUnreadable.noElement(role: role.rawValue, title: title, app: name) }
         guard let origin = Self.value(kAXPositionAttribute, of: found, as: .cgPoint, CGPoint.zero),
               let size = Self.value(kAXSizeAttribute, of: found, as: .cgSize, CGSize.zero) else {
             throw ScreenUnreadable.elementWithoutFrame(role: role.rawValue, title: title, app: name)
         }
         return CGRect(origin: origin, size: size)
+    }
+
+    /// The first element that matches, breadth first, and the first one along the way that
+    /// would not answer. [LAW:decomposition] Held apart from `frame` and from every
+    /// Accessibility call so the three outcomes can be checked with no app to read from.
+    ///
+    /// Only `unreadableElement` is ridden out, and the `guard` says so rather than the
+    /// placement of a `catch`: the caps and the interrupt travel as the same error type,
+    /// and a walk that swallowed those would run past the very bounds they exist to keep.
+    nonisolated static func search<Element>(
+        from roots: [Element],
+        children: (Element) throws -> [Element],
+        matches: (Element) throws -> Bool
+    ) throws -> (found: Element?, unreadable: ScreenUnreadable?) {
+        var unreadable: ScreenUnreadable?
+        func riding<T>(_ empty: T, _ read: () throws -> T) throws -> T {
+            do { return try read() } catch let unread as ScreenUnreadable {
+                guard case .unreadableElement = unread else { throw unread }
+                unreadable = unreadable ?? unread
+                return empty
+            }
+        }
+        let found = try breadthFirst(
+            from: roots,
+            children: { element in try riding([]) { try children(element) } },
+            where: { element in try riding(false) { try matches(element) } }
+        )
+        return (found, unreadable)
     }
 
     /// The three things an Accessibility read can come back as. The distinction the search
