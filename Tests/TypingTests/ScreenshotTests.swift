@@ -9,12 +9,34 @@ import Testing
     ///
     /// [LAW:behavior-not-structure] Asserted as the contract - a capture that wrote no
     /// file fails - rather than by reaching for the exit status this deliberately ignores.
+    /// The grant is stated rather than inherited, here and below. Left to the default it
+    /// would be read off whatever machine is running the suite, and a headless runner
+    /// without Screen Recording refuses before `screencapture` is ever reached - so this
+    /// test would pass without exercising the thing it is named for, and say nothing while
+    /// doing it. [LAW:verifiable-goals]
     @Test func aCaptureThatWroteNoFileFails() {
         let nowhere = URL(fileURLWithPath: "/var/empty/no-such-directory/shot.png")
         #expect(throws: ScreenNotCaptured.self) {
-            try Screenshot.capture(to: nowhere)
+            try Screenshot.capture(to: nowhere, screenRecordingAllowed: true)
         }
         #expect(!FileManager.default.fileExists(atPath: nowhere.path))
+    }
+
+    /// A caller that may not record the screen is refused, and refused before anything on
+    /// disk is touched: `screencapture` would write a blank picture that looks exactly like
+    /// a real one, and a run that cannot produce evidence must not destroy the evidence
+    /// already sitting at the destination either.
+    @Test func aCallerThatMayNotRecordTheScreenIsRefusedAndTakesNothingWithIt() throws {
+        let destination = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lowtalker-ungranted-\(UUID().uuidString).png")
+        let earlier = Data("a picture from an earlier run".utf8)
+        try earlier.write(to: destination)
+        defer { try? FileManager.default.removeItem(at: destination) }
+
+        #expect(throws: ScreenNotCaptured.self) {
+            try Screenshot.capture(to: destination, screenRecordingAllowed: false)
+        }
+        #expect(try Data(contentsOf: destination) == earlier)
     }
 
     /// The stale-picture hole, closed. A destination whose directory is not writable can
@@ -36,7 +58,7 @@ import Testing
             try? FileManager.default.removeItem(at: directory)
         }
         #expect(throws: (any Error).self) {
-            try Screenshot.capture(to: stale)
+            try Screenshot.capture(to: stale, screenRecordingAllowed: true)
         }
     }
 }
