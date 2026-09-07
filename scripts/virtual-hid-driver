@@ -48,7 +48,6 @@ PKG_URL="https://github.com/pqrs-org/Karabiner-DriverKit-VirtualHIDDevice/releas
 MANAGER_APP=/Applications/.Karabiner-VirtualHIDDevice-Manager.app
 MANAGER="$MANAGER_APP/Contents/MacOS/Karabiner-VirtualHIDDevice-Manager"
 SUPPORT_DIR="/Library/Application Support/org.pqrs/Karabiner-DriverKit-VirtualHIDDevice"
-IO_NODE=org_pqrs_Karabiner_DriverKit_VirtualHIDDeviceRoot
 
 die() { echo "virtual-hid-driver: $*" >&2; exit 1; }
 
@@ -60,117 +59,79 @@ die() { echo "virtual-hid-driver: $*" >&2; exit 1; }
 # clearing the directory itself is left to whoever reaps the temp area.
 VHID_SCRATCH="${TMPDIR:-/tmp}/low-talker-virtual-hid-driver"
 
-# How a probe reports that it could not read the machine, as opposed to reading it and
-# finding nothing. The reason goes to stderr and the word goes to stdout.
+# ---------------------------------------------------------------------------
+# The reading
 #
-# Probes cannot use `die`. Every one of them is reached through a command
-# substitution, and bash swallows a fatal error raised in there: the caller receives an
-# empty string, carries on, and the run ends 0. So each probe is total, returns a word
-# for every outcome including its own failure, and the verbs below - which do run in
-# the main shell, where exiting works - refuse to act on that word.
+# Where this Mac's driver stands is read by `lowtalker driver`, not here. The four
+# probes and the verdict table used to live in this file; they moved to Swift so the
+# menu-bar app could reach them, because an app in /Applications cannot run a script out
+# of this repo and a second probe written to give it the same words would be two clocks.
+# [LAW:one-source-of-truth] The install and remove verbs below are still this script's.
+#
+# The constants above that the CLI also holds - the bundle id, the receipt ids, the two
+# payload trees - are copies kept here on purpose: this is the file that deletes those
+# paths, and a path arriving from a subprocess is not what `sudo rm -rf` should be
+# handed. `make check-docs` reads `lowtalker driver pins` and fails when a copy has
+# drifted from it.
+# ---------------------------------------------------------------------------
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOWTALKER="$ROOT/.build/debug/lowtalker"
+
+# Checked once, in the main shell, before any verb runs. Every reading below is taken
+# through a command substitution, where bash swallows a fatal error - so a missing build
+# discovered down there would surface as an empty string, not as a refusal.
+require_cli() {
+  [ -x "$LOWTALKER" ] || die "no lowtalker at $LOWTALKER - run 'make cli' first"
+}
+
+# Every reading below is total: it returns a word for each outcome including its own
+# failure, and `probe-failed` is how it says it could not look, as opposed to having
+# looked and found nothing. None of them can use `die` - each is reached through a
+# command substitution, and bash swallows a fatal error raised in there: the caller
+# would receive an empty string, carry on, and the run would end 0. The verbs, which run
+# in the main shell where exiting works, refuse to act on the sentinel.
 # [LAW:no-silent-failure]
-probe_failure() { echo "virtual-hid-driver: $*" >&2; echo probe-failed; }
 
-# ---------------------------------------------------------------------------
-# The facts
+# The fact table to stderr for a reader, and the verdict word to stdout for a caller.
 #
-# Four probes. They are the authoritative reading of the machine, and the verdict
-# below is derived from them and from nothing else.
-# ---------------------------------------------------------------------------
-
-# The driver extension's registration state, as one canonical word.
-#
-# [LAW:parse-dont-validate] The bracket text `systemextensionsctl` prints is parsed
-# once, here, into a word the rest of the script matches exactly. No caller greps that
-# listing again, so no caller can come to a different conclusion about what it said.
-#
-# The mapping is total: text nobody here has seen becomes `unknown` rather than the
-# nearest familiar word. Misfiling an unseen state is how `remove` would come to report
-# success on a machine it did not understand. [LAW:no-silent-failure]
-registration_word() {
-  case "$1" in
-    'activated enabled')                           echo enabled ;;
-    'activated disabled')                          echo disabled ;;
-    'activated waiting for user')                  echo waiting ;;
-    'terminated waiting to uninstall on reboot')   echo pending-reboot ;;
-    *)                                             echo unknown ;;
-  esac
+# The CLI prints `unknown` and exits 1 when it could not read the machine, which is a
+# word every caller here already refuses on, so the status is folded into the word
+# rather than propagated: this function's contract is that it always yields one verdict.
+report_state() {
+  local result status
+  # The pinned package is what `install` would fetch, not something read off this Mac,
+  # so it is this script's line to print and it comes before the CLI's own table.
+  echo "pinned package     $PKG_VERSION (driver extension $DEXT_VERSION)" >&2
+  result=$("$LOWTALKER" driver state) && status=0 || status=$?
+  [ -n "$result" ] || { echo "virtual-hid-driver: lowtalker driver state printed no verdict (exit $status)" >&2; result=unknown; }
+  echo "$result"
 }
 
-dext_registration() {
-  local listing pattern lines status extracted live
-  listing=$(systemextensionsctl list) && status=0 || status=$?
-  if (( status != 0 )); then
-    probe_failure "could not list the system extensions (systemextensionsctl exit $status)"
-    return 0
-  fi
-  pattern=$(printf '\t%s\t%s (' "$TEAM_ID" "$BUNDLE_ID")
-
-  # grep exits 1 for "found nothing" and 2 or more for "could not look". Collapsing
-  # those together is how a broken probe comes to read as "no driver installed", so
-  # they are told apart here. [LAW:no-silent-failure]
-  lines=$(grep -F "$pattern" <<<"$listing") && status=0 || status=$?
-  if (( status > 1 )); then
-    probe_failure "could not search the systemextensionsctl listing (grep exit $status)"
-    return 0
-  fi
-
-  # A Mac that has been upgraded but not yet restarted lists the bundle twice: the
-  # incoming registration, and the outgoing one still waiting on a reboot. The
-  # outgoing entry governs nothing, so it is dropped and what remains is the answer.
-  #
-  # The two steps stay separate values because they answer different questions, and an
-  # empty result means something different for each: nothing extracted is a listing
-  # this probe cannot parse, while nothing left after the filter is a genuine
-  # pending-reboot. Collapsing them reports an unread machine as a state `remove` will
-  # happily finish from. [LAW:no-silent-failure]
-  extracted=$(sed -n 's/.*\[\(.*\)\]$/\1/p' <<<"$lines")
-  live=$(sed '/^terminated waiting to uninstall on reboot$/d' <<<"$extracted")
-
-  if [[ -z $lines ]]; then
-    echo unregistered
-  elif [[ -z $extracted ]]; then
-    probe_failure "systemextensionsctl listed $BUNDLE_ID but no line carried a bracketed state"
-  elif [[ -z $live ]]; then
-    echo pending-reboot
-  elif [[ $live == *$'\n'* ]]; then
-    echo ambiguous
-  else
-    registration_word "$live"
-  fi
+# How macOS has the extension registered, as one word. Removal reasons about this fact
+# alone: only a live registration needs withdrawing, and only the withdrawal needs the
+# Manager app that removal is about to delete.
+driver_registration() {
+  local word status
+  word=$("$LOWTALKER" driver registration) && status=0 || status=$?
+  if (( status != 0 )) || [ -z "$word" ]; then echo probe-failed; else echo "$word"; fi
 }
 
-# Which of the package's two payload trees are on disk.
-installed_files() {
-  local manager=no support=no
-  [[ -d $MANAGER_APP ]] && manager=yes
-  [[ -d $SUPPORT_DIR ]] && support=yes
-  case "$manager$support" in
-    yesyes) echo both ;;
-    nono)   echo none ;;
-    *)      echo partial ;;
-  esac
-}
-
-# The version of one installer receipt, or `none`. The receipt outlives the files,
-# because the package's own uninstall scripts never call `pkgutil --forget`.
+# The version of one installer receipt, `none`, or the sentinel. The receipt outlives
+# the files, because the package's own uninstall scripts never call `pkgutil --forget`.
 #
 # The id is a parameter because two products leave receipts this script cares about and
 # reading them differs in nothing else. [LAW:one-type-per-behavior]
 receipt_version() {
   local id=$1 out status
-  out=$(pkgutil --pkg-info "$id" 2>&1) && status=0 || status=$?
-
-  # pkgutil exits non-zero for two unrelated reasons: this Mac holds no such receipt,
-  # which is a normal answer, and pkgutil could not run, which is not. Sending both
-  # down the "no receipt" path is how a broken probe would come to read as a clean
-  # machine, so the two are told apart by what pkgutil actually said.
+  out=$("$LOWTALKER" driver receipt "$id") && status=0 || status=$?
+  # Three answers, told apart by the CLI and kept apart here: a version, a Mac holding
+  # no such receipt, and a pkgutil nobody could read. Sending the last down the "no
+  # receipt" path is how a broken probe comes to read as a clean machine.
   # [LAW:no-silent-failure]
-  case "$status:$out" in
-    0:*)                echo "$out" | sed -n 's/^version: //p' ;;
-    *"No receipt for"*) echo none ;;
-    *)                  probe_failure "pkgutil could not read the receipt for $id (exit $status): $out" ;;
-  esac
+  if (( status != 0 )); then echo probe-failed
+  elif [ -z "$out" ]; then echo none
+  else echo "$out"; fi
 }
 
 # The receipt id when the machine holds one and nothing when it does not, so removal
@@ -186,78 +147,6 @@ receipts_present() {
     probe-failed) echo probe-failed ;;
     *)            echo "$BUNDLE_ID" ;;
   esac
-}
-
-# Whether the driver has matched and published its node in the IORegistry. This is
-# loading, not enabling: the extension can be enabled and still absent here until
-# some client opens it.
-io_node_present() {
-  local out status
-  out=$(ioreg -r -n "$IO_NODE" -d 1) && status=0 || status=$?
-  if (( status != 0 )); then
-    probe_failure "could not query the IORegistry for $IO_NODE (ioreg exit $status)"
-    return 0
-  fi
-  [[ -n ${out//[[:space:]]/} ]] && echo yes || echo no
-}
-
-# ---------------------------------------------------------------------------
-# The verdict
-# ---------------------------------------------------------------------------
-
-# One word for the whole machine, derived from the four facts and composed into a key
-# so the mapping reads as a table to check against rather than a chain of conditions
-# to simulate. The default arm names the key it could not place, which is the
-# difference between a bug report and a mystery.
-verdict_for() {
-  local files=$1 receipt=$2 reg=$3 io=$4
-  local held=yes
-
-  # A probe that could not read the machine says so, and that answer is never blended
-  # into a verdict about the driver. The reason is already on stderr; this only keeps
-  # the unread fact from being reported as a fact. [LAW:no-silent-failure]
-  case "$files $receipt $reg $io" in
-    *probe-failed*) echo unknown; return 0 ;;
-  esac
-
-  [[ $receipt == none ]] && held=no
-
-  case "files=$files;receipt=$held;reg=$reg;io=$io" in
-    'files=none;receipt=no;reg=unregistered;io=no')   echo absent ;;
-    'files=both;receipt=yes;reg=unregistered;io=no')  echo installed-inactive ;;
-    'files=both;receipt=yes;reg=waiting;io=no')       echo awaiting-approval ;;
-    'files=both;receipt=yes;reg=disabled;io=no')      echo disabled ;;
-    'files=both;receipt=yes;reg=enabled;io=no')       echo enabled ;;
-    'files=both;receipt=yes;reg=enabled;io=yes')      echo running ;;
-    # Removal finished. Spelled as a whole key rather than matched on the registration
-    # alone: `remove` reads this verdict as "nothing left to do", and a machine still
-    # holding a payload or a receipt is `residue`, not this.
-    'files=none;receipt=no;reg=pending-reboot;io=no') echo pending-reboot ;;
-    # A registration this script cannot name, or two live ones at once. Kept apart
-    # from `residue` because residue is a mess we understand and this is not.
-    *'reg=unknown'*|*'reg=ambiguous'*)                echo unknown ;;
-    *)                                                echo residue ;;
-  esac
-}
-
-report_state() {
-  local files receipt reg io result
-  files=$(installed_files)
-  receipt=$(receipt_version "$BUNDLE_ID")
-  reg=$(dext_registration)
-  io=$(io_node_present)
-  result=$(verdict_for "$files" "$receipt" "$reg" "$io")
-
-  {
-    echo "pinned package     $PKG_VERSION (driver extension $DEXT_VERSION)"
-    echo "payload on disk    $files"
-    echo "installer receipt  $receipt"
-    echo "extension state    $reg"
-    echo "IORegistry node    $io"
-    echo "verdict            $result"
-  } >&2
-
-  echo "$result"
 }
 
 # ---------------------------------------------------------------------------
@@ -421,7 +310,7 @@ cmd_remove() {
   # `remove` interrupted after the files were deleted come back and finish the receipt
   # instead of being sent to reinstall the package first.
   # [LAW:dataflow-not-control-flow]
-  registered=$(dext_registration)
+  registered=$(driver_registration)
   case "$registered" in
     unregistered|pending-reboot) ;;
     probe-failed) die "could not read whether the extension is still registered, and deleting the Manager while it is would strand the registration with nothing able to retract it; refusing to guess" ;;
@@ -436,7 +325,7 @@ cmd_remove() {
       # ordering mistake this verb can make, and it is unrecoverable without
       # reinstalling, so it is checked here rather than trusted.
       # [LAW:no-ambient-temporal-coupling]
-      withdrawn=$(dext_registration)
+      withdrawn=$(driver_registration)
       case "$withdrawn" in
         pending-reboot|unregistered) ;;
         # A sentinel is not a registration state: reporting it as one sends an operator
@@ -465,6 +354,11 @@ cmd_remove() {
 
   remove_outcome "$(report_state)"
 }
+
+# Every verb reads the machine, and every reading goes through the CLI, so the build is
+# proven present once here rather than discovered missing inside a command substitution
+# that would swallow the refusal.
+require_cli
 
 case "${1:-}" in
   state)   cmd_state ;;

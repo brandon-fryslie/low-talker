@@ -17,38 +17,70 @@ app:
 run: app
 	open "$(APP)"
 
-test: check-docs
-	scripts/virtual-hid-driver-test
+# The build comes first because everything after it needs the CLI: `check-docs` reads
+# the driver constants out of it, and scripts/virtual-hid-driver now takes every reading
+# of the machine through it.
+test:
 	swift build
+	$(MAKE) check-docs
+	scripts/virtual-hid-driver-test
 	swift test
 
-# [LAW:one-source-of-truth] scripts/virtual-hid-driver pins these values; README.md
-# quotes them for a reader following the runbook by hand. The script is the source and
-# the README is the copy, so this is what keeps the copy from drifting quietly the next
-# time a pin moves. Every pinned constant README.md quotes belongs in the list below.
+# [LAW:one-source-of-truth] `lowtalker driver pins` is the source for everything about
+# the driver extension's identity: the bundle id, the team, the IORegistry node, the
+# receipt ids, the two payload trees, and the verdict vocabulary. Two readers keep
+# copies - scripts/virtual-hid-driver, because it is the file that deletes those paths
+# and a path arriving from a subprocess is not what `sudo rm -rf` should be handed, and
+# README.md, because a reader follows the runbook by hand. This is what proves the
+# copies still agree.
+#
+# Needs `swift build` first; the `test` target runs it before this.
 check-docs:
 	@set -euo pipefail; \
-	for constant in PKG_VERSION DEXT_VERSION TEAM_ID BUNDLE_ID IO_NODE ELEMENTS_RECEIPT; do \
+	pins=$$(.build/debug/lowtalker driver pins) \
+	  || { echo "check-docs: could not read 'lowtalker driver pins' - run 'swift build' first" >&2; exit 1; }; \
+	pin() { awk -F'\t' -v k="$$1" '$$1==k{print $$2}' <<<"$$pins"; }; \
+	for pair in bundle-id:BUNDLE_ID team-id:TEAM_ID elements-receipt:ELEMENTS_RECEIPT manager-app:MANAGER_APP support-dir:SUPPORT_DIR; do \
+	  key=$${pair%%:*}; constant=$${pair#*:}; \
+	  value=$$(pin "$$key"); \
+	  [ -n "$$value" ] || { echo "check-docs: 'lowtalker driver pins' emits no $$key" >&2; exit 1; }; \
+	  copy=$$(sed -n "s/^$$constant=//p" scripts/virtual-hid-driver | tr -d '"'); \
+	  [ "$$copy" = "$$value" ] \
+	    || { echo "check-docs: scripts/virtual-hid-driver sets $$constant=$$copy, but the CLI pins $$key=$$value" >&2; exit 1; }; \
+	  echo "check-docs: scripts/virtual-hid-driver agrees with $$key"; \
+	done
+# What README.md quotes for a reader following the runbook by hand. The driver's identity
+# comes from the CLI; the package the script fetches is the script's own pin, and stays
+# there because nothing in Swift downloads anything.
+	@set -euo pipefail; \
+	pins=$$(.build/debug/lowtalker driver pins); \
+	for key in bundle-id team-id io-node elements-receipt; do \
+	  value=$$(awk -F'\t' -v k="$$key" '$$1==k{print $$2}' <<<"$$pins"); \
+	  grep -qF "$$value" README.md \
+	    || { echo "check-docs: the CLI pins $$key=$$value, which README.md never mentions" >&2; exit 1; }; \
+	  echo "check-docs: README.md agrees with $$key=$$value"; \
+	done; \
+	for constant in PKG_VERSION DEXT_VERSION; do \
 	  pinned=$$(sed -n "s/^$$constant=//p" scripts/virtual-hid-driver); \
 	  [ -n "$$pinned" ] || { echo "check-docs: scripts/virtual-hid-driver defines no $$constant" >&2; exit 1; }; \
 	  grep -qF "$$pinned" README.md \
 	    || { echo "check-docs: scripts/virtual-hid-driver pins $$constant=$$pinned, which README.md never mentions" >&2; exit 1; }; \
 	  echo "check-docs: README.md agrees with $$constant=$$pinned"; \
 	done
-# The verdict vocabulary is the other copy README.md keeps: `verdict_for` emits the
-# words and the prose lists them. Compared as sets in both directions, so a verdict
-# added to the script and a verdict left standing in README after the script dropped
-# it both fail. Empty on either side is a broken reader, not agreement, and says so.
+# The verdict vocabulary is the other copy README.md keeps: `DriverState` emits the words
+# and the prose lists them. Compared as sets in both directions, so a verdict added to the
+# enum and a verdict left standing in README after the enum dropped it both fail. Empty on
+# either side is a broken reader, not agreement, and says so.
 	@set -euo pipefail; \
-	emitted=$$(sed -n '/^verdict_for()/,/^}/p' scripts/virtual-hid-driver \
-	  | sed -n 's/.*echo \([a-z][a-z-]*\).*/\1/p' | sort -u); \
+	emitted=$$(.build/debug/lowtalker driver pins \
+	  | awk -F'\t' '$$1=="verdicts"{print $$2}' | tr ' ' '\n' | sort -u); \
 	quoted=$$(grep -o 'The verdicts are [^.]*\.' README.md \
 	  | grep -o '`[a-z-]*`' | tr -d '`' | sort -u); \
-	[ -n "$$emitted" ] || { echo "check-docs: found no verdict words in verdict_for" >&2; exit 1; }; \
+	[ -n "$$emitted" ] || { echo "check-docs: 'lowtalker driver pins' emits no verdicts" >&2; exit 1; }; \
 	[ -n "$$quoted" ] || { echo "check-docs: README.md carries no 'The verdicts are ...' sentence" >&2; exit 1; }; \
 	diff <(echo "$$emitted") <(echo "$$quoted") \
-	  || { echo "check-docs: verdict_for and README.md disagree about the verdicts (< script, > README)" >&2; exit 1; }; \
-	echo "check-docs: README.md names every verdict verdict_for emits"
+	  || { echo "check-docs: DriverState and README.md disagree about the verdicts (< enum, > README)" >&2; exit 1; }; \
+	echo "check-docs: README.md names every verdict DriverState emits"
 
 # The CLI for engine work, and the keyboard helper it types through. Both are signed
 # with the dev identity rather than ad hoc: the helper admits exactly the certificate
