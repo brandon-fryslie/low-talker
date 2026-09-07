@@ -4,15 +4,27 @@
 ///
 /// [LAW:effects-at-boundaries] The condition is the caller's and is asked on the
 /// caller's actor; this owns only the asking and the clock.
+public func holds(
+    within window: Duration,
+    askingEvery poll: Duration,
+    isolation: isolated (any Actor)? = #isolation,
+    _ condition: () throws -> Bool
+) async throws -> Bool {
+    try await holds(within: window, askingEvery: poll, on: ContinuousClock(), isolation: isolation, condition)
+}
+
+/// The same ask, against a clock the caller owns.
 ///
-/// [LAW:no-ambient-temporal-coupling] The clock is a parameter, not the ambient one.
-/// Callers get `ContinuousClock` by default; a caller that needs the outcome to be a
-/// fact rather than a race - a test, above all - hands in a clock it advances itself,
-/// and the result stops depending on how fast the machine happened to schedule.
+/// [LAW:no-ambient-temporal-coupling] A caller that needs the outcome to be a fact
+/// rather than a race - a test, above all - hands in a clock it advances itself, and
+/// the result stops depending on how fast the machine happened to schedule.
+///
+/// Two entry points rather than one `on:` with a default, because inferring `C` from a
+/// default expression is rejected by the Swift 6.1 toolchain CI builds with.
 public func holds<C: Clock>(
     within window: C.Duration,
     askingEvery poll: C.Duration,
-    on clock: C = ContinuousClock(),
+    on clock: C,
     isolation: isolated (any Actor)? = #isolation,
     _ condition: () throws -> Bool
 ) async throws -> Bool {
