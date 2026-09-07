@@ -76,9 +76,12 @@ public struct Pointer {
 
     /// The next report toward `to` from `from`, given that the OS moves the cursor `gain`
     /// points per count: the remaining distance over the gain, rounded toward zero so a
-    /// known gain never overshoots, and clamped to the report's edge. Zero on an axis within half a point, which is arrived; otherwise at
-    /// least one count in the target's direction, so a gain estimate too high to ask for a
-    /// whole count still asks for something. Pure. [LAW:decomposition]
+    /// known gain undershoots, and clamped to the report's edge. Zero on an axis within
+    /// half a point, which is arrived; otherwise at least one count in the target's
+    /// direction, so a gain estimate too high to ask for a whole count still asks for
+    /// something. That floor is the one place a known gain steps past the target - a
+    /// remainder just over half a point under a large gain - and the next round's
+    /// re-estimate takes it back. Pure. [LAW:decomposition]
     public nonisolated static func step(from: ScreenPoint, to: ScreenPoint, gain: Double) -> Move {
         Move(x: step(to.x - from.x, gain), y: step(to.y - from.y, gain))
     }
