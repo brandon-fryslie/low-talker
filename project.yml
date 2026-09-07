@@ -43,8 +43,6 @@ targets:
         product: LowTalkerCore
       - package: low-talker
         product: KeyboardService
-      - package: low-talker
-        product: Typing
       # The helper rides inside the bundle, where the plist above names it, signed on
       # copy with the app's own identity.
       - target: lowtalker-keyboardd
