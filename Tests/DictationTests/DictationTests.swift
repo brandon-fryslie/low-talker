@@ -233,6 +233,20 @@ extension Result {
         #expect(rig.reported.raised)
     }
 
+    /// The other half of the same contract, at the loop: `press(.ended)` puts the session
+    /// on the queue before it returns, so a `finish` with nothing awaited between it and
+    /// the key-up is still owed that session's wait. What this pins is that guarantee, not
+    /// the window it closed - after submission became synchronous there is no window left
+    /// here to reach, and a test that claimed to reproduce one would be claiming more than
+    /// it does. [LAW:behavior-not-structure]
+    @Test func finishRightAfterAKeyUpWaitsForThatPressWithNothingAwaitedInBetween() async throws {
+        let rig = try Rig(hearing: FakeTranscriber { _ in Transcript(typed: "a") })
+        rig.hold()
+        try await rig.dictation.finish()
+        #expect(rig.keyboard.log == Self.typed("a"))
+        #expect(rig.reported.raised)
+    }
+
     /// The session's own line, which the app's log and the CLI's print both read. Where
     /// the words went is read off what was performed, so a route that names its own app
     /// says that app and not the one that happened to be in front at key-down.

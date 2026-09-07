@@ -111,6 +111,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// keys rather than being waited out in full.
     private let interrupt = Interrupt()
 
+    /// A signal is a third way to ask the app to go, after the menu item and Cmd-Q, and
+    /// it goes the same way they do rather than by the default disposition, which ends
+    /// the process where it stands - with a session's keys still down, if one is in
+    /// flight. [LAW:single-enforcer] `terminate` is the door; this only knocks on it.
+    ///
+    /// The knock is posted to the main run loop rather than made from the handler, and
+    /// that is load-bearing: `terminate` answers `.terminateLater` by spinning a nested
+    /// event loop until the reply comes, and the reply is a main-queue block, which
+    /// cannot run while another main-queue block is still on the stack. A handler that
+    /// called `terminate` itself would hang the app it was trying to end. Every other way
+    /// in reaches `terminate` from the run loop, and so does this - in the common modes,
+    /// so an open menu is not a signal ignored. [LAW:no-ambient-temporal-coupling]
+    ///
+    /// Watched from the moment the delegate exists, which is before the run loop starts:
+    /// a signal arriving in that window is answered as the first thing the running app does.
+    private let signals: [any DispatchSourceSignal] = [SIGINT, SIGTERM].map { number in
+        signal(number, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
+        source.setEventHandler {
+            RunLoop.main.perform(inModes: [.common]) { MainActor.assumeIsolated { NSApp.terminate(nil) } }
+        }
+        source.resume()
+        return source
+    }
+
     /// The engine, from the moment launch starts loading it. Awaiting the task is how
     /// a session gets the transcriber; a task still running is the app's "still
     /// loading" state, held here rather than inside the engine.
@@ -137,6 +162,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showEngineStatus("checking…")
         _ = engine
         registerKeyboardHelper()
+        showHotkeyStatus("starting…")
         Task { await listen() }
     }
 
