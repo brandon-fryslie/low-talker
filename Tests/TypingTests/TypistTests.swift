@@ -168,7 +168,6 @@ import Testing
 @Suite struct ScreenUnreadableTests {
     @Test func onlyTheFailuresTimeCanChangeAreRiddenOut() {
         #expect(ScreenUnreadable.noFocus("com.apple.TextEdit").mayPassWithTime)
-        #expect(ScreenUnreadable.noText("com.apple.TextEdit").mayPassWithTime)
         #expect(!ScreenUnreadable.noFrontmostApp.mayPassWithTime)
         #expect(!ScreenUnreadable.notRunning("com.apple.TextEdit").mayPassWithTime)
         #expect(!ScreenUnreadable.wouldNotComeForward(wanted: "a", frontmost: "b").mayPassWithTime)
@@ -176,18 +175,30 @@ import Testing
         // An element that would not answer is the same kind of moment's silence: the app
         // is there and busy, which is what a poll is for.
         #expect(ScreenUnreadable.unreadableElement("com.apple.TextEdit", attribute: "AXChildren", code: -25204).mayPassWithTime)
+        // A process does not grow a bundle id while a poll waits, so riding this one out
+        // would retry against something that can never answer.
+        #expect(!ScreenUnreadable.frontmostWithoutBundleID(pid: 0).mayPassWithTime)
     }
 
     /// An element that would not answer says so, and says it apart from an element that
-    /// answered and did not match. Both used to come out as `noElement`, whose words send
-    /// the reader to the Accessibility pane for a permission they already have.
+    /// answered and did not match: the message names the app, the attribute and the code,
+    /// and does not offer a permission the reader already holds.
     @Test func anElementThatWouldNotAnswerReadsDifferentlyFromOneThatDidNotMatch() {
         let unreadable = ScreenUnreadable.unreadableElement("com.apple.TextEdit", attribute: "AXChildren", code: -25204).description
         #expect(unreadable.contains("com.apple.TextEdit"))
         #expect(unreadable.contains("AXChildren"))
         #expect(unreadable.contains("-25204"))
         #expect(!unreadable.contains("Accessibility?"))
-        #expect(ScreenUnreadable.noElement(role: "AXButton", title: "Cancel", app: "com.apple.TextEdit").description.contains("Accessibility?"))
+    }
+
+    /// The untrusted case states the fact instead of offering "no such element" as the
+    /// explanation - the hour that costs is what this message exists to save, so it is
+    /// asserted rather than assumed.
+    @Test func anUntrustedProcessSaysSoRatherThanBlamingTheElement() {
+        let untrusted = ScreenUnreadable.noElement(role: "AXButton", title: "Cancel", app: "com.apple.SecurityAgent", trusted: false)
+        let trusted = ScreenUnreadable.noElement(role: "AXButton", title: "Cancel", app: "com.apple.SecurityAgent", trusted: true)
+        #expect("\(untrusted)" != "\(trusted)")
+        #expect("\(untrusted)".contains("Accessibility"))
     }
 }
 

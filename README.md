@@ -130,6 +130,71 @@ Each press prints `began` as the key goes down. A release after the threshold (2
 
 The tap needs Input Monitoring and Accessibility. macOS charges a terminal command's tap to the terminal, so the command fails with `the session refused an event tap` until the terminal has both under System Settings > Privacy & Security; the app asks on its own behalf.
 
+## The config file
+
+    make cli
+    .build/debug/lowtalker config check
+
+reads `~/.config/low-talker/config.toml` and prints what the app would run with. It starts nothing. `--path` reads some other file instead, which is how a file is checked before it is installed. No file at all is not an error: the app runs on the defaults, dictation on Right Option with the default model. A file that exists but cannot be read, or cannot be understood, is an error and is never quietly replaced by the defaults, since a config the user wrote and the app silently ignored is worse than one it refuses.
+
+The file names a `model`, a model folder name such as `base.en`, and an array of `[[modes]]` tables. Each mode takes a `name`, a `chord`, an optional `vocabulary` of terms, and an optional `routes`.
+
+    model = "base.en"
+
+    [[modes]]
+    name = "dictation"
+    chord = { modifiers = ["rightOption"] }
+    routes = [{ when = "always", then = { insert = "focus" } }]
+
+    [[modes]]
+    name = "safari"
+    chord = { modifiers = ["leftCommand", "leftShift"], key = 1 }
+    vocabulary = ["Kubernetes", "Anthropic"]
+    routes = [{ when = "always", then = { insert = { app = "com.apple.Safari" } } }]
+
+A chord is its modifiers and, where one is wanted, a key code; it needs at least one key either way. A route's `insert` is either the word `"focus"`, whatever has focus when the route fires, or a table naming an app by bundle id. A key the schema has no place for is refused rather than ignored, so a typo is told rather than silently doing nothing.
+
+Where a fault is reported depends on how far reading got. A file that is not TOML at all names the line reading stopped on. Anything that is TOML but wrong is named by its path in the document instead, as `modes[1].routes[0].when: "sometyme" is not something a route can match on` or `modes[1].chord is missing`, and carries no line number: decoding reports the path it was at, and the TOML library exposes source positions only for a parse error, not for a document that parsed. The path counts `[[modes]]` entries from zero, the way the file writes them, so the entry it names is one the reader can count to.
+
+A file can also parse and still say something nobody meant, and those gaps are reported too. A mode whose `routes` is an empty list claims nothing: it listens, and nothing it hears becomes anything. A mode with no `routes` key at all dictates instead. The two look almost alike in a file and mean different things, which is why the report tells them apart. A bundle id no app on this Mac answers to is reported as well; that one is checked against the machine rather than against the file, which is why it is the check command's own work and not something reading the file could ever have found.
+
+Every heading is printed every time, so a mode with no vocabulary shows an empty `vocabulary:` rather than leaving the reader to wonder whether the key was read and ignored. On the file above, with a mode inserting into an app this Mac does not have and a mode with no routes added after it:
+
+    /Users/you/.config/low-talker/config.toml
+
+    model: base.en
+
+    mode "dictation"
+      chord: rightOption
+      vocabulary:
+      routes:
+        always → insert into the focused element
+
+    mode "safari"
+      chord: leftCommand+leftShift+key 1
+      vocabulary:
+        Kubernetes
+        Anthropic
+      routes:
+        always → insert into com.apple.Safari
+
+    mode "ghost"
+      chord: rightCommand
+      vocabulary:
+      routes:
+        always → insert into com.example.nope
+
+    mode "silent"
+      chord: function
+      vocabulary:
+      routes:
+
+    gaps:
+      mode "ghost" inserts into com.example.nope, which no app on this Mac answers to
+      mode "silent" has no routes, so nothing said in it becomes anything
+
+The exit status is 0 when the file is understood and has no gaps, 1 when it cannot be understood, and 2 when it is understood but has gaps.
+
 ## Acting on a route
 
     make cli
@@ -206,6 +271,23 @@ The daemon is a prerequisite, and through the device nothing starts it. The publ
     sudo nohup "/Library/Application Support/org.pqrs/Karabiner-DriverKit-VirtualHIDDevice/Applications/Karabiner-VirtualHIDDevice-Daemon.app/Contents/MacOS/Karabiner-VirtualHIDDevice-Daemon" &
 
 `sudo launchctl list | grep pqrs` does return a job, which is confusing: that job is the driver extension itself, running as user `_driverkit` under macOS's system-extension machinery, not the daemon.
+
+An Accessibility read is not a verdict on every app, and the reader says so rather than
+guessing. Measured on this Mac: VS Code frontmost with a document open answers `kAXValue`
+on its focused element with success and zero characters - the identical answer an empty
+TextEdit document gives. A reader that handed both back as a string would collapse "there
+is nothing on the screen" into "this app will not tell you", and it did: a run that typed
+all 29 characters correctly, proven by screenshot and by saving the buffer to disk,
+reported `MISMATCH: the screen holds []`. So a read answers with one of three things - the
+text, an empty answer, or no value at all - and only the first is evidence. The other two
+print as `nothing readable: ...` and send you to a screenshot. Slack is Electron too, so
+two of the five apps in this epic's done-condition are verifiable only by picture.
+
+Walking the tree for some other element that does carry text is not the way out, and was
+measured before being rejected: VS Code's tree runs past the 2000-element search limit,
+1334 of those elements answer `kAXValue` with a string and 230 are non-empty - sidebar
+filenames, "No code actions available", stale error text. Matching typed text anywhere in
+that would trade a false negative for false positives.
 
 `type` takes the target app's bundle id as an argument and refuses to type into anything else. It raises the named app, waits for macOS to agree it is frontmost, and re-checks before every keystroke. If the app will not come forward, nothing is posted at all:
 
@@ -284,6 +366,45 @@ Clicking by hand. The target is a menu bar item, chosen because opening a menu i
     make cli
     scripts/keyboard-helper install
     osascript -e 'tell application "TextEdit" to activate'
+    .build/debug/lowtalker click AXMenuBarItem Format
+
+`click` aims at whatever is in front. It is the hands half of a pair: `lowtalker see` is
+the eyes, and takes no positional arguments - only `--shot <path>`, to name where the
+picture goes so a before and an after can be kept side by side.
+
+    .build/debug/lowtalker see
+    frontmost com.apple.TextEdit
+    alerts 0
+    focus AXTextArea holds [Hello world, this is Low Talker.]
+    screenshot /var/folders/.../lowtalker-see-1788802162595.png (1691751 bytes)
+
+`see` reports the frontmost app, how many system alerts macOS has over everything, what
+the focused element is and whether it will say what it holds, and then takes a screenshot.
+The picture is attempted whatever the readings above it did, and a run that cannot take one
+says so on the screenshot line and exits non-zero. It is not optional because for some apps
+it is the only true answer, and because a `see` before a click and a `see` after it are
+then comparable pictures.
+
+The virtual mouse refuses to press while a system alert is up - `click` and the routed
+`clickElement` below alike, because the refusal lives in the mouse rather than in whichever
+command started the click. An alert sits at the same screen centre every dialog does, so a
+frame located in the app underneath one has somebody else's button over it, and a click at
+that frame's centre would answer their prompt instead. It is asked at the press rather than
+at every motion report, because a move cannot answer anybody's prompt and a press can, so
+an alert that opens while the cursor is still travelling is still caught at the press. The
+count is read from `com.apple.UserNotificationCenter`
+through Accessibility with a half-second messaging timeout, deliberately not through
+System Events, which a modal SecurityAgent dialog can leave waiting rather than answering.
+
+The picture is of the main display: `screencapture` is run with `-m`, because without it
+a Mac with two monitors gets one file per display and none at the path that was asked
+for. And the process must hold Screen Recording, which a binary run from a terminal that
+holds it does - TCC attributes the grant to the responsible parent - so `see` checks
+rather than assumes: without it `screencapture` writes a blank picture that looks exactly
+like a real one.
+
+The same click is still reachable as a routed action, for a route that decides one:
+
     echo '[{"clickElement":{"role":"AXMenuBarItem","title":"Format"}}]' | .build/debug/lowtalker act --context '{"chord":{"modifiers":["rightOption"]},"press":"hold","frontmostApp":"com.apple.TextEdit","focusedElementRole":null}'
 
 TextEdit's Format menu opens under a highlighted title, which is the click landing somewhere you can see it; Escape closes it again. `clickElement` searches the frontmost app's Accessibility tree breadth first for an element of that role and title, stopping at 2000 elements, or at a 5 s budget polled once per element which the element in hand can carry about 1.5 s past, and clicks the centre of its frame; an element with no area is refused by name. An element that will not answer does not fail the search, but it does stop a fruitless one reporting that the element is missing. The other two forms are `{"click":{"at":{"x":242,"y":16.5},"button":"left","times":1}}` and `{"scroll":{"at":{"x":100,"y":200},"vertical":-3,"horizontal":0}}`. A scroll of 0 by 0 is a bare move, which is how the loop is measured: `[{"scroll":{"at":{"x":1400,"y":800},"vertical":0,"horizontal":0}}]` through the same `act`, with the context's `frontmostApp` set to whatever is in front.
