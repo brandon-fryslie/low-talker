@@ -51,9 +51,9 @@ import Testing
         listener.delegate = reader
         listener.resume()
         let connection = NSXPCConnection(listenerEndpoint: listener.endpoint)
-        connection.remoteObjectInterface = NSXPCInterface(with: KeyboardService.self)
+        connection.remoteObjectInterface = NSXPCInterface(with: HelperService.self)
         connection.resume()
-        let proxy = try #require(connection.remoteObjectProxyWithErrorHandler { _ in } as? KeyboardService)
+        let proxy = try #require(connection.remoteObjectProxyWithErrorHandler { _ in } as? HelperService)
         proxy.releaseAll { _ in }
         let token = try #require(reader.await())
         let identity = try CallerIdentity(requirement: try OwnProcess.requirement())

@@ -28,6 +28,9 @@ import Testing
         .runShortcut(name: "Append to Journal", input: "hi"),
         .runShortcut(name: "Toggle Lights", input: nil),
         .pipe(executable: "/usr/bin/env", arguments: ["rewrite", "--tone", "formal"]),
+        .click(at: ScreenPoint(x: 697.5, y: 475), button: .right, times: .double),
+        .scroll(at: ScreenPoint(x: 100, y: 200), vertical: WheelCounts(rawValue: -3)!, horizontal: .none),
+        .clickElement(role: AccessibilityRole(rawValue: "AXButton"), title: "Cancel"),
     ]
 
     private func roundTrip<T: Codable & Equatable>(_ value: T) throws -> T {
@@ -63,7 +66,10 @@ import Testing
           {"activateApp": {"bundleID": "com.apple.Safari"}},
           {"openURL": {"url": "https://example.com/"}},
           {"runShortcut": {"name": "Toggle Lights"}},
-          {"pipe": {"executable": "/usr/bin/env", "arguments": ["rewrite"]}}
+          {"pipe": {"executable": "/usr/bin/env", "arguments": ["rewrite"]}},
+          {"click": {"at": {"x": 697.5, "y": 475}, "button": "left", "times": 2}},
+          {"scroll": {"at": {"x": 100, "y": 200}, "vertical": -3, "horizontal": 0}},
+          {"clickElement": {"role": "AXButton", "title": "Cancel"}}
         ]
         """
         let decoded = try JSONDecoder().decode([Action].self, from: Data(json.utf8))
@@ -75,7 +81,41 @@ import Testing
             .openURL(url: URL(string: "https://example.com/")!),
             .runShortcut(name: "Toggle Lights", input: nil),
             .pipe(executable: "/usr/bin/env", arguments: ["rewrite"]),
+            .click(at: ScreenPoint(x: 697.5, y: 475), button: .left, times: .double),
+            .scroll(at: ScreenPoint(x: 100, y: 200), vertical: WheelCounts(rawValue: -3)!, horizontal: .none),
+            .clickElement(role: AccessibilityRole(rawValue: "AXButton"), title: "Cancel"),
         ])
+    }
+
+    /// A click that clicks no times is not a click, from a number or from JSON.
+    @Test func clicksRejectZeroAndBelow() {
+        #expect(Clicks(rawValue: 0) == nil)
+        #expect(Clicks(rawValue: -1) == nil)
+        #expect(Clicks(rawValue: 1) == .single)
+        let json = Data(#"{"click": {"at": {"x": 1, "y": 2}, "button": "left", "times": 0}}"#.utf8)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(Action.self, from: json)
+        }
+    }
+
+    /// A click clicks at most three times and a scroll rolls at most a thousand counts, so
+    /// a Pipe program's huge number is refused when decoded and never reaches a device.
+    @Test func clicksAndWheelCountsAreBounded() {
+        #expect(Clicks(rawValue: 3)?.rawValue == 3)
+        #expect(Clicks(rawValue: 4) == nil)
+        #expect(WheelCounts(rawValue: -1000)?.rawValue == -1000)
+        #expect(WheelCounts(rawValue: 1001) == nil)
+        let json = Data(#"{"scroll": {"at": {"x": 1, "y": 2}, "vertical": 100000, "horizontal": 0}}"#.utf8)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(Action.self, from: json)
+        }
+        // Int.min is the value abs() traps on rather than refuses, so it is the one a
+        // bound checked the wrong way would crash the process over.
+        #expect(WheelCounts(rawValue: Int.min) == nil)
+        let extreme = Data(#"{"scroll": {"at": {"x": 1, "y": 2}, "vertical": -9223372036854775808, "horizontal": 0}}"#.utf8)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(Action.self, from: extreme)
+        }
     }
 
     /// The Context shape the dry-run CLI will accept on `--context`.
