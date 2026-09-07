@@ -82,7 +82,7 @@ private struct ModeEntry: Decodable {
             // A mode that names no routes dictates, which is the only thing it could
             // have meant; one that names an empty list claims nothing, and `lowtalker
             // config check` is where that gap is reported.
-            router: routes.map { Router(routes: $0.map(\.route)) } ?? Router(routes: [.dictation])
+            router: routes.map { Router(routes: $0.map(\.route)) } ?? Mode.dictation.router
         )
     }
 }
@@ -147,8 +147,10 @@ private extension DecodingError {
     /// types, which mean nothing to someone editing TOML.
     var sentence: String {
         switch self {
-        case .keyNotFound(let key, let context):
-            "\(Self.path(context.codingPath + [key])) is missing"
+        // TOMLKit's context already ends with the key it could not find; naming it
+        // again here would spell it twice.
+        case .keyNotFound(_, let context):
+            "\(Self.path(context.codingPath)) is missing"
         case .typeMismatch(_, let context):
             "\(Self.path(context.codingPath)) is not the kind of value that key takes"
         case .valueNotFound(_, let context):
@@ -163,7 +165,15 @@ private extension DecodingError {
         }
     }
 
+    /// `modes[0].chord`, the way the file's author wrote it: `[[modes]]` is
+    /// positional, so an index is a coordinate they can count to, where Swift's own
+    /// "Index 0" names a CodingKey they have never heard of.
     static func path(_ keys: [any CodingKey]) -> String {
-        keys.isEmpty ? "the config" : keys.map(\.stringValue).joined(separator: ".")
+        let path = keys.reduce(into: "") { path, key in
+            if let index = key.intValue { path += "[\(index)]" }
+            else if path.isEmpty { path += key.stringValue }
+            else { path += ".\(key.stringValue)" }
+        }
+        return path.isEmpty ? "the config" : path
     }
 }
