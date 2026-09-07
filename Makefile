@@ -56,6 +56,7 @@ check-docs:
 	pins=$$(.build/debug/lowtalker driver pins); \
 	for key in bundle-id team-id io-node elements-receipt; do \
 	  value=$$(awk -F'\t' -v k="$$key" '$$1==k{print $$2}' <<<"$$pins"); \
+	  [ -n "$$value" ] || { echo "check-docs: 'lowtalker driver pins' emits no $$key" >&2; exit 1; }; \
 	  grep -qF "$$value" README.md \
 	    || { echo "check-docs: the CLI pins $$key=$$value, which README.md never mentions" >&2; exit 1; }; \
 	  echo "check-docs: README.md agrees with $$key=$$value"; \
