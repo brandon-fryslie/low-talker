@@ -35,7 +35,11 @@ extension Modifier {
     /// The key that moves this modifier, and the bit the event's flags carry while it
     /// is held. The bits are the device-side ones from IOLLEvent.h, which tell left
     /// from right where the CoreGraphics masks do not.
-    var hardware: (keyCode: CGKeyCode, mask: UInt64) {
+    ///
+    /// Public because the key code is how a modifier becomes a HID usage for the typist:
+    /// derived through the one key-code table rather than tabulated a second time beside
+    /// it. [LAW:one-source-of-truth]
+    public var hardware: (keyCode: CGKeyCode, mask: UInt64) {
         switch self {
         case .leftShift: (CGKeyCode(kVK_Shift), UInt64(NX_DEVICELSHIFTKEYMASK))
         case .rightShift: (CGKeyCode(kVK_RightShift), UInt64(NX_DEVICERSHIFTKEYMASK))
