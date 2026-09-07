@@ -3,7 +3,7 @@
 ///
 /// [LAW:one-type-per-behavior] Both are the same thing to the OS, so they are the same
 /// type here; a chord read off the event tap can be replayed by SendKeys unchanged.
-public struct KeyChord: Hashable, Codable, Sendable {
+public struct KeyChord: Hashable, Codable, Sendable, CustomStringConvertible {
     public let modifiers: Set<Modifier>
     /// The non-modifier key, if the chord has one. A push-to-talk hotkey such as Right
     /// Option is modifiers only.
@@ -31,15 +31,29 @@ public struct KeyChord: Hashable, Codable, Sendable {
         self.modifiers = modifiers
         self.key = key
     }
+
+    /// The chord as `lowtalker config check` reads it back: `rightOption`, or
+    /// `leftCommand+leftShift+key 1`. Never empty, because a chord never is.
+    ///
+    /// Sorted, because `modifiers` is a Set and a Set has no order: without this, two
+    /// runs over one config could spell one chord two ways. [LAW:one-source-of-truth]
+    public var description: String {
+        (modifiers.map(\.description).sorted() + (key.map { ["key \($0.rawValue)"] } ?? []))
+            .joined(separator: "+")
+    }
 }
 
 /// Side-specific, because the hotkey distinguishes Right Option from Left Option.
-public enum Modifier: String, Hashable, Codable, CaseIterable, Sendable {
+public enum Modifier: String, Hashable, Codable, CaseIterable, Sendable, CustomStringConvertible {
     case leftShift, rightShift
     case leftControl, rightControl
     case leftOption, rightOption
     case leftCommand, rightCommand
     case function
+
+    /// The spelling the file uses, so a report reads a chord back in the words its
+    /// author typed rather than in Swift's name for the case.
+    public var description: String { rawValue }
 
     /// [LAW:single-enforcer] Which modifiers exist is this type's rule, so a file that
     /// names another is answered from the cases themselves and never falls out of step
