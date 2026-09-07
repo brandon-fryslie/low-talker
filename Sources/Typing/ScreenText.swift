@@ -16,8 +16,10 @@
 /// instead. [LAW:types-are-the-program] The distinction lives in the type rather than
 /// in a convention every call site has to remember.
 public enum ScreenText: Equatable, Sendable {
-    /// The element answered, and there was text. Non-empty by construction.
-    case reads(String)
+    /// The element answered, and there was text. The payload is `NonEmptyText`, so the
+    /// empty reading is unrepresentable rather than merely undocumented: no call site,
+    /// here or in a future importer, can construct the case that would print as `[]`.
+    case reads(NonEmptyText)
     /// The element answered `kAXValue` with the empty string. Says nothing about the
     /// screen: an empty document and an app that never reports its contents produce
     /// this identical answer.
@@ -35,8 +37,10 @@ public enum ScreenText: Equatable, Sendable {
     public init(answer: String?) {
         switch answer {
         case .none: self = .noValue
-        case .some(let text) where text.isEmpty: self = .answeredEmpty
-        case .some(let text): self = .reads(text)
+        // `NonEmptyText`'s refusal IS the classification: the answer that will not become
+        // one is the empty answer, so there is no separate emptiness test to keep in step
+        // with the payload's own rule. [LAW:one-source-of-truth]
+        case .some(let text): self = NonEmptyText(text).map(ScreenText.reads) ?? .answeredEmpty
         }
     }
 
@@ -53,14 +57,14 @@ public enum ScreenText: Equatable, Sendable {
     /// empty TextEdit document verifiable. [LAW:types-are-the-program]
     public func shows(_ text: String, moreThan baseline: ScreenText) -> Bool {
         guard case .reads(let now) = self else { return false }
-        return now.occurrences(of: text) > baseline.alreadyHeld(text)
+        return now.value.occurrences(of: text) > baseline.alreadyHeld(text)
     }
 
     /// How many times a baseline reading is taken to have already held `text`: a silence
     /// held nothing, for the reason `shows` gives.
     private func alreadyHeld(_ text: String) -> Int {
         guard case .reads(let held) = self else { return 0 }
-        return held.occurrences(of: text)
+        return held.value.occurrences(of: text)
     }
 }
 
