@@ -7,6 +7,19 @@ options:
   deploymentTarget:
     macOS: "15.0"
 
+# Shared by every target. macOS keys Microphone, Accessibility, and Input Monitoring
+# grants to the signing certificate, so dev builds carry a self-signed identity that
+# `make signing-identity` creates once per Mac. Ad hoc signing would key the grants to
+# each build's own hash and lose them on every rebuild. The keyboard helper admits
+# exactly the certificate that signed it, which is one more reason the app and the
+# helper are signed by the one identity named here; scripts/signing-identity reads it
+# for the CLI and helper builds outside Xcode.
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: LowTalker Dev
+
 packages:
   # [LAW:one-way-deps] The app links the SwiftPM package at the repo root; the
   # package knows nothing of the app.
@@ -19,20 +32,47 @@ targets:
     platform: macOS
     sources:
       - App/LowTalker
+      # The keyboard helper's launchd plist, where SMAppService.daemon reads it from.
+      - path: App/LaunchDaemons/com.lowtalker.keyboardd.plist
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Library/LaunchDaemons
     dependencies:
       - package: low-talker
         product: LowTalkerCore
+      - package: low-talker
+        product: KeyboardService
+      # The helper rides inside the bundle, where the plist above names it, signed on
+      # copy with the app's own identity.
+      - target: lowtalker-keyboardd
+        embed: true
+        copy:
+          destination: wrapper
+          subpath: Contents/MacOS
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ltd.deadgrass.low-talker
-        SWIFT_VERSION: "6.0"
         # No checked-in Info.plist: Xcode synthesises one from these keys.
         GENERATE_INFOPLIST_FILE: true
         INFOPLIST_KEY_LSUIElement: true
         INFOPLIST_KEY_NSMicrophoneUsageDescription: low-talker listens to your microphone while you hold the dictation key so it can turn what you say into text. Audio never leaves this Mac.
-        # macOS keys Microphone, Accessibility, and Input Monitoring grants to the
-        # signing certificate, so dev builds carry a self-signed identity that
-        # `make signing-identity` creates once per Mac. Ad hoc signing would key the
-        # grants to each build's own hash and lose them on every rebuild.
-        CODE_SIGN_STYLE: Manual
-        CODE_SIGN_IDENTITY: LowTalker Dev
+
+  # The root keyboard helper, built here from the same sources Package.swift builds it
+  # from, because an Xcode app can embed an Xcode tool and cannot embed a package's
+  # executable. `make helper` builds the same program for the LaunchDaemon path.
+  lowtalker-keyboardd:
+    type: tool
+    platform: macOS
+    sources:
+      - Sources/lowtalker-keyboardd
+    dependencies:
+      - package: low-talker
+        product: KeyboardService
+      - package: low-talker
+        product: VirtualKeyboard
+      - package: low-talker
+        product: Keystrokes
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lowtalker.keyboardd

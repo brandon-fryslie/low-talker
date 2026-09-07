@@ -26,3 +26,14 @@ func uninterrupted(_ call: () -> Int) -> Int {
         guard result < 0, errno == EINTR else { return result }
     }
 }
+
+/// Every wait on a socket in this module is a poll with a deadline, so the calls
+/// themselves must never wait: a blocking write hands over a frame whole, and one larger
+/// than the room the poll reported would wait for the rest with no deadline at all - under
+/// the lock, with every waiter behind it. [LAW:no-ambient-temporal-coupling]
+func neverBlock(_ descriptor: Int32) throws {
+    let flags = fcntl(descriptor, F_GETFL)
+    guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) >= 0 else {
+        throw DaemonError.socket("fcntl(O_NONBLOCK)", errno)
+    }
+}
