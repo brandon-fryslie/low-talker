@@ -10,7 +10,7 @@ You need Xcode 16 or later plus `xcodegen` and `jq`, both from Homebrew.
 - `make run` builds and launches it.
 - `make cli` builds the command-line tool into `.build/debug/lowtalker` and signs it; "Trying the engine" below uses it.
 - `make helper` builds the root keyboard helper into `.build/debug/lowtalker-keyboardd` and signs it; "The keyboard helper" below says what it is.
-- `make test` runs `make check-docs`, `scripts/virtual-hid-driver-test`, `swift build`, and `swift test`.
+- `make test` runs `swift build`, then `make check-docs`, `scripts/virtual-hid-driver-test`, and `swift test`. The build comes first because everything after it needs the CLI.
 - `make clean` removes the generated project, `DerivedData/`, and `.build/`.
 
 CI runs `make signing-identity`, `make test`, and `make app` on a macos-15 runner for every pull request to master and every push to master; the workflow is `.github/workflows/ci.yml`.
@@ -240,9 +240,18 @@ LowTalker types by driving a virtual keyboard macOS treats as real hardware: the
 
 `state` prints a fact table to stderr for a reader and one verdict word to stdout, so `$(scripts/virtual-hid-driver state)` is exactly the verdict. The verdicts are `absent`, `installed-inactive`, `awaiting-approval`, `disabled`, `enabled`, `running`, `pending-reboot`, `residue`, and `unknown`. `enabled` means macOS has the extension switched on; `running` means that and the driver has published its node in the IORegistry. `running` is the fully working state.
 
+The script installs and removes; it no longer reads. Where the driver stands is read by `lowtalker driver`, which the script calls for every one of those words:
+
+    lowtalker driver state         # the four readings to stderr, one verdict to stdout
+    lowtalker driver registration  # how macOS has the extension registered, as one word
+    lowtalker driver receipt <id>  # one installer receipt's version, or nothing
+    lowtalker driver pins          # every constant this program holds about the driver
+
+The probe moved out of the script because the menu-bar app has to reach the same answer in the same words, and an app in `/Applications` cannot run a script out of this repo. A second probe written to give it those words would be two clocks. So `scripts/virtual-hid-driver` needs `.build/debug/lowtalker` present — run `make cli` (or `swift build`) first, and it says so by name when the build is missing. The driver's identity — bundle id, team, IORegistry node, receipt ids, and the two payload trees — is pinned in `Sources/DriverExtension`; the script and this file keep copies, and `make check-docs` reads `lowtalker driver pins` and fails when a copy has drifted.
+
 Run it as the logged-in user, never under `sudo`; it takes sudo itself for the file steps. macOS attributes the activation request to whoever makes it, and your approval answers that request.
 
-Two version numbers travel together and are not the same. The package is 8.4.0 and carries the Manager and Daemon helper apps; the driver extension inside it is 1.8.0, which is what `systemextensionsctl` reports. It has not moved across many package releases, so a package upgrade that leaves `systemextensionsctl` still reading 1.8.0 has not failed. The script is authoritative for both numbers, and pins the package's SHA-256 checksum besides. This file quotes the versions, not the checksum, and `make check-docs` fails when a number quoted here disagrees with the script.
+Two version numbers travel together and are not the same. The package is 8.4.0 and carries the Manager and Daemon helper apps; the driver extension inside it is 1.8.0, which is what `systemextensionsctl` reports. It has not moved across many package releases, so a package upgrade that leaves `systemextensionsctl` still reading 1.8.0 has not failed. The script is authoritative for both numbers, and pins the package's SHA-256 checksum besides: nothing in Swift downloads anything, so what to fetch stays where the fetching is. This file quotes the versions, not the checksum, and `make check-docs` fails when a number quoted here disagrees with the script.
 
 ### The VirtualKeyboard module
 

@@ -9,6 +9,7 @@ let package = Package(
         .library(name: "Keystrokes", targets: ["Keystrokes"]),
         .library(name: "KeyboardLayout", targets: ["KeyboardLayout"]),
         .library(name: "Pointing", targets: ["Pointing"]),
+        .library(name: "DriverExtension", targets: ["DriverExtension"]),
         .library(name: "VirtualKeyboard", targets: ["VirtualKeyboard"]),
         .library(name: "KeyboardService", targets: ["KeyboardService"]),
         .library(name: "Typing", targets: ["Typing"]),
@@ -35,6 +36,15 @@ let package = Package(
         // usage, the modifiers held with it, and the two names one key goes by. It links
         // nothing, so neither the layout nor the device has to link the other to speak.
         .target(name: "Keystrokes"),
+        // Where the Karabiner-DriverKit-VirtualHIDDevice driver extension stands on this
+        // Mac, and the four readings that answer is derived from. It links nothing and
+        // knows nothing of low-talker, so the CLI, the menu-bar app and
+        // scripts/virtual-hid-driver all reach one vocabulary instead of three.
+        // [LAW:one-source-of-truth]
+        .target(name: "DriverExtension"),
+        // The verdict table is a pure function of four readings, so every combination is
+        // exercised here - including the ones this Mac cannot be put into.
+        .testTarget(name: "DriverExtensionTests", dependencies: ["DriverExtension"]),
         // The same seam for the mouse: a button, a count of motion, a move and a scroll.
         // Like Keystrokes it links nothing, so the device and the click decision share a
         // vocabulary without sharing a dependency. [LAW:one-way-deps]
@@ -78,6 +88,7 @@ let package = Package(
             name: "lowtalker",
             dependencies: [
                 "LowTalkerCore",
+                "DriverExtension",
                 "VirtualKeyboard",
                 "KeyboardLayout",
                 "KeyboardService",
