@@ -14,7 +14,7 @@ public struct Config: Hashable, Sendable {
     /// config check` and any listing should speak of them in.
     public let modes: [Mode]
 
-    public init(model: ModelName, modes: [Mode]) throws {
+    public init(model: ModelName, modes: [Mode]) throws(ConfigError) {
         guard !modes.isEmpty else { throw ConfigError.noModes }
         var names: Set<String> = []
         var chords: Set<KeyChord> = []
@@ -100,9 +100,11 @@ public enum ConfigError: Error, Equatable, CustomStringConvertible {
     case modeUnnamed
     case twoModesNamed(String)
     case twoModesOnOneChord(String)
-    case noSuchMatch(String)
-    case noSuchTarget(String)
-    case thenNamesNoOneThing
+    /// The file exists but could not be read at all, in the words the system used.
+    case unreadable(path: String, why: String)
+    /// A refusal the parser reported that this file has no better words for. Carried
+    /// rather than dropped: a fault nobody named is worse than one named awkwardly.
+    case notUnderstood(String)
 
     public var description: String {
         switch self {
@@ -120,12 +122,10 @@ public enum ConfigError: Error, Equatable, CustomStringConvertible {
             "two modes are named \"\(name)\""
         case .twoModesOnOneChord(let name):
             "mode \"\(name)\" answers to a chord another mode already answers to"
-        case .noSuchMatch(let name):
-            "\"\(name)\" is not something a route can match on"
-        case .noSuchTarget(let name):
-            "\"\(name)\" is not somewhere text can be inserted"
-        case .thenNamesNoOneThing:
-            "a route's then names exactly one thing to do"
+        case .unreadable(let path, let why):
+            "\(path) could not be read: \(why)"
+        case .notUnderstood(let why):
+            why
         }
     }
 }
