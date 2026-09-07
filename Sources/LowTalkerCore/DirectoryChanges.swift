@@ -60,7 +60,11 @@ enum DirectoryChanges {
             )!  // The author vouches: this returns nil for an empty or malformed path
                 // list, and the one path here is a directory that exists.
             FSEventStreamSetDispatchQueue(stream, queue)
-            FSEventStreamStart(stream)
+            // [LAW:no-silent-failure] A start that failed and was not looked at is a
+            // watch that never fires and never says so, which is the one way this type
+            // can be wrong without anybody finding out. It fails only when the stream has
+            // no queue to run on, which is set on the line above.
+            precondition(FSEventStreamStart(stream), "FSEvents refused to start on \(directory.path)")
             let teardown = Teardown(stream: stream, sink: sink)
             continuation.onTermination = { _ in teardown() }
         }
