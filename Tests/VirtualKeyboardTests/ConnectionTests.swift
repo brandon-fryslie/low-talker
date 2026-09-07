@@ -41,6 +41,43 @@ import Testing
         #expect(lost.count == 1)
     }
 
+    /// A daemon that stops talking without hanging up - suspended, or wedged - is as gone
+    /// as one that closed the stream, and is found out by its silence rather than waited
+    /// on forever. [LAW:no-ambient-temporal-coupling]
+    @Test func aDaemonThatSaysNothingForThePatienceIsLost() throws {
+        let fake = FakeDaemon()
+        let lost = Lost()
+        let connection = try DaemonConnection(fileDescriptor: fake.clientDescriptor, patience: .milliseconds(100), whenLost: lost.record)
+        #expect(lost.await() == .silent)
+        withExtendedLifetime(connection) {}
+    }
+
+    /// A daemon that stops mid-frame is the same silence, noticed in the middle of a read
+    /// rather than between frames.
+    @Test func aDaemonThatStopsMidFrameIsLost() throws {
+        let fake = FakeDaemon()
+        let lost = Lost()
+        let connection = try DaemonConnection(fileDescriptor: fake.clientDescriptor, patience: .milliseconds(100), whenLost: lost.record)
+        try fake.sendRaw([0, 0])
+        #expect(lost.await() == .silent)
+        withExtendedLifetime(connection) {}
+    }
+
+    /// A version mismatch arrives on the frame that answers a request, and that request
+    /// fails by its name: the answer does not count, because a driver built for another
+    /// protocol did not do what was asked. [LAW:no-silent-failure]
+    @Test func anAnswerCarryingAVersionMismatchFailsTheRequestItAnswers() throws {
+        let fake = FakeDaemon { frame, daemon in
+            if case .request(let id, _) = frame {
+                try daemon.send(.response(id: id, payload: [DaemonConnection.Status.driverVersionMismatched.rawValue, 1]))
+            }
+        }
+        let lost = Lost()
+        let connection = try DaemonConnection(fileDescriptor: fake.clientDescriptor, whenLost: lost.record)
+        #expect(throws: DaemonError.driverVersionMismatched) { try connection.request(.keyboardInitialize, by: .now + .seconds(2)) }
+        #expect(lost.await() == .driverVersionMismatched)
+    }
+
     /// This side hanging up is not the daemon's doing, and is not reported as it.
     @Test func hangingUpOurselvesTellsNobody() throws {
         let fake = FakeDaemon()

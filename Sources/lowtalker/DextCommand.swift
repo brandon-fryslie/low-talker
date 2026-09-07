@@ -3,7 +3,6 @@ import ApplicationServices
 import ArgumentParser
 import Foundation
 import KeyboardLayout
-import KeyboardService
 import Keystrokes
 import LowTalkerCore
 import VirtualKeyboard
@@ -35,7 +34,7 @@ struct DextCommand: AsyncParsableCommand {
 struct DextTypeCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "type",
-        abstract: "Type text through the driver extension into a named app (needs sudo)."
+        abstract: "Type text through the virtual keyboard into a named app (sudo for --through device)."
     )
 
     @Argument(help: "The bundle id of the app to type into, e.g. com.apple.TextEdit.")

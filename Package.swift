@@ -50,6 +50,12 @@ let package = Package(
             name: "lowtalker-keyboardd",
             dependencies: ["KeyboardService", "VirtualKeyboard", "Keystrokes"]
         ),
+        // The authorization boundary of a root keystroke service, checked against the
+        // test process's own identity and audit token: real code signing, no root.
+        .testTarget(
+            name: "lowtalker-keyboarddTests",
+            dependencies: ["lowtalker-keyboardd", "KeyboardService"]
+        ),
         .executableTarget(
             name: "lowtalker",
             dependencies: [

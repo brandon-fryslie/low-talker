@@ -82,11 +82,42 @@ final class Failure: NSError, @unchecked Sendable {
     required init?(coder: NSCoder) { super.init(coder: coder) }
 }
 
-/// Accepts a connection when the caller is who the requirement says, and refuses it
-/// otherwise.
+/// Which connection has the keyboard. One at a time, because there is one keyboard: two
+/// clients typing through the same set of held keys would each post reports missing the
+/// other's, and the first to leave would release the keys the other was holding.
+/// [LAW:types-are-the-program] Refusal is the truthful answer to a second client, and a
+/// client that wants to share can connect per insert - the connection is lazy, and the
+/// helper paid for readiness once.
+final class Holder: @unchecked Sendable {
+    struct Busy: Error, CustomStringConvertible {
+        let pid: pid_t
+        var description: String { "pid \(pid) holds the keyboard" }
+    }
+
+    private let lock = NSLock()
+    private var holding: (connection: ObjectIdentifier, pid: pid_t)?
+
+    /// The keyboard is `connection`'s until it is released, or `Busy` names whose it is.
+    func claim(_ connection: NSXPCConnection) throws {
+        lock.lock(); defer { lock.unlock() }
+        if let holding { throw Busy(pid: holding.pid) }
+        holding = (ObjectIdentifier(connection), connection.processIdentifier)
+    }
+
+    /// The identifier and not the connection: a handler that holds its own connection
+    /// keeps it alive, and this runs from one.
+    func release(_ connection: ObjectIdentifier) {
+        lock.lock(); defer { lock.unlock() }
+        if holding?.connection == connection { holding = nil }
+    }
+}
+
+/// Accepts a connection when the caller is who the requirement says and nobody else has
+/// the keyboard, and refuses it otherwise, saying why.
 final class Listener: NSObject, NSXPCListenerDelegate {
     private let keyboard: Keyboard
     private let callers: CallerIdentity
+    private let holder = Holder()
 
     init(keyboard: Keyboard, callers: CallerIdentity) {
         self.keyboard = keyboard
@@ -97,6 +128,7 @@ final class Listener: NSObject, NSXPCListenerDelegate {
         do {
             guard let token = connection.callerAuditToken else { throw CallerIdentity.Refused.noAuditToken }
             try callers.check(auditToken: token)
+            try holder.claim(connection)
         } catch {
             log("refused a connection from pid \(connection.processIdentifier): \(error)")
             return false
@@ -106,8 +138,13 @@ final class Listener: NSObject, NSXPCListenerDelegate {
         // Both, and not one: an interrupted connection ends invalid, a closed one ends
         // interrupted, and a client killed mid-burst can take either path. The release is
         // idempotent, so running it twice costs a report and running it never costs the
-        // operator a held key.
-        connection.invalidationHandler = { [keyboard] in keyboard.releaseEverything(because: "a client went away") }
+        // operator a held key. The keyboard is free for the next client only once this
+        // one's keys are up, which is why invalidation releases the holder last.
+        let id = ObjectIdentifier(connection)
+        connection.invalidationHandler = { [keyboard, holder] in
+            keyboard.releaseEverything(because: "a client went away")
+            holder.release(id)
+        }
         connection.interruptionHandler = { [keyboard] in keyboard.releaseEverything(because: "a client was interrupted") }
         connection.resume()
         log("accepted a connection from pid \(connection.processIdentifier)")
@@ -139,15 +176,18 @@ do {
     let callers = try CallerIdentity.sameSignerAsThisProcess()
     log("callers must satisfy: \(callers.text)")
 
-    // The connection is lost on the reading thread, and there is no keyboard to release
-    // by then: the device went with the daemon. Ending is the whole answer; launchd keeps
-    // this job alive and the next start reaches or restarts the daemon. [LAW:no-silent-failure]
-    let reached = try DaemonProcess.reach(within: .seconds(10)) { lost in
+    // The connection is lost on the reading thread, and no key can be released over a
+    // connection that is gone. What can be done is to stop the daemon this helper
+    // started, which takes the device and whatever it held down with it; a daemon
+    // somebody else runs stays theirs. Then end: launchd restarts this job after an
+    // unsuccessful exit, and the next start reaches or restarts the daemon.
+    // [LAW:no-silent-failure]
+    let reached = try DaemonProcess.reach(within: .seconds(10)) { lost, daemon in
         log("the daemon's connection was lost (\(lost)); exiting for launchd to start this again")
+        DaemonProcess.stop(daemon)
         exit(1)
     }
-    let startup = try reached.keyboard.start(within: .seconds(10))
-    log("the keyboard is up: the daemon answered in \(startup.answered), ready after \(startup.ready)")
+    log("the keyboard is up: the daemon answered in \(reached.startup.answered), ready after \(reached.startup.ready)")
     let keyboard = Keyboard(keyboard: reached.keyboard)
 
     // launchd stops a job with SIGTERM. Taken as an event rather than the default
@@ -166,8 +206,11 @@ do {
     // neither.
     withExtendedLifetime((delegate, termination)) { dispatchMain() }
 } catch let refused as CallerIdentity.Refused {
+    // The installation is wrong and starting again will not fix it. launchd cannot be
+    // told EX_CONFIG: KeepAlive restarts on anything but a successful exit, so 0 is the
+    // one code that says do not start this again. The reason is in the log.
     log("will not start: \(refused)")
-    exit(78) // EX_CONFIG: the installation is wrong, and starting again will not fix it.
+    exit(0)
 } catch {
     log("could not start: \(error)")
     exit(1)

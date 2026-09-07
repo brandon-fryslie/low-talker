@@ -36,9 +36,9 @@ enum Through: String, ExpressibleByArgument, CaseIterable {
     /// The helper is not said to be ready, because from here it is a service that either
     /// answers or does not, and the first keystroke is what asks.
     func open(_ clock: ContinuousClock) throws -> Opened {
-        let connecting = clock.now
         switch self {
         case .device:
+            let connecting = clock.now
             let device = try VirtualKeyboard()
             let connected = clock.now - connecting
             let startup = try device.start(within: .seconds(3))
@@ -47,10 +47,9 @@ enum Through: String, ExpressibleByArgument, CaseIterable {
                 report: "connected in \(connected.milliseconds) ms, daemon answered in \(startup.answered.milliseconds) ms, keyboard ready after \(startup.ready.milliseconds) ms"
             )
         case .helper:
-            let helper = HelperKeyboard()
             return Opened(
-                keyboard: helper,
-                report: "connected to \(Helper.machServiceName) in \((clock.now - connecting).milliseconds) ms"
+                keyboard: HelperKeyboard(),
+                report: "keystrokes go to \(Helper.machServiceName); the first one asks whether it answers"
             )
         }
     }

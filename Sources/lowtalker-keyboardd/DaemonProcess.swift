@@ -14,12 +14,13 @@ import VirtualKeyboard
 enum DaemonProcess {
     static let executable = "/Library/Application Support/org.pqrs/Karabiner-DriverKit-VirtualHIDDevice/Applications/Karabiner-VirtualHIDDevice-Daemon.app/Contents/MacOS/Karabiner-VirtualHIDDevice-Daemon"
 
-    /// A keyboard connected to the daemon, and where the daemon came from: found running,
-    /// or started here - in which case it is this helper's to stop.
-    /// [LAW:types-are-the-program] Two origins, two duties, and no pid to wonder about.
+    /// A keyboard that is up, where the daemon behind it came from - found running, or
+    /// started here, in which case it is this helper's to stop - and what bringing it up
+    /// cost. [LAW:types-are-the-program] Two origins, two duties, and no pid to wonder about.
     struct Reached {
         let keyboard: VirtualKeyboard
         let daemon: Origin
+        let startup: VirtualKeyboard.Startup
     }
 
     enum Origin {
@@ -32,20 +33,39 @@ enum DaemonProcess {
         var description: String { "could not start \(executable): \(String(cString: strerror(code))) (\(code))" }
     }
 
-    /// Connects to the daemon, starting it when it is not there to connect to, in at most
-    /// `limit` altogether.
-    static func reach(within limit: Duration, whenLost: @escaping @Sendable (DaemonError) -> Void) throws -> Reached {
+    /// Brings the keyboard up, in at most `limit` altogether: connects to the daemon,
+    /// starting it when it is not there to connect to, then starts the keyboard on it.
+    ///
+    /// [LAW:single-enforcer] The one unit that can leave a daemon running that this helper
+    /// started, so it is the one that makes sure it does not: a daemon started here that
+    /// never answers, or one whose keyboard will not start, is stopped before the failure
+    /// leaves. The caller holds no pid to orphan. `whenLost` is told the daemon's origin
+    /// with the loss, for the same reason: what it may stop is this unit's knowledge.
+    static func reach(within limit: Duration, whenLost: @escaping @Sendable (DaemonError, Origin) -> Void) throws -> Reached {
+        let deadline = ContinuousClock.now + limit
+        let (keyboard, origin) = try connect(by: deadline, whenLost: whenLost)
         do {
-            return Reached(keyboard: try VirtualKeyboard(whenLost: whenLost), daemon: .alreadyRunning)
+            let startup = try keyboard.start(within: deadline - ContinuousClock.now)
+            return Reached(keyboard: keyboard, daemon: origin, startup: startup)
+        } catch {
+            stop(origin)
+            throw error
+        }
+    }
+
+    /// A connection to the daemon and where the daemon came from.
+    private static func connect(by deadline: ContinuousClock.Instant, whenLost: @escaping @Sendable (DaemonError, Origin) -> Void) throws -> (VirtualKeyboard, Origin) {
+        do {
+            return (try VirtualKeyboard { whenLost($0, .alreadyRunning) }, .alreadyRunning)
         } catch let unreachable as DaemonError {
             log("no daemon to reach (\(unreachable)); starting it")
         }
-        let pid = try start()
-        let deadline = ContinuousClock.now + limit
+        let origin = Origin.startedHere(try start())
         while true {
             do {
-                return Reached(keyboard: try VirtualKeyboard(whenLost: whenLost), daemon: .startedHere(pid))
-            } catch is DaemonError where ContinuousClock.now < deadline {
+                return (try VirtualKeyboard { whenLost($0, origin) }, origin)
+            } catch let unreachable as DaemonError {
+                guard ContinuousClock.now < deadline else { stop(origin); throw unreachable }
                 Thread.sleep(forTimeInterval: 0.1)
             }
         }

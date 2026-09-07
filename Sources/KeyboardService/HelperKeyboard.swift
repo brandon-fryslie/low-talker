@@ -15,6 +15,7 @@ import Keystrokes
 /// daemon answers every request, and the answer is what the pacing is built on.
 public final class HelperKeyboard: KeyPress {
     private let connection: NSXPCConnection
+    private let replyTimeout: Duration
 
     /// The helper's refusal, or the connection's, as one thing a caller can catch.
     public struct Unreachable: Error, CustomStringConvertible {
@@ -25,35 +26,74 @@ public final class HelperKeyboard: KeyPress {
     /// Connects to the helper's Mach service. The connection is lazy - launchd starts the
     /// job on the first call, not here - so a helper that is not installed is discovered
     /// when a key is first pressed rather than at construction.
-    public init() {
-        connection = NSXPCConnection(machServiceName: Helper.machServiceName, options: .privileged)
+    ///
+    /// `replyTimeout` bounds each call: a helper that neither answers nor drops the
+    /// connection is unreachable at the deadline rather than a caller blocked for good.
+    public convenience init(replyTimeout: Duration = .seconds(5)) {
+        self.init(connection: NSXPCConnection(machServiceName: Helper.machServiceName, options: .privileged), replyTimeout: replyTimeout)
+    }
+
+    /// Over a connection someone else made, which is how a test puts a service of its own
+    /// on the far end. [LAW:decomposition]
+    init(connection: NSXPCConnection, replyTimeout: Duration) {
+        self.connection = connection
+        self.replyTimeout = replyTimeout
         connection.remoteObjectInterface = NSXPCInterface(with: KeyboardService.self)
         connection.resume()
     }
 
     deinit { connection.invalidate() }
 
+    /// The first word back about one call, from whichever of the two ways it can end
+    /// speaks first. Its own object because both speak from the connection's queue after
+    /// `call` may have returned: a late one writes here, into something that outlives the
+    /// call, and never into a local that does not. [LAW:no-ambient-temporal-coupling]
+    private final class Outcome: @unchecked Sendable {
+        enum Word {
+            case acknowledged
+            case failed(Error)
+        }
+
+        private let lock = NSLock()
+        private let spoken = DispatchSemaphore(value: 0)
+        private var word: Word?
+
+        func say(_ word: Word) {
+            lock.lock()
+            if self.word == nil { self.word = word }
+            lock.unlock()
+            spoken.signal()
+        }
+
+        /// The word, or nil when none came in time.
+        func await(_ timeout: Duration) -> Word? {
+            let nanoseconds = timeout.components.seconds * 1_000_000_000 + timeout.components.attoseconds / 1_000_000_000
+            guard spoken.wait(timeout: .now() + .nanoseconds(Int(nanoseconds))) == .success else { return nil }
+            lock.lock(); defer { lock.unlock() }
+            return word
+        }
+    }
+
     /// One round trip, with the reply turned back into a throw.
     ///
-    /// [LAW:no-silent-failure] An XPC call can fail in two ways that look nothing alike -
-    /// the helper refused, or the connection did - and a client that only reads the first
-    /// types into a dead service forever. Both arrive here, and both throw.
+    /// [LAW:no-silent-failure] An XPC call can fail in three ways that look nothing alike -
+    /// the helper refused, the connection did, or nobody said anything - and a client that
+    /// only reads the first types into a dead service forever. All three arrive here, and
+    /// all three throw.
     private func call(_ body: (KeyboardService, @escaping (Error?) -> Void) -> Void) throws {
-        let answered = DispatchSemaphore(value: 0)
-        var failure: Error?
+        let outcome = Outcome()
         let proxy = connection.remoteObjectProxyWithErrorHandler { error in
-            failure = Unreachable(reason: "the keyboard helper could not be reached: \(error.localizedDescription)")
-            answered.signal()
+            outcome.say(.failed(Unreachable(reason: "the keyboard helper could not be reached: \(error.localizedDescription)")))
         }
         guard let service = proxy as? KeyboardService else {
             throw Unreachable(reason: "the keyboard helper answered with something that is not a keyboard")
         }
-        body(service) { error in
-            if let error, failure == nil { failure = error }
-            answered.signal()
+        body(service) { error in outcome.say(error.map { .failed($0) } ?? .acknowledged) }
+        switch outcome.await(replyTimeout) {
+        case .acknowledged: return
+        case .failed(let error): throw error
+        case nil: throw Unreachable(reason: "the keyboard helper did not answer in \(replyTimeout)")
         }
-        answered.wait()
-        if let failure { throw failure }
     }
 
     public func down(_ usage: Usage) throws {

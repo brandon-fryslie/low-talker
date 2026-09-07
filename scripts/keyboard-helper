@@ -34,35 +34,45 @@ PLIST="/Library/LaunchDaemons/${LABEL}.plist"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HELPER="${ROOT}/.build/debug/lowtalker-keyboardd"
 
+# A path is any bytes and a plist is XML, so the four characters XML reserves are escaped
+# once, here, before the path is written into one. [LAW:parse-dont-validate]
+xml_escape() {
+  printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g'
+}
+
 die() { echo "keyboard-helper: $*" >&2; exit 1; }
 
 install_helper() {
   [ -x "$HELPER" ] || die "no helper at $HELPER - run 'make helper' first"
   # An ad hoc helper refuses to start, for a reason it logs; said here as well, before
-  # a job is registered that will only ever exit 78. [LAW:no-silent-failure]
+  # a job is registered that would only ever start and stop. [LAW:no-silent-failure]
   # Captured rather than piped: grep -q closes the pipe at its first match, and under
   # pipefail codesign's resulting SIGPIPE would fail a signature that passed.
   signature=$(codesign -dvv "$HELPER" 2>&1) || die "codesign could not read $HELPER: $signature"
   grep -q '^Authority=' <<<"$signature" \
     || die "$HELPER is signed ad hoc and would admit no caller - run 'make helper', which signs it with the dev identity"
 
-  # KeepAlive, not RunAtLoad alone: this owns a device whose readiness costs a second, and
-  # a helper that stayed dead after one bad start would answer nothing until someone
-  # noticed. Restarting is the behaviour that fails loudly instead of quietly - and it is
-  # how the helper comes back after the daemon it holds open goes away.
+  # KeepAlive after an unsuccessful exit, not RunAtLoad alone: this owns a device whose
+  # readiness costs a second, and a helper that stayed dead after a crash would answer
+  # nothing until someone noticed. Restarting is the behaviour that fails loudly instead
+  # of quietly - and it is how the helper comes back after the daemon it holds open goes
+  # away. A helper that will not start exits 0 on purpose, with the reason in its log,
+  # because 0 is the one exit launchd can be told not to restart.
   #
   # The helper speaks through the unified log; stderr is kept for what it cannot route
-  # there, which is a crash.
+  # there, which is a crash. Under /Library/Logs, which only root and admins may write:
+  # a fixed name under /tmp is a file anyone may plant for root to open.
+  helper_xml="$(xml_escape "$HELPER")"
   sudo tee "$PLIST" >/dev/null <<PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key><string>${LABEL}</string>
-    <key>ProgramArguments</key><array><string>${HELPER}</string></array>
+    <key>ProgramArguments</key><array><string>${helper_xml}</string></array>
     <key>MachServices</key><dict><key>${SERVICE}</key><true/></dict>
-    <key>KeepAlive</key><true/>
-    <key>StandardErrorPath</key><string>/tmp/${LABEL}.crash.log</string>
+    <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+    <key>StandardErrorPath</key><string>/Library/Logs/${LABEL}.crash.log</string>
 </dict>
 </plist>
 PLIST_EOF
