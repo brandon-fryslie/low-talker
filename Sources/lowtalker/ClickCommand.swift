@@ -13,7 +13,9 @@ import Typing
 /// Context it is handed, while this aims at whatever macOS has just put on the screen -
 /// a driver approval, a login item prompt - which nothing routed and nobody can name in
 /// advance. The clicking itself is `Pointer`'s, unchanged and not repeated here, so both
-/// paths land through one mechanism. [LAW:single-enforcer]
+/// paths land through one mechanism - including the refusal to post a report while macOS
+/// has an alert over everything, which `GuardedMouse.check` owns for every caller rather
+/// than this command owning it for itself. [LAW:single-enforcer]
 ///
 /// **The virtual mouse and not a CGEvent**, because that is the whole reason this line of
 /// work exists: a report from the driver extension is hardware to the OS and reaches
@@ -37,11 +39,6 @@ struct ClickCommand: AsyncParsableCommand {
 
     @MainActor
     func run() async throws {
-        // Before anything is located, because the frame located under an alert is a frame
-        // with the alert's own buttons over it, and answering somebody else's prompt is
-        // not a mistake that can be taken back. [LAW:parse-dont-validate]
-        try SystemAlerts.requireNone()
-
         let front = try TargetApp.frontmost()
         let interrupt = Interrupt.watched()
         let target = TargetApp(bundleID: front, interrupt: interrupt)

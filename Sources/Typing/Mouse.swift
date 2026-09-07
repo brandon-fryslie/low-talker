@@ -12,9 +12,10 @@ import Pointing
 /// only the main actor may ask.
 @MainActor
 public protocol Mouse {
-    /// Throws rather than let the next report be posted: the operator interrupted, or the
-    /// target app is no longer frontmost. One member and not two, for the reason
-    /// `Keyboard.check` gives. [LAW:one-type-per-behavior]
+    /// Throws rather than let the next report be posted: the operator interrupted, the
+    /// target app is no longer frontmost, or macOS has put an alert over everything. One
+    /// member and not two, for the reason `Keyboard.check` gives.
+    /// [LAW:one-type-per-behavior]
     func check() throws
     func down(_ button: Button) throws
     func releaseAll() throws
@@ -23,8 +24,8 @@ public protocol Mouse {
 }
 
 /// A mouse, refusing any report this run has lost the right to post. The mirror of
-/// `GuardedKeyboard`: the device, the operator's interrupt and the app in front meet here
-/// and nowhere else. [LAW:decomposition]
+/// `GuardedKeyboard`: the device, the operator's interrupt, the app in front and the
+/// alerts over it meet here and nowhere else. [LAW:decomposition]
 public struct GuardedMouse: Mouse {
     public let pointing: any Pointing
     public let interrupt: Interrupt
@@ -36,9 +37,18 @@ public struct GuardedMouse: Mouse {
         self.screen = screen
     }
 
+    /// [LAW:single-enforcer] The alert refusal lives here rather than in whichever command
+    /// happened to start the click. `Pointer` calls this before every motion report and
+    /// again immediately before the button goes down, so an alert that opens while the
+    /// cursor is still travelling - the several seconds an element search and a move can
+    /// take - is caught at the last report instead of only at the first. And every caller
+    /// of the mechanism inherits it: `act`'s routed `clickElement` reaches the same
+    /// `Pointer.click`, and a guard sitting in one CLI command would have left that door
+    /// open.
     public func check() throws {
         try interrupt.check()
         try screen.requireFrontmost()
+        try SystemAlerts.requireNone()
     }
 
     public func down(_ button: Button) throws { try pointing.down(button) }
