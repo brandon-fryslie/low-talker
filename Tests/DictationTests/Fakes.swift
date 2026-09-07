@@ -56,39 +56,6 @@ final class FakeTranscriber: Transcriber {
     }
 }
 
-/// Something a test holds shut, and everything that arrives at it waits until the
-/// test opens it. How many are waiting is readable, so a test can prove a session is
-/// held here rather than infer it from time passing. [LAW:no-ambient-temporal-coupling]
-final class Gate: Sendable {
-    private struct State {
-        var open = false
-        var waiters: [CheckedContinuation<Void, Never>] = []
-    }
-
-    private let state = Mutex(State())
-
-    var waiting: Int { state.withLock { $0.waiters.count } }
-
-    func open() {
-        let released = state.withLock { state in
-            state.open = true
-            defer { state.waiters = [] }
-            return state.waiters
-        }
-        released.forEach { $0.resume() }
-    }
-
-    func wait() async {
-        await withCheckedContinuation { continuation in
-            let through = state.withLock { state in
-                if !state.open { state.waiters.append(continuation) }
-                return state.open
-            }
-            if through { continuation.resume() }
-        }
-    }
-}
-
 /// A keyboard that records every call, and refuses all of them once told to.
 @MainActor
 final class LoggingKeyboard: Keyboard {

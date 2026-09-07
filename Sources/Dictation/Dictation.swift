@@ -131,13 +131,24 @@ public final class Dictation {
                 case .failed(let error): .failure(NoMicrophone.failed(error))
                 }
             }
-            Task { [sessions] in
+            Task { [sessions, report] in
                 do {
-                    report(.success(try await sessions.run {
-                        let (clip, context) = try heard.get()
-                        return try await self.hear(clip, in: context, since: keyUp)
-                    }))
+                    // Reported from inside the operation, so the queue that orders the
+                    // typing orders the telling of it too, and a drain that waited for
+                    // the one has waited for the other. [LAW:single-enforcer]
+                    try await sessions.run {
+                        let outcome: Result<Session, any Error>
+                        do {
+                            let (clip, context) = try heard.get()
+                            outcome = .success(try await self.hear(clip, in: context, since: keyUp))
+                        } catch {
+                            outcome = .failure(error)
+                        }
+                        await report(outcome)
+                    }
                 } catch {
+                    // The operation reports its own outcome; only the queue's own
+                    // refusal to accept it reaches here. [LAW:no-silent-failure]
                     report(.failure(error))
                 }
             }
@@ -151,8 +162,8 @@ public final class Dictation {
     /// leaves a key down for macOS to repeat into whatever comes forward next. This is
     /// what a surface awaits before it goes, and the wait is on the sessions themselves
     /// rather than on a grace period long enough to probably cover them.
-    public func finish() async {
-        await sessions.drain()
+    public func finish() async throws {
+        try await sessions.drain()
     }
 
     private func hear(_ clip: AudioClip, in context: Context, since keyUp: ContinuousClock.Instant) async throws -> Session {

@@ -1,6 +1,6 @@
 import LowTalkerCore
-import Synchronization
 import Testing
+import TestProbes
 
 /// Counts operations in flight and remembers the most it ever saw at once.
 private actor Occupancy {
@@ -18,45 +18,6 @@ private actor Occupancy {
 }
 
 private struct Boom: Error {}
-
-/// Something a test holds shut, and whatever arrives at it waits until the test opens
-/// it, so an operation can be proven unfinished rather than assumed so because little
-/// time has passed. [LAW:no-ambient-temporal-coupling]
-private final class Gate: Sendable {
-    private struct State {
-        var open = false
-        var waiters: [CheckedContinuation<Void, Never>] = []
-    }
-
-    private let state = Mutex(State())
-
-    func open() {
-        let released = state.withLock { state in
-            state.open = true
-            defer { state.waiters = [] }
-            return state.waiters
-        }
-        released.forEach { $0.resume() }
-    }
-
-    func wait() async {
-        await withCheckedContinuation { continuation in
-            let through = state.withLock { state in
-                if !state.open { state.waiters.append(continuation) }
-                return state.open
-            }
-            if through { continuation.resume() }
-        }
-    }
-}
-
-/// Raised by an operation as the last thing it does, so a drain that came back early is
-/// caught by what has not happened yet.
-private final class Flag: Sendable {
-    private let value = Mutex(false)
-    var raised: Bool { value.withLock { $0 } }
-    func raise() { value.withLock { $0 = true } }
-}
 
 @Suite struct SerialQueueTests {
     /// Many operations submitted at once, each yielding mid-flight so an unserialized
@@ -165,13 +126,13 @@ private final class Flag: Sendable {
         await started.wait()
         #expect(!finished.raised)
         held.open()
-        await queue.drain()
+        try await queue.drain()
         #expect(finished.raised)
         try await submitted.value
     }
 
     /// However it ended: a failed operation is waited for like any other, and its failure
-    /// stays with its own caller - draining is not a `try`.
+    /// stays with its own caller rather than travelling to whoever drained.
     @Test func drainWaitsForAFailedOperationAndDoesNotCarryItsFailure() async throws {
         let queue = SerialQueue()
         let started = Gate()
@@ -188,8 +149,61 @@ private final class Flag: Sendable {
         }
         await started.wait()
         held.open()
-        await queue.drain()
+        try await queue.drain()
         #expect(finished.raised)
         await #expect(throws: Boom.self) { try await submitted.value }
+    }
+
+    /// The doc's guarantee is plural, and a burst of overlapping presses - not a single
+    /// one - is what `Dictation.finish()` leans on it for. The second operation is
+    /// submitted while the first is still held, so it joins a chain rather than arriving
+    /// at an empty queue, and the drain is asked for while it is still running: a drain
+    /// that came back at the end of the first is caught by the second's flag still down.
+    @Test func drainWaitsForTheSecondOperationInTheChainAndNotOnlyTheFirst() async throws {
+        let queue = SerialQueue()
+        let firstRunning = Gate()
+        let firstHeld = Gate()
+        let secondRunning = Gate()
+        let secondHeld = Gate()
+        let first = Flag()
+        let second = Flag()
+        let earlier = Task {
+            try await queue.run {
+                firstRunning.open()
+                await firstHeld.wait()
+                first.raise()
+            }
+        }
+        await firstRunning.wait()
+        let later = Task {
+            try await queue.run {
+                secondRunning.open()
+                await secondHeld.wait()
+                for _ in 0..<50 { await Task.yield() }
+                second.raise()
+            }
+        }
+        firstHeld.open()
+        await secondRunning.wait()
+        // Running, and the queue only reaches it once the first is done: the chain the
+        // drain owes a wait to is two long.
+        #expect(first.raised)
+        #expect(!second.raised)
+        secondHeld.open()
+        try await queue.drain()
+        #expect(second.raised)
+        try await earlier.value
+        try await later.value
+    }
+
+    /// Draining from inside an operation is the same wait-on-yourself a submission is -
+    /// the tail being awaited is the caller's own operation - and is refused the same way
+    /// rather than left to hang undiagnosed.
+    @Test func drainingFromInsideAnOperationIsRefused() async throws {
+        let queue = SerialQueue()
+        await #expect(throws: SerialQueueError.self) {
+            try await queue.run { try await queue.drain() }
+        }
+        #expect(try await queue.run { "still running" } == "still running")
     }
 }

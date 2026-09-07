@@ -62,7 +62,7 @@ struct DictateCommand: AsyncParsableCommand {
             // The release happens on the session's own way out, so the process may not
             // go before the session has: returning here at the speed of the poll would
             // beat a burst to its release and leave a key down.
-            await dictation.finish()
+            try await dictation.finish()
             throw error
         }
     }
