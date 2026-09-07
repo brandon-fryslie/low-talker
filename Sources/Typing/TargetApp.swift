@@ -153,8 +153,8 @@ public struct TargetApp {
             return try Self.children(of: element, in: name)
         }, matches: { try Self.string(kAXRoleAttribute, of: $0, in: name) == role.rawValue && Self.string(kAXTitleAttribute, of: $0, in: name) == title })
         guard let found else { throw unreadable ?? ScreenUnreadable.noElement(role: role.rawValue, title: title, app: name) }
-        guard let origin = Self.value(kAXPositionAttribute, of: found, as: .cgPoint, CGPoint.zero),
-              let size = Self.value(kAXSizeAttribute, of: found, as: .cgSize, CGSize.zero) else {
+        guard let origin = try Self.value(kAXPositionAttribute, of: found, as: .cgPoint, CGPoint.zero, in: name),
+              let size = try Self.value(kAXSizeAttribute, of: found, as: .cgSize, CGSize.zero, in: name) else {
             throw ScreenUnreadable.elementWithoutFrame(role: role.rawValue, title: title, app: name)
         }
         return CGRect(origin: origin, size: size)
@@ -188,9 +188,9 @@ public struct TargetApp {
         return (found, unreadable)
     }
 
-    /// The three things an Accessibility read can come back as. The distinction the search
-    /// turns on is the middle one against the last: an app saying it has no such attribute
-    /// has answered, and an app that did not answer has not. [LAW:types-are-the-program]
+    /// The four things an Accessibility read can come back as. The distinction the search
+    /// turns on is absence against silence: an app saying it has no such attribute has
+    /// answered, and an app that did not answer has not. [LAW:types-are-the-program]
     /// A `Bool` or an optional would collapse those two, which is the collapse this exists
     /// to prevent.
     enum AXAnswer: Equatable {
@@ -201,6 +201,10 @@ public struct TargetApp {
         case absent
         /// The app did not answer, most often the messaging timeout set above.
         case unanswered
+        /// This process is not allowed under Accessibility, so no read will answer and
+        /// waiting will not change that. Held apart from `unanswered` because the two want
+        /// opposite advice: grant a permission, or try again.
+        case denied
     }
 
     /// What a read's outcome means, decided apart from the read itself so it can be
@@ -209,6 +213,7 @@ public struct TargetApp {
         switch outcome {
         case .success: .answered
         case .noValue, .attributeUnsupported: .absent
+        case .apiDisabled: .denied
         default: .unanswered
         }
     }
@@ -226,6 +231,7 @@ public struct TargetApp {
         case .answered: return value
         case .absent: return nil
         case .unanswered: throw ScreenUnreadable.unreadableElement(app, attribute: name, code: outcome.rawValue)
+        case .denied: throw ScreenUnreadable.accessibilityDenied(app)
         }
     }
 
@@ -244,9 +250,8 @@ public struct TargetApp {
 
     /// A geometry attribute unboxed from its `AXValue`, when the app answered with one of
     /// the type asked for. The type id is the check, for the reason `element` gives.
-    private static func value<T>(_ attribute: String, of element: AXUIElement, as type: AXValueType, _ empty: T) -> T? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success, let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+    private static func value<T>(_ name: String, of element: AXUIElement, as type: AXValueType, _ empty: T, in app: String) throws -> T? {
+        guard let value = try attribute(name, of: element, in: app), CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
         var unboxed = empty
         guard AXValueGetValue(value as! AXValue, type, &unboxed) else { return nil }
         return unboxed
@@ -322,6 +327,9 @@ public enum ScreenUnreadable: Error, CustomStringConvertible {
     /// `noElement`, which says the app answered for every element it was asked about and
     /// none of them matched: this one says the search never saw the whole tree.
     case unreadableElement(String, attribute: String, code: Int32)
+    /// Every read will fail because this process is not allowed under Accessibility, which
+    /// is a permission to grant rather than a blip to ride out.
+    case accessibilityDenied(String)
 
     /// Whether waiting could still change the answer. An app that will not answer right
     /// now may answer in two milliseconds; an app that is not in front is not going to
@@ -331,7 +339,7 @@ public enum ScreenUnreadable: Error, CustomStringConvertible {
     public var mayPassWithTime: Bool {
         switch self {
         case .noFocus, .noText, .noElement, .unreadableElement: true
-        case .noFrontmostApp, .notRunning, .wouldNotComeForward, .wrongApp, .elementWithoutFrame, .tooManyElements, .searchTooSlow: false
+        case .noFrontmostApp, .notRunning, .wouldNotComeForward, .wrongApp, .elementWithoutFrame, .tooManyElements, .searchTooSlow, .accessibilityDenied: false
         }
     }
 
@@ -348,6 +356,7 @@ public enum ScreenUnreadable: Error, CustomStringConvertible {
         case .tooManyElements(let app, let limit): "\(app) exposes more than \(limit) elements, which is more than one search reads"
         case .searchTooSlow(let app, let limit): "\(app) did not answer an element search within \(limit)"
         case .unreadableElement(let app, let attribute, let code): "\(app) would not answer \(attribute) for an element the search reached; Accessibility error \(code)"
+        case .accessibilityDenied(let app): "\(app) cannot be read; is this process allowed under Accessibility?"
         }
     }
 }

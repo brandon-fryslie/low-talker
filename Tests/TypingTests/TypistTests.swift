@@ -207,9 +207,17 @@ import Testing
     /// is the case the whole distinction exists for.
     @Test func anAppThatWouldNotAnswerIsNotALeaf() {
         #expect(TargetApp.answer(to: .cannotComplete) == .unanswered)
-        #expect(TargetApp.answer(to: .apiDisabled) == .unanswered)
         #expect(TargetApp.answer(to: .invalidUIElement) == .unanswered)
         #expect(TargetApp.answer(to: .notImplemented) == .unanswered)
+    }
+
+    /// A denied process and a busy app both fail every read, and the advice they want is
+    /// opposite: grant a permission, or try again. Reporting the first as the second sends
+    /// the reader to the Accessibility pane for a permission they already hold.
+    @Test func aProcessThatIsNotAllowedIsToldSo() {
+        #expect(TargetApp.answer(to: .apiDisabled) == .denied)
+        #expect(ScreenUnreadable.accessibilityDenied("com.apple.TextEdit").mayPassWithTime == false)
+        #expect(ScreenUnreadable.accessibilityDenied("com.apple.TextEdit").description.contains("allowed under Accessibility"))
     }
 }
 
