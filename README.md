@@ -272,6 +272,23 @@ The daemon is a prerequisite, and through the device nothing starts it. The publ
 
 `sudo launchctl list | grep pqrs` does return a job, which is confusing: that job is the driver extension itself, running as user `_driverkit` under macOS's system-extension machinery, not the daemon.
 
+An Accessibility read is not a verdict on every app, and the reader says so rather than
+guessing. Measured on this Mac: VS Code frontmost with a document open answers `kAXValue`
+on its focused element with success and zero characters - the identical answer an empty
+TextEdit document gives. A reader that handed both back as a string would collapse "there
+is nothing on the screen" into "this app will not tell you", and it did: a run that typed
+all 29 characters correctly, proven by screenshot and by saving the buffer to disk,
+reported `MISMATCH: the screen holds []`. So a read answers with one of three things - the
+text, an empty answer, or no value at all - and only the first is evidence. The other two
+print as `nothing readable: ...` and send you to a screenshot. Slack is Electron too, so
+two of the five apps in this epic's done-condition are verifiable only by picture.
+
+Walking the tree for some other element that does carry text is not the way out, and was
+measured before being rejected: VS Code's tree runs past the 2000-element search limit,
+1334 of those elements answer `kAXValue` with a string and 230 are non-empty - sidebar
+filenames, "No code actions available", stale error text. Matching typed text anywhere in
+that would trade a false negative for false positives.
+
 `type` takes the target app's bundle id as an argument and refuses to type into anything else. It raises the named app, waits for macOS to agree it is frontmost, and re-checks before every keystroke. If the app will not come forward, nothing is posted at all:
 
     com.apple.TextEdit would not come to the front, com.googlecode.iterm2 is there; nothing was typed
@@ -348,6 +365,45 @@ Clicking by hand:
 
     make cli
     scripts/keyboard-helper install
+    .build/debug/lowtalker click AXButton Cancel
+
+`click` aims at whatever is in front. It is the hands half of a pair: `lowtalker see` is
+the eyes, and takes no positional arguments - only `--shot <path>`, to name where the
+picture goes so a before and an after can be kept side by side.
+
+    .build/debug/lowtalker see
+    frontmost com.apple.SecurityAgent
+    alerts 0
+    focus unreadable: com.apple.SecurityAgent has no focused element; is this process allowed under Accessibility?
+    screenshot /var/folders/.../lowtalker-see-1788771558021.png (1084155 bytes)
+
+`see` reports the frontmost app, how many system alerts macOS has over everything, what
+the focused element is and whether it will say what it holds, and then takes a screenshot.
+The picture is attempted whatever the readings above it did, and a run that cannot take one
+says so on the screenshot line and exits non-zero. It is not optional because for some apps
+it is the only true answer, and because a `see` before a click and a `see` after it are
+then comparable pictures.
+
+The virtual mouse refuses to press while a system alert is up - `click` and the routed
+`clickElement` below alike, because the refusal lives in the mouse rather than in whichever
+command started the click. An alert sits at the same screen centre every dialog does, so a
+frame located in the app underneath one has somebody else's button over it, and a click at
+that frame's centre would answer their prompt instead. It is asked at the press rather than
+at every motion report, because a move cannot answer anybody's prompt and a press can, so
+an alert that opens while the cursor is still travelling is still caught at the press. The
+count is read from `com.apple.UserNotificationCenter`
+through Accessibility with a half-second messaging timeout, deliberately not through
+System Events, which a modal SecurityAgent dialog can leave waiting rather than answering.
+
+The picture is of the main display: `screencapture` is run with `-m`, because without it
+a Mac with two monitors gets one file per display and none at the path that was asked
+for. And the process must hold Screen Recording, which a binary run from a terminal that
+holds it does - TCC attributes the grant to the responsible parent - so `see` checks
+rather than assumes: without it `screencapture` writes a blank picture that looks exactly
+like a real one.
+
+The same click is still reachable as a routed action, for a route that decides one:
+
     echo '[{"clickElement":{"role":"AXButton","title":"Cancel"}}]' | .build/debug/lowtalker act --context '{"chord":{"modifiers":["rightOption"]},"press":"hold","frontmostApp":"com.apple.SecurityAgent","focusedElementRole":null}'
 
 `clickElement` searches the frontmost app's Accessibility tree breadth first for an element of that role and title, stopping at 2000 elements or 5 s, and clicks the centre of its frame; an element with no area is refused by name. The other two forms are `{"click":{"at":{"x":697.5,"y":475},"button":"left","times":1}}` and `{"scroll":{"at":{"x":100,"y":200},"vertical":-3,"horizontal":0}}`. A scroll of 0 by 0 is a bare move, which is how the loop is measured: `[{"scroll":{"at":{"x":1400,"y":800},"vertical":0,"horizontal":0}}]` through the same `act`, with the context's `frontmostApp` set to whatever is in front.

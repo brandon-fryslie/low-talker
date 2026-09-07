@@ -42,6 +42,21 @@ final class StuckKeyboard: Keyboard {
 
 struct Refused: Error {}
 
+/// A pointing device that records every report reaching it. Where `FakeMouse` stands in
+/// for the whole mouse, this stands under one - so a test can ask not only whether a
+/// refusal was raised but whether anything reached the device before it.
+///
+/// Not `@MainActor`, because `Pointing` is not: it is the seam under the mouse, shared with
+/// the helper, and `VirtualPointing` conforms unisolated for the same reason.
+final class RecordingPointing: Pointing {
+    private(set) var log: [String] = []
+
+    func down(_ button: Button) throws { log.append("down \(button.rawValue)") }
+    func releaseAll() throws { log.append("up") }
+    func move(by delta: Move) throws { log.append("move \(delta.x.value) \(delta.y.value)") }
+    func scroll(by delta: Scroll) throws { log.append("scroll \(delta.vertical.value) \(delta.horizontal.value)") }
+}
+
 /// A mouse on a screen of its own, recording every report. The cursor moves by what a
 /// report asks times a curve standing in for the OS's acceleration - three points a
 /// count when the report is fast, one when it is slow - so the pointer's loop is tested
@@ -89,7 +104,7 @@ final class FakeMouse: Mouse {
 
     func locate(_ role: AccessibilityRole, _ title: String) throws -> CGRect {
         guard let frame = elements["\(role.rawValue)/\(title)"] else {
-            throw ScreenUnreadable.noElement(role: role.rawValue, title: title, app: "the fake screen")
+            throw ScreenUnreadable.noElement(role: role.rawValue, title: title, app: "the fake screen", trusted: true)
         }
         return frame
     }
