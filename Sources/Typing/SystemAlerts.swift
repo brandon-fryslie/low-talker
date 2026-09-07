@@ -47,9 +47,10 @@ public enum SystemAlerts {
     /// what is on the screen" - the same answer-shaped void `ScreenText` exists to refuse.
     nonisolated static func count(from result: AXError, value: CFTypeRef?) throws -> Int {
         switch result {
-        // A process holding no windows answers with an empty list, and one that has not
-        // finished launching answers that it has no such value. Both are an empty screen.
+        // `.noValue` is an owner with nothing yet in the attribute, `.attributeUnsupported`
+        // one whose element does not carry it at all. Neither is a refusal to answer.
         case .noValue, .attributeUnsupported: return 0
+        // An owner holding no windows lands here instead, with an empty list to count.
         case .success:
             guard let windows = value as? [CFTypeRef] else { throw AlertsUnreadable.answeredWithSomethingElse }
             return windows.count
