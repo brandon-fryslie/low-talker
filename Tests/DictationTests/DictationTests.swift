@@ -3,6 +3,7 @@ import KeyboardLayout
 import LowTalkerCore
 import Synchronization
 import Testing
+import TestProbes
 import Typing
 
 private struct NoEngine: Error {}
@@ -30,9 +31,14 @@ final class Rig {
     let keyboard = LoggingKeyboard()
     let dictation: Dictation
     private let reports: AsyncStream<Result<Dictation.Session, any Error>>
+    /// Raised by the first outcome to be reported. The stream says what the next report
+    /// is, this says whether one has come at all - the difference a `finish` that
+    /// returned before its session was reported would show.
+    let reported = Flag()
 
     init(
         transcriber: @escaping @Sendable @MainActor () async throws -> any Transcriber,
+        router: Router = Router(routes: [.dictation]),
         frontmost: @escaping @Sendable @MainActor () throws -> BundleID = { textEdit }
     ) throws {
         capture = AudioCapture(hardware: hardware)
@@ -40,14 +46,18 @@ final class Rig {
         let (stream, feed) = AsyncStream.makeStream(of: Result<Dictation.Session, any Error>.self)
         reports = stream
         let keyboard = keyboard
+        let reported = reported
         dictation = Dictation(
             capture: capture,
             transcriber: transcriber,
-            router: Router(routes: [.dictation]),
+            router: router,
             executor: Executor(keyboard: { _ in keyboard }, mouse: { _ in Self.unusedPointer }, hotkeys: [Self.rightOption]),
             layout: { Self.us },
             frontmost: frontmost,
-            report: { feed.yield($0) }
+            report: { outcome in
+                reported.raise()
+                feed.yield(outcome)
+            }
         )
     }
 
@@ -203,8 +213,9 @@ extension Result {
     /// it types and releases them on its way out, so a surface that went while one was
     /// still in flight would leave a key down for macOS to repeat into whatever came
     /// forward next. The session is held at the engine with nothing typed yet, so a
-    /// `finish` that did not wait is caught by the empty keyboard log.
-    @Test func finishReturnsOnlyAfterASessionStillInFlightHasTyped() async throws {
+    /// `finish` that did not wait is caught by the empty keyboard log - and by the
+    /// report not having landed, which is the other half of what `finish` promises.
+    @Test func finishReturnsOnlyAfterASessionStillInFlightHasTypedAndBeenReported() async throws {
         let gate = Gate()
         let rig = try Rig(transcriber: {
             FakeTranscriber { _ in
@@ -215,9 +226,32 @@ extension Result {
         rig.hold()
         #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { gate.waiting == 1 })
         #expect(rig.keyboard.log.isEmpty)
+        #expect(!rig.reported.raised)
         gate.open()
-        await rig.dictation.finish()
+        try await rig.dictation.finish()
         #expect(rig.keyboard.log == Self.typed("a"))
+        #expect(rig.reported.raised)
+    }
+
+    /// The session's own line, which the app's log and the CLI's print both read. Where
+    /// the words went is read off what was performed, so a route that names its own app
+    /// says that app and not the one that happened to be in front at key-down.
+    @Test func aSessionsLineNamesTheAppItsRouteTargetedNotTheOneInFront() async throws {
+        let safari = BundleID(rawValue: "com.apple.Safari")
+        let rig = try Rig(
+            transcriber: { FakeTranscriber { _ in Transcript(typed: "a") } },
+            router: Router(routes: [Route(when: .always, then: .insertTranscript(target: .app(bundleID: safari)))])
+        )
+        rig.hold()
+        #expect(try await rig.session().description.hasSuffix("1 actions into com.apple.Safari"))
+    }
+
+    /// Nothing said is a session that performed nothing, and a destination it never had
+    /// is left unsaid rather than rendered as an empty one.
+    @Test func aSessionThatPerformedNothingNamesNoDestination() async throws {
+        let rig = try Rig(hearing: FakeTranscriber { _ in Transcript(typed: "") })
+        rig.hold()
+        #expect(try await rig.session().description.hasSuffix("0 actions"))
     }
 
     @Test func anEngineThatFailsIsReportedAndTheNextPressTypes() async throws {

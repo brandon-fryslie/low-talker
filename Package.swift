@@ -36,6 +36,10 @@ let package = Package(
         // usage, the modifiers held with it, and the two names one key goes by. It links
         // nothing, so neither the layout nor the device has to link the other to speak.
         .target(name: "Keystrokes"),
+        // The gate and the flag a suite plants in concurrent work to see where it has
+        // got to. A plain target because test targets cannot import one another's
+        // sources, and in no product because nothing ships it. [LAW:one-source-of-truth]
+        .target(name: "TestProbes"),
         // The same seam for the mouse: a button, a count of motion, a move and a scroll.
         // Like Keystrokes it links nothing, so the device and the click decision share a
         // vocabulary without sharing a dependency. [LAW:one-way-deps]
@@ -68,7 +72,7 @@ let package = Package(
         // app links it and hands over the real microphone, engine and keyboard.
         // [LAW:decomposition]
         .target(name: "Dictation", dependencies: ["LowTalkerCore", "Typing", "KeyboardLayout"]),
-        .testTarget(name: "DictationTests", dependencies: ["Dictation", "LowTalkerCore", "Typing", "KeyboardLayout", "Keystrokes", "Pointing"]),
+        .testTarget(name: "DictationTests", dependencies: ["Dictation", "LowTalkerCore", "Typing", "KeyboardLayout", "Keystrokes", "Pointing", "TestProbes"]),
         // The root daemon that owns the device. It links VirtualKeyboard and the seam, and
         // deliberately not KeyboardLayout: text never reaches this process.
         .executableTarget(
@@ -98,6 +102,7 @@ let package = Package(
             name: "LowTalkerCoreTests",
             dependencies: [
                 "LowTalkerCore",
+                "TestProbes",
                 // The tests build WhisperKit's result types by hand to exercise the
                 // mapping without model weights.
                 .product(name: "WhisperKit", package: "argmax-oss-swift"),

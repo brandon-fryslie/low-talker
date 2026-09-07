@@ -6,11 +6,11 @@
 /// interleave. This actor owns the order explicitly as a chain of tasks, and it is
 /// the one place that fact lives for anything that wraps a non-reentrant resource.
 ///
-/// An operation may not submit to a queue it is running inside, directly or through
-/// other queues, and neither may any task that inherits the operation's context: the
-/// submission would wait on itself forever, so it is refused instead. A task that
-/// must resubmit later without waiting is spawned with `Task.detached`, which
-/// inherits nothing.
+/// An operation may neither submit to a queue it is running inside nor drain one,
+/// directly or through other queues, and neither may any task that inherits the
+/// operation's context: either wait would be a wait on itself, forever, so both are
+/// refused instead. A task that must come back later without waiting is spawned with
+/// `Task.detached`, which inherits nothing.
 public actor SerialQueue {
     /// The latest submission, whatever its outcome. The next one awaits it.
     private var tail: Task<Void, Never>?
@@ -23,7 +23,7 @@ public actor SerialQueue {
     public func run<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) async throws -> T {
         let id = ObjectIdentifier(self)
         // [LAW:no-silent-failure] The alternative is a hang with no diagnostics.
-        guard !Self.enclosing.contains(id) else { throw SerialQueueError.reentrantSubmission }
+        guard !Self.enclosing.contains(id) else { throw SerialQueueError.reentrantWait }
         let earlier = tail
         let task = Task {
             await earlier?.value
@@ -42,19 +42,22 @@ public actor SerialQueue {
     /// [LAW:no-ambient-temporal-coupling] The queue owns the order, so it owns the
     /// question of when the ordered work is done; a caller that timed a sleep against it
     /// instead would be betting on how long the work takes.
-    public func drain() async {
+    public func drain() async throws {
+        // [LAW:single-enforcer] The same refusal `run` makes, read off the same set: from
+        // inside an operation the tail is that operation, so the wait would never return.
+        guard !Self.enclosing.contains(ObjectIdentifier(self)) else { throw SerialQueueError.reentrantWait }
         await tail?.value
     }
 }
 
 public enum SerialQueueError: Error, CustomStringConvertible {
-    /// An operation submitted to a queue it is running inside.
-    case reentrantSubmission
+    /// A task waited on a queue it is running inside, by submitting to it or draining it.
+    case reentrantWait
 
     public var description: String {
         switch self {
-        case .reentrantSubmission:
-            "an operation submitted to a SerialQueue it is running inside, which would wait on itself forever"
+        case .reentrantWait:
+            "a task waited on a SerialQueue it is running inside, which would wait on itself forever"
         }
     }
 }
