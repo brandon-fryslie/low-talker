@@ -5,7 +5,6 @@ import Foundation
 import KeyboardLayout
 import Keystrokes
 import LowTalkerCore
-import VirtualKeyboard
 
 /// The spike behind low-keyboard-3ti.2: keystrokes sent to the
 /// Karabiner-DriverKit-VirtualHIDDevice driver extension from this process, with as
@@ -86,14 +85,16 @@ struct DextTypeCommand: AsyncParsableCommand {
         // controls. A character is several reports, so a throw between them - a socket
         // timeout, a focus check that fails, the operator's Ctrl-C - leaves that key
         // held, and macOS repeats a held key until something releases it. One place
-        // enforces that, not each throw site.
+        // enforces that, not each throw site. Registered before the keyboard is brought
+        // up, so a device that will not come up is released through the connection that
+        // was opened to it: the last run's keys may still be down there.
         defer {
             do { try keyboard.releaseAll() }
             // [LAW:no-silent-failure] Nowhere to throw from a defer, so it is said out
             // loud: a key may be left held and the next thing typed will show it.
             catch { print("the keyboard was not released: \(error). A key may be left held.") }
         }
-        print(opened.report)
+        print(try opened.bringUp())
 
         // A press in the device's own vocabulary: a modifier is a key like any other, held
         // around the one it modifies. So a keystroke costs one report per modifier held,

@@ -17,19 +17,22 @@ enum Through: String, ExpressibleByArgument, CaseIterable {
     /// The installed helper, which is root so this process does not have to be.
     case helper
 
-    /// A keyboard that is up, and what bringing it up cost.
+    /// A keyboard that is open, and the step that brings it up.
     ///
     /// The two travel together because they are made together, and separating them would
     /// mean asking a `KeyPress` afterwards which kind it really is - a question the type
-    /// exists to stop anyone needing to ask. [LAW:types-are-the-program]
+    /// exists to stop anyone needing to ask. [LAW:types-are-the-program] Opening and
+    /// bringing up are two steps and not one so the caller can register its release
+    /// between them: a device that will not come up is released through the connection
+    /// that was opened to it, on the same way out every other failure takes.
     struct Opened {
         let keyboard: any KeyPress
-        /// Ready to print. What is worth saying differs: the device has to be brought up
-        /// and waited for - about a second of it, which is pqrs's one-second readiness
-        /// poll rather than the hardware, and the number is worth printing because that
-        /// wait is the whole reason a helper holds its connection open. The helper has
-        /// already paid it, at its own startup, before any client existed.
-        let report: String
+        /// Brings the keyboard up and answers with what is worth saying about it. For the
+        /// device that is a wait - about a second of it, which is pqrs's one-second
+        /// readiness poll rather than the hardware, and the number is worth printing
+        /// because that wait is the whole reason a helper holds its connection open. The
+        /// helper has already paid it, at its own startup, before any client existed.
+        let bringUp: () throws -> String
     }
 
     /// [LAW:no-silent-failure] Nothing is claimed here that this side has not observed.
@@ -41,16 +44,14 @@ enum Through: String, ExpressibleByArgument, CaseIterable {
             let connecting = clock.now
             let device = try VirtualKeyboard()
             let connected = clock.now - connecting
-            let startup = try device.start(within: .seconds(3))
-            return Opened(
-                keyboard: device,
-                report: "connected in \(connected.milliseconds) ms, daemon answered in \(startup.answered.milliseconds) ms, keyboard ready after \(startup.ready.milliseconds) ms"
-            )
+            return Opened(keyboard: device) {
+                let startup = try device.start(within: .seconds(3))
+                return "connected in \(connected.milliseconds) ms, daemon answered in \(startup.answered.milliseconds) ms, keyboard ready after \(startup.ready.milliseconds) ms"
+            }
         case .helper:
-            return Opened(
-                keyboard: HelperKeyboard(),
-                report: "keystrokes go to \(Helper.machServiceName); the first one asks whether it answers"
-            )
+            return Opened(keyboard: HelperKeyboard()) {
+                "keystrokes go to \(Helper.machServiceName); the first one asks whether it answers"
+            }
         }
     }
 }
