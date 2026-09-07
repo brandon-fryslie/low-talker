@@ -356,17 +356,29 @@ import Testing
 
     // MARK: - Reading the file
 
-    /// No file at all is the one case that yields the defaults.
+    /// No file at all is the one case that yields the defaults - and says it did, so a
+    /// reader is never shown the defaults as though somebody had written them.
     @Test func noFileIsTheDefaults() throws {
         let missing = URL(filePath: NSTemporaryDirectory()).appending(path: "low-talker-\(UUID().uuidString)/config.toml")
-        #expect(try Config.load(from: missing) == .default)
+        #expect(try Config.load(from: missing) == .noFile(at: missing))
+        #expect(try Config.load(from: missing).config == .default)
+    }
+
+    /// A file that says exactly what the defaults say is still a file somebody wrote,
+    /// and the two are told apart by which case they arrive in rather than by comparing
+    /// configs - which could not tell them apart at all.
+    @Test func aFileSayingTheDefaultsIsStillAFile() throws {
+        let url = URL(filePath: NSTemporaryDirectory()).appending(path: "low-talker-\(UUID().uuidString).toml")
+        try "".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        #expect(try Config.load(from: url) == .file(.default, at: url))
     }
 
     @Test func aFileOnDiskIsWhatTheAppRunsOn() throws {
         let url = URL(filePath: NSTemporaryDirectory()).appending(path: "low-talker-\(UUID().uuidString).toml")
         try Self.full.write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
-        #expect(try Config.load(from: url) == Config(toml: Self.full))
+        #expect(try Config.load(from: url) == .file(Config(toml: Self.full), at: url))
     }
 
     /// [LAW:no-silent-failure] A path that exists but hands back no config text is an
