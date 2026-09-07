@@ -157,56 +157,6 @@ public enum DriverUnreadable: Error, CustomStringConvertible, Equatable {
     }
 }
 
-/// One command run against the machine, and everything it said.
-///
-/// Small on purpose: the probes need a status and two streams, and a general process
-/// wrapper would be a second thing to maintain for the sake of arguments nobody passes.
-struct Command {
-    let tool: URL
-    let arguments: [String]
-
-    init(_ tool: String, _ arguments: String...) {
-        self.tool = URL(fileURLWithPath: tool)
-        self.arguments = arguments
-    }
-
-    struct Output {
-        let status: Int32
-        let stdout: String
-        let stderr: String
-        /// What a reader should be shown when the command failed: tools split their
-        /// complaints across both streams and which one carried it is not the reader's
-        /// problem.
-        var merged: String {
-            [stdout, stderr].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-                .joined(separator: "\n")
-        }
-    }
-
-    func run() throws -> Output {
-        let process = Process()
-        process.executableURL = tool
-        process.arguments = arguments
-        let out = Pipe(), err = Pipe()
-        process.standardOutput = out
-        process.standardError = err
-        try process.run()
-        // Both pipes are drained before the wait. A process whose pipe fills blocks in
-        // write and never exits, so a wait taken first would be a wait on a full buffer -
-        // and `systemextensionsctl list` on a Mac with fourteen extensions is well past
-        // the point where that stops being theoretical.
-        let outBytes = out.fileHandleForReading.readDataToEndOfFile()
-        let errBytes = err.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return Output(
-            status: process.terminationStatus,
-            stdout: String(decoding: outBytes, as: UTF8.self),
-            stderr: String(decoding: errBytes, as: UTF8.self)
-        )
-    }
-}
-
 private extension String {
     /// The remainder of the first line starting with `prefix`.
     func lineValue(after prefix: String) -> String? {
