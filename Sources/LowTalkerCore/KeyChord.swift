@@ -40,6 +40,20 @@ public enum Modifier: String, Hashable, Codable, CaseIterable, Sendable {
     case leftOption, rightOption
     case leftCommand, rightCommand
     case function
+
+    /// [LAW:single-enforcer] Which modifiers exist is this type's rule, so a file that
+    /// names another is answered from the cases themselves and never falls out of step
+    /// with them.
+    public init(from decoder: any Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        guard let modifier = Modifier(rawValue: raw) else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "\"\(raw)\" is not a modifier: \(Modifier.allCases.map(\.rawValue).joined(separator: ", "))"
+            ))
+        }
+        self = modifier
+    }
 }
 
 /// A macOS virtual key code (the `kVK_*` constants; `CGKeyCode`). Key codes rather
