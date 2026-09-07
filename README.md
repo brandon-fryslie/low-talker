@@ -195,6 +195,21 @@ Every heading is printed every time, so a mode with no vocabulary shows an empty
 
 The exit status is 0 when the file is understood and has no gaps, 1 when it cannot be understood, and 2 when it is understood but has gaps.
 
+### Reloading as it is edited
+
+    .build/debug/lowtalker config watch
+
+prints the same report and then stays up, printing it again each time the file is saved into something different. The app reads the file the same way, so a chord can be changed and seen to take effect without relaunching anything; it takes effect on the next press of the chord, since a session that is already listening keeps the mode it started in.
+
+A save that cannot be understood does not disturb what is running. It is named the way `check` names it, followed by the file still in force:
+
+    refused: line 2 is not TOML: Error while parsing table header: expected ']', saw '\n'
+    still running: /Users/you/.config/low-talker/config.toml
+
+Which is the whole point of reloading this way rather than re-reading the file and taking whatever comes back. A config half way through being typed is refused a hundred times over the course of an edit, and if a refusal cost the author their settings the feature would be worse than not having it. The defaults are reached by deleting the file, never by mistyping it.
+
+Deleting the file reloads too, back to the defaults, and the report says the file is gone rather than showing the defaults as though somebody had written them. Creating a file where there was none is picked up as well, and so is creating `~/.config/low-talker/` itself: the watch is placed on the deepest directory of that path that exists, because a watch on a directory that is not there yet is deaf for the life of the process. Saves that change nothing — the file rewritten with the same bytes, or some other file in the same directory — are read and not reported, so what gets printed is the set of changes to what the app would run with, not the set of times the disk was touched.
+
 ## Acting on a route
 
     make cli
