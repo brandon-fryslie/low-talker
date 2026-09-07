@@ -39,6 +39,25 @@ import Testing
         #expect(try Data(contentsOf: destination) == earlier)
     }
 
+    /// The recursive-delete hole, closed. `--shot` carries a path from outside, so a
+    /// mistyped destination naming a folder must not be cleared to make room for a
+    /// picture: `removeItem` would take the folder and everything under it. The file left
+    /// inside is what makes this a test of the refusal rather than of the error - a guard
+    /// that threw after deleting would satisfy the throw and still have done the damage.
+    @Test func aDestinationThatIsADirectoryIsRefusedAndKeepsWhatIsInIt() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lowtalker-folder-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let inside = directory.appendingPathComponent("what-a-mistyped-shot-would-have-taken.txt")
+        try Data("still here".utf8).write(to: inside)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        #expect(throws: ScreenNotCaptured.self) {
+            try Screenshot.capture(to: directory, screenRecordingAllowed: true)
+        }
+        #expect(try Data(contentsOf: inside) == Data("still here".utf8))
+    }
+
     /// The stale-picture hole, closed. A destination whose directory is not writable can
     /// neither be captured to nor cleared, so a picture left there by an earlier run would
     /// sit exactly where the check looks for evidence and vouch for a capture that wrote

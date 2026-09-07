@@ -29,11 +29,22 @@ public struct GuardedMouse: Mouse {
     public let pointing: any Pointing
     public let interrupt: Interrupt
     public let screen: TargetApp
+    /// The alert reading taken as a parameter rather than read inside `down`, for the
+    /// reason `Screenshot.capture` takes the Screen Recording grant: it lets a test ask
+    /// what a press does with an alert on a screen it does not have.
+    /// [LAW:effects-at-boundaries]
+    public let alerts: @MainActor () throws -> Void
 
-    public init(pointing: any Pointing, interrupt: Interrupt, screen: TargetApp) {
+    public init(
+        pointing: any Pointing,
+        interrupt: Interrupt,
+        screen: TargetApp,
+        alerts: @escaping @MainActor () throws -> Void = SystemAlerts.requireNone
+    ) {
         self.pointing = pointing
         self.interrupt = interrupt
         self.screen = screen
+        self.alerts = alerts
     }
 
     /// [LAW:single-enforcer] The interrupt and the frontmost app are proven here rather
@@ -48,7 +59,7 @@ public struct GuardedMouse: Mouse {
     /// down can. `Pointer.click` calls `check` and then this, so it is still asked at the
     /// last instant before the press, without a move paying for it once per motion report.
     public func down(_ button: Button) throws {
-        try SystemAlerts.requireNone()
+        try alerts()
         try pointing.down(button)
     }
 
