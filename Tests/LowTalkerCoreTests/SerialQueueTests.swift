@@ -196,6 +196,25 @@ private struct Boom: Error {}
         try await later.value
     }
 
+    /// The sequence a caller shutting down actually performs: hand the work over, then
+    /// drain, with nothing awaited in between. It is a sequence only a synchronous
+    /// `submit` can express - an `async` one would put an `await` between the two, which
+    /// is the window this closed - so the compiler holds that half and this test is what
+    /// keeps the signature from quietly going back. The run holds the other half: the
+    /// operation needs fifty scheduling rounds to reach its flag, so a drain that came
+    /// back without waiting for it is caught by the flag still being down.
+    @Test func drainWaitsForAnOperationSubmittedWithNothingAwaitedInBetween() async throws {
+        let queue = SerialQueue()
+        let finished = Flag()
+        let submitted = try queue.submit {
+            for _ in 0..<50 { await Task.yield() }
+            finished.raise()
+        }
+        try await queue.drain()
+        #expect(finished.raised)
+        try await submitted.value
+    }
+
     /// Draining from inside an operation is the same wait-on-yourself a submission is -
     /// the tail being awaited is the caller's own operation - and is refused the same way
     /// rather than left to hang undiagnosed.
