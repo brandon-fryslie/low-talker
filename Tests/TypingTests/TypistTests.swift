@@ -49,22 +49,28 @@ import Typing
 
     /// A chord names its sides, so it can hold the hotkey where text cannot. Right
     /// Option and E is Right Option going down first, which the tap hears as the hotkey.
+    /// The modifiers go down in the order their bits run, and the tap begins a press only
+    /// when exactly the hotkey is held: Right Command comes down after Right Option, so
+    /// the hotkey is held alone on the way; Left Command comes down before it, so it never is.
     @Test func aChordHoldingTheHotkeyIsRefused() throws {
         let keyboard = RefusingKeyboard()
         let typist = Typist(keyboard: keyboard, hotkeys: [Self.rightOption])
         #expect(throws: WouldPressTheHotkey.self) { try typist.lower(KeyChord(key: Key(rawValue: 0x0E), modifiers: [.rightOption])) }
-        #expect(throws: WouldPressTheHotkey.self) { try typist.lower(KeyChord(key: Key(rawValue: 0x0E), modifiers: [.rightOption, .leftCommand])) }
+        #expect(throws: WouldPressTheHotkey.self) { try typist.lower(KeyChord(key: Key(rawValue: 0x0E), modifiers: [.rightOption, .rightCommand])) }
+        _ = try typist.lower(KeyChord(key: Key(rawValue: 0x0E), modifiers: [.rightOption, .leftCommand]))
         _ = try typist.lower(KeyChord(key: Key(rawValue: 0x0E), modifiers: [.leftOption]))
         #expect(keyboard.log.isEmpty)
     }
 
-    /// A hotkey with a key of its own is that key under those modifiers and nothing else:
-    /// the same modifiers over another key is a different chord to the tap.
+    /// A hotkey with a key of its own is that key under exactly those modifiers and nothing
+    /// else: the same modifiers over another key, or the key under more of them, is a
+    /// different chord to the tap.
     @Test func aHotkeyWithAKeyRefusesOnlyThatKey() throws {
         let typist = Typist(keyboard: RefusingKeyboard(), hotkeys: [KeyChord(key: Key(rawValue: 0x31), modifiers: [.leftCommand, .leftShift])])
         #expect(throws: WouldPressTheHotkey.self) { try typist.lower(KeyChord(key: Key(rawValue: 0x31), modifiers: [.leftCommand, .leftShift])) }
         _ = try typist.lower(KeyChord(key: Key(rawValue: 0x00), modifiers: [.leftCommand, .leftShift]))
         _ = try typist.lower(KeyChord(key: Key(rawValue: 0x31), modifiers: [.leftCommand]))
+        _ = try typist.lower(KeyChord(key: Key(rawValue: 0x31), modifiers: [.leftCommand, .leftShift, .leftOption]))
     }
 
     /// A hotkey holding Fn can never be pressed by this typist, so it refuses nothing -

@@ -13,13 +13,14 @@ import LowTalkerCore
 /// typing any. [LAW:parse-dont-validate]
 ///
 /// The hotkey is refused here and nowhere else. The virtual keyboard is hardware to
-/// macOS, so the app's own event tap sees every key this presses, and a keystroke that
-/// holds the hotkey's modifiers would begin a press at the detector: dictation
-/// retriggering dictation. Text never reaches it - a layout lowers every character to
-/// the left modifiers, and the default hotkey is Right Option - but a chord names its
-/// sides and could. The answer is a refusal by type rather than a tap that is asked to
-/// look away for a while, because the tap can lapse and be switched back on mid-insert
-/// and a typist that had counted on its silence would be surprised. [LAW:single-enforcer]
+/// macOS, so the app's own event tap sees every key this presses, and a keystroke whose
+/// modifiers pass through the hotkey's on the way down would begin a press at the
+/// detector: dictation retriggering dictation. Text never reaches it - a layout lowers
+/// every character to the left modifiers, and the default hotkey is Right Option - but a
+/// chord names its sides and could. The answer is a refusal by type rather than a tap
+/// that is asked to look away for a while, because the tap can lapse and be switched back
+/// on mid-insert and a typist that had counted on its silence would be surprised.
+/// [LAW:single-enforcer]
 @MainActor
 public struct Typist {
     public let keyboard: any Keyboard
@@ -129,12 +130,21 @@ public struct Typist {
             self.key = key
         }
 
-        /// Whether the tap would see this keystroke as the hotkey. The modifiers go down
-        /// one at a time, so a keystroke holding the hotkey's modifiers and more presses
-        /// the hotkey on its way to the rest; and a hotkey with no key is pressed by any
-        /// keystroke that holds its modifiers.
+        /// Whether the tap would see this keystroke as the hotkey, by the detector's rule:
+        /// a press begins on a key-down that leaves exactly the hotkey's modifiers held.
+        /// `Scribe` puts the modifiers down one at a time in the order `Modifiers.usages`
+        /// runs, so a bare hotkey is pressed when some prefix of that order is its
+        /// modifiers, and one with a key is pressed by that key under exactly them.
+        /// [LAW:one-source-of-truth] The order is read from the sequence the scribe
+        /// presses, not restated here.
         func isPressed(by keystroke: Keystroke) -> Bool {
-            keystroke.modifiers.isSuperset(of: modifiers) && key.map { $0 == keystroke.usage } ?? true
+            switch key {
+            case nil:
+                let order = keystroke.modifiers.usages
+                return order.indices.contains { Modifiers(order[...$0]) == modifiers }
+            case let key?:
+                return keystroke.modifiers == modifiers && keystroke.usage == key
+            }
         }
     }
 }
