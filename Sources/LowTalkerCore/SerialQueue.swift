@@ -34,6 +34,17 @@ public actor SerialQueue {
         tail = Task { _ = await task.result }
         return try await task.value
     }
+
+    /// Returns once every operation submitted before this call has finished, however it
+    /// ended. Operations submitted after it are not waited for, so a caller draining
+    /// before it shuts down waits exactly as long as the work already accepted.
+    ///
+    /// [LAW:no-ambient-temporal-coupling] The queue owns the order, so it owns the
+    /// question of when the ordered work is done; a caller that timed a sleep against it
+    /// instead would be betting on how long the work takes.
+    public func drain() async {
+        await tail?.value
+    }
 }
 
 public enum SerialQueueError: Error, CustomStringConvertible {

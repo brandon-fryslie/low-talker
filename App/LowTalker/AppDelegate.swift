@@ -183,7 +183,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .success(let session):
             sessions.notice("\(session.description, privacy: .public): \(session.transcript.text, privacy: .private)")
         case .failure(let error):
-            sessions.error("session failed: \(String(describing: error), privacy: .public)")
+            // The kind of failure is public and its account is not: a TypingStopped
+            // names the character left half typed, which is a character the user
+            // dictated. [LAW:no-silent-failure] The type alone still says what broke.
+            sessions.error("session failed: \(String(describing: type(of: error)), privacy: .public) — \(String(describing: error), privacy: .private)")
         }
     }
 

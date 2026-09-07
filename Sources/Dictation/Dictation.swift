@@ -32,9 +32,14 @@ public final class Dictation {
 
         /// The session in numbers, without the words: they are what the user
         /// dictated, and each surface decides for itself whether to show them.
-        /// [LAW:one-source-of-truth] The app's log line and the CLI's are this.
+        /// [LAW:one-source-of-truth] The app's log line and the CLI's are this, and
+        /// where the words went is read off what was performed rather than off the app
+        /// that happened to be in front at key-down: a route may name its own target,
+        /// and then the two are different apps.
         public var description: String {
-            "heard \(transcript.words.count) words \(Int(keyUpToTranscript / .milliseconds(1))) ms after key-up, \(performed.count) actions into \(context.frontmostApp.rawValue)"
+            let into = Set(performed.map(\.into)).map(\.rawValue).sorted().joined(separator: ", ")
+            let destination = into.isEmpty ? "" : " into \(into)"
+            return "heard \(transcript.words.count) words \(Int(keyUpToTranscript / .milliseconds(1))) ms after key-up, \(performed.count) actions\(destination)"
         }
     }
 
@@ -100,11 +105,17 @@ public final class Dictation {
             let keyUp = ContinuousClock.now
             let open = press
             press = .up
+            // What there is to hear, or the reason there is nothing. One value, so a
+            // press that was refused at key-down and one that was heard leave here by
+            // the same path: the failure is thrown inside the queued operation, which
+            // is what makes it wait its turn instead of overtaking a session still
+            // being typed. [LAW:dataflow-not-control-flow]
+            let heard: Result<(AudioClip, Context), any Error>
             switch open {
             case .up:
                 preconditionFailure("a press ended that never began; the detector pairs every ended with a began")
             case .refused(let error):
-                report(.failure(error))
+                heard = .failure(error)
             case .down(let session, let into):
                 let clip = capture.endSession(session)
                 // The role is a synchronous call into another process, up to half a
@@ -114,20 +125,34 @@ public final class Dictation {
                 // [LAW:no-silent-failure] Read at key-up, once: a microphone that
                 // stopped mid-hold leaves a ring the engine would hear as silence and
                 // this loop would report as nothing said.
-                let audio: Result<AudioClip, any Error> = switch capture.state {
-                case .running: .success(clip)
+                heard = switch capture.state {
+                case .running: .success((clip, context))
                 case .stopped: .failure(NoMicrophone.stopped)
                 case .failed(let error): .failure(NoMicrophone.failed(error))
                 }
-                Task { [sessions] in
-                    do {
-                        report(.success(try await sessions.run { try await self.hear(audio.get(), in: context, since: keyUp) }))
-                    } catch {
-                        report(.failure(error))
-                    }
+            }
+            Task { [sessions] in
+                do {
+                    report(.success(try await sessions.run {
+                        let (clip, context) = try heard.get()
+                        return try await self.hear(clip, in: context, since: keyUp)
+                    }))
+                } catch {
+                    report(.failure(error))
                 }
             }
         }
+    }
+
+    /// Returns once every session already begun has been typed and reported.
+    ///
+    /// [LAW:no-ambient-temporal-coupling] A session holds keys down while it types and
+    /// releases them on its way out, so a process that exits while one is in flight
+    /// leaves a key down for macOS to repeat into whatever comes forward next. This is
+    /// what a surface awaits before it goes, and the wait is on the sessions themselves
+    /// rather than on a grace period long enough to probably cover them.
+    public func finish() async {
+        await sessions.drain()
     }
 
     private func hear(_ clip: AudioClip, in context: Context, since keyUp: ContinuousClock.Instant) async throws -> Session {
