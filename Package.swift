@@ -20,6 +20,7 @@ let package = Package(
         // WhisperKit ships inside the Argmax OSS SDK since 1.0; the WhisperKit product
         // is the only one linked.
         .package(url: "https://github.com/argmaxinc/argmax-oss-swift.git", from: "1.1.0"),
+        .package(url: "https://github.com/LebJe/TOMLKit.git", from: "0.6.0"),
     ],
     targets: [
         // [LAW:one-way-deps] Core knows nothing of the CLI or the app; both link it.
@@ -27,6 +28,7 @@ let package = Package(
             name: "LowTalkerCore",
             dependencies: [
                 .product(name: "WhisperKit", package: "argmax-oss-swift"),
+                .product(name: "TOMLKit", package: "TOMLKit"),
             ]
         ),
         // The vocabulary at the seam between deciding what to type and typing it: a HID
