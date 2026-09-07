@@ -109,6 +109,13 @@ import Testing
         #expect(throws: DecodingError.self) {
             try JSONDecoder().decode(Action.self, from: json)
         }
+        // Int.min is the value abs() traps on rather than refuses, so it is the one a
+        // bound checked the wrong way would crash the process over.
+        #expect(WheelCounts(rawValue: Int.min) == nil)
+        let extreme = Data(#"{"scroll": {"at": {"x": 1, "y": 2}, "vertical": -9223372036854775808, "horizontal": 0}}"#.utf8)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(Action.self, from: extreme)
+        }
     }
 
     /// The Context shape the dry-run CLI will accept on `--context`.

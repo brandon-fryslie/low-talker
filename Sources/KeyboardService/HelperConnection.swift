@@ -98,16 +98,16 @@ public final class HelperConnection: @unchecked Sendable {
             // for an interrupted connection and an invalid one alike, and only the code
             // tells a dead helper from one that refused the connection.
             let failed = error as NSError
-            outcome.say(.failed(Unreachable(reason: "the keyboard helper could not be reached: \(failed.localizedDescription) (\(failed.domain) \(failed.code))")))
+            outcome.say(.failed(Unreachable(reason: "the helper could not be reached: \(failed.localizedDescription) (\(failed.domain) \(failed.code))")))
         }
         guard let service = proxy as? HelperService else {
-            throw Unreachable(reason: "the keyboard helper answered with something that is not a helper")
+            throw Unreachable(reason: "the helper answered with something that is not a helper")
         }
         body(service) { error in outcome.say(error.map { .failed($0) } ?? .acknowledged) }
         switch outcome.await(replyTimeout) {
         case .acknowledged: return
         case .failed(let error): throw error
-        case nil: throw Unreachable(reason: "the keyboard helper did not answer in \(replyTimeout)")
+        case nil: throw Unreachable(reason: "the helper did not answer in \(replyTimeout)")
         }
     }
 }

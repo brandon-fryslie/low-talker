@@ -44,17 +44,18 @@ let package = Package(
         // low-talker: no dependency on LowTalkerCore, so it leaves for its own package by
         // a move rather than by an untangling.
         .target(name: "VirtualKeyboard", dependencies: ["Keystrokes", "Pointing"]),
-        // What crosses the privilege boundary, and the client's side of it. It links
-        // Keystrokes and nothing else: not the layout, because a root helper must never
-        // read one, and not the device, because a client must never open one.
+        // What crosses the privilege boundary, and the client's side of it. It links the
+        // two vocabularies and nothing else: not the layout, because a root helper must
+        // never read one, and not the device, because a client must never open one.
         // [LAW:one-way-deps]
         .target(name: "KeyboardService", dependencies: ["Keystrokes", "Pointing"]),
         .testTarget(name: "KeyboardServiceTests", dependencies: ["KeyboardService", "Keystrokes", "Pointing"]),
-        // The app's one inserter: text and chords lowered to keystrokes and pressed on a
-        // keyboard, with the hotkey refused and the target app re-proven in front before
-        // every key. It links the core for the actions and chords it performs, the layout
-        // and the vocabulary, and takes the keyboard as a value, so the same typist runs
-        // against the helper in the app and against the driver under sudo. [LAW:composability]
+        // The app's one inserter and its one pointer: text and chords lowered to keystrokes,
+        // clicks and scrolls to pointing reports, with the hotkey refused and the target app
+        // re-proven in front before each one. It links the core for the actions it performs,
+        // the layout and both vocabularies, and takes the keyboard and the mouse as values,
+        // so the same typist runs against the helper in the app and against the driver under
+        // sudo. [LAW:composability]
         .target(name: "Typing", dependencies: ["LowTalkerCore", "KeyboardLayout", "Keystrokes", "Pointing"]),
         // Driven against a keyboard the test plays, so a run can be stopped inside any
         // keystroke and its report read back.

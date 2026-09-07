@@ -47,11 +47,16 @@ final class Devices: NSObject, ServedDevices, @unchecked Sendable {
     private func attempt(_ act: () throws -> Void, _ reply: (Error?) -> Void) {
         device.lock()
         defer { device.unlock() }
+        reply(outcome(of: act))
+    }
+
+    /// The lock is the caller's to hold, so an act made of several is still one sequence.
+    private func outcome(of act: () throws -> Void) -> Error? {
         do {
             try act()
-            reply(nil)
+            return nil
         } catch {
-            reply(refusal(error))
+            return refusal(error)
         }
     }
 
@@ -87,14 +92,16 @@ final class Devices: NSObject, ServedDevices, @unchecked Sendable {
     /// macOS continues across whatever the pointer crosses. The client cannot clean up
     /// after itself in precisely the case that matters, so the helper does it, on every
     /// way a connection can end - and on its own way out, for the same reason. Each device
-    /// is released whatever the other answered.
+    /// is released whatever the other answered, and the lock is held across both: a
+    /// report landing between them would be a key set down after the keyboard was cleared,
+    /// with nothing left to catch it.
     func releaseEverything(because reason: String) {
-        attempt({ try keyboard.releaseAll() }) { error in
-            log(error.map { "\(reason), and the keyboard would not release: \($0)" } ?? "\(reason); every key is up")
-        }
-        attempt({ try mouse.releaseAll() }) { error in
-            log(error.map { "\(reason), and the mouse would not release: \($0)" } ?? "\(reason); every button is up")
-        }
+        device.lock()
+        defer { device.unlock() }
+        let key = outcome(of: keyboard.releaseAll)
+        log(key.map { "\(reason), and the keyboard would not release: \($0)" } ?? "\(reason); every key is up")
+        let button = outcome(of: mouse.releaseAll)
+        log(button.map { "\(reason), and the mouse would not release: \($0)" } ?? "\(reason); every button is up")
     }
 
     /// [LAW:parse-dont-validate] The wire's byte is wider than the device on both counts -

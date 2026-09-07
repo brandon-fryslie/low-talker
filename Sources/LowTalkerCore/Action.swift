@@ -78,7 +78,9 @@ public struct WheelCounts: RawRepresentable, Hashable, Codable, Sendable {
     public let rawValue: Int
 
     public init?(rawValue: Int) {
-        guard abs(rawValue) <= Self.limit else { return nil }
+        // Containment and not abs, which traps on Int.min - the guard would crash on a
+        // value it exists to refuse.
+        guard (-Self.limit...Self.limit).contains(rawValue) else { return nil }
         self.rawValue = rawValue
     }
 
