@@ -1,8 +1,8 @@
 import Foundation
 import LowTalkerCore
-import Testing
+import Signals
 import TestProbes
-import Typing
+import Testing
 
 @Suite struct SignalWatchTests {
     /// `SIGUSR1` ends a process that has not been told otherwise, so a run that reaches

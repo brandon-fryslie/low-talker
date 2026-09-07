@@ -3,6 +3,7 @@ import Dictation
 import KeyboardService
 import LowTalkerCore
 import ServiceManagement
+import Signals
 import Typing
 import os
 

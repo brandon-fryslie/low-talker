@@ -9,10 +9,17 @@ import Synchronization
 
 /// Something a test holds shut, and everything that arrives at it waits until the test
 /// opens it. How many are waiting is readable, so a test can prove work is held here.
+///
+/// A cancelled waiter comes back rather than staying held: a gate that outlived its
+/// cancellation would hold a whole suite forever, and a task group whose first failure
+/// cancels its siblings is the ordinary way a suite arrives here. Coming back is all it
+/// does - the caller reads cancellation where it already reads it, so `wait` stays a
+/// thing that returns. [LAW:no-ambient-temporal-coupling]
 public final class Gate: Sendable {
     private struct State {
         var open = false
-        var waiters: [CheckedContinuation<Void, Never>] = []
+        var waiters: [Int: CheckedContinuation<Void, Never>] = [:]
+        var arrivals = 0
     }
 
     private let state = Mutex(State())
@@ -24,19 +31,32 @@ public final class Gate: Sendable {
     public func open() {
         let released = state.withLock { state in
             state.open = true
-            defer { state.waiters = [] }
+            defer { state.waiters = [:] }
             return state.waiters
         }
-        released.forEach { $0.resume() }
+        released.values.forEach { $0.resume() }
     }
 
     public func wait() async {
-        await withCheckedContinuation { continuation in
-            let through = state.withLock { state in
-                if !state.open { state.waiters.append(continuation) }
-                return state.open
+        let arrival = state.withLock { state in
+            state.arrivals += 1
+            return state.arrivals
+        }
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                // Cancellation is read under the same lock the handler takes, which is
+                // what makes the two arrivals meet: whichever gets the lock second finds
+                // what the first left, so the continuation is resumed exactly once
+                // whether the cancellation lands before this waiter is filed or after.
+                let through = state.withLock { state in
+                    guard !state.open, !Task.isCancelled else { return true }
+                    state.waiters[arrival] = continuation
+                    return false
+                }
+                if through { continuation.resume() }
             }
-            if through { continuation.resume() }
+        } onCancel: {
+            state.withLock { $0.waiters.removeValue(forKey: arrival) }?.resume()
         }
     }
 }

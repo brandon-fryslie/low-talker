@@ -5,7 +5,7 @@ import KeyboardService
 import LowTalkerCore
 import Typing
 
-/// Performs a list of actions the way the app will: text typed and chords pressed on the
+/// Performs a list of actions the way the app does: text typed and chords pressed on the
 /// virtual keyboard, clicks and scrolls made with the virtual mouse, both through the
 /// installed helper, into the app the context names.
 ///
@@ -16,7 +16,7 @@ import Typing
 struct ActCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "act",
-        abstract: "Perform the actions on stdin through the keyboard helper, as the app would."
+        abstract: "Perform the actions on stdin through the keyboard helper, as the app does."
     )
 
     // [LAW:parse-dont-validate] Decoded once, here at the edge, and the executor never
