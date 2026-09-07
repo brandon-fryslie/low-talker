@@ -1,4 +1,5 @@
 import Foundation
+import Signals
 
 /// A stop, as a value the run reads rather than a way out that skips the run's own
 /// ending.

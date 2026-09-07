@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "Pointing", targets: ["Pointing"]),
         .library(name: "VirtualKeyboard", targets: ["VirtualKeyboard"]),
         .library(name: "KeyboardService", targets: ["KeyboardService"]),
+        .library(name: "Signals", targets: ["Signals"]),
         .library(name: "Typing", targets: ["Typing"]),
         .library(name: "Dictation", targets: ["Dictation"]),
         .executable(name: "lowtalker", targets: ["lowtalker"]),
@@ -36,6 +37,11 @@ let package = Package(
         // usage, the modifiers held with it, and the two names one key goes by. It links
         // nothing, so neither the layout nor the device has to link the other to speak.
         .target(name: "Keystrokes"),
+        // Answering a signal rather than obeying it, for every process here that has an
+        // ending of its own to unwind through. It links nothing, so the root daemon
+        // watches through the same unit as the CLI and the app without linking the
+        // transcriber they reach it through. [LAW:one-source-of-truth]
+        .target(name: "Signals"),
         // The gate and the flag a suite plants in concurrent work to see where it has
         // got to. A plain target because test targets cannot import one another's
         // sources, and in no product because nothing ships it. [LAW:one-source-of-truth]
@@ -63,27 +69,28 @@ let package = Package(
         // the layout and both vocabularies, and takes the keyboard and the mouse as values,
         // which is what lets each run against the helper in the app and against the
         // driver under sudo. [LAW:composability]
-        .target(name: "Typing", dependencies: ["LowTalkerCore", "KeyboardLayout", "Keystrokes", "Pointing"]),
+        .target(name: "Typing", dependencies: ["LowTalkerCore", "KeyboardLayout", "Keystrokes", "Pointing", "Signals"]),
         // Driven against a keyboard the test plays, so a run can be stopped inside any
         // keystroke and its report read back.
-        .testTarget(name: "TypingTests", dependencies: ["Typing", "LowTalkerCore", "KeyboardLayout", "Keystrokes", "Pointing", "TestProbes"]),
+        .testTarget(name: "TypingTests", dependencies: ["Typing", "LowTalkerCore", "KeyboardLayout", "Keystrokes", "Pointing", "Signals", "TestProbes"]),
         // The loop from a press to typed text, with every collaborator taken as a value.
         // Its own target rather than app code so the loop runs under `swift test`; the
         // app links it and hands over the real microphone, engine and keyboard.
         // [LAW:decomposition]
         .target(name: "Dictation", dependencies: ["LowTalkerCore", "Typing", "KeyboardLayout"]),
         .testTarget(name: "DictationTests", dependencies: ["Dictation", "LowTalkerCore", "Typing", "KeyboardLayout", "Keystrokes", "Pointing", "TestProbes"]),
-        // The root daemon that owns the devices. It links VirtualKeyboard, both vocabularies
-        // and the seam, and deliberately not KeyboardLayout: text never reaches this process.
+        // The root daemon that owns the devices. It links VirtualKeyboard, both vocabularies,
+        // the seam and the signal watch, and deliberately not KeyboardLayout: text never
+        // reaches this process.
         .executableTarget(
             name: "lowtalker-keyboardd",
-            dependencies: ["KeyboardService", "VirtualKeyboard", "Keystrokes", "Pointing"]
+            dependencies: ["KeyboardService", "VirtualKeyboard", "Keystrokes", "Pointing", "Signals"]
         ),
         // The authorization boundary of a root keystroke service, checked against the
         // test process's own identity and audit token: real code signing, no root.
         .testTarget(
             name: "lowtalker-keyboarddTests",
-            dependencies: ["lowtalker-keyboardd", "KeyboardService", "VirtualKeyboard", "Keystrokes", "Pointing"]
+            dependencies: ["lowtalker-keyboardd", "KeyboardService", "VirtualKeyboard", "Keystrokes", "Pointing", "Signals"]
         ),
         .executableTarget(
             name: "lowtalker",
