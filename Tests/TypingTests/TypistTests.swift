@@ -226,8 +226,8 @@ import Testing
     }
 
     /// A denied process and a busy app both fail every read, and the advice they want is
-    /// opposite: grant a permission, or try again. Reporting the first as the second sends
-    /// the reader to the Accessibility pane for a permission they already hold.
+    /// opposite: grant a permission, or try again. Reporting a busy app as a denied one
+    /// sends the reader to the Accessibility pane for a permission they already hold.
     @Test func aProcessThatIsNotAllowedIsToldSo() {
         #expect(TargetApp.answer(to: .apiDisabled) == .denied)
         #expect(ScreenUnreadable.accessibilityDenied("com.apple.TextEdit").mayPassWithTime == false)

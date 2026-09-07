@@ -262,9 +262,7 @@ public struct TargetApp {
     /// One Accessibility read, and the one place a read's outcome is acted on.
     /// [LAW:single-enforcer] An absent attribute is `nil`; an app that would not answer is
     /// thrown, never folded into absence. [LAW:no-silent-failure] Folding a timeout into
-    /// "no children" prunes a subtree out of a search and then reports the element
-    /// missing, which sends whoever reads that to the Accessibility pane for a permission
-    /// they already have.
+    /// "no children" prunes a subtree out of a search and then calls the element missing.
     private static func attribute(_ name: String, of element: AXUIElement, in app: String) throws -> CFTypeRef? {
         var value: CFTypeRef?
         let outcome = AXUIElementCopyAttributeValue(element, name as CFString, &value)
