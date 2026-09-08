@@ -50,8 +50,10 @@ enum DirectoryChanges {
                     // Per-file granularity, so a file edited in place is reported and
                     // not only the entries appearing and disappearing around it.
                     kFSEventStreamCreateFlagFileEvents
-                        // What keeps the stream alive across its own root being deleted
-                        // and made again.
+                        // The root's own going and coming back is reported rather than
+                        // passed over in silence. Measured: a root replaced at the same
+                        // path goes on being delivered from without this flag, so what it
+                        // adds is being told about the root, not the stream outliving it.
                         | kFSEventStreamCreateFlagWatchRoot
                     // Deliberately not kFSEventStreamCreateFlagNoDefer: handing the first
                     // change of a batch over at once reads a save that unlinks before it
