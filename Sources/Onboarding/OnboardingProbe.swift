@@ -59,6 +59,15 @@ public enum OnboardingProbe {
         // The endpoint is handed out at load, so a job that holds the service names it
         // here. A job that asked and lost simply has no such line: launchd does not make
         // the loser loud, which is exactly why this is read rather than assumed.
+        //
+        // At load, and not at check-in - which is the whole reason this reads the
+        // endpoints block rather than a state field, and is worth recording because it is
+        // the reading that looks wrong. Measured with a job whose program is `sleep`, so
+        // it never checks a Mach service in at all: `state = running`, and the endpoint
+        // already named, with `active = 0`. Check-in is what `active` tracks. So a helper
+        // between its own start and `listener.resume()` - it files this keyboard's answer
+        // in that window, then waits on the daemon - already reads as holding the service,
+        // which is what the assistant's row needs it to say.
         return printed.stdout.contains("\"\(service)\" = {") ? .holdingTheService : .anotherJobHoldsTheService
     }
 

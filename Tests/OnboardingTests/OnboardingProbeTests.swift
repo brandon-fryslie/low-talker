@@ -28,6 +28,10 @@ import Testing
     /// The same job when launchd gave the name to somebody else. Measured on this Mac:
     /// the record is complete, the job says `state = running`, and there is simply no
     /// endpoints block. Nothing in it announces the loss.
+    ///
+    /// Which is the lost-name shape and not a job that has yet to check in - a distinction
+    /// worth naming, because a running job that has never checked a service in still names
+    /// its endpoint, at `active = 0`. There is no endpoints block here at all.
     static let holdingNothing = """
     system/com.lowtalker.keyboardd = {
     \tactive count = 1
