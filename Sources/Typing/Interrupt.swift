@@ -1,4 +1,5 @@
 import Foundation
+import Signals
 
 /// A stop, as a value the run reads rather than a way out that skips the run's own
 /// ending.
@@ -20,7 +21,7 @@ import Foundation
 public final class Interrupt: @unchecked Sendable {
     private let lock = NSLock()
     private var raised: Int32?
-    private var sources: [any DispatchSourceSignal] = []
+    private var watch: SignalWatch?
 
     /// Raised only by `raise`: the caller's own cancel.
     public init() {}
@@ -28,13 +29,7 @@ public final class Interrupt: @unchecked Sendable {
     /// Raised by the process's signals, for a command line that is stopped with Ctrl-C.
     public static func watched(_ numbers: [Int32] = [SIGINT, SIGTERM]) -> Interrupt {
         let interrupt = Interrupt()
-        interrupt.sources = numbers.map { number in
-            signal(number, SIG_IGN)
-            let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
-            source.setEventHandler { interrupt.raise(number) }
-            return source
-        }
-        interrupt.sources.forEach { $0.resume() }
+        interrupt.watch = SignalWatch(on: numbers) { interrupt.raise($0) }
         return interrupt
     }
 
