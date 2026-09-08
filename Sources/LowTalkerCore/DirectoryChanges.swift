@@ -98,7 +98,7 @@ enum DirectoryChanges {
     /// Long enough to gather one editor's save - which lands as a temp file, a rename,
     /// and a touch - into a single tick, and short enough that a saved config is running
     /// before the hand leaves the keyboard.
-    private static let latency: CFTimeInterval = 0.1
+    static let latency: CFTimeInterval = 0.1
 
     private static let queue = DispatchQueue(label: "com.lowtalker.directory-changes")
 }
