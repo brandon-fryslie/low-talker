@@ -20,7 +20,7 @@ enum KeyboardTypeAnswer {
     /// The cache with this keyboard's own answer in it, and every other device's left
     /// exactly as it was.
     ///
-    /// [LAW:effects-at-boundaries] Pure, so the one thing this must never do - drop
+    /// [LAW:effects-at-boundaries] Pure, so the one thing the merge must never do - drop
     /// another device's entry - is asserted without root and without a file. The cache on
     /// this Mac already held an entry from an unrelated country-33 device, and the 3ti.7
     /// spike's other temptation was to initialise this keyboard as country 33 so it would
@@ -35,13 +35,36 @@ enum KeyboardTypeAnswer {
 
     /// Files it, reading what is there first so the merge has something to preserve.
     ///
-    /// Unconditional: the same read, merge and write happen on every start, and the
-    /// result is the same whether or not the entry was already there.
-    /// [LAW:dataflow-not-control-flow] A start that skipped the write on the strength of
-    /// a reading would be one more path to be wrong about, for a file written once a boot.
-    static func file(into path: String = VirtualKeyboardIdentity.keyboardTypePlist) throws {
+    /// The write is the merge's result, so a merge that changed nothing writes nothing -
+    /// which is not a skipped operation but an empty one, the way filtering to nothing
+    /// returns an empty list. [LAW:dataflow-not-control-flow] It matters because every
+    /// rewrite is another chance to lose a race: this is a read-modify-write of a file
+    /// shared with Keyboard Setup Assistant itself, and a writer landing between the read
+    /// and the write has its entry overwritten by the snapshot this took. Writing only
+    /// what changes leaves that window on the one start that has something to file and on
+    /// no start after it.
+    ///
+    /// What survives every other device's answer is the merge, and only the merge. A
+    /// writer outside this process, inside that window, can still lose one, and nothing
+    /// available here prevents it: a lock serializes only writers that take it, and
+    /// Keyboard Setup Assistant and cfprefsd take none. Said plainly rather than dressed
+    /// as a guarantee this cannot keep.
+    @discardableResult
+    static func file(into path: String = VirtualKeyboardIdentity.keyboardTypePlist) throws -> Filing {
         let cache = try Cache.read(at: path)
-        try cache.replacing(answers: filed(into: cache.answers)).write(to: path)
+        let answers = filed(into: cache.answers)
+        guard answers != cache.answers else { return .alreadyFiled }
+        try cache.replacing(answers: answers).write(to: path)
+        return .filed
+    }
+
+    /// What a start found. Two named outcomes rather than a bare Bool, because the log
+    /// line differs and "already there" is the ordinary case on every boot after the
+    /// first - a start that says nothing about which one it was leaves a reader unable to
+    /// tell a working helper from one that has stopped filing anything.
+    enum Filing: Equatable {
+        case alreadyFiled
+        case filed
     }
 
     /// `/Library/Preferences/com.apple.keyboardtype` as this writer needs to see it: the
@@ -89,6 +112,19 @@ enum KeyboardTypeAnswer {
             return Cache(root: root, answers: answers)
         }
 
+        /// The mode the file must end up with, whoever wrote it.
+        ///
+        /// World-readable is load-bearing rather than incidental: onboarding reads this
+        /// file with no privilege, and a file this helper tightened would leave that row
+        /// permanently unreadable for every ordinary user while the answer inside it was
+        /// perfectly correct. Measured on this platform: an atomic *replace* keeps the
+        /// existing file's mode, so a Mac that already has this file is never tightened -
+        /// but an atomic *create* takes the writer's umask, and a Mac that has met no
+        /// keyboard has no file for this to replace. launchd's umask is settable per job,
+        /// so left alone the permissions of the file this creates would be a fact about
+        /// the job's configuration rather than about this writer. Set, they are neither.
+        private static let mode: NSNumber = 0o644
+
         /// Written as the file rather than through `defaults`, because that is how the
         /// answers are read back: onboarding parses this same path with this same
         /// serializer, and a write that went through another door would be a second way
@@ -100,6 +136,7 @@ enum KeyboardTypeAnswer {
                 try PropertyListSerialization
                     .data(fromPropertyList: root, format: .binary, options: 0)
                     .write(to: URL(fileURLWithPath: path), options: .atomic)
+                try FileManager.default.setAttributes([.posixPermissions: Self.mode], ofItemAtPath: path)
             } catch {
                 throw Unwritable.notWritten(path: path, reason: "\(error)")
             }
