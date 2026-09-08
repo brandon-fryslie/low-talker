@@ -101,6 +101,25 @@ import Testing
         #expect(try Data(contentsOf: URL(fileURLWithPath: path)) == filed)
     }
 
+    /// And that the two outcomes reach a reader as two different sentences, which is the
+    /// entire reason there are two of them rather than a Bool nobody looks at. The helper
+    /// interpolates the case into the line it logs as it starts, so a reader running
+    /// README's `log show` can tell a start that filed the answer from one that found it
+    /// already there - and, through that, a working helper from one that has stopped
+    /// filing anything.
+    ///
+    /// Held here because it went missing here once: the enum was justified by a log line
+    /// that differed per case while the caller discarded the value and logged one
+    /// sentence either way, so the justification was true of the type and false of the
+    /// program. [LAW:one-source-of-truth]
+    /// Over every case rather than the two named here, so an outcome added later has to
+    /// find its own words instead of quietly sharing another's.
+    @Test func theOutcomesSayDifferentThingsToAReader() {
+        let said = KeyboardTypeAnswer.Filing.allCases.map { "\($0)" }
+        #expect(Set(said).count == said.count, "outcomes a reader cannot tell apart: \(said)")
+        for sentence in said { #expect(!sentence.isEmpty) }
+    }
+
     /// A cache holding somebody else's answers and not ours is a start with something to
     /// file, so the merge is written and said to have been.
     @Test func aStartThatHasSomethingToAddSaysItFiledIt() throws {
@@ -114,24 +133,57 @@ import Testing
     /// helper tightened would leave the assistant's row permanently unreadable for every
     /// ordinary user, with the answer inside it perfectly correct.
     ///
-    /// Both starting conditions are here because the write reaches them by different
+    /// Every starting condition is here because the filing reaches them by different
     /// paths - measured on this platform, an atomic replace keeps the existing file's
-    /// mode while an atomic create takes the writer's umask - and the contract over both
-    /// is one: whoever wrote it and whatever was there before, the file a reader has to
-    /// read is world-readable afterwards. The 0600 case is the one that bites, since it
-    /// is the mode a replace would otherwise carry forward.
+    /// mode while an atomic create takes the writer's umask, and a start with nothing to
+    /// file writes at all - and the contract over all of them is one: whoever wrote it
+    /// and whatever was there before, the file a reader has to read is world-readable
+    /// afterwards. Stated over the conditions rather than over the paths, so it holds a
+    /// start that repairs the mode and writes nothing else to the same bar as the one
+    /// that wrote the file.
     /// [LAW:behavior-not-structure]
-    @Test(arguments: [nil, 0o600] as [Int?])
-    func theFiledCacheIsLeftWorldReadable(existingMode: Int?) throws {
+    @Test(arguments: Start.allCases)
+    func theFiledCacheIsLeftWorldReadable(start: Start) throws {
         let path = scratch("mode")
-        if let existingMode {
-            try write(["keyboardtype": ["10203-5824-33": 40]], to: path)
-            try FileManager.default.setAttributes([.posixPermissions: existingMode], ofItemAtPath: path)
+        // Tightened rather than left as written, because 0600 is the mode every one of
+        // these has to be repaired from - the one an atomic replace carries forward.
+        if let cached = start.cached {
+            try write(["keyboardtype": cached], to: path)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
         }
         try KeyboardTypeAnswer.file(into: path)
         let left = try #require(
             FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? NSNumber)
         #expect(left.int32Value == 0o644, "left \(String(left.int32Value, radix: 8))")
+    }
+
+    /// What a start finds on disk, as the conditions themselves rather than as a file and
+    /// a mode that would have to be kept agreeing - there is no cache with no file, and a
+    /// mode belongs to a file that exists. [LAW:types-are-the-program] `CaseIterable`, so
+    /// a condition worth naming later is covered by the contract above the moment it is
+    /// named rather than when somebody remembers to list it.
+    enum Start: CaseIterable {
+        /// A Mac that has met no keyboard: nothing to replace, so the file is created and
+        /// takes whatever umask this process inherited from launchd.
+        case noCacheYet
+        /// Somebody else's answers, tightened. The merge has ours to add, so the file is
+        /// replaced - carrying the 0600 forward, which is the path that bites.
+        case othersAnswersUnreadable
+        /// Our answer already there, tightened. The merge has nothing to add, so nothing
+        /// is written and the mode is the only thing left to repair - the case that made
+        /// the guarantee hold on the first boot and never again, because a mode wrong for
+        /// any reason after the first filing was read past on every start after it.
+        case ourAnswerAlreadyThereUnreadable
+
+        /// The answers already cached, and nothing at all where there is no file yet.
+        var cached: [String: Int]? {
+            switch self {
+            case .noCacheYet: nil
+            case .othersAnswersUnreadable: ["10203-5824-33": 40]
+            case .ourAnswerAlreadyThereUnreadable:
+                [VirtualKeyboardIdentity.keyboardTypeKey: VirtualKeyboardIdentity.ansiKeyboardType]
+            }
+        }
     }
 
     /// [LAW:no-silent-failure] A file that is there and cannot be understood is refused,

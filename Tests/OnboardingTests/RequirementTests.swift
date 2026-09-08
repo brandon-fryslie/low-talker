@@ -159,8 +159,8 @@ import Testing
     /// Held for both arms, because the helper's standing changes what is left to do about
     /// the answer and never who writes it. A step that regrew the paste in either arm
     /// would be the row going back to asking a person for the thing the helper does.
-    @Test(arguments: [false, true]) func anUnansweredAssistantAsksTheReaderToRunNothing(helperAnswering: Bool) {
-        let step = Self.assistantStep(helperAnswering: helperAnswering)
+    @Test(arguments: [false, true]) func anUnansweredAssistantAsksTheReaderToRunNothing(aHelperHasRun: Bool) {
+        let step = Self.assistantStep(aHelperHasRun: aHelperHasRun)
         #expect(step.contains("keyboard helper"))
         for pasted in ["sudo", "defaults", VirtualKeyboardIdentity.keyboardTypeDomain, VirtualKeyboardIdentity.keyboardTypeKey] {
             #expect(!step.contains(pasted), "the step hands the reader \(pasted) to run")
@@ -173,7 +173,7 @@ import Testing
     /// left that can be wrong, and the helper has already said why in its log.
     /// [LAW:no-silent-failure]
     @Test func anAnsweringHelperAndNoAnswerSendsTheReaderToTheHelpersLog() {
-        let step = Self.assistantStep(helperAnswering: true)
+        let step = Self.assistantStep(aHelperHasRun: true)
         #expect(step.contains("log show"))
         #expect(step.contains(Self.service), "the step names no subsystem to read")
         #expect(!step.contains("clears itself"), "the step tells a reader to wait for something that already happened")
@@ -182,14 +182,14 @@ import Testing
     /// And the other way round: a helper that is not answering yet has not had its chance
     /// to file anything, so nothing has failed and there is no log to send anyone to.
     @Test func aHelperThatIsNotAnsweringYetIsWhatTheRowIsWaitingBehind() {
-        let step = Self.assistantStep(helperAnswering: false)
+        let step = Self.assistantStep(aHelperHasRun: false)
         #expect(step.contains("clears itself"))
         #expect(!step.contains("log show"), "the step blames a filing that was never attempted")
     }
 
-    private static func assistantStep(helperAnswering: Bool) -> String {
+    private static func assistantStep(aHelperHasRun: Bool) -> String {
         Requirement.keyboardSetupAssistant(
-            answered: false, helperAnswering: helperAnswering, helperSubsystem: service).step ?? ""
+            answered: false, aHelperHasRun: aHelperHasRun, helperSubsystem: service).step ?? ""
     }
 
     /// The readings table covers this row too. It carried the helper's five alone until
@@ -199,7 +199,7 @@ import Testing
     /// [LAW:one-source-of-truth]
     @Test func bothOfTheAssistantsReadingsAreInTheTableThatHoldsReadmeToThem() {
         #expect(Self.readings(for: .keyboardSetupAssistant) == [true, false].map {
-            Requirement.keyboardSetupAssistant(answered: $0, helperAnswering: false, helperSubsystem: Self.service).reads
+            Requirement.keyboardSetupAssistant(answered: $0, aHelperHasRun: false, helperSubsystem: Self.service).reads
         })
     }
 
@@ -221,8 +221,8 @@ import Testing
     }
 
     @Test func anAnsweredAssistantAsksNothing() {
-        #expect(Requirement.keyboardSetupAssistant(answered: true, helperAnswering: true, helperSubsystem: Self.service).met)
-        #expect(Requirement.keyboardSetupAssistant(answered: true, helperAnswering: false, helperSubsystem: Self.service).met)
+        #expect(Requirement.keyboardSetupAssistant(answered: true, aHelperHasRun: true, helperSubsystem: Self.service).met)
+        #expect(Requirement.keyboardSetupAssistant(answered: true, aHelperHasRun: false, helperSubsystem: Self.service).met)
     }
 
     // MARK: - a reader with no clone

@@ -116,7 +116,7 @@ public extension OnboardingProbe {
         // The dependency is in the data rather than in the order two independent readings
         // happen to be taken in. [LAW:no-ambient-temporal-coupling]
         let helper = helperRow(approvalPending: approvalPending)
-        return Readiness(driverRow() + helper.rows + keyboardSetupAssistantRow(helperAnswering: helper.answering))
+        return Readiness(driverRow() + helper.rows + keyboardSetupAssistantRow(aHelperHasRun: helper.aHelperHasRun))
     }
 
     /// Each reading is taken and turned into its row here, at the edge, and a reading
@@ -130,14 +130,18 @@ public extension OnboardingProbe {
 
     /// The helper's row, and the one thing about it the assistant's row needs.
     ///
-    /// A reading that failed answers `answering: false`, which is not that reading
-    /// collapsing into a wrong one: it is the only honest thing to hand a row that asks
-    /// "has the helper already had its chance to file this". We could not say that it
-    /// had. What could not be read is loud in the row this returns beside it - the
-    /// helper's own, which reads `could not be read` and names the reason - so the
-    /// failure is reported where it belongs rather than inferred from the assistant's
-    /// step. [LAW:no-silent-failure]
-    private static func helperRow(approvalPending: Bool?) -> (rows: [Requirement], answering: Bool) {
+    /// What that one thing is, `HelperStanding` says: this asks the standing rather than
+    /// comparing it here, so the question "has a helper already had its chance to file
+    /// the answer" has one answer and it lives with the states it is about.
+    /// [LAW:one-source-of-truth]
+    ///
+    /// A reading that failed answers `false`, which is not that reading collapsing into a
+    /// wrong one: it is the only honest thing to hand a row asking whether a helper ran,
+    /// when nobody could look. What could not be read is loud in the row this returns
+    /// beside it - the helper's own, which reads `could not be read` and names the
+    /// reason - so the failure is reported where it belongs rather than inferred from the
+    /// assistant's step. [LAW:no-silent-failure]
+    private static func helperRow(approvalPending: Bool?) -> (rows: [Requirement], aHelperHasRun: Bool) {
         do {
             let standing = try helperStanding(
                 label: Helper.launchdLabel,
@@ -145,15 +149,15 @@ public extension OnboardingProbe {
                 service: Helper.machServiceName)
                 .sharpenedByTheAppsOwnRegistration(approvalPending: approvalPending)
             return ([.keyboardHelper(standing, serviceName: Helper.machServiceName, developmentLabel: Helper.developmentLabel)],
-                    standing == .holdingTheService)
+                    standing.aHelperHasRun)
         } catch { return ([.unreadable(.keyboardHelper, error)], false) }
     }
 
-    private static func keyboardSetupAssistantRow(helperAnswering: Bool) -> [Requirement] {
+    private static func keyboardSetupAssistantRow(aHelperHasRun: Bool) -> [Requirement] {
         do {
             return [.keyboardSetupAssistant(
                 answered: try keyboardSetupAssistantAnswered(),
-                helperAnswering: helperAnswering,
+                aHelperHasRun: aHelperHasRun,
                 helperSubsystem: Helper.machServiceName)]
         } catch { return [.unreadable(.keyboardSetupAssistant, error)] }
     }

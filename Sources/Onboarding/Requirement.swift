@@ -106,10 +106,17 @@ private let loginItemsPane = "System Settings > General > Login Items & Extensio
 /// the download alone left this reader installed and inactive - the next state down,
 /// whose own step then told them to install a package they already had, so nothing here
 /// could ever move them off it.
+/// The lead-in to the activation is part of this text and not written beside it at the
+/// call site, because everything here is under one "Without one," and the activation is
+/// the second half of what the script's `install` does for the reader who has it. Written
+/// as a separate sentence after the block, it read as a step every reader owed - telling
+/// someone who had just run `scripts/virtual-hid-driver install`, which activates, to go
+/// and activate again.
 private let installWithoutAClone = """
     Without one, install \(DriverPackage.version) of the public package yourself -
     download it, open it, and let the installer finish:
         \(DriverPackage.url)
+    Then ask macOS to activate the driver.
     """
 
 /// The activation itself, which both of those states end in and neither can reach with
@@ -158,7 +165,6 @@ public extension Requirement {
             The driver package is not on this Mac. From a clone of this repo:
                 scripts/virtual-hid-driver install
             \(installWithoutAClone)
-            Then ask macOS to activate the driver.
             \(activationWithoutAClone)
             """
         case .installedInactive:
@@ -252,6 +258,30 @@ public enum HelperStanding: Sendable, Hashable, CaseIterable {
     public func sharpenedByTheAppsOwnRegistration(approvalPending: Bool?) -> HelperStanding {
         self == .noJob && approvalPending == true ? .awaitingApproval : self
     }
+
+    /// Whether a keyboard helper has actually started under this standing.
+    ///
+    /// Deliberately not "is the app's helper answering". The helper files this keyboard's
+    /// answer with Keyboard Setup Assistant in its first moments, before it reaches the
+    /// daemon and long before it can win or lose a Mach service name - so a helper that
+    /// took the name and one that lost it to the development job have both already had
+    /// their chance to file, and the assistant's row is asking about the chance and not
+    /// about the name. Reading it as `holdingTheService` alone sent a Mac running the
+    /// development helper to wait for a filing that had already happened and already
+    /// failed.
+    ///
+    /// A holder nobody could identify is not one of them: `anotherJobHoldsTheService`
+    /// means some job took the name and this Mac could not say whose, so there is no
+    /// ground to claim a helper ran. [LAW:no-silent-failure] Written as an exhaustive
+    /// switch with no `default`, so a standing added later has to answer this rather than
+    /// inheriting whichever answer happened to be the fallback.
+    /// [LAW:types-are-the-program]
+    var aHelperHasRun: Bool {
+        switch self {
+        case .holdingTheService, .theDevelopmentJobHoldsTheService: true
+        case .anotherJobHoldsTheService, .noJob, .awaitingApproval: false
+        }
+    }
 }
 
 public extension Requirement {
@@ -335,16 +365,18 @@ public extension Requirement {
     /// sends a reader to wait out a failure is that failure staying silent at the level
     /// of an instruction. [LAW:no-silent-failure]
     ///
-    /// - Parameter helperAnswering: whether the helper that files this is holding its
-    ///   service, from the row above, which is read first for exactly this reason.
+    /// - Parameter aHelperHasRun: whether a keyboard helper has already started and so
+    ///   already had its chance to file this, from the row above, which is read first for
+    ///   exactly this reason. See `HelperStanding.aHelperHasRun` for why that is a wider
+    ///   question than whether the app's own helper holds the service.
     /// - Parameter helperSubsystem: the subsystem the helper logs under, which is its own
     ///   Mach service name. Passed in rather than reached for, so this stays a pure
     ///   function of what onboarding read. [LAW:effects-at-boundaries]
-    static func keyboardSetupAssistant(answered: Bool, helperAnswering: Bool, helperSubsystem: String) -> Requirement {
+    static func keyboardSetupAssistant(answered: Bool, aHelperHasRun: Bool, helperSubsystem: String) -> Requirement {
         Requirement(
             name: Row.keyboardSetupAssistant.rawValue,
             reads: reads(forAnswered: answered),
-            step: answered ? nil : step(helperAnswering: helperAnswering, helperSubsystem: helperSubsystem)
+            step: answered ? nil : step(aHelperHasRun: aHelperHasRun, helperSubsystem: helperSubsystem)
         )
     }
 
@@ -355,15 +387,15 @@ public extension Requirement {
     /// Both arms open the same way, because the reader needs the same fact either way:
     /// the assistant is about to take the first line typed. They differ in what is left
     /// to do about it, which is what the helper's standing decides.
-    private static func step(helperAnswering: Bool, helperSubsystem: String) -> String {
+    private static func step(aHelperHasRun: Bool, helperSubsystem: String) -> String {
         let opening = """
             macOS raises Keyboard Setup Assistant the first time the virtual
             keyboard types, and it takes those keystrokes. The keyboard helper
             files this keyboard's own answer as it starts,
             """
-        return helperAnswering ? """
-            \(opening) and it is answering - so
-            the filing itself is what failed. The helper logs the reason:
+        return aHelperHasRun ? """
+            \(opening) and one has already
+            started - so the filing itself is what failed. It logs the reason:
                 /usr/bin/log show --predicate 'subsystem == "\(helperSubsystem)"' --last 1h
             """ : """
             \(opening) so this clears itself

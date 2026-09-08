@@ -41,8 +41,8 @@ do {
     // row, which stays unmet until the answer is actually on disk - so this is reported
     // twice and swallowed nowhere. [LAW:no-silent-failure]
     do {
-        try KeyboardTypeAnswer.file()
-        log("this keyboard's answer is filed with Keyboard Setup Assistant under \(VirtualKeyboardIdentity.keyboardTypeKey)")
+        let filing = try KeyboardTypeAnswer.file()
+        log("this keyboard's answer \(filing) with Keyboard Setup Assistant under \(VirtualKeyboardIdentity.keyboardTypeKey)")
     } catch {
         log("could not file this keyboard's answer with Keyboard Setup Assistant, so it may take the first line typed: \(error)")
     }

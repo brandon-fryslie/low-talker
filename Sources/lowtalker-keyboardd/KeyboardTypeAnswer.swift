@@ -53,18 +53,43 @@ enum KeyboardTypeAnswer {
     static func file(into path: String = VirtualKeyboardIdentity.keyboardTypePlist) throws -> Filing {
         let cache = try Cache.read(at: path)
         let answers = filed(into: cache.answers)
-        guard answers != cache.answers else { return .alreadyFiled }
-        try cache.replacing(answers: answers).write(to: path)
-        return .filed
+        let filing: Filing = answers == cache.answers ? .alreadyFiled : .filed
+        if filing == .filed {
+            try cache.replacing(answers: answers).write(to: path)
+        }
+        // Every start, and not only the one that wrote. The content and the mode are two
+        // different facts about this file with two different conditions, and one guard
+        // over both is what made the mode repairable on the first boot and never again:
+        // a file left 0600 by an interrupted first start, or tightened later by anything
+        // outside this process, was read on every subsequent start, found to need no
+        // merge, and returned from before the mode was ever looked at - so onboarding's
+        // unprivileged read failed permanently while the helper believed itself fine.
+        // [LAW:dataflow-not-control-flow]
+        try Cache.makeReadable(at: path)
+        return filing
     }
 
     /// What a start found. Two named outcomes rather than a bare Bool, because the log
     /// line differs and "already there" is the ordinary case on every boot after the
     /// first - a start that says nothing about which one it was leaves a reader unable to
     /// tell a working helper from one that has stopped filing anything.
-    enum Filing: Equatable {
+    ///
+    /// Which is a claim about the log, so it is kept where the log can be held to it: the
+    /// cases carry the words the helper says, and a test reads them back to check that no
+    /// two outcomes reach a reader as the same sentence. The enum existed for one start
+    /// before the caller discarded it and logged one line either way - the justification
+    /// above true of the type and false of the program. [LAW:one-source-of-truth]
+    /// `CaseIterable` so that check covers an outcome added later without being asked to.
+    enum Filing: Equatable, CaseIterable, CustomStringConvertible {
         case alreadyFiled
         case filed
+
+        public var description: String {
+            switch self {
+            case .filed: "is now filed"
+            case .alreadyFiled: "was already filed"
+            }
+        }
     }
 
     /// `/Library/Preferences/com.apple.keyboardtype` as this writer needs to see it: the
@@ -125,18 +150,33 @@ enum KeyboardTypeAnswer {
         /// the job's configuration rather than about this writer. Set, they are neither.
         private static let mode: NSNumber = 0o644
 
+        /// Makes it so, on a file that is already there.
+        ///
+        /// The one place the mode is set, so there is one answer to what it should be
+        /// rather than one per path through the filing. [LAW:single-enforcer] Asserted
+        /// rather than checked-then-set: the call costs the same either way, and a read
+        /// followed by a conditional write is a window for the two to disagree.
+        static func makeReadable(at path: String) throws {
+            do {
+                try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: path)
+            } catch {
+                throw Unwritable.notWritten(path: path, reason: "its mode could not be set to 644: \(error)")
+            }
+        }
+
         /// Written as the file rather than through `defaults`, because that is how the
         /// answers are read back: onboarding parses this same path with this same
         /// serializer, and a write that went through another door would be a second way
         /// for one fact to be stored. Measured on this Mac: a direct write to the file is
         /// what `defaults read` reports a moment later, in both directions, so cfprefsd
         /// serves this domain from the file rather than from a cache in front of it.
+        /// The bytes alone. The mode is `makeReadable`'s, asserted by the caller on every
+        /// start rather than here on the starts that happen to write.
         func write(to path: String) throws {
             do {
                 try PropertyListSerialization
                     .data(fromPropertyList: root, format: .binary, options: 0)
                     .write(to: URL(fileURLWithPath: path), options: .atomic)
-                try FileManager.default.setAttributes([.posixPermissions: Self.mode], ofItemAtPath: path)
             } catch {
                 throw Unwritable.notWritten(path: path, reason: "\(error)")
             }
