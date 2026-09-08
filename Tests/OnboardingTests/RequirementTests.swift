@@ -80,8 +80,7 @@ import Testing
     /// In particular, a job that is loaded and running but lost the name is not ready -
     /// that is the whole failure this requirement exists to catch.
     @Test func onlyAHelperHoldingTheServiceIsReady() {
-        let standings: [HelperStanding] = [.holdingTheService, .anotherJobHoldsTheService, .noJob, .awaitingApproval]
-        for standing in standings {
+        for standing in HelperStanding.allCases {
             let requirement = Requirement.keyboardHelper(standing, serviceName: Self.service, developmentLabel: Self.devLabel)
             #expect(requirement.met == (standing == .holdingTheService), "\(standing)")
         }
@@ -90,10 +89,20 @@ import Testing
     /// An app whose helper is enabled while another job holds the name reports enabled
     /// and types nothing. The step has to name the other job, because nothing else on
     /// the Mac will: launchd does not make the loser loud.
-    @Test func aLostMachServiceNamesTheJobThatTookIt() {
-        let step = Requirement.keyboardHelper(.anotherJobHoldsTheService, serviceName: Self.service, developmentLabel: Self.devLabel).step ?? ""
+    @Test func aServiceLostToTheDevelopmentJobNamesItAndTheRemoval() {
+        let step = Requirement.keyboardHelper(.theDevelopmentJobHoldsTheService, serviceName: Self.service, developmentLabel: Self.devLabel).step ?? ""
         #expect(step.contains(Self.devLabel))
         #expect(step.contains("keyboard-helper uninstall"))
+    }
+
+    /// A holder that was never identified is never reported as one that was. Naming the
+    /// development job here would send a reader to a command that removes a job this Mac
+    /// does not have, and leave the job that actually holds the name in place.
+    @Test func aServiceLostToAnUnidentifiedJobNamesNeitherThatJobNorItsRemoval() {
+        let step = Requirement.keyboardHelper(.anotherJobHoldsTheService, serviceName: Self.service, developmentLabel: Self.devLabel).step ?? ""
+        #expect(!step.contains(Self.devLabel))
+        #expect(!step.contains("keyboard-helper uninstall"))
+        #expect(step.contains("/Library/LaunchDaemons"))
     }
 
     @Test func aHelperWaitingForItsApprovalIsSentToLoginItems() {
@@ -113,8 +122,8 @@ import Testing
     /// answering, or one that lost the name, is a reading launchd took itself, and no
     /// pending approval may overwrite it.
     @Test func sharpeningNeverOverwritesAReadingLaunchdCouldTake() {
-        for standing in [HelperStanding.holdingTheService, .anotherJobHoldsTheService, .awaitingApproval] {
-            #expect(standing.sharpenedByTheAppsOwnRegistration(approvalPending: true) == standing)
+        for standing in HelperStanding.allCases where standing != .noJob {
+            #expect(standing.sharpenedByTheAppsOwnRegistration(approvalPending: true) == standing, "\(standing)")
         }
     }
 

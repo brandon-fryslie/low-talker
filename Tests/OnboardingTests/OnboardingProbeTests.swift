@@ -51,6 +51,17 @@ import Testing
         #expect(try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service) == .anotherJobHoldsTheService)
     }
 
+    /// Only a development job that actually holds the name is reported as the holder.
+    /// Every other reading of it - absent, or loaded and empty-handed - leaves the holder
+    /// unidentified, because it is: the app read one other label, not every job on the
+    /// Mac. Naming a holder nobody read is the mistake this reading exists to stop.
+    @Test func onlyADevelopmentJobHoldingTheNameIsReportedAsTheHolder() {
+        #expect(OnboardingProbe.lostName(toDevelopment: .holdingTheService) == .theDevelopmentJobHoldsTheService)
+        for development in HelperStanding.allCases where development != .holdingTheService {
+            #expect(OnboardingProbe.lostName(toDevelopment: development) == .anotherJobHoldsTheService, "\(development)")
+        }
+    }
+
     /// The service name appears in that record as an environment variable, spelled
     /// without the `= {` that an endpoint carries. Reading it as the endpoint would
     /// report every registered job as holding the service, which is the one answer this

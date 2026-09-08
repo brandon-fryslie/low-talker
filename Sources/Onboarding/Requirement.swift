@@ -156,16 +156,21 @@ public extension Requirement {
 /// The reading comes from launchd, which is what both the app and the CLI can ask. The
 /// app knows one thing launchd cannot say, and `awaitingApproval` is that thing: see
 /// `sharpenedByTheAppsOwnRegistration`.
-public enum HelperStanding: Sendable, Hashable {
+public enum HelperStanding: Sendable, Hashable, CaseIterable {
     /// The app's job holds the Mach service: registered, approved, and answering.
     case holdingTheService
-    /// A job under the app's label is loaded, and launchd gave the service to another
-    /// claimant.
+    /// A job under the app's label is loaded, and the development job holds the service.
     ///
     /// launchd does not make the loser loud: the second job to ask for a Mach service
     /// name bootstraps with exit 0, runs, and simply never gets the endpoint. An app in
     /// this state reports its helper enabled and types nothing, which is the whole
     /// reason this is a requirement of its own and not folded into the approval.
+    ///
+    /// Which claimant took the name is read rather than assumed, because the two want
+    /// different steps: this one names a command that removes it.
+    case theDevelopmentJobHoldsTheService
+    /// The same loss, and the holder is neither this app's job nor the development one,
+    /// so it can be found but not named.
     case anotherJobHoldsTheService
     /// launchd has no job under the app's label at all.
     case noJob
@@ -198,6 +203,7 @@ public extension Requirement {
     private static func reads(for standing: HelperStanding) -> String {
         switch standing {
         case .holdingTheService: "answering"
+        case .theDevelopmentJobHoldsTheService: "registered, but the development job holds the service"
         case .anotherJobHoldsTheService: "registered, but another job holds the service"
         case .noJob: "not registered"
         case .awaitingApproval: "waiting for approval in Login Items & Extensions"
@@ -220,13 +226,21 @@ public extension Requirement {
             registers on every launch - and turn it on in
             \(loginItemsPane) if it asks.
             """
-        case .anotherJobHoldsTheService:
+        case .theDevelopmentJobHoldsTheService:
             """
             Another launchd job holds \(serviceName), so the app's
             helper never got the name and answers nothing, however healthy it
             looks. That job is \(developmentLabel), the
             development one. Remove it, then launch LowTalker again:
                 scripts/keyboard-helper uninstall
+            """
+        case .anotherJobHoldsTheService:
+            """
+            Another launchd job holds \(serviceName), so the app's
+            helper never got the name and answers nothing, however
+            healthy it looks. It is not the development job, and the
+            app cannot name it. Find its plist:
+                sudo grep -l \(serviceName) /Library/LaunchDaemons/*.plist
             """
         }
     }

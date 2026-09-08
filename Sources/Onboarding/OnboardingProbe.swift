@@ -17,9 +17,30 @@ public enum OnboardingProbe {
     /// shape is already what `scripts/keyboard-helper install` reads back to find out
     /// whether its own job got the name; both now ask through here.
     /// [LAW:one-source-of-truth]
-    public static func helperStanding(label: String, service: String) throws -> HelperStanding {
-        let printed = try Command("/bin/launchctl", "print", "system/\(label)").run()
-        return try standing(from: printed, label: label, service: service)
+    public static func helperStanding(label: String, developmentLabel: String, service: String) throws -> HelperStanding {
+        let mine = try standing(ofLabel: label, service: service)
+        // Who took the name is a question only a lost name asks, so the healthy path - the
+        // one the menu takes on every open, on the main actor - still costs one subprocess.
+        // A development record that cannot be read throws rather than answering: naming a
+        // holder nobody read is the mistake this reading exists to stop making.
+        guard mine == .anotherJobHoldsTheService else { return mine }
+        return lostName(toDevelopment: try standing(ofLabel: developmentLabel, service: service))
+    }
+
+    /// Which lost-name state a development reading means. Only a development job that
+    /// actually holds the name earns being named; every other reading of it - absent,
+    /// loaded but empty-handed - leaves the holder unidentified, because it is.
+    /// [LAW:effects-at-boundaries] Pure, so both arms are reachable on a Mac in neither.
+    static func lostName(toDevelopment development: HelperStanding) -> HelperStanding {
+        development == .holdingTheService ? .theDevelopmentJobHoldsTheService : .anotherJobHoldsTheService
+    }
+
+    /// Where one label stands. Two labels are asked the same question, so they are asked
+    /// through the same reading. [LAW:one-type-per-behavior]
+    private static func standing(ofLabel label: String, service: String) throws -> HelperStanding {
+        try standing(
+            from: Command("/bin/launchctl", "print", "system/\(label)").run(),
+            label: label, service: service)
     }
 
     /// What launchd said, read.
@@ -111,7 +132,10 @@ public extension OnboardingProbe {
 
     private static func helperRow(approvalPending: Bool?) -> [Requirement] {
         do {
-            let standing = try helperStanding(label: Helper.launchdLabel, service: Helper.machServiceName)
+            let standing = try helperStanding(
+                label: Helper.launchdLabel,
+                developmentLabel: Helper.developmentLabel,
+                service: Helper.machServiceName)
                 .sharpenedByTheAppsOwnRegistration(approvalPending: approvalPending)
             return [.keyboardHelper(standing, serviceName: Helper.machServiceName, developmentLabel: Helper.developmentLabel)]
         } catch { return [.unreadable("Keyboard helper", error)] }
