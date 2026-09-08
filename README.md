@@ -199,7 +199,7 @@ The exit status is 0 when the file is understood and has no gaps, 1 when it cann
 
     .build/debug/lowtalker config watch
 
-prints the same report and then stays up, printing it again each time the file is saved into something different. The app reads the file the same way, so a chord can be changed and seen to take effect without relaunching anything; it takes effect on the next press of the chord, since a session that is already listening keeps the mode it started in.
+prints the same report and then stays up, printing it again each time the file is saved into something different. Teaching the app itself to read the file this way is low-app-3sp.3's work; for now this is where a chord can be changed and seen to take effect.
 
 A save that cannot be understood does not disturb what is running. It is named the way `check` names it, followed by the file still in force:
 
