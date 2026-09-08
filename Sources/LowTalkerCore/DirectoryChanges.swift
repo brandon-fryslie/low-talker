@@ -35,7 +35,7 @@ enum DirectoryChanges {
                 release: nil,
                 copyDescription: nil
             )
-            let stream = FSEventStreamCreate(
+            guard let stream = FSEventStreamCreate(
                 nil,
                 { _, info, _, _, _, _ in
                     // `info` is the pointer set in `context` just below and never
@@ -60,8 +60,13 @@ enum DirectoryChanges {
                     // writes in the gap between the two, and calls the file missing. The
                     // latency below is the one thing that decides when a reading is taken.
                 )
-            )!  // The author vouches: this returns nil for an empty or malformed path
-                // list, and the one path here is a directory that exists.
+            ) else {
+                // [LAW:no-silent-failure] The same vouch as the start below, failing the
+                // same way. Nothing here can produce nil - an empty or malformed path
+                // list, or the allocation failing - and if one ever does, the crash names
+                // the directory rather than being a bare unwrap somewhere in this file.
+                preconditionFailure("FSEvents refused a stream for \(directory.path)")
+            }
             FSEventStreamSetDispatchQueue(stream, queue)
             // [LAW:no-silent-failure] A start that failed and was not looked at is a
             // watch that never fires and never says so, which is the one way this type
