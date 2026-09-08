@@ -7,8 +7,16 @@ struct ConfigCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "config",
         abstract: "Read the config file the app runs on.",
-        subcommands: [Check.self]
+        subcommands: [Check.self, Watch.self]
     )
+}
+
+/// [LAW:effects-at-boundaries] The one question these commands ask of the machine rather
+/// than of the file, at the edge, so `ConfigReport` stays a pure function of what the
+/// file said and what this returned. [LAW:one-source-of-truth] `check` and `watch` print
+/// the same report, so they ask it the same way.
+private func appExists(_ id: BundleID) -> Bool {
+    NSWorkspace.shared.urlForApplication(withBundleIdentifier: id.rawValue) != nil
 }
 
 extension ConfigCommand {
@@ -40,12 +48,58 @@ extension ConfigCommand {
             // taken on some runs and not others. [LAW:dataflow-not-control-flow]
             throw ExitCode(report.gaps.isEmpty ? 0 : 2)
         }
+    }
 
-        /// [LAW:effects-at-boundaries] The one question in this command that the machine
-        /// answers rather than the file. It lives here, at the edge, so `ConfigReport`
-        /// stays a pure function of what the file said and what this returned.
-        private func appExists(_ id: BundleID) -> Bool {
-            NSWorkspace.shared.urlForApplication(withBundleIdentifier: id.rawValue) != nil
+    /// The same reading as `check`, kept up as the file is edited, so a chord can be
+    /// changed and seen to take effect before the app is wired to do it.
+    struct Watch: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "watch",
+            abstract: "Print what the app would run with, then every change to it until interrupted.",
+            discussion: """
+                Prints the report `check` prints, then stays up and prints it again each \
+                time the file is saved into something different. A save that cannot be \
+                understood is named and the config already running is kept, so a syntax \
+                error mid-edit costs nothing. Deleting \
+                the file goes back to the defaults, and creating one where there was none \
+                is picked up as well.
+                """
+        )
+
+        @Option(
+            help: "The file to watch, for trying one out before it is installed.",
+            transform: URL.init(fileURLWithPath:)
+        )
+        var path: URL = Config.fileURL
+
+        func run() async throws {
+            setvbuf(stdout, nil, _IOLBF, 0)
+            // A config that cannot be read now has no previous config to keep, so it is
+            // the same refusal `check` makes and exits the same way. Only what happens
+            // after the first reading is a reload.
+            let loaded = try Config.load(from: path)
+            print(ConfigReport(loaded, appExists: appExists))
+            for await reload in Config.reloads(after: loaded) {
+                print(Self.narration(of: reload, appExists: appExists))
+            }
+        }
+
+        /// What one reload reads as on the way past.
+        ///
+        /// [LAW:effects-at-boundaries] The whole of what this command says, with no
+        /// printing in it, so a test reads what a watcher sees instead of driving a file
+        /// and catching stdout to find out.
+        static func narration(of reload: Config.Reload, appExists: (BundleID) -> Bool) -> String {
+            // A blank line first, so a run of these reads as several reports and not one
+            // long one.
+            switch reload {
+            case .adopted(let loaded):
+                "\n\(ConfigReport(loaded, appExists: appExists))"
+            case .kept(let loaded, let error):
+                // The error first, because it is the news; what is still running second,
+                // because that is the reassurance.
+                "\nrefused: \(error)\nstill running: \(loaded)"
+            }
         }
     }
 }
