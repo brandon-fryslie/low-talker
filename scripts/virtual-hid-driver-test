@@ -1,30 +1,54 @@
 #!/usr/bin/env bash
-# The decision logic in scripts/virtual-hid-driver, exercised against stubbed probes.
+# The shell-level contracts in scripts/virtual-hid-driver, exercised against a stubbed
+# CLI.
 #
-# Nothing here touches the machine's driver. The script is sourced for its function
-# definitions and every probe that reads the Mac - pkgutil, systemextensionsctl, ioreg
-# - is shadowed by a shell function, so no privileged or destructive command can run
+# The decision logic this suite used to cover - the bracket text, the verdict table, the
+# four probes - moved to Sources/DriverExtension, where every combination of readings is
+# exercised rather than the dozen anyone thought to write down. What is left here is
+# what is still shell: the wrappers that turn the CLI's exits into words, the sentinel
+# those words carry, and the exit codes a caller scripts against.
+#
+# Nothing here touches the machine's driver. `lowtalker` is replaced by a stub that
+# answers from environment variables, so no privileged or destructive command can run
 # even if a guard under test were wrong. `install` and `remove` are never invoked.
 #
-# [LAW:behavior-not-structure] The assertions are on the contract: the verdict words
-# README.md documents and `expect` consumes, the probe sentinels, and the exit codes.
-# Nothing here pins an internal call shape, so the implementation stays free to move.
+# [LAW:behavior-not-structure] The assertions are on the contract: the words the verbs
+# consume, the sentinel, and the exit codes. Nothing here pins an internal call shape.
 #
 # Held to bash 3.2 like the script it tests, so no arrays.
 set -uo pipefail
 
 SCRIPT="$(dirname "$0")/virtual-hid-driver"
 
-# Sourcing runs the verb dispatch at the foot of the script, and `state` is the
-# read-only one. Its exit status reports the machine, not this suite, so it is not the
-# signal here - what has to be true is that the definitions arrived, and that is
-# checked directly rather than inferred from it. [LAW:no-silent-failure]
+# Sourcing defines the functions and runs nothing: the verb dispatch is guarded to
+# direct execution. What has to be true is that the definitions arrived, and that is
+# checked directly rather than inferred from a status. [LAW:no-silent-failure]
 sourced_status=0
 # shellcheck source=/dev/null
-source "$SCRIPT" state >/dev/null 2>&1 || sourced_status=$?
+source "$SCRIPT" || sourced_status=$?
 set +e
-declare -f verdict_for >/dev/null && declare -f dext_registration >/dev/null \
+declare -f report_state >/dev/null && declare -f receipt_version >/dev/null \
   || { echo "virtual-hid-driver-test: sourcing $SCRIPT left its functions undefined (exit $sourced_status)" >&2; exit 1; }
+
+# From here on every reading goes to a stub that answers from the environment, so the
+# states this Mac cannot be put into are the ordinary case rather than the hard one.
+STUB_DIR=$(mktemp -d) || { echo "virtual-hid-driver-test: could not make a scratch directory" >&2; exit 1; }
+trap 'rm -rf "$STUB_DIR"' EXIT
+LOWTALKER="$STUB_DIR/lowtalker"
+cat > "$LOWTALKER" <<'STUB'
+#!/usr/bin/env bash
+# argv is `driver <verb> [argument]`, which is exactly what the script calls.
+case "${2:-}" in
+  state)        printf '%s\n' "$STUB_STATE";   exit "$STUB_STATE_STATUS" ;;
+  registration) printf '%s\n' "$STUB_REG";     exit "$STUB_REG_STATUS" ;;
+  receipt)      printf '%s\n' "$STUB_RECEIPT"; exit "$STUB_RECEIPT_STATUS" ;;
+  *) echo "stub lowtalker: unexpected argv: $*" >&2; exit 64 ;;
+esac
+STUB
+chmod +x "$LOWTALKER"
+export STUB_STATE=running STUB_STATE_STATUS=0
+export STUB_REG=enabled STUB_REG_STATUS=0
+export STUB_RECEIPT= STUB_RECEIPT_STATUS=0
 
 pass=0
 fail=0
@@ -53,157 +77,102 @@ check_contains() {
 }
 
 # ---------------------------------------------------------------------------
-# registration_word - the bracket text systemextensionsctl prints, as one word
+# require_cli - the build proven present before any reading is attempted
 # ---------------------------------------------------------------------------
 
-check "registration_word enabled"        enabled        "$(registration_word 'activated enabled')"
-check "registration_word disabled"       disabled       "$(registration_word 'activated disabled')"
-check "registration_word waiting"        waiting        "$(registration_word 'activated waiting for user')"
-check "registration_word pending-reboot" pending-reboot "$(registration_word 'terminated waiting to uninstall on reboot')"
-# Text nobody here has seen becomes `unknown` rather than the nearest familiar word:
-# misfiling an unseen state is how `remove` would report success on a machine it did
-# not understand.
-check "registration_word unseen text"    unknown        "$(registration_word 'activated something new')"
+# Checked in the main shell rather than inside a command substitution, which is the
+# whole point of it: a missing build discovered down there would be swallowed.
+( LOWTALKER="$STUB_DIR/not-built"; require_cli ) >/dev/null 2>&1
+check "require_cli refuses a missing build" 1 "$?"
+check_contains "require_cli names how to fix it" "make cli" \
+  "$( ( LOWTALKER="$STUB_DIR/not-built"; require_cli ) 2>&1 )"
+( require_cli ) >/dev/null 2>&1
+check "require_cli accepts a build that is there" 0 "$?"
 
 # ---------------------------------------------------------------------------
-# verdict_for - the whole table, one case per verdict
+# report_state - one verdict word, whatever the CLI did
 # ---------------------------------------------------------------------------
 
-check "verdict absent"             absent             "$(verdict_for none    none   unregistered no)"
-check "verdict installed-inactive" installed-inactive "$(verdict_for both    1.8.0  unregistered no)"
-check "verdict awaiting-approval"  awaiting-approval  "$(verdict_for both    1.8.0  waiting      no)"
-check "verdict disabled"           disabled           "$(verdict_for both    1.8.0  disabled     no)"
-check "verdict enabled"            enabled            "$(verdict_for both    1.8.0  enabled      no)"
-check "verdict running"            running            "$(verdict_for both    1.8.0  enabled      yes)"
-check "verdict pending-reboot"     pending-reboot     "$(verdict_for none    none   pending-reboot no)"
-check "verdict residue"            residue            "$(verdict_for partial 1.8.0  unregistered no)"
-check "verdict unknown registration" unknown          "$(verdict_for both    1.8.0  unknown      no)"
-check "verdict two live registrations" unknown        "$(verdict_for both    1.8.0  ambiguous    no)"
+STUB_STATE=running STUB_STATE_STATUS=0
+check "report_state yields the CLI's verdict" running "$(report_state 2>/dev/null)"
 
-# A probe that could not read the machine is never blended into a verdict about the
-# driver, whichever fact carries the sentinel.
-check "verdict probe-failed files"   unknown "$(verdict_for probe-failed none  unregistered no)"
-check "verdict probe-failed receipt" unknown "$(verdict_for both probe-failed enabled      no)"
-check "verdict probe-failed reg"     unknown "$(verdict_for both 1.8.0       probe-failed no)"
-check "verdict probe-failed io"      unknown "$(verdict_for both 1.8.0       enabled      probe-failed)"
+# The CLI prints `unknown` and exits 1 for a machine it could not read. That word is one
+# every caller here already refuses on, so it is carried through rather than turned into
+# a second way of saying the same thing.
+STUB_STATE=unknown STUB_STATE_STATUS=1
+check "report_state carries an unreadable machine through as unknown" unknown "$(report_state 2>/dev/null)"
 
-# A removal interrupted after the files went but before the receipt was forgotten is
-# not "done, waiting on a restart" - it is residue. `remove` reads `pending-reboot` as
-# "nothing left to do", so matching this verdict on the registration alone reported a
-# machine with a live receipt as finished and stranded that receipt forever.
-check "receipt left behind is residue, not pending-reboot" residue "$(verdict_for none 1.8.0 pending-reboot no)"
-check "files left behind is residue, not pending-reboot"   residue "$(verdict_for both none  pending-reboot no)"
+# An empty answer would sail through every case arm below it into the fallthrough, so it
+# becomes the one word that is always refused, and the reason is said out loud.
+STUB_STATE= STUB_STATE_STATUS=1
+check "report_state turns an empty answer into unknown" unknown "$(report_state 2>/dev/null)"
+check_contains "report_state says the CLI printed no verdict" "printed no verdict" \
+  "$(report_state 2>&1 >/dev/null)"
+STUB_STATE=running STUB_STATE_STATUS=0
+
+# The pinned package is what `install` would fetch rather than something read off this
+# Mac, so it is this script's line and it belongs beside the CLI's own table.
+check_contains "report_state prints the pinned package for a reader" "$PKG_VERSION" \
+  "$(report_state 2>&1 >/dev/null)"
 
 # ---------------------------------------------------------------------------
-# receipt_version - pkgutil's exits, told apart by what it actually said
+# cmd_state - the exit code a caller tests
 # ---------------------------------------------------------------------------
 
-STUB_PKGUTIL_OUT=""
-STUB_PKGUTIL_STATUS=0
-pkgutil() { printf '%s\n' "$STUB_PKGUTIL_OUT"; return "$STUB_PKGUTIL_STATUS"; }
+STUB_STATE=running STUB_STATE_STATUS=0
+( cmd_state ) >/dev/null 2>&1
+check "cmd_state exits 0 on a reading it took" 0 "$?"
+# `state` succeeds when it has taken a reading; claiming success for a reading it never
+# took is the one thing it must not do.
+STUB_STATE=unknown STUB_STATE_STATUS=1
+( cmd_state ) >/dev/null 2>&1
+check "cmd_state exits non-zero on a machine it could not read" 1 "$?"
+STUB_STATE=running STUB_STATE_STATUS=0
 
-STUB_PKGUTIL_OUT="package-id: org.pqrs.test
-version: 1.8.0
-volume: /"
-STUB_PKGUTIL_STATUS=0
-check "receipt_version reads the version" 1.8.0 "$(receipt_version org.pqrs.test)"
+# ---------------------------------------------------------------------------
+# driver_registration - the one fact removal reasons about alone
+# ---------------------------------------------------------------------------
 
-# "No receipt" is a normal answer; anything else pkgutil says is not.
-STUB_PKGUTIL_OUT="No receipt for 'org.pqrs.test' on '/'."
-STUB_PKGUTIL_STATUS=1
-check "receipt_version absent receipt" none "$(receipt_version org.pqrs.test)"
+STUB_REG=enabled STUB_REG_STATUS=0
+check "driver_registration yields the CLI's word" enabled "$(driver_registration)"
+STUB_REG=pending-reboot STUB_REG_STATUS=0
+check "driver_registration yields a pending-reboot registration" pending-reboot "$(driver_registration)"
+# Refusing to act on a reading nobody took is what keeps `remove` from deleting the
+# Manager while the extension is still registered - the one ordering mistake it can make
+# that nothing can walk back.
+STUB_REG=unknown STUB_REG_STATUS=1
+check "driver_registration forwards a failed reading as the sentinel" probe-failed "$(driver_registration)"
+STUB_REG= STUB_REG_STATUS=0
+check "driver_registration reads an empty answer as the sentinel" probe-failed "$(driver_registration)"
+STUB_REG=enabled STUB_REG_STATUS=0
 
-STUB_PKGUTIL_OUT="pkgutil: cannot open the receipt database"
-STUB_PKGUTIL_STATUS=2
-# stderr carries probe_failure's reason and is asserted below, so it is set aside here
-# rather than discarded: the word on stdout is what this case is about.
-check "receipt_version unreadable receipt" probe-failed "$(receipt_version org.pqrs.test 2>/dev/null)"
-check_contains "receipt_version says why it could not read" \
-  "pkgutil could not read the receipt" "$(receipt_version org.pqrs.test 2>&1 >/dev/null)"
+# ---------------------------------------------------------------------------
+# receipt_version - a version, no receipt, or the sentinel
+# ---------------------------------------------------------------------------
+
+STUB_RECEIPT=8.4.0 STUB_RECEIPT_STATUS=0
+check "receipt_version reads the version" 8.4.0 "$(receipt_version org.pqrs.test)"
+# The CLI prints nothing for a Mac holding no such receipt, and that is a normal answer.
+STUB_RECEIPT= STUB_RECEIPT_STATUS=0
+check "receipt_version reads an absent receipt" none "$(receipt_version org.pqrs.test)"
+# Anything the CLI could not read is not a clean machine, and the two must not arrive as
+# one answer. [LAW:no-silent-failure]
+STUB_RECEIPT= STUB_RECEIPT_STATUS=1
+check "receipt_version forwards an unreadable receipt as the sentinel" probe-failed "$(receipt_version org.pqrs.test)"
 
 # ---------------------------------------------------------------------------
 # receipts_present - the receipt to forget, or nothing, or the sentinel
 # ---------------------------------------------------------------------------
 
-# receipt_version is stubbed from here on, so its own cases above run first.
-STUB_RECEIPT=none
-receipt_version() { echo "$STUB_RECEIPT"; }
-
-STUB_RECEIPT=none
+STUB_RECEIPT= STUB_RECEIPT_STATUS=0
 check "receipts_present finds nothing to forget" "" "$(receipts_present)"
-STUB_RECEIPT=1.8.0
+STUB_RECEIPT=8.4.0 STUB_RECEIPT_STATUS=0
 check "receipts_present names the receipt" "$BUNDLE_ID" "$(receipts_present)"
 # Collapsing the sentinel into "present" would have `remove` forget a receipt on the
 # strength of a reading nobody took.
-STUB_RECEIPT=probe-failed
+STUB_RECEIPT= STUB_RECEIPT_STATUS=1
 check "receipts_present forwards the sentinel" probe-failed "$(receipts_present)"
-
-# ---------------------------------------------------------------------------
-# dext_registration - the listing, parsed once into a word
-# ---------------------------------------------------------------------------
-
-# Built from the script's own constants rather than a second copy of them.
-# [LAW:one-source-of-truth]
-dext_line() { printf '*\t*\t%s\t%s (1.8.0/1.8.0)\tKarabiner-VirtualHIDDevice [%s]' "$TEAM_ID" "$BUNDLE_ID" "$1"; }
-
-STUB_LIST=""
-STUB_LIST_STATUS=0
-systemextensionsctl() { printf '%s\n' "$STUB_LIST"; return "$STUB_LIST_STATUS"; }
-
-STUB_LIST="$(dext_line 'activated enabled')"
-check "dext_registration reads an enabled registration" enabled "$(dext_registration)"
-
-STUB_LIST="$(dext_line 'activated waiting for user')"
-check "dext_registration reads a waiting registration" waiting "$(dext_registration)"
-
-STUB_LIST="--- extensions
-no driver here"
-check "dext_registration reports an unlisted bundle" unregistered "$(dext_registration)"
-
-# A Mac upgraded but not yet restarted lists the bundle twice; the outgoing entry
-# governs nothing.
-STUB_LIST="$(dext_line 'terminated waiting to uninstall on reboot')
-$(dext_line 'activated enabled')"
-check "dext_registration drops the outgoing entry mid-upgrade" enabled "$(dext_registration)"
-
-STUB_LIST="$(dext_line 'terminated waiting to uninstall on reboot')"
-check "dext_registration reads a pending-reboot registration" pending-reboot "$(dext_registration)"
-
-STUB_LIST="$(dext_line 'activated enabled')
-$(dext_line 'activated disabled')"
-check "dext_registration refuses to pick between two live registrations" ambiguous "$(dext_registration)"
-
-# Listed, but no line carried a bracketed state: a listing this probe cannot parse is
-# not an empty machine.
-STUB_LIST="$(printf '*\t*\t%s\t%s (1.8.0/1.8.0)\tno bracket here' "$TEAM_ID" "$BUNDLE_ID")"
-check "dext_registration refuses an unparseable listing" probe-failed "$(dext_registration 2>/dev/null)"
-
-STUB_LIST=""
-STUB_LIST_STATUS=4
-check "dext_registration survives a failing listing" probe-failed "$(dext_registration 2>/dev/null)"
-check_contains "dext_registration says why it could not list" \
-  "could not list the system extensions" "$(dext_registration 2>&1 >/dev/null)"
-STUB_LIST_STATUS=0
-
-# ---------------------------------------------------------------------------
-# io_node_present - the IORegistry node
-# ---------------------------------------------------------------------------
-
-STUB_IOREG=""
-STUB_IOREG_STATUS=0
-ioreg() { printf '%s' "$STUB_IOREG"; return "$STUB_IOREG_STATUS"; }
-
-STUB_IOREG="+-o ${IO_NODE}  <class IOService>"
-check "io_node_present finds the node" yes "$(io_node_present)"
-# ioreg prints whitespace for a node that is not there, which is not a node.
-STUB_IOREG="
-
-"
-check "io_node_present reads whitespace as absent" no "$(io_node_present)"
-STUB_IOREG=""
-STUB_IOREG_STATUS=1
-check "io_node_present survives a failing query" probe-failed "$(io_node_present 2>/dev/null)"
-STUB_IOREG_STATUS=0
+STUB_RECEIPT= STUB_RECEIPT_STATUS=0
 
 # ---------------------------------------------------------------------------
 # remove_outcome - the exit codes a caller scripts against
