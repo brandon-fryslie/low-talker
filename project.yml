@@ -43,6 +43,10 @@ targets:
         product: LowTalkerCore
       - package: low-talker
         product: KeyboardService
+      # The list of what must hold before low-talker can type, which the menu shows and
+      # `lowtalker onboard` prints. One list, two views. [LAW:one-source-of-truth]
+      - package: low-talker
+        product: Onboarding
       - package: low-talker
         product: Signals
       - package: low-talker
