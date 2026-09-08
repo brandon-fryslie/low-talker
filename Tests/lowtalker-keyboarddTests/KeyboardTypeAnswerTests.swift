@@ -218,6 +218,14 @@ import Testing
         #expect(said.contains("is filed"), "the report does not say the answer is filed")
         #expect(!said.contains("may take the first line typed"),
                 "the report sends the reader to watch for a dialog that will not appear")
+        // And it names the cost as possible rather than certain, which is all it is in a
+        // position to know. The mode is asserted and never read back, so a `setAttributes`
+        // that fails of its own accord leaves the real mode unmeasured - and a file that
+        // was already 644 still reads fine. Promised flatly, that sentence sends an
+        // operator after a permissions failure that may not be there. It happens to be
+        // there in this test, which is why the claim is checked here and not the file.
+        #expect(!said.contains("will fail"),
+                "the report promises a read failure it never measured")
     }
 
     /// [LAW:no-silent-failure] A file that is there and cannot be understood is refused,

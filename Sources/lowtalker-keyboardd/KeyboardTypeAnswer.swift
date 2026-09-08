@@ -191,7 +191,7 @@ enum KeyboardTypeAnswer {
     /// the caller cannot tell them apart. The two that leave the answer unfiled mean the
     /// assistant may take the first line typed; `modeNotSet` means the opposite - the
     /// answer is filed and the assistant is answered - and costs something else entirely,
-    /// which is that onboarding's unprivileged read of the file starts failing. A caller
+    /// which is that onboarding's unprivileged read of the file may stop working. A caller
     /// framing every one of these as "could not file the answer" sent an operator looking
     /// for a dialog that was never going to appear, while the failure that had actually
     /// happened went unnamed. So the sentence lives here, per case, and the caller logs
@@ -200,8 +200,13 @@ enum KeyboardTypeAnswer {
         case unreadable(path: String, reason: String)
         case notWritten(path: String, reason: String)
         /// Reachable only once the answer is filed - the content is written, or was
-        /// already right, before the mode is ever asserted - which is why this case can
-        /// say so flatly rather than hedging about what did and did not land.
+        /// already right, before the mode is ever asserted - so this case can say flatly
+        /// that the filing landed. The cost is where it must hedge: the mode is asserted
+        /// and never read back, so a `setAttributes` that fails for a reason of its own
+        /// leaves the real mode unknown, and a file already at 0644 still reads fine. A
+        /// flat "the read will fail" sent an operator after a permissions problem that
+        /// may not be there. [LAW:no-silent-failure] wants the failure loud and true, and
+        /// a consequence this case cannot know is not the failure it has.
         case modeNotSet(path: String, reason: String)
 
         var description: String {
@@ -220,8 +225,8 @@ enum KeyboardTypeAnswer {
             case .modeNotSet(let path, let reason):
                 """
                 this keyboard's answer is filed and Keyboard Setup Assistant is answered, \
-                but \(path) could not be left world-readable, so onboarding's unprivileged \
-                read of it will fail: \(reason)
+                but the mode on \(path) could not be asserted, so onboarding's unprivileged \
+                read of it may fail: \(reason)
                 """
             }
         }

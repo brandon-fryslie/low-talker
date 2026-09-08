@@ -179,6 +179,20 @@ import Testing
         #expect(!step.contains("clears itself"), "the step tells a reader to wait for something that already happened")
     }
 
+    /// The window that step names is a guess, and the step has to admit it. The helper
+    /// logs the filing once, as it starts, while the standing that picks this arm says
+    /// only that a helper is up now - launchd holds the name for as long as the Mac is up.
+    /// So a reader whose helper started days ago runs the command and gets nothing back,
+    /// and nothing is exactly what reads as "no failure here" - the silence this arm was
+    /// added to break, arriving by a different door. [LAW:no-silent-failure]
+    @Test func theLogThisStepNamesAdmitsItsWindowMayBeTooSmall() {
+        let step = Self.assistantStep(aHelperHasRun: true)
+        #expect(!step.contains("--last 1h"),
+                "the window closes before a helper that started this morning")
+        #expect(step.contains("widen"),
+                "an empty result reads as no failure and the step never says otherwise")
+    }
+
     /// And the other way round: a helper that is not answering yet has not had its chance
     /// to file anything, so nothing has failed and there is no log to send anyone to.
     @Test func aHelperThatIsNotAnsweringYetIsWhatTheRowIsWaitingBehind() {
@@ -236,6 +250,23 @@ import Testing
             let step = Requirement.driverExtension(state).step ?? ""
             #expect(step.contains("scripts/virtual-hid-driver install"), "\(state)")
             #expect(step.contains("\(DriverProbe.managerExecutable) activate"), "\(state)")
+        }
+    }
+
+    /// Both of them scope that activation to the reader it is for, on the line that
+    /// introduces it. The script's `install` activates, so the block is only ever the
+    /// no-clone reader's - and a step is not read as a paragraph: `stepLines` makes every
+    /// line its own menu item, so a qualifier set three lines up never reaches someone
+    /// skimming down to the command. Unscoped, this told a reader who had just run the
+    /// script to go and activate again, which is the defect the block was rewritten to
+    /// remove and the one it grew back for `absent` alone.
+    @Test func theActivationBothStatesNameSaysWhichReaderOwesIt() throws {
+        for state in [DriverState.absent, .installedInactive] {
+            let leadIn = try #require(
+                Requirement.driverExtension(state).stepLines.first { $0.contains("ask macOS to activate") },
+                "\(state) no longer introduces the activation in words")
+            #expect(leadIn.contains("Without"),
+                    "\(state) never says the activation is the no-clone reader's")
         }
     }
 

@@ -107,16 +107,21 @@ private let loginItemsPane = "System Settings > General > Login Items & Extensio
 /// whose own step then told them to install a package they already had, so nothing here
 /// could ever move them off it.
 /// The lead-in to the activation is part of this text and not written beside it at the
-/// call site, because everything here is under one "Without one," and the activation is
-/// the second half of what the script's `install` does for the reader who has it. Written
-/// as a separate sentence after the block, it read as a step every reader owed - telling
-/// someone who had just run `scripts/virtual-hid-driver install`, which activates, to go
-/// and activate again.
+/// call site, because the activation is the second half of what the script's `install`
+/// does for the reader who has it. Written as a separate sentence after the block, it
+/// read as a step every reader owed - telling someone who had just run
+/// `scripts/virtual-hid-driver install`, which activates, to go and activate again.
+///
+/// It names the qualifier a second time rather than resting on the "Without one," three
+/// lines above, because a step is not read as a paragraph: `Requirement.stepLines` makes
+/// every line its own menu item, with no blank line to hold them together. A scope set
+/// once at the top reaches whoever is still reading from the top, which is not the reader
+/// this block goes wrong for.
 private let installWithoutAClone = """
     Without one, install \(DriverPackage.version) of the public package yourself -
     download it, open it, and let the installer finish:
         \(DriverPackage.url)
-    Then ask macOS to activate the driver.
+    Without a clone, ask macOS to activate the driver yourself too.
     """
 
 /// The activation itself, which both of those states end in and neither can reach with
@@ -387,6 +392,14 @@ public extension Requirement {
     /// Both arms open the same way, because the reader needs the same fact either way:
     /// the assistant is about to take the first line typed. They differ in what is left
     /// to do about it, which is what the helper's standing decides.
+    ///
+    /// The window the running arm names is a guess, and the step says so rather than
+    /// letting the reader take it for a promise. The standing it is chosen from carries
+    /// no time: `holdingTheService` means a helper is up now, not that it started
+    /// recently, and a `KeepAlive` daemon holds the name for as long as the Mac is up.
+    /// The filing is logged once, at that start, so a window that opens after it comes
+    /// back empty - and empty is what a reader takes for "no failure here", which is the
+    /// silence this arm exists to break. [LAW:no-silent-failure]
     private static func step(aHelperHasRun: Bool, helperSubsystem: String) -> String {
         let opening = """
             macOS raises Keyboard Setup Assistant the first time the virtual
@@ -395,8 +408,10 @@ public extension Requirement {
             """
         return aHelperHasRun ? """
             \(opening) and one has already
-            started - so the filing itself is what failed. It logs the reason:
-                /usr/bin/log show --predicate 'subsystem == "\(helperSubsystem)"' --last 1h
+            started - so the filing itself is what failed. It logged the reason as it
+            started, which may be further back than this window - widen it if nothing
+            comes back:
+                /usr/bin/log show --predicate 'subsystem == "\(helperSubsystem)"' --last 24h
             """ : """
             \(opening) so this clears itself
             once the helper above is answering.
