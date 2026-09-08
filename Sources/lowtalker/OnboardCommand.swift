@@ -32,24 +32,34 @@ struct OnboardCommand: ParsableCommand {
 }
 
 extension OnboardCommand {
-    /// Every reading the keyboard helper's row can take, one to a line.
+    /// Every reading every onboarding row can take, one to a line, each named with the
+    /// row it belongs to.
     ///
     /// README.md lists these for a reader following the runbook by hand. It cannot read a
-    /// Swift enum, so it keeps a copy, and `make check-docs` reads this to prove the copy
-    /// still agrees - the same proof the driver extension's verdict vocabulary already
+    /// Swift enum, so it keeps a copy per row, and `make check-docs` reads this to hold
+    /// each copy to it - the same proof the driver extension's verdict vocabulary already
     /// gets, and the absence of which let a case added to `HelperStanding` leave README
     /// stale with every check green. [LAW:one-source-of-truth]
     ///
-    /// [CLI] One reading per line on stdout, because a reading is a phrase with spaces in
-    /// it and a line is the one delimiter that cannot collide with the content.
+    /// The row is on every line because this used to print the helper's readings alone
+    /// and say nothing about it. What that cost was not a wrong answer but an invisible
+    /// gap: the assistant's two readings were hand-copied into README with no check, and
+    /// no reader of this command's output could have told. Naming the row makes the
+    /// command's answer complete and lets each caller take the rows it came for.
+    /// [LAW:composability]
+    ///
+    /// [CLI] One reading per line on stdout, as row and reading separated by a tab. Both
+    /// halves are phrases with spaces in them, so the tab is the one delimiter that
+    /// cannot collide with the content, and the line is the one that cannot collide with
+    /// a pair.
     struct Readings: ParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "readings",
-            abstract: "Print every reading the keyboard helper's row can take, one per line."
+            abstract: "Print every reading each onboarding row can take, as row and reading separated by a tab."
         )
 
         func run() {
-            print(Requirement.helperReadings.joined(separator: "\n"))
+            print(Requirement.readings.map { "\($0.row.rawValue)\t\($0.reading)" }.joined(separator: "\n"))
         }
     }
 }

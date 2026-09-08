@@ -29,6 +29,18 @@ public struct Requirement: Sendable, Hashable {
 }
 
 public extension Requirement {
+    /// What each row is called, in the order onboarding prints them.
+    ///
+    /// One home for the three names, because four readers say them: the factory that
+    /// builds each row, the row a failed reading becomes, the readings table `make
+    /// check-docs` holds README to, and the tests. Spelled out at each of those, they
+    /// are four clocks. [LAW:one-source-of-truth]
+    enum Row: String, Sendable, Hashable, CaseIterable {
+        case driverExtension = "Driver extension"
+        case keyboardHelper = "Keyboard helper"
+        case keyboardSetupAssistant = "Keyboard Setup Assistant"
+    }
+
     /// A requirement whose fact could not be read.
     ///
     /// The row stays in the list rather than being dropped or skipped: every requirement
@@ -36,8 +48,8 @@ public extension Requirement {
     /// a list a reader takes as complete. It carries a step, so it is never `met` and
     /// never lets `ready` come out true on the strength of a reading nobody took.
     /// [LAW:no-silent-failure]
-    static func unreadable(_ name: String, _ error: any Error) -> Requirement {
-        Requirement(name: name, reads: "could not be read", step: "\(error)")
+    static func unreadable(_ row: Row, _ error: any Error) -> Requirement {
+        Requirement(name: row.rawValue, reads: "could not be read", step: "\(error)")
     }
 }
 
@@ -82,15 +94,41 @@ public struct Readiness: Sendable, CustomStringConvertible {
 /// reader who stops.
 private let loginItemsPane = "System Settings > General > Login Items & Extensions"
 
-/// What the two install steps say to the reader the repo script cannot serve: someone who
+/// What the `absent` step says to the reader the repo script cannot serve: someone who
 /// installed LowTalker.app and has no clone, for whom `scripts/virtual-hid-driver` names
 /// a file that is not on their Mac. The app cannot run the install for them - see
 /// README's account of why - so the least it can do is name the artifact rather than a
 /// path only a developer has. [LAW:no-silent-failure] at the level of an instruction: a
 /// step a reader cannot follow is a step that fails without saying so.
-private let withoutAClone = """
-    Without one, install \(DriverPackage.version) of the public package yourself:
+///
+/// Both halves of the script's `install` are named, because it is two things and only the
+/// first is the package: it installs, and then it asks the Manager to activate. Naming
+/// the download alone left this reader installed and inactive - the next state down,
+/// whose own step then told them to install a package they already had, so nothing here
+/// could ever move them off it.
+private let installWithoutAClone = """
+    Without one, install \(DriverPackage.version) of the public package yourself -
+    download it, open it, and let the installer finish:
         \(DriverPackage.url)
+    """
+
+/// The activation itself, which both of those states end in and neither can reach with
+/// the package alone.
+///
+/// Run as the logged-in user rather than under sudo, and the reason is the same one that
+/// keeps this step out of the app's hands entirely: macOS attributes an activation
+/// request to whoever asks, and the approval the user gives answers that request. The
+/// Manager is named from `DriverProbe`, so this and the `MANAGER` the script runs cannot
+/// come to name different binaries. [LAW:one-source-of-truth]
+///
+/// Begins on a line of its own at every site, so the lead-in sentence each state writes
+/// for it does not push this one's first line past the width the rest of the steps wrap
+/// to. A step's lines are what the menu makes its items out of.
+private let activationWithoutAClone = """
+    Run it as you and not under sudo: macOS attributes an activation
+    request to whoever asks, and the approval you give answers that
+    request.
+        \(DriverProbe.managerExecutable) activate
     """
 
 public extension Requirement {
@@ -101,8 +139,13 @@ public extension Requirement {
     /// registration nobody approved needs a click, and a Mac mid-removal needs a
     /// restart. A single "the driver is not ready" would send all three the same way.
     static func driverExtension(_ state: DriverState) -> Requirement {
-        Requirement(name: "Driver extension", reads: state.rawValue, step: step(for: state))
+        Requirement(name: Row.driverExtension.rawValue, reads: reads(for: state), step: step(for: state))
     }
+
+    /// The verdict word itself. Named as a reading rather than reached through
+    /// `rawValue` at each site, so the row and the readings table are built from one
+    /// expression. [LAW:one-source-of-truth]
+    private static func reads(for state: DriverState) -> String { state.rawValue }
 
     private static func step(for state: DriverState) -> String? {
         switch state {
@@ -114,14 +157,18 @@ public extension Requirement {
             """
             The driver package is not on this Mac. From a clone of this repo:
                 scripts/virtual-hid-driver install
-            \(withoutAClone)
+            \(installWithoutAClone)
+            Then ask macOS to activate the driver.
+            \(activationWithoutAClone)
             """
         case .installedInactive:
             """
             The package is installed but macOS holds no registration for it,
-            so the activation request never landed. From a clone of this repo:
+            so the activation request never landed. From a clone of this repo,
+            whose install asks for it again:
                 scripts/virtual-hid-driver install
-            \(withoutAClone)
+            Without one, ask macOS to activate it yourself.
+            \(activationWithoutAClone)
             """
         case .awaitingApproval:
             """
@@ -210,18 +257,8 @@ public enum HelperStanding: Sendable, Hashable, CaseIterable {
 public extension Requirement {
     /// The root helper that owns the virtual keyboard.
     static func keyboardHelper(_ standing: HelperStanding, serviceName: String, developmentLabel: String) -> Requirement {
-        Requirement(name: "Keyboard helper", reads: reads(for: standing), step: step(for: standing, serviceName: serviceName, developmentLabel: developmentLabel))
+        Requirement(name: Row.keyboardHelper.rawValue, reads: reads(for: standing), step: step(for: standing, serviceName: serviceName, developmentLabel: developmentLabel))
     }
-
-    /// Every reading the helper's row can take, in the enum's own order.
-    ///
-    /// README.md lists these for a reader following the runbook by hand, and it cannot
-    /// read a Swift enum, so it keeps a copy and `make check-docs` reads this to prove the
-    /// copy still agrees. Derived from `reads(for:)` itself rather than written out a
-    /// second time, so the list cannot drift from what the two surfaces actually print: a
-    /// case added to `HelperStanding` reaches every reader that quotes the list.
-    /// [LAW:one-source-of-truth]
-    static var helperReadings: [String] { HelperStanding.allCases.map { reads(for: $0) } }
 
     private static func reads(for standing: HelperStanding) -> String {
         switch standing {
@@ -282,23 +319,84 @@ public extension Requirement {
     /// first dictation after an install types into a dialog, which is why onboarding
     /// owns it alongside the two approvals.
     ///
-    /// The only row whose step names nobody and nothing to run. The write wants root,
+    /// The only row whose step names nobody and nothing to install. The write wants root,
     /// which is why it used to be a `sudo` command printed for a reader to paste - but
     /// the keyboard helper is root, knows which keyboard it owns, and has to be running
     /// before the keyboard can type at all, so it files the answer as it starts. What is
     /// left to say is which row this one is waiting behind. [LAW:one-source-of-truth] The
     /// helper writes and this reads, and both take the key and the file from
     /// `VirtualKeyboardIdentity`.
-    static func keyboardSetupAssistant(answered: Bool) -> Requirement {
+    ///
+    /// Which makes the helper's standing part of this row's step and not context around
+    /// it. "Wait for the helper to file it" is true only while the helper is not yet
+    /// answering; said to someone whose helper IS answering, it is an instruction to wait
+    /// for something that already happened, and the one thing that can actually be
+    /// wrong - the filing failed, and the helper said why - goes unmentioned. A step that
+    /// sends a reader to wait out a failure is that failure staying silent at the level
+    /// of an instruction. [LAW:no-silent-failure]
+    ///
+    /// - Parameter helperAnswering: whether the helper that files this is holding its
+    ///   service, from the row above, which is read first for exactly this reason.
+    /// - Parameter helperSubsystem: the subsystem the helper logs under, which is its own
+    ///   Mach service name. Passed in rather than reached for, so this stays a pure
+    ///   function of what onboarding read. [LAW:effects-at-boundaries]
+    static func keyboardSetupAssistant(answered: Bool, helperAnswering: Bool, helperSubsystem: String) -> Requirement {
         Requirement(
-            name: "Keyboard Setup Assistant",
-            reads: answered ? "answered for this keyboard" : "will ask on first use",
-            step: answered ? nil : """
-                macOS raises Keyboard Setup Assistant the first time the virtual
-                keyboard types, and it takes those keystrokes. The keyboard helper
-                files this keyboard's own answer as it starts, so this clears itself
-                once the helper above is answering.
-                """
+            name: Row.keyboardSetupAssistant.rawValue,
+            reads: reads(forAnswered: answered),
+            step: answered ? nil : step(helperAnswering: helperAnswering, helperSubsystem: helperSubsystem)
         )
+    }
+
+    private static func reads(forAnswered answered: Bool) -> String {
+        answered ? "answered for this keyboard" : "will ask on first use"
+    }
+
+    /// Both arms open the same way, because the reader needs the same fact either way:
+    /// the assistant is about to take the first line typed. They differ in what is left
+    /// to do about it, which is what the helper's standing decides.
+    private static func step(helperAnswering: Bool, helperSubsystem: String) -> String {
+        let opening = """
+            macOS raises Keyboard Setup Assistant the first time the virtual
+            keyboard types, and it takes those keystrokes. The keyboard helper
+            files this keyboard's own answer as it starts,
+            """
+        return helperAnswering ? """
+            \(opening) and it is answering - so
+            the filing itself is what failed. The helper logs the reason:
+                /usr/bin/log show --predicate 'subsystem == "\(helperSubsystem)"' --last 1h
+            """ : """
+            \(opening) so this clears itself
+            once the helper above is answering.
+            """
+    }
+}
+
+// MARK: - the vocabulary README keeps a copy of
+
+public extension Requirement {
+    /// Every reading every row can take, each paired with the row it belongs to.
+    ///
+    /// README.md lists these for a reader following the runbook by hand. It cannot read a
+    /// Swift enum, so it keeps a copy per row, and `make check-docs` reads this to hold
+    /// each copy to it. Derived from the same `reads(for:)` the rows themselves are built
+    /// from rather than written out a second time, so a case added to `DriverState` or
+    /// `HelperStanding` reaches every reader that quotes the list.
+    /// [LAW:one-source-of-truth]
+    ///
+    /// Every row is in it, and each reading carries the row it belongs to rather than
+    /// leaving that to what the caller happens to know it asked for. The table covered
+    /// only the helper's five readings before, unlabelled - so the assistant's two sat
+    /// hand-copied into README with nothing checking them, and nothing about the table
+    /// said they were missing. A vocabulary table whose gaps are invisible to the reader
+    /// trusting it is the drift it exists to catch. [LAW:composability]
+    ///
+    /// `unreadable`'s reading is in none of them: it belongs to no row's own vocabulary,
+    /// being the one thing every row says when the machine could not be read, and README
+    /// describes it once as exactly that.
+    static var readings: [(row: Row, reading: String)] {
+        DriverState.allCases.map { (row: Row.driverExtension, reading: reads(for: $0)) }
+            + HelperStanding.allCases.map { (row: Row.keyboardHelper, reading: reads(for: $0)) }
+            + [true, false].map { (row: Row.keyboardSetupAssistant, reading: reads(forAnswered: $0)) }
     }
 }

@@ -99,6 +99,9 @@ extension DriverCommand {
                 ("io-node", DriverProbe.ioNodeName),
                 ("elements-receipt", DriverProbe.elementsReceiptID),
                 ("manager-app", DriverProbe.managerApp),
+                // The binary onboarding names to a reader with no clone, so that the
+                // activation step and the script's own `MANAGER` cannot drift apart.
+                ("manager-executable", DriverProbe.managerExecutable),
                 ("support-dir", DriverProbe.supportDirectory),
                 // What onboarding names to a reader with no clone. The script fetches and
                 // checksums the package and so holds the pin it acts on; this copy is the

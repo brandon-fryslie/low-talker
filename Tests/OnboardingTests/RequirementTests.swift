@@ -96,10 +96,15 @@ import Testing
     /// string would put back exactly the ambiguity that splitting them removed, while
     /// leaving README and the enum in perfect agreement about it.
     @Test func everyStandingReadsBackAsItsOwnLineAndNoTwoShareOne() {
-        #expect(Requirement.helperReadings == HelperStanding.allCases.map {
+        #expect(Self.readings(for: .keyboardHelper) == HelperStanding.allCases.map {
             Requirement.keyboardHelper($0, serviceName: Self.service, developmentLabel: Self.devLabel).reads
         })
-        #expect(Set(Requirement.helperReadings).count == HelperStanding.allCases.count)
+        #expect(Set(Self.readings(for: .keyboardHelper)).count == HelperStanding.allCases.count)
+    }
+
+    /// What the table says one row can read.
+    static func readings(for row: Requirement.Row) -> [String] {
+        Requirement.readings.filter { $0.row == row }.map(\.reading)
     }
 
     /// An app whose helper is enabled while another job holds the name reports enabled
@@ -151,12 +156,61 @@ import Testing
     /// type - so it files the answer as it starts, and this row waits behind the helper's
     /// rather than handing the reader a command. This is what "the row stops naming a
     /// command" has to keep meaning. [LAW:behavior-not-structure]
-    @Test func anUnansweredAssistantAsksTheReaderToRunNothing() {
-        let step = Requirement.keyboardSetupAssistant(answered: false).step ?? ""
+    /// Held for both arms, because the helper's standing changes what is left to do about
+    /// the answer and never who writes it. A step that regrew the paste in either arm
+    /// would be the row going back to asking a person for the thing the helper does.
+    @Test(arguments: [false, true]) func anUnansweredAssistantAsksTheReaderToRunNothing(helperAnswering: Bool) {
+        let step = Self.assistantStep(helperAnswering: helperAnswering)
         #expect(step.contains("keyboard helper"))
         for pasted in ["sudo", "defaults", VirtualKeyboardIdentity.keyboardTypeDomain, VirtualKeyboardIdentity.keyboardTypeKey] {
             #expect(!step.contains(pasted), "the step hands the reader \(pasted) to run")
         }
+    }
+
+    /// Waiting is only true while there is something to wait for. Told to someone whose
+    /// helper is answering, "this clears itself once the helper is answering" sends them
+    /// to wait out a failure that has already happened - the filing is the only thing
+    /// left that can be wrong, and the helper has already said why in its log.
+    /// [LAW:no-silent-failure]
+    @Test func anAnsweringHelperAndNoAnswerSendsTheReaderToTheHelpersLog() {
+        let step = Self.assistantStep(helperAnswering: true)
+        #expect(step.contains("log show"))
+        #expect(step.contains(Self.service), "the step names no subsystem to read")
+        #expect(!step.contains("clears itself"), "the step tells a reader to wait for something that already happened")
+    }
+
+    /// And the other way round: a helper that is not answering yet has not had its chance
+    /// to file anything, so nothing has failed and there is no log to send anyone to.
+    @Test func aHelperThatIsNotAnsweringYetIsWhatTheRowIsWaitingBehind() {
+        let step = Self.assistantStep(helperAnswering: false)
+        #expect(step.contains("clears itself"))
+        #expect(!step.contains("log show"), "the step blames a filing that was never attempted")
+    }
+
+    private static func assistantStep(helperAnswering: Bool) -> String {
+        Requirement.keyboardSetupAssistant(
+            answered: false, helperAnswering: helperAnswering, helperSubsystem: service).step ?? ""
+    }
+
+    /// The readings table covers this row too. It carried the helper's five alone until
+    /// these two sat hand-copied into README with nothing holding them to the code, which
+    /// is the drift the table exists to catch - so what is asserted is that the row is in
+    /// it at all, and that what is in it is what the row prints.
+    /// [LAW:one-source-of-truth]
+    @Test func bothOfTheAssistantsReadingsAreInTheTableThatHoldsReadmeToThem() {
+        #expect(Self.readings(for: .keyboardSetupAssistant) == [true, false].map {
+            Requirement.keyboardSetupAssistant(answered: $0, helperAnswering: false, helperSubsystem: Self.service).reads
+        })
+    }
+
+    /// Every row is in the table, and no row's readings are borrowed from another's. A
+    /// gap here is invisible to the check that reads it: README would be held to the rows
+    /// that happened to be listed and silently unheld on the rest.
+    @Test func everyRowHasReadingsOfItsOwnInTheTable() {
+        for row in Requirement.Row.allCases {
+            #expect(!Self.readings(for: row).isEmpty, "\(row.rawValue) has no readings in the table")
+        }
+        #expect(Requirement.readings.count == Requirement.Row.allCases.reduce(0) { $0 + Self.readings(for: $1).count })
     }
 
     /// The key is `<product>-<vendor>-<country>`, which is not the order the device is
@@ -167,21 +221,46 @@ import Testing
     }
 
     @Test func anAnsweredAssistantAsksNothing() {
-        #expect(Requirement.keyboardSetupAssistant(answered: true).met)
+        #expect(Requirement.keyboardSetupAssistant(answered: true, helperAnswering: true, helperSubsystem: Self.service).met)
+        #expect(Requirement.keyboardSetupAssistant(answered: true, helperAnswering: false, helperSubsystem: Self.service).met)
     }
 
     // MARK: - a reader with no clone
 
-    /// Both states that want an install name the public package as well as the repo
-    /// script. Someone who installed LowTalker.app has no `scripts/` directory, and the
-    /// app cannot run the install for them - so a step naming only the script is one that
-    /// half its readers cannot follow.
-    @Test func theInstallStepsNameThePackageAndNotOnlyTheRepoScript() {
+    /// Both states that want the driver put right name something the reader can run
+    /// without a clone, as well as the repo script. Someone who installed LowTalker.app
+    /// has no `scripts/` directory, and the app cannot run the install for them - so a
+    /// step naming only the script is one that half its readers cannot follow.
+    @Test func bothStatesNeedingTheDriverGiveTheReaderWithNoCloneSomethingToRun() {
         for state in [DriverState.absent, .installedInactive] {
             let step = Requirement.driverExtension(state).step ?? ""
             #expect(step.contains("scripts/virtual-hid-driver install"), "\(state)")
-            #expect(step.contains(DriverPackage.url), "\(state)")
-            #expect(step.contains(DriverPackage.version), "\(state)")
+            #expect(step.contains("\(DriverProbe.managerExecutable) activate"), "\(state)")
+        }
+    }
+
+    /// A Mac with no package needs the package, and one that has it needs only the
+    /// activation. Naming the package to `installed-inactive` too was telling a reader to
+    /// install what they already had, which could never move them off that state - the
+    /// script's `install` is a download AND a separate activation, and only the second
+    /// half is what is missing here.
+    @Test func onlyTheStateMissingThePackageNamesThePackage() {
+        let absent = Requirement.driverExtension(.absent).step ?? ""
+        #expect(absent.contains(DriverPackage.url))
+        #expect(absent.contains(DriverPackage.version))
+
+        let inactive = Requirement.driverExtension(.installedInactive).step ?? ""
+        #expect(!inactive.contains(DriverPackage.url), "the step tells a reader to install a package they already have")
+    }
+
+    /// The activation has to be asked for by the logged-in user - macOS attributes the
+    /// request to whoever asks, and the approval answers that request - so a step that
+    /// let a reader reach for sudo would send them to an install that cannot complete.
+    /// It is the same fact that keeps this step out of the app's hands.
+    @Test func theActivationTellsTheReaderNotToTakeItUnderSudo() {
+        for state in [DriverState.absent, .installedInactive] {
+            let step = Requirement.driverExtension(state).step ?? ""
+            #expect(step.contains("not under sudo"), "\(state)")
         }
     }
 
@@ -197,7 +276,7 @@ import Testing
     /// A fact nobody could read never counts as met, so a report cannot come out ready
     /// on the strength of a reading nobody took. [LAW:no-silent-failure]
     @Test func aRequirementThatCouldNotBeReadIsNeverMet() {
-        let requirement = Requirement.unreadable("Driver extension", OnboardingUnreadable.plistUnreadable(path: "/p", reason: "why"))
+        let requirement = Requirement.unreadable(.driverExtension, OnboardingUnreadable.plistUnreadable(path: "/p", reason: "why"))
         #expect(!requirement.met)
         #expect(requirement.step?.contains("why") == true)
         #expect(!Readiness([requirement]).ready)

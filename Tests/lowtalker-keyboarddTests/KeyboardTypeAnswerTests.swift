@@ -82,6 +82,58 @@ import Testing
         #expect(root["somethingElse"] as? String == "kept")
     }
 
+    /// Every start files it, and the write is the merge's result - so a start that finds
+    /// its answer already there writes nothing, which is not an operation skipped but an
+    /// empty one. It matters because this is a read-modify-write of a file shared with
+    /// Keyboard Setup Assistant itself, and every rewrite is another window for a writer
+    /// landing between the read and the write to have its entry overwritten by the
+    /// snapshot this took. Leaving that window open on the one start that has something
+    /// to file, and on no start after it, is the whole of what can be done here.
+    ///
+    /// Which start it was is the returned value and not a silence: "already there" is the
+    /// ordinary case on every boot after the first, and a helper that had stopped filing
+    /// anything would look identical without it. [LAW:no-silent-failure]
+    @Test func aStartThatFindsTheAnswerAlreadyThereFilesNothing() throws {
+        let path = scratch("twice")
+        #expect(try KeyboardTypeAnswer.file(into: path) == .filed)
+        let filed = try Data(contentsOf: URL(fileURLWithPath: path))
+        #expect(try KeyboardTypeAnswer.file(into: path) == .alreadyFiled)
+        #expect(try Data(contentsOf: URL(fileURLWithPath: path)) == filed)
+    }
+
+    /// A cache holding somebody else's answers and not ours is a start with something to
+    /// file, so the merge is written and said to have been.
+    @Test func aStartThatHasSomethingToAddSaysItFiledIt() throws {
+        let path = scratch("others")
+        try write(["keyboardtype": ["10203-5824-33": 40]], to: path)
+        #expect(try KeyboardTypeAnswer.file(into: path) == .filed)
+    }
+
+    /// Onboarding reads this file with no privilege at all, so the mode it is left in is
+    /// part of filing the answer and not a detail of how it was written: a cache this
+    /// helper tightened would leave the assistant's row permanently unreadable for every
+    /// ordinary user, with the answer inside it perfectly correct.
+    ///
+    /// Both starting conditions are here because the write reaches them by different
+    /// paths - measured on this platform, an atomic replace keeps the existing file's
+    /// mode while an atomic create takes the writer's umask - and the contract over both
+    /// is one: whoever wrote it and whatever was there before, the file a reader has to
+    /// read is world-readable afterwards. The 0600 case is the one that bites, since it
+    /// is the mode a replace would otherwise carry forward.
+    /// [LAW:behavior-not-structure]
+    @Test(arguments: [nil, 0o600] as [Int?])
+    func theFiledCacheIsLeftWorldReadable(existingMode: Int?) throws {
+        let path = scratch("mode")
+        if let existingMode {
+            try write(["keyboardtype": ["10203-5824-33": 40]], to: path)
+            try FileManager.default.setAttributes([.posixPermissions: existingMode], ofItemAtPath: path)
+        }
+        try KeyboardTypeAnswer.file(into: path)
+        let left = try #require(
+            FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? NSNumber)
+        #expect(left.int32Value == 0o644, "left \(String(left.int32Value, radix: 8))")
+    }
+
     /// [LAW:no-silent-failure] A file that is there and cannot be understood is refused,
     /// and refused before anything is written. Reading it as "no answers yet" would have
     /// this write back a cache holding one entry where every other keyboard's used to be -
