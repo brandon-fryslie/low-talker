@@ -59,16 +59,28 @@ public enum OnboardingProbe {
         // The endpoint is handed out at load, so a job that holds the service names it
         // here. A job that asked and lost simply has no such line: launchd does not make
         // the loser loud, which is exactly why this is read rather than assumed.
+        //
+        // At load, and not at check-in - which is the whole reason this reads the
+        // endpoints block rather than a state field, and is worth recording because it is
+        // the reading that looks wrong. Measured with a job whose program is `sleep`, so
+        // it never checks a Mach service in at all: `state = running`, and the endpoint
+        // already named, with `active = 0`. Check-in is what `active` tracks. So a helper
+        // between its own start and `listener.resume()` - it files this keyboard's answer
+        // in that window, then waits on the daemon - already reads as holding the service,
+        // which is what the assistant's row needs it to say.
         return printed.stdout.contains("\"\(service)\" = {") ? .holdingTheService : .anotherJobHoldsTheService
     }
 
     /// Whether Keyboard Setup Assistant already holds a verdict for this keyboard.
     ///
-    /// The file is world-readable, so this needs no privilege; writing the entry does,
-    /// which is why the requirement names a command rather than taking the step itself.
+    /// The file is world-readable, so this needs no privilege. Writing it does, which is
+    /// the keyboard helper's job as it starts - this is the reading that says the helper
+    /// got there, and the row it feeds stays unmet until it has. [LAW:one-source-of-truth]
+    /// One file and one key, both named by `VirtualKeyboardIdentity`, so the reader here
+    /// and the writer in the helper cannot come to mean different files.
     public static func keyboardSetupAssistantAnswered(
         key: String = VirtualKeyboardIdentity.keyboardTypeKey,
-        at path: String = keyboardTypePlist
+        at path: String = VirtualKeyboardIdentity.keyboardTypePlist
     ) throws -> Bool {
         // A Mac that has never met any keyboard has no file, and that is an answer: the
         // assistant has nothing cached. Told apart from a file that is there and cannot
@@ -92,17 +104,6 @@ public enum OnboardingProbe {
         }
         return answers[key] != nil
     }
-
-    /// Where macOS files the assistant's answers, as `defaults` names it. The
-    /// requirement prints this inside the command that writes it, and a step naming a
-    /// different file from the one that was read is a step that does nothing - so the
-    /// file below is derived from it rather than written out a second time.
-    /// [LAW:one-source-of-truth]
-    public static let keyboardTypeDomain = "/Library/Preferences/com.apple.keyboardtype"
-
-    /// The same thing as a file. `defaults` takes the domain and
-    /// `PropertyListSerialization` takes the file, and they are one path.
-    public static let keyboardTypePlist = keyboardTypeDomain + ".plist"
 }
 
 public extension OnboardingProbe {
@@ -118,7 +119,13 @@ public extension OnboardingProbe {
     ///   helper's registration, and nil from a caller that owns none. See
     ///   `HelperStanding.sharpenedByTheAppsOwnRegistration(approvalPending:)`.
     static func readiness(approvalPending: Bool?) -> Readiness {
-        Readiness(driverRow() + helperRow(approvalPending: approvalPending) + keyboardSetupAssistantRow())
+        // The helper's row is read before the assistant's because the assistant's step
+        // depends on it: the answer is filed BY the helper, so what is left to do about a
+        // missing answer is a different thing depending on whether the helper has run.
+        // The dependency is in the data rather than in the order two independent readings
+        // happen to be taken in. [LAW:no-ambient-temporal-coupling]
+        let helper = helperRow(approvalPending: approvalPending)
+        return Readiness(driverRow() + helper.rows + keyboardSetupAssistantRow(aHelperHasRun: helper.aHelperHasRun))
     }
 
     /// Each reading is taken and turned into its row here, at the edge, and a reading
@@ -127,28 +134,41 @@ public extension OnboardingProbe {
     /// [LAW:effects-at-boundaries]
     private static func driverRow() -> [Requirement] {
         do { return [.driverExtension(DriverState(try DriverProbe.facts()))] }
-        catch { return [.unreadable("Driver extension", error)] }
+        catch { return [.unreadable(.driverExtension, error)] }
     }
 
-    private static func helperRow(approvalPending: Bool?) -> [Requirement] {
+    /// The helper's row, and the one thing about it the assistant's row needs.
+    ///
+    /// What that one thing is, `HelperStanding` says: this asks the standing rather than
+    /// comparing it here, so the question "has a helper already had its chance to file
+    /// the answer" has one answer and it lives with the states it is about.
+    /// [LAW:one-source-of-truth]
+    ///
+    /// A reading that failed answers `false`, which is not that reading collapsing into a
+    /// wrong one: it is the only honest thing to hand a row asking whether a helper ran,
+    /// when nobody could look. What could not be read is loud in the row this returns
+    /// beside it - the helper's own, which reads `could not be read` and names the
+    /// reason - so the failure is reported where it belongs rather than inferred from the
+    /// assistant's step. [LAW:no-silent-failure]
+    private static func helperRow(approvalPending: Bool?) -> (rows: [Requirement], aHelperHasRun: Bool) {
         do {
             let standing = try helperStanding(
                 label: Helper.launchdLabel,
                 developmentLabel: Helper.developmentLabel,
                 service: Helper.machServiceName)
                 .sharpenedByTheAppsOwnRegistration(approvalPending: approvalPending)
-            return [.keyboardHelper(standing, serviceName: Helper.machServiceName, developmentLabel: Helper.developmentLabel)]
-        } catch { return [.unreadable("Keyboard helper", error)] }
+            return ([.keyboardHelper(standing, serviceName: Helper.machServiceName, developmentLabel: Helper.developmentLabel)],
+                    standing.aHelperHasRun)
+        } catch { return ([.unreadable(.keyboardHelper, error)], false) }
     }
 
-    private static func keyboardSetupAssistantRow() -> [Requirement] {
+    private static func keyboardSetupAssistantRow(aHelperHasRun: Bool) -> [Requirement] {
         do {
             return [.keyboardSetupAssistant(
                 answered: try keyboardSetupAssistantAnswered(),
-                key: VirtualKeyboardIdentity.keyboardTypeKey,
-                path: keyboardTypeDomain
-            )]
-        } catch { return [.unreadable("Keyboard Setup Assistant", error)] }
+                aHelperHasRun: aHelperHasRun,
+                helperSubsystem: Helper.machServiceName)]
+        } catch { return [.unreadable(.keyboardSetupAssistant, error)] }
     }
 }
 

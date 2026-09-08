@@ -1,5 +1,6 @@
 import DriverExtension
 import Foundation
+import KeyboardService
 import Testing
 @testable import Onboarding
 
@@ -27,6 +28,10 @@ import Testing
     /// The same job when launchd gave the name to somebody else. Measured on this Mac:
     /// the record is complete, the job says `state = running`, and there is simply no
     /// endpoints block. Nothing in it announces the loss.
+    ///
+    /// Which is the lost-name shape and not a job that has yet to check in - a distinction
+    /// worth naming, because a running job that has never checked a service in still names
+    /// its endpoint, at `active = 0`. There is no endpoints block here at all.
     static let holdingNothing = """
     system/com.lowtalker.keyboardd = {
     \tactive count = 1
@@ -59,6 +64,44 @@ import Testing
         #expect(OnboardingProbe.lostName(toDevelopment: .holdingTheService) == .theDevelopmentJobHoldsTheService)
         for development in HelperStanding.allCases where development != .holdingTheService {
             #expect(OnboardingProbe.lostName(toDevelopment: development) == .anotherJobHoldsTheService, "\(development)")
+        }
+    }
+
+    /// The whole way from what launchd printed to what the reader is told, on the Mac
+    /// where reading it as "is the app's own helper answering" got it wrong: the
+    /// development job holds the name, so a real helper is running and has already been
+    /// through its filing - and a reader whose answer is still missing needs the log,
+    /// not a wait for something that already happened and already failed.
+    ///
+    /// Taken through the readings rather than by handing the step a bool, because the
+    /// bool is what was wrong: every piece here was right on its own while what they
+    /// composed to was a reader told to wait forever. [LAW:behavior-not-structure]
+    @Test func aDevelopmentHelperHoldingTheNameSendsTheReaderToTheLog() throws {
+        let mine = try OnboardingProbe.standing(
+            from: Command.Output(status: 0, stdout: Self.holdingNothing, stderr: ""),
+            label: Self.label, service: Self.service)
+        #expect(mine == .anotherJobHoldsTheService, "the app's own job is read as holding a name it lost")
+        let standing = OnboardingProbe.lostName(toDevelopment: try OnboardingProbe.standing(
+            from: Command.Output(status: 0, stdout: Self.holdingTheService, stderr: ""),
+            label: Helper.developmentLabel, service: Self.service))
+            .sharpenedByTheAppsOwnRegistration(approvalPending: nil)
+        #expect(standing == .theDevelopmentJobHoldsTheService)
+
+        let step = Requirement.keyboardSetupAssistant(
+            answered: false, aHelperHasRun: standing.aHelperHasRun, helperSubsystem: Self.service).step ?? ""
+        #expect(step.contains("log show"), "the reader is not told where the failure is reported")
+        #expect(!step.contains("clears itself"), "the reader is told to wait for a filing that already happened")
+    }
+
+    /// Which standings mean a helper has already had its chance to file the answer. Both
+    /// jobs run the same helper and it files before it can win or lose a name, so both
+    /// have been through it; a holder nobody could identify has not earned the claim,
+    /// because nothing was read that says a helper is what took the name.
+    /// [LAW:no-silent-failure] Exhaustive, so a standing added later has to answer this.
+    @Test func onlyAStandingThatNamesARunningHelperSaysOneHasRun() {
+        let ran: Set<HelperStanding> = [.holdingTheService, .theDevelopmentJobHoldsTheService]
+        for standing in HelperStanding.allCases {
+            #expect(standing.aHelperHasRun == ran.contains(standing), "\(standing)")
         }
     }
 

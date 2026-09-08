@@ -100,17 +100,18 @@ let package = Package(
         .target(name: "Dictation", dependencies: ["LowTalkerCore", "Typing", "KeyboardLayout"]),
         .testTarget(name: "DictationTests", dependencies: ["Dictation", "LowTalkerCore", "Typing", "KeyboardLayout", "Keystrokes", "Pointing", "TestProbes"]),
         // The root daemon that owns the devices. It links VirtualKeyboard, both vocabularies,
-        // the seam and the signal watch, and deliberately not KeyboardLayout: text never
-        // reaches this process.
+        // the seam and the signal watch, DriverExtension for the identity the keyboard files
+        // its Keyboard Setup Assistant answer under, and deliberately not KeyboardLayout:
+        // text never reaches this process.
         .executableTarget(
             name: "lowtalker-keyboardd",
-            dependencies: ["KeyboardService", "VirtualKeyboard", "Keystrokes", "Pointing", "Signals"]
+            dependencies: ["KeyboardService", "VirtualKeyboard", "DriverExtension", "Keystrokes", "Pointing", "Signals"]
         ),
         // The authorization boundary of a root keystroke service, checked against the
         // test process's own identity and audit token: real code signing, no root.
         .testTarget(
             name: "lowtalker-keyboarddTests",
-            dependencies: ["lowtalker-keyboardd", "KeyboardService", "VirtualKeyboard", "Keystrokes", "Pointing", "Signals"]
+            dependencies: ["lowtalker-keyboardd", "KeyboardService", "VirtualKeyboard", "DriverExtension", "Keystrokes", "Pointing", "Signals"]
         ),
         .executableTarget(
             name: "lowtalker",
