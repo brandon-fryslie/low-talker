@@ -43,6 +43,12 @@ targets:
         product: LowTalkerCore
       - package: low-talker
         product: KeyboardService
+      - package: low-talker
+        product: Signals
+      - package: low-talker
+        product: Typing
+      - package: low-talker
+        product: Dictation
       # The helper rides inside the bundle, where the plist above names it, signed on
       # copy with the app's own identity.
       - target: lowtalker-keyboardd
@@ -73,6 +79,8 @@ targets:
         product: VirtualKeyboard
       - package: low-talker
         product: Keystrokes
+      - package: low-talker
+        product: Signals
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lowtalker.keyboardd
