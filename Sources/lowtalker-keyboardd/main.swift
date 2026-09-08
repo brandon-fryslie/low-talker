@@ -1,5 +1,6 @@
 import Foundation
 import KeyboardService
+import Signals
 import VirtualKeyboard
 import os
 
@@ -48,27 +49,25 @@ do {
     // not what it holds. [LAW:dataflow-not-control-flow]
     devices.releaseEverything(because: "starting")
 
-    // launchd stops a job with SIGTERM. Taken as an event rather than the default
-    // disposition, which would end the process with whatever was held still held. The
-    // departure is claimed before the keys are released: the release is a request, and
-    // a request that finds the daemon gone reports the loss on this thread, into the
-    // handler above, which must find the departure already taken. [LAW:no-ambient-temporal-coupling]
-    signal(SIGTERM, SIG_IGN)
-    let termination = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-    termination.setEventHandler {
+    // launchd stops a job with SIGTERM. The departure is claimed before the keys are
+    // released: the release is a request, and a request that finds the daemon gone
+    // reports the loss on this thread, into the handler above, which must find the
+    // departure already taken. [LAW:no-ambient-temporal-coupling]
+    // The stop is handed the one value it uses, not the whole of what reaching returned.
+    let origin = reached.daemon
+    let termination = SignalWatch(on: [SIGTERM], answeringOn: .main) { _ in
         guard departure.claim() else { return }
         devices.releaseEverything(because: "asked to stop")
-        leave(reached.daemon, because: "asked to stop", status: 0)
+        leave(origin, because: "asked to stop", status: 0)
     }
-    termination.resume()
 
     let listener = NSXPCListener(machServiceName: Helper.machServiceName)
     let delegate = Listener(devices: devices, callers: callers)
     listener.delegate = delegate
     listener.resume()
     log("listening on \(Helper.machServiceName)")
-    // Held so the delegate and the signal source outlive this scope; `resume` retains
-    // neither.
+    // Held so the delegate and the watch outlive this scope; `resume` retains neither
+    // the listener nor the sources the watch owns.
     withExtendedLifetime((delegate, termination)) { dispatchMain() }
 } catch let refused as CallerIdentity.Refused {
     // The installation is wrong and starting again will not fix it. launchd cannot be
