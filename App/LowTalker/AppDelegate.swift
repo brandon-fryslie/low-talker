@@ -2,6 +2,7 @@ import AppKit
 import Dictation
 import KeyboardService
 import LowTalkerCore
+import Onboarding
 import ServiceManagement
 import Signals
 import Typing
@@ -12,7 +13,7 @@ import os
 /// loading the moment the app is up, and to hand the loop its microphone, engine and
 /// keyboard.
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // [LAW:no-ambient-temporal-coupling] NSStatusBar is only usable once the
     // application object exists, which is after this delegate is allocated. Lazy
     // creation ties the item's lifetime to first use instead of to an optional that
@@ -20,78 +21,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var statusItem: NSStatusItem = {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "low-talker")
-        item.menu = makeMenu()
+        item.menu = menu
         return item
     }()
 
-    /// A menu line that is a readout, not a command.
-    private static func readout() -> NSMenuItem {
-        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-        item.isEnabled = false
-        return item
-    }
+    /// The one menu, emptied and rebuilt from a fresh reading every time it is about to
+    /// be shown. It holds no state of its own: what a reader sees is what
+    /// `menuNeedsUpdate` just read, never a title some earlier code path remembered to
+    /// keep in step. [LAW:one-source-of-truth]
+    private lazy var menu: NSMenu = {
+        let menu = NSMenu()
+        menu.delegate = self
+        return menu
+    }()
 
-    /// What the engine is doing.
-    private let engineItem = readout()
-    /// Whether the hotkey is being watched, or why not.
-    private let hotkeyItem = readout()
-    /// Where the keyboard helper stands with launchd. The one action a user has on it,
-    /// the approval, is theirs alone to give.
-    private let helperItem = readout()
+    /// What the engine is doing, and whether the hotkey is being watched. The two
+    /// things in the menu that cannot be read on demand: they arrive from the load's
+    /// and the tap's own callbacks, so they are held here while everything else is read
+    /// at the moment the menu opens. Launch sets both before it returns, so no menu can
+    /// open on an empty string.
+    private var engineStatus = ""
+    private var hotkeyStatus = ""
 
     /// The same readouts in the unified log, where `log show` can time them: a menu
-    /// nobody has open is no way to measure a launch.
+    /// nobody has open is no way to measure a launch, and no way for an agent to check
+    /// what the app is showing without a screen. [LAW:verifiable-goals]
     private let log = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "engine")
     /// One line per press: what was heard, how long after key-up, and what was typed.
     private let sessions = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "dictation")
 
+    /// The helper's registration, from the bundle's own launchd plist. One instance,
+    /// because registering and asking where the registration stands are two questions
+    /// about one record. [LAW:one-source-of-truth]
+    private let helperService = SMAppService.daemon(plistName: "\(Helper.launchdLabel).plist")
+
     /// [LAW:one-source-of-truth] Every engine status passes through here, so the
     /// menu and the log never tell different stories.
     private func showEngineStatus(_ status: String) {
-        engineItem.title = "Whisper model: \(status)"
+        engineStatus = status
         log.info("model: \(status, privacy: .public)")
     }
 
     private func showHotkeyStatus(_ status: String) {
-        hotkeyItem.title = "Hotkey: \(status)"
+        hotkeyStatus = status
         log.notice("hotkey: \(status, privacy: .public)")
     }
 
     /// The root keyboard helper, registered from the bundle's own launchd plist.
     ///
     /// Registering is idempotent, so it happens on every launch: the first one lands the
-    /// job in Login Items as "requires approval", where it waits for the user, and every
-    /// later one reads back where it stands. What is read is what is shown; nothing here
-    /// assumes the click happened. [LAW:no-silent-failure] Walking the user through the
-    /// approval is onboarding's job (low-keyboard-3ti.7); this shows the state and opens
-    /// the pane.
+    /// job in Login Items as "requires approval", where it waits for the user. Nothing is
+    /// read back here. `SMAppService` answers only whether this app's own registration is
+    /// approved, and that is one of two readings the helper's row needs - the other,
+    /// which job actually holds the Mach service, only launchd can give. Both are taken
+    /// together when the menu opens.
     private func registerKeyboardHelper() {
-        let service = SMAppService.daemon(plistName: "\(Helper.launchdLabel).plist")
-        // [LAW:dataflow-not-control-flow] On the first launch of every install register()
-        // throws "Operation not permitted": smd will not bootstrap a daemon nobody has
-        // approved yet. So the throw is not the readout; the status is, and it is read
-        // whether or not the call threw. The throw goes to the log as what smd said.
         do {
-            try service.register()
+            try helperService.register()
         } catch {
+            // [LAW:no-silent-failure] On the first launch of every install this throws
+            // "Operation not permitted": smd will not bootstrap a daemon nobody has
+            // approved yet. That is a normal step on the way in rather than a failure to
+            // start, so it is reported here and the readout comes from what was read.
             log.notice("keyboard helper: register — \(error.localizedDescription, privacy: .public)")
-        }
-        showHelperStatus(Self.describe(service.status))
-    }
-
-    private func showHelperStatus(_ status: String) {
-        helperItem.title = "Keyboard helper: \(status)"
-        log.notice("keyboard helper: \(status, privacy: .public)")
-    }
-
-    /// Every state SMAppService can report, in the words a user can act on.
-    private static func describe(_ status: SMAppService.Status) -> String {
-        switch status {
-        case .enabled: "enabled"
-        case .requiresApproval: "waiting for approval in Login Items & Extensions"
-        case .notRegistered: "not registered"
-        case .notFound: "not found in the app bundle"
-        @unknown default: "in a state this build does not know (\(status.rawValue))"
         }
     }
 
@@ -153,8 +145,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        statusItem.isVisible = true
         showEngineStatus("checking…")
+        statusItem.isVisible = true
         _ = engine
         registerKeyboardHelper()
         showHotkeyStatus("starting…")
@@ -233,14 +225,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func makeMenu() -> NSMenu {
-        let menu = NSMenu()
-        menu.addItem(engineItem)
-        menu.addItem(hotkeyItem)
-        menu.addItem(helperItem)
-        menu.addItem(withTitle: "Approve the keyboard helper in Login Items…", action: #selector(openLoginItems), keyEquivalent: "")
+    // MARK: - the menu
+
+    /// Everything the menu says, made here, every time, from what this Mac reads now.
+    ///
+    /// This is the ticket's "re-read on activation until both hold": an `LSUIElement` app
+    /// has no window to activate, so opening the menu is the moment. The reading is taken
+    /// on this thread, and the menu waits about 220ms for it - measured here from the log
+    /// timestamps, and spent almost entirely in the driver probe's subprocesses. It is
+    /// paid on open rather than kept warm in the background because a cached reading is a
+    /// reading that can be stale exactly when it matters: right after the user gave the
+    /// approval this menu was telling them to give. [LAW:no-ambient-temporal-coupling]
+    ///
+    /// `menuNeedsUpdate` rather than `menuWillOpen`: AppKit calls this one before the
+    /// menu is laid out, so the items are in place when it is measured.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        // The one reading no other process can take, logged raw as `SMAppService` gave
+        // it. On a Mac whose helper is already approved it changes nothing a reader
+        // sees, so an agent checking that the app asked at all - and that it asked about
+        // the right plist - has nothing else to read back. [LAW:no-silent-failure]
+        let registration = helperService.status
+        log.notice("helper registration: SMAppService.Status \(registration.rawValue, privacy: .public)")
+
+        let readiness = OnboardingProbe.readiness(approvalPending: registration == .requiresApproval)
+        log.notice("onboarding: \(readiness.ready ? "ready" : "not ready", privacy: .public)")
+        for requirement in readiness.requirements {
+            log.notice("onboarding: \(requirement.name, privacy: .public): \(requirement.reads, privacy: .public)")
+        }
+
+        menu.removeAllItems()
+        menu.addItem(readout("Whisper model: \(engineStatus)"))
+        menu.addItem(readout("Hotkey: \(hotkeyStatus)"))
+        // Every requirement, met or not, and its step under it as the lines it was
+        // written in - one item per line, so nothing here wraps text the requirement
+        // already broke. A list that showed only what was missing would leave a reader
+        // unable to tell "checked and fine" from "never checked".
+        // [LAW:dataflow-not-control-flow]
+        for requirement in readiness.requirements {
+            menu.addItem(readout("\(requirement.name): \(requirement.reads)"))
+            for line in requirement.stepLines { menu.addItem(readout("    \(line)")) }
+        }
         menu.addItem(.separator())
+        // Where every step that asks for a click sends a reader, one click closer.
+        menu.addItem(withTitle: "Open Login Items & Extensions…", action: #selector(openLoginItems), keyEquivalent: "")
         menu.addItem(withTitle: "Quit low-talker", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        return menu
+    }
+
+    /// A line the menu says and nothing a reader can press. An item with no action is
+    /// one AppKit disables on its own, which is the whole of what "readout" means here.
+    private func readout(_ title: String) -> NSMenuItem {
+        NSMenuItem(title: title, action: nil, keyEquivalent: "")
     }
 }

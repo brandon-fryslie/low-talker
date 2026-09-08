@@ -1,3 +1,4 @@
+import DriverExtension
 import Foundation
 import Keystrokes
 
@@ -50,11 +51,19 @@ public struct TooManyKeys: Error, CustomStringConvertible {
 ///
 /// **The calling process must be root**, for the reason `DaemonConnection` gives.
 public final class VirtualKeyboard: KeyPress {
-    /// pqrs's own defaults for the virtual keyboard, three uint64 in this order. All
-    /// three are `strong_typedef`s over `uint64_t`, so the payload is 24 bytes; the
+    /// The device's identity, three uint64 in this order. All three are
+    /// `strong_typedef`s over `uint64_t`, so the payload is 24 bytes; the
     /// reasonable-looking reading - two 16-bit ids and a byte - is five bytes long, well
     /// formed, and initializes a device that is not the one asked for.
-    static let parameters: [UInt8] = [0x16c0, 0x27db, 0].flatMap { (value: UInt64) in (0..<8).map { UInt8(truncatingIfNeeded: value >> (8 * $0)) } }
+    ///
+    /// The numbers come from `VirtualKeyboardIdentity` rather than sitting inline,
+    /// because onboarding builds the Keyboard Setup Assistant's cache key out of the
+    /// same three. [LAW:one-source-of-truth]
+    static let parameters: [UInt8] = [
+        VirtualKeyboardIdentity.vendorID,
+        VirtualKeyboardIdentity.productID,
+        VirtualKeyboardIdentity.countryCode,
+    ].flatMap { (value: UInt64) in (0..<8).map { UInt8(truncatingIfNeeded: value >> (8 * $0)) } }
 
     private let daemon: DaemonConnection
     private let reportTimeout: Duration
