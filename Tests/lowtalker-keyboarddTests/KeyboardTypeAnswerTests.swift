@@ -187,6 +187,39 @@ import Testing
         }
     }
 
+    /// A mode that could not be set is reported as itself, and not as a lost answer.
+    ///
+    /// The two failures cost different things and only one of them is about the assistant:
+    /// by the time the mode is asserted the answer is filed, so an operator told the
+    /// keyboard may swallow the first line typed would be watching for a dialog that is
+    /// never going to appear, while the failure that did happen - onboarding can no longer
+    /// read the file - went unnamed. Every one of these used to say the same sentence.
+    /// [LAW:no-silent-failure]
+    ///
+    /// Made to fail with the immutable flag, which is what `chmod(2)` refuses: the file is
+    /// there and its answers are already this keyboard's, so the merge writes nothing and
+    /// the mode is the only thing left to set. It has to start at a mode other than 644,
+    /// because macOS lets a no-op chmod through the flag.
+    @Test func aModeThatCouldNotBeSetIsReportedAsTheModeAndNotAsALostAnswer() throws {
+        let path = scratch("immutable")
+        try write(["keyboardtype": [key: ansi]], to: path)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600, .immutable: true], ofItemAtPath: path)
+        defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: path) }
+
+        let failure = #expect(throws: KeyboardTypeAnswer.Unwritable.self) {
+            try KeyboardTypeAnswer.file(into: path)
+        }
+        guard case .modeNotSet = failure else {
+            Issue.record("the mode failing was reported as \(String(describing: failure))")
+            return
+        }
+        let said = "\(try #require(failure))"
+        #expect(said.contains("is filed"), "the report does not say the answer is filed")
+        #expect(!said.contains("may take the first line typed"),
+                "the report sends the reader to watch for a dialog that will not appear")
+    }
+
     /// [LAW:no-silent-failure] A file that is there and cannot be understood is refused,
     /// and refused before anything is written. Reading it as "no answers yet" would have
     /// this write back a cache holding one entry where every other keyboard's used to be -

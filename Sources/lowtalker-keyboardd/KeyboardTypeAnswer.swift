@@ -50,7 +50,7 @@ enum KeyboardTypeAnswer {
     /// Keyboard Setup Assistant and cfprefsd take none. Said plainly rather than dressed
     /// as a guarantee this cannot keep.
     @discardableResult
-    static func file(into path: String = VirtualKeyboardIdentity.keyboardTypePlist) throws -> Filing {
+    static func file(into path: String = VirtualKeyboardIdentity.keyboardTypePlist) throws(Unwritable) -> Filing {
         let cache = try Cache.read(at: path)
         let answers = filed(into: cache.answers)
         let filing: Filing = answers == cache.answers ? .alreadyFiled : .filed
@@ -112,7 +112,7 @@ enum KeyboardTypeAnswer {
         /// holding one entry where fourteen devices' answers used to be. Only a file that
         /// is genuinely absent, and a file holding no answers yet, are empty caches - and
         /// they are, because a Mac that has met no keyboard has nothing cached.
-        static func read(at path: String) throws -> Cache {
+        static func read(at path: String) throws(Unwritable) -> Cache {
             guard FileManager.default.fileExists(atPath: path) else { return Cache(root: [:], answers: [:]) }
             let contents: Any
             do {
@@ -156,11 +156,11 @@ enum KeyboardTypeAnswer {
         /// rather than one per path through the filing. [LAW:single-enforcer] Asserted
         /// rather than checked-then-set: the call costs the same either way, and a read
         /// followed by a conditional write is a window for the two to disagree.
-        static func makeReadable(at path: String) throws {
+        static func makeReadable(at path: String) throws(Unwritable) {
             do {
                 try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: path)
             } catch {
-                throw Unwritable.notWritten(path: path, reason: "its mode could not be set to 644: \(error)")
+                throw Unwritable.modeNotSet(path: path, reason: "\(error)")
             }
         }
 
@@ -172,7 +172,7 @@ enum KeyboardTypeAnswer {
         /// serves this domain from the file rather than from a cache in front of it.
         /// The bytes alone. The mode is `makeReadable`'s, asserted by the caller on every
         /// start rather than here on the starts that happen to write.
-        func write(to path: String) throws {
+        func write(to path: String) throws(Unwritable) {
             do {
                 try PropertyListSerialization
                     .data(fromPropertyList: root, format: .binary, options: 0)
@@ -183,19 +183,46 @@ enum KeyboardTypeAnswer {
         }
     }
 
-    /// Why this keyboard's answer could not be filed. Never swallowed into "filed": the
+    /// What went wrong, and what it costs the reader. Never swallowed into "filed": the
     /// consequence of believing it was is that the first dictation after an install types
     /// into a dialog, which is the whole reason this exists. [LAW:no-silent-failure]
+    ///
+    /// Each case says its own consequence, because they are not the same consequence and
+    /// the caller cannot tell them apart. The two that leave the answer unfiled mean the
+    /// assistant may take the first line typed; `modeNotSet` means the opposite - the
+    /// answer is filed and the assistant is answered - and costs something else entirely,
+    /// which is that onboarding's unprivileged read of the file starts failing. A caller
+    /// framing every one of these as "could not file the answer" sent an operator looking
+    /// for a dialog that was never going to appear, while the failure that had actually
+    /// happened went unnamed. So the sentence lives here, per case, and the caller logs
+    /// it rather than writing one of its own. [LAW:one-source-of-truth]
     enum Unwritable: Error, CustomStringConvertible, Equatable {
         case unreadable(path: String, reason: String)
         case notWritten(path: String, reason: String)
+        /// Reachable only once the answer is filed - the content is written, or was
+        /// already right, before the mode is ever asserted - which is why this case can
+        /// say so flatly rather than hedging about what did and did not land.
+        case modeNotSet(path: String, reason: String)
 
         var description: String {
             switch self {
             case .unreadable(let path, let reason):
-                "could not read \(path), so this keyboard's answer was not filed and nothing was overwritten: \(reason)"
+                """
+                could not read \(path), so this keyboard's answer was not filed and \
+                nothing was overwritten, and Keyboard Setup Assistant may take the first \
+                line typed: \(reason)
+                """
             case .notWritten(let path, let reason):
-                "could not write \(path): \(reason)"
+                """
+                could not write \(path), so this keyboard's answer was not filed and \
+                Keyboard Setup Assistant may take the first line typed: \(reason)
+                """
+            case .modeNotSet(let path, let reason):
+                """
+                this keyboard's answer is filed and Keyboard Setup Assistant is answered, \
+                but \(path) could not be left world-readable, so onboarding's unprivileged \
+                read of it will fail: \(reason)
+                """
             }
         }
     }

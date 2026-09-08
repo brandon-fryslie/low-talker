@@ -40,11 +40,16 @@ do {
     // is not worth refusing to type over. Said here, and read back by onboarding's own
     // row, which stays unmet until the answer is actually on disk - so this is reported
     // twice and swallowed nowhere. [LAW:no-silent-failure]
+    // The failure says what it cost, because only it knows: a mode that could not be set
+    // leaves the answer filed and the assistant answered, and a frame written here would
+    // have told an operator to expect a dialog that is never going to appear.
+    // [LAW:one-source-of-truth] Typed, so this is every failure `file` has rather than
+    // whichever ones were thought of here.
     do {
         let filing = try KeyboardTypeAnswer.file()
         log("this keyboard's answer \(filing) with Keyboard Setup Assistant under \(VirtualKeyboardIdentity.keyboardTypeKey)")
     } catch {
-        log("could not file this keyboard's answer with Keyboard Setup Assistant, so it may take the first line typed: \(error)")
+        log("\(error)")
     }
 
     // The connection is lost on the reading thread, and no key can be released over a
