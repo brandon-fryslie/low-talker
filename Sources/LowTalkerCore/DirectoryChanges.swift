@@ -50,12 +50,13 @@ enum DirectoryChanges {
                     // Per-file granularity, so a file edited in place is reported and
                     // not only the entries appearing and disappearing around it.
                     kFSEventStreamCreateFlagFileEvents
-                        // The first change of a batch arrives at once; only the rest of
-                        // that batch waits out the latency.
-                        | kFSEventStreamCreateFlagNoDefer
                         // What keeps the stream alive across its own root being deleted
                         // and made again.
                         | kFSEventStreamCreateFlagWatchRoot
+                    // Deliberately not kFSEventStreamCreateFlagNoDefer: handing the first
+                    // change of a batch over at once reads a save that unlinks before it
+                    // writes in the gap between the two, and calls the file missing. The
+                    // latency below is the one thing that decides when a reading is taken.
                 )
             )!  // The author vouches: this returns nil for an empty or malformed path
                 // list, and the one path here is a directory that exists.
@@ -65,7 +66,7 @@ enum DirectoryChanges {
             // can be wrong without anybody finding out. It fails only when the stream has
             // no queue to run on, which is set on the line above.
             precondition(FSEventStreamStart(stream), "FSEvents refused to start on \(directory.path)")
-            let teardown = Teardown(stream: stream, sink: sink)
+            let teardown = Teardown(stream: stream, sink: sink, queue: queue)
             continuation.onTermination = { _ in teardown() }
         }
     }
@@ -127,11 +128,18 @@ private final class Sink: Sendable {
 private struct Teardown: @unchecked Sendable {
     let stream: FSEventStreamRef
     let sink: Unmanaged<Sink>
+    let queue: DispatchQueue
 
     func callAsFunction() {
         FSEventStreamStop(stream)
         FSEventStreamInvalidate(stream)
         FSEventStreamRelease(stream)
-        sink.release()
+        // [LAW:no-ambient-temporal-coupling] The stop above ends delivery; this hop waits
+        // out the delivery already under way. Stopping first is what closes the set of
+        // callbacks that can still hold the sink, and the queue is serial, so every one
+        // of them is ahead of this block and done with the pointer before it goes. Async
+        // and not sync: this runs on whatever thread ended the stream, which can be this
+        // queue, and a sync onto itself is a deadlock.
+        queue.async { sink.release() }
     }
 }
