@@ -112,12 +112,13 @@ import Testing
     /// that differed per case while the caller discarded the value and logged one
     /// sentence either way, so the justification was true of the type and false of the
     /// program. [LAW:one-source-of-truth]
+    ///
     /// Over every case rather than the two named here, so an outcome added later has to
     /// find its own words instead of quietly sharing another's.
     @Test func theOutcomesSayDifferentThingsToAReader() {
         let said = KeyboardTypeAnswer.Filing.allCases.map { "\($0)" }
         #expect(Set(said).count == said.count, "outcomes a reader cannot tell apart: \(said)")
-        for sentence in said { #expect(!sentence.isEmpty) }
+        #expect(said.allSatisfy { !$0.isEmpty }, "an outcome says nothing to a reader: \(said)")
     }
 
     /// A cache holding somebody else's answers and not ours is a start with something to
@@ -136,11 +137,11 @@ import Testing
     /// Every starting condition is here because the filing reaches them by different
     /// paths - measured on this platform, an atomic replace keeps the existing file's
     /// mode while an atomic create takes the writer's umask, and a start with nothing to
-    /// file writes at all - and the contract over all of them is one: whoever wrote it
-    /// and whatever was there before, the file a reader has to read is world-readable
-    /// afterwards. Stated over the conditions rather than over the paths, so it holds a
-    /// start that repairs the mode and writes nothing else to the same bar as the one
-    /// that wrote the file.
+    /// file writes nothing at all - and the contract over all of them is one: whoever
+    /// wrote it and whatever was there before, the file a reader has to read is
+    /// world-readable afterwards. Stated over the conditions rather than the paths, so
+    /// it holds a start that repairs the mode and writes nothing else to the same bar as
+    /// the one that wrote the file.
     /// [LAW:behavior-not-structure]
     @Test(arguments: Start.allCases)
     func theFiledCacheIsLeftWorldReadable(start: Start) throws {
@@ -168,19 +169,19 @@ import Testing
         case noCacheYet
         /// Somebody else's answers, tightened. The merge has ours to add, so the file is
         /// replaced - carrying the 0600 forward, which is the path that bites.
-        case othersAnswersUnreadable
+        case othersAnswersTightened
         /// Our answer already there, tightened. The merge has nothing to add, so nothing
         /// is written and the mode is the only thing left to repair - the case that made
         /// the guarantee hold on the first boot and never again, because a mode wrong for
         /// any reason after the first filing was read past on every start after it.
-        case ourAnswerAlreadyThereUnreadable
+        case ourAnswerAlreadyThereTightened
 
         /// The answers already cached, and nothing at all where there is no file yet.
         var cached: [String: Int]? {
             switch self {
             case .noCacheYet: nil
-            case .othersAnswersUnreadable: ["10203-5824-33": 40]
-            case .ourAnswerAlreadyThereUnreadable:
+            case .othersAnswersTightened: ["10203-5824-33": 40]
+            case .ourAnswerAlreadyThereTightened:
                 [VirtualKeyboardIdentity.keyboardTypeKey: VirtualKeyboardIdentity.ansiKeyboardType]
             }
         }
