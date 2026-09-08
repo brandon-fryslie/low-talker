@@ -146,15 +146,17 @@ import Testing
     // MARK: - the Keyboard Setup Assistant
 
     /// Not an approval, and the one thing here that appears on first use: an unanswered
-    /// assistant takes the first dictation's keystrokes. The step has to carry the write
-    /// that stops it, aimed at this device's own key.
-    @Test func anUnansweredAssistantCarriesTheWriteThatSuppressesIt() {
-        let key = VirtualKeyboardIdentity.keyboardTypeKey
-        let requirement = Requirement.keyboardSetupAssistant(answered: false, key: key, path: "/Library/Preferences/com.apple.keyboardtype")
-        let step = requirement.step ?? ""
-        #expect(step.contains(key))
-        #expect(step.contains("/Library/Preferences/com.apple.keyboardtype"))
-        #expect(step.contains("\(VirtualKeyboardIdentity.ansiKeyboardType)"))
+    /// assistant takes the first dictation's keystrokes. The write that stops it wants
+    /// root, and the keyboard helper is root and has to be running before anything can
+    /// type - so it files the answer as it starts, and this row waits behind the helper's
+    /// rather than handing the reader a command. This is what "the row stops naming a
+    /// command" has to keep meaning. [LAW:behavior-not-structure]
+    @Test func anUnansweredAssistantAsksTheReaderToRunNothing() {
+        let step = Requirement.keyboardSetupAssistant(answered: false).step ?? ""
+        #expect(step.contains("keyboard helper"))
+        for pasted in ["sudo", "defaults", VirtualKeyboardIdentity.keyboardTypeDomain, VirtualKeyboardIdentity.keyboardTypeKey] {
+            #expect(!step.contains(pasted), "the step hands the reader \(pasted) to run")
+        }
     }
 
     /// The key is `<product>-<vendor>-<country>`, which is not the order the device is
@@ -165,7 +167,29 @@ import Testing
     }
 
     @Test func anAnsweredAssistantAsksNothing() {
-        #expect(Requirement.keyboardSetupAssistant(answered: true, key: "k", path: "/p").met)
+        #expect(Requirement.keyboardSetupAssistant(answered: true).met)
+    }
+
+    // MARK: - a reader with no clone
+
+    /// Both states that want an install name the public package as well as the repo
+    /// script. Someone who installed LowTalker.app has no `scripts/` directory, and the
+    /// app cannot run the install for them - so a step naming only the script is one that
+    /// half its readers cannot follow.
+    @Test func theInstallStepsNameThePackageAndNotOnlyTheRepoScript() {
+        for state in [DriverState.absent, .installedInactive] {
+            let step = Requirement.driverExtension(state).step ?? ""
+            #expect(step.contains("scripts/virtual-hid-driver install"), "\(state)")
+            #expect(step.contains(DriverPackage.url), "\(state)")
+            #expect(step.contains(DriverPackage.version), "\(state)")
+        }
+    }
+
+    /// The URL is built from the version, so a bump cannot leave it aimed at the old
+    /// release - the failure a hand-written pair invites. [LAW:one-source-of-truth]
+    @Test func thePackageUrlCarriesTheVersionItPins() {
+        #expect(DriverPackage.url.contains("/v\(DriverPackage.version)/"))
+        #expect(DriverPackage.url.hasSuffix("-\(DriverPackage.version).pkg"))
     }
 
     // MARK: - the list

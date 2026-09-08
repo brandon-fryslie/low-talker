@@ -48,7 +48,7 @@ check-docs:
 	pins=$$(.build/debug/lowtalker driver pins) \
 	  || { echo "check-docs: could not read 'lowtalker driver pins' - run 'swift build' first" >&2; exit 1; }; \
 	pin() { awk -F'\t' -v k="$$1" '$$1==k{print $$2}' <<<"$$pins"; }; \
-	for pair in bundle-id:BUNDLE_ID team-id:TEAM_ID elements-receipt:ELEMENTS_RECEIPT manager-app:MANAGER_APP support-dir:SUPPORT_DIR; do \
+	for pair in bundle-id:BUNDLE_ID team-id:TEAM_ID elements-receipt:ELEMENTS_RECEIPT manager-app:MANAGER_APP support-dir:SUPPORT_DIR package-version:PKG_VERSION; do \
 	  key=$${pair%%:*}; constant=$${pair#*:}; \
 	  value=$$(pin "$$key"); \
 	  [ -n "$$value" ] || { echo "check-docs: 'lowtalker driver pins' emits no $$key" >&2; exit 1; }; \
@@ -58,11 +58,14 @@ check-docs:
 	  echo "check-docs: scripts/virtual-hid-driver agrees with $$key"; \
 	done
 # What README.md quotes for a reader following the runbook by hand. The driver's identity
-# comes from the CLI; the package the script fetches is the script's own pin, and stays
-# there because nothing in Swift downloads anything.
+# comes from the CLI, and so does the package now: nothing in Swift downloads anything, but
+# onboarding has to NAME the package to a reader who installed LowTalker.app and has no
+# clone, for whom `scripts/virtual-hid-driver install` is not an instruction. The script
+# still holds the pin it acts on, because it is the file that fetches and checksums the
+# bytes; the loop above is what proves the two copies agree.
 	@set -euo pipefail; \
 	pins=$$(.build/debug/lowtalker driver pins); \
-	for key in bundle-id team-id io-node elements-receipt; do \
+	for key in bundle-id team-id io-node elements-receipt package-url; do \
 	  value=$$(awk -F'\t' -v k="$$key" '$$1==k{print $$2}' <<<"$$pins"); \
 	  [ -n "$$value" ] || { echo "check-docs: 'lowtalker driver pins' emits no $$key" >&2; exit 1; }; \
 	  grep -qF "$$value" README.md \

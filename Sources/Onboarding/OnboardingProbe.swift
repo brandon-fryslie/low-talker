@@ -64,11 +64,14 @@ public enum OnboardingProbe {
 
     /// Whether Keyboard Setup Assistant already holds a verdict for this keyboard.
     ///
-    /// The file is world-readable, so this needs no privilege; writing the entry does,
-    /// which is why the requirement names a command rather than taking the step itself.
+    /// The file is world-readable, so this needs no privilege. Writing it does, which is
+    /// the keyboard helper's job as it starts - this is the reading that says the helper
+    /// got there, and the row it feeds stays unmet until it has. [LAW:one-source-of-truth]
+    /// One file and one key, both named by `VirtualKeyboardIdentity`, so the reader here
+    /// and the writer in the helper cannot come to mean different files.
     public static func keyboardSetupAssistantAnswered(
         key: String = VirtualKeyboardIdentity.keyboardTypeKey,
-        at path: String = keyboardTypePlist
+        at path: String = VirtualKeyboardIdentity.keyboardTypePlist
     ) throws -> Bool {
         // A Mac that has never met any keyboard has no file, and that is an answer: the
         // assistant has nothing cached. Told apart from a file that is there and cannot
@@ -92,17 +95,6 @@ public enum OnboardingProbe {
         }
         return answers[key] != nil
     }
-
-    /// Where macOS files the assistant's answers, as `defaults` names it. The
-    /// requirement prints this inside the command that writes it, and a step naming a
-    /// different file from the one that was read is a step that does nothing - so the
-    /// file below is derived from it rather than written out a second time.
-    /// [LAW:one-source-of-truth]
-    public static let keyboardTypeDomain = "/Library/Preferences/com.apple.keyboardtype"
-
-    /// The same thing as a file. `defaults` takes the domain and
-    /// `PropertyListSerialization` takes the file, and they are one path.
-    public static let keyboardTypePlist = keyboardTypeDomain + ".plist"
 }
 
 public extension OnboardingProbe {
@@ -143,11 +135,7 @@ public extension OnboardingProbe {
 
     private static func keyboardSetupAssistantRow() -> [Requirement] {
         do {
-            return [.keyboardSetupAssistant(
-                answered: try keyboardSetupAssistantAnswered(),
-                key: VirtualKeyboardIdentity.keyboardTypeKey,
-                path: keyboardTypeDomain
-            )]
+            return [.keyboardSetupAssistant(answered: try keyboardSetupAssistantAnswered())]
         } catch { return [.unreadable("Keyboard Setup Assistant", error)] }
     }
 }

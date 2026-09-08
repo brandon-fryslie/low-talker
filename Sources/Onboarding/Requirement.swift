@@ -82,6 +82,17 @@ public struct Readiness: Sendable, CustomStringConvertible {
 /// reader who stops.
 private let loginItemsPane = "System Settings > General > Login Items & Extensions"
 
+/// What the two install steps say to the reader the repo script cannot serve: someone who
+/// installed LowTalker.app and has no clone, for whom `scripts/virtual-hid-driver` names
+/// a file that is not on their Mac. The app cannot run the install for them - see
+/// README's account of why - so the least it can do is name the artifact rather than a
+/// path only a developer has. [LAW:no-silent-failure] at the level of an instruction: a
+/// step a reader cannot follow is a step that fails without saying so.
+private let withoutAClone = """
+    Without one, install \(DriverPackage.version) of the public package yourself:
+        \(DriverPackage.url)
+    """
+
 public extension Requirement {
     /// The driver extension low-talker types through.
     ///
@@ -101,14 +112,16 @@ public extension Requirement {
             nil
         case .absent:
             """
-            The driver package is not on this Mac. Install it:
+            The driver package is not on this Mac. From a clone of this repo:
                 scripts/virtual-hid-driver install
+            \(withoutAClone)
             """
         case .installedInactive:
             """
             The package is installed but macOS holds no registration for it,
-            so the activation request never landed. Run it again:
+            so the activation request never landed. From a clone of this repo:
                 scripts/virtual-hid-driver install
+            \(withoutAClone)
             """
         case .awaitingApproval:
             """
@@ -268,20 +281,23 @@ public extension Requirement {
     /// to the assistant instead of the target app. An unhandled assistant means the
     /// first dictation after an install types into a dialog, which is why onboarding
     /// owns it alongside the two approvals.
-    static func keyboardSetupAssistant(answered: Bool, key: String, path: String) -> Requirement {
+    ///
+    /// The only row whose step names nobody and nothing to run. The write wants root,
+    /// which is why it used to be a `sudo` command printed for a reader to paste - but
+    /// the keyboard helper is root, knows which keyboard it owns, and has to be running
+    /// before the keyboard can type at all, so it files the answer as it starts. What is
+    /// left to say is which row this one is waiting behind. [LAW:one-source-of-truth] The
+    /// helper writes and this reads, and both take the key and the file from
+    /// `VirtualKeyboardIdentity`.
+    static func keyboardSetupAssistant(answered: Bool) -> Requirement {
         Requirement(
             name: "Keyboard Setup Assistant",
             reads: answered ? "answered for this keyboard" : "will ask on first use",
-            // Writing our own key, never aiming at another device's. A cache here
-            // already held an entry from an unrelated country-33 device, and
-            // initialising this keyboard with country 33 to collide with it would make
-            // the device declare something untrue about itself - and would work only
-            // until that entry was cleared.
             step: answered ? nil : """
-                macOS will raise Keyboard Setup Assistant the first time the
-                virtual keyboard types, and it will take those keystrokes.
-                Write this device's own answer first:
-                    sudo defaults write \(path) keyboardtype -dict-add "\(key)" -int \(VirtualKeyboardIdentity.ansiKeyboardType)
+                macOS raises Keyboard Setup Assistant the first time the virtual
+                keyboard types, and it takes those keystrokes. The keyboard helper
+                files this keyboard's own answer as it starts, so this clears itself
+                once the helper above is answering.
                 """
         )
     }

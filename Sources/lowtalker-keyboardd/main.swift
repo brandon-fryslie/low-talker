@@ -1,3 +1,4 @@
+import DriverExtension
 import Foundation
 import KeyboardService
 import Signals
@@ -28,6 +29,23 @@ do {
     let callers = try CallerIdentity.sameSignerAsThisProcess()
     log("callers must satisfy: \(callers.text)")
     let departure = Departure()
+
+    // Before the devices come up, and that ordering is the whole point: macOS raises
+    // Keyboard Setup Assistant when the keyboard ENUMERATES, so an answer filed after
+    // `reach` would be a race with the dialog it exists to prevent.
+    // [LAW:no-ambient-temporal-coupling]
+    //
+    // A failure here does not stop the helper. The keyboard still types; what is lost is
+    // that the assistant may take the first line of it, which is worth saying loudly and
+    // is not worth refusing to type over. Said here, and read back by onboarding's own
+    // row, which stays unmet until the answer is actually on disk - so this is reported
+    // twice and swallowed nowhere. [LAW:no-silent-failure]
+    do {
+        try KeyboardTypeAnswer.file()
+        log("this keyboard's answer is filed with Keyboard Setup Assistant under \(VirtualKeyboardIdentity.keyboardTypeKey)")
+    } catch {
+        log("could not file this keyboard's answer with Keyboard Setup Assistant, so it may take the first line typed: \(error)")
+    }
 
     // The connection is lost on the reading thread, and no key can be released over a
     // connection that is gone. What can be done is to stop the daemon this helper

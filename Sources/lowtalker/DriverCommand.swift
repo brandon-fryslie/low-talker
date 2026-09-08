@@ -100,6 +100,11 @@ extension DriverCommand {
                 ("elements-receipt", DriverProbe.elementsReceiptID),
                 ("manager-app", DriverProbe.managerApp),
                 ("support-dir", DriverProbe.supportDirectory),
+                // What onboarding names to a reader with no clone. The script fetches and
+                // checksums the package and so holds the pin it acts on; this copy is the
+                // one the app reads out loud, and check-docs proves they still agree.
+                ("package-version", DriverPackage.version),
+                ("package-url", DriverPackage.url),
                 // The whole verdict vocabulary on one line, in the enum's own order, so a
                 // word added or dropped here reaches every reader that quotes the list.
                 ("verdicts", DriverState.allCases.map(\.rawValue).joined(separator: " ")),
