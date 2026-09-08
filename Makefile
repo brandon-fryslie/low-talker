@@ -91,8 +91,8 @@ check-docs:
 	  echo "check-docs: README.md agrees with $$key=$$value"; \
 	done; \
 	for constant in PKG_VERSION DEXT_VERSION; do \
-	  pinned=$$(sed -n "s/^$$constant=//p" scripts/virtual-hid-driver); \
-	  [ -n "$$pinned" ] || { echo "check-docs: scripts/virtual-hid-driver defines no $$constant" >&2; exit 1; }; \
+	  pinned=$$(source scripts/virtual-hid-driver; printf '%s' "$${!constant}"); \
+	  [ -n "$$pinned" ] || { echo "check-docs: scripts/virtual-hid-driver leaves $$constant empty" >&2; exit 1; }; \
 	  grep -qF "$$pinned" README.md \
 	    || { echo "check-docs: scripts/virtual-hid-driver pins $$constant=$$pinned, which README.md never mentions" >&2; exit 1; }; \
 	  echo "check-docs: README.md agrees with $$constant=$$pinned"; \
