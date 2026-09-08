@@ -186,6 +186,36 @@ import Testing
         #expect(await reloads.next() == .adopted(.file(try Config(toml: Self.onLeftControl), at: file)))
     }
 
+    /// The config directory is taken away under a running watch and made again - what a
+    /// reinstall does, or an `rm -rf ~/.config/low-talker` followed by writing a fresh
+    /// config. The watch is rooted at that directory, so a stream that did not survive it
+    /// would go quiet for the rest of the process and look exactly like nobody saving.
+    /// [LAW:no-silent-failure]
+    ///
+    /// The claim is carried by what a reload *says* rather than by when it arrives. Ticks
+    /// are indistinguishable and the directory coming back raises its own, so pinning this
+    /// on a tick would mean telling two of them apart by the clock - and at this layer
+    /// there is nothing to tell apart: only a read of the new file can name the chord in
+    /// it. The directory's absence is a real reload too, which is why the one that carries
+    /// the claim is found by its content and not by its place in the queue.
+    /// [LAW:behavior-not-structure]
+    @Test(.timeLimit(.minutes(1)))
+    func aConfigDirectoryDeletedAndMadeAgainIsStillWatched() async throws {
+        let (directory, file) = try Self.scratch(existing: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var (_, reloads) = try await Self.watching(file, settlingOn: Self.onRightCommand)
+
+        try FileManager.default.removeItem(at: directory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Self.onLeftControl.write(to: file, atomically: true, encoding: .utf8)
+
+        let adopted = Config.Reload.adopted(.file(try Config(toml: Self.onLeftControl), at: file))
+        var reload: Config.Reload
+        repeat {
+            reload = try #require(await reloads.next())
+        } while reload != adopted
+    }
+
     /// Deleting the file goes back to the defaults, and says it did: the report a reader
     /// gets names an absent file rather than showing them the defaults as though someone
     /// had written them.
