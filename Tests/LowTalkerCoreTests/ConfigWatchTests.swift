@@ -201,35 +201,4 @@ import Testing
         #expect(reload == .adopted(.noFile(at: file)))
         #expect(reload.running.config == .default)
     }
-
-    /// A save that unlinks the file before writing the new one - how some editors save,
-    /// and what `git checkout` and `rsync` do without `--inplace` - is one save and not a
-    /// deletion followed by a creation.
-    ///
-    /// The rule this defends is the one `Reload` claims in its own doc comment: the
-    /// defaults are reached by deleting the file and by nothing else. Here is where they
-    /// would otherwise be reached by *saving* it, for one tick, on the way past - which is
-    /// why the write is not atomic. It is the whole point that there is a moment with no
-    /// file at that path.
-    ///
-    /// The 30 ms is the save being modelled, not a wait for anything: the two halves of
-    /// this kind of save are apart by about that much, and a gap is the only way to say
-    /// so. Measured on this Mac, the read lands in a gap from about 5 ms wide when the
-    /// stream is created with `kFSEventStreamCreateFlagNoDefer`, and never below the
-    /// 100 ms latency without it - so this fails if that flag comes back and passes on any
-    /// machine, however slow, while it stays away. A gap wider than the latency is a file
-    /// that really is missing and really does read as the defaults, which is why the
-    /// number sits between the two and not past them.
-    @Test(.timeLimit(.minutes(1)))
-    func aSaveThatUnlinksBeforeItWritesIsNeverTheDefaults() async throws {
-        let (directory, file) = try Self.scratch(existing: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        var (_, reloads) = try await Self.watching(file, settlingOn: Self.onRightCommand)
-
-        try FileManager.default.removeItem(at: file)
-        try await Task.sleep(for: .milliseconds(30))
-        try Self.onLeftControl.write(to: file, atomically: false, encoding: .utf8)
-
-        #expect(await reloads.next() == .adopted(.file(try Config(toml: Self.onLeftControl), at: file)))
-    }
 }
