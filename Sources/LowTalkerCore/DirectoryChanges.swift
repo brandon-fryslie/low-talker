@@ -130,27 +130,23 @@ private final class Sink: Sendable {
 /// pointer it was given outlive the continuation by exactly nothing.
 ///
 /// `@unchecked Sendable` for the FSEvents handle, which Core Services does not describe
-/// to Swift. It is made on one thread and touched again only inside the block below, on
-/// the one queue this stream was ever scheduled on.
+/// to Swift. It is made on one thread and used again only here, and `FSEventStreamStop`
+/// is documented as the way to end delivery from any thread.
 private struct Teardown: @unchecked Sendable {
     let stream: FSEventStreamRef
     let sink: Unmanaged<Sink>
     let queue: DispatchQueue
 
     func callAsFunction() {
-        // [LAW:no-ambient-temporal-coupling] Ending a watch has one owner, and it is the
-        // queue the stream runs on. The queue is serial, so this block is behind every
-        // callback already in flight and none of the four calls has to reason about what
-        // another thread is doing meanwhile. A callback that lands in the gap before it
-        // yields to a continuation that has already finished, which is a no-op.
-        //
-        // Async and not sync: this runs on whatever thread ended the stream, which can be
-        // this queue, and a sync onto itself is a deadlock.
-        queue.async {
-            FSEventStreamStop(stream)
-            FSEventStreamInvalidate(stream)
-            FSEventStreamRelease(stream)
-            sink.release()
-        }
+        FSEventStreamStop(stream)
+        FSEventStreamInvalidate(stream)
+        FSEventStreamRelease(stream)
+        // [LAW:no-ambient-temporal-coupling] The stop above ends delivery; this hop waits
+        // out the delivery already under way. Stopping first is what closes the set of
+        // callbacks that can still hold the sink, and the queue is serial, so every one
+        // of them is ahead of this block and done with the pointer before it goes. Async
+        // and not sync: this runs on whatever thread ended the stream, which can be this
+        // queue, and a sync onto itself is a deadlock.
+        queue.async { sink.release() }
     }
 }
