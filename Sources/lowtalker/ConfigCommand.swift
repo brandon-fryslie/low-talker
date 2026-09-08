@@ -80,16 +80,25 @@ extension ConfigCommand {
             let loaded = try Config.load(from: path)
             print(ConfigReport(loaded, appExists: appExists))
             for await reload in Config.reloads(after: loaded) {
-                print("")
-                switch reload {
-                case .adopted(let loaded):
-                    print(ConfigReport(loaded, appExists: appExists))
-                case .kept(let loaded, let error):
-                    // The error first, because it is the news; what is still running
-                    // second, because that is the reassurance.
-                    print("refused: \(error)")
-                    print("still running: \(loaded)")
-                }
+                print(Self.narration(of: reload, appExists: appExists))
+            }
+        }
+
+        /// What one reload reads as on the way past.
+        ///
+        /// [LAW:effects-at-boundaries] The whole of what this command says, with no
+        /// printing in it, so a test reads what a watcher sees instead of driving a file
+        /// and catching stdout to find out.
+        static func narration(of reload: Config.Reload, appExists: (BundleID) -> Bool) -> String {
+            // A blank line first, so a run of these reads as several reports and not one
+            // long one.
+            switch reload {
+            case .adopted(let loaded):
+                "\n\(ConfigReport(loaded, appExists: appExists))"
+            case .kept(let loaded, let error):
+                // The error first, because it is the news; what is still running second,
+                // because that is the reassurance.
+                "\nrefused: \(error)\nstill running: \(loaded)"
             }
         }
     }
