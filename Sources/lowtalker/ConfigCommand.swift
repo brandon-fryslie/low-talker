@@ -59,8 +59,8 @@ extension ConfigCommand {
             discussion: """
                 Prints the report `check` prints, then stays up and prints it again each \
                 time the file is saved into something different. A save that cannot be \
-                understood is named and the config already running is kept, which is what \
-                the app does with it - so a syntax error mid-edit costs nothing. Deleting \
+                understood is named and the config already running is kept, so a syntax \
+                error mid-edit costs nothing. Deleting \
                 the file goes back to the defaults, and creating one where there was none \
                 is picked up as well.
                 """
