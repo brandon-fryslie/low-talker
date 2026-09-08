@@ -19,12 +19,20 @@ run: app
 
 # The build comes first because everything after it needs the CLI: `check-docs` reads
 # the driver constants out of it, and scripts/virtual-hid-driver now takes every reading
-# of the machine through it.
+# of the machine through it. This is why `check-docs` is a recipe line here rather than a
+# prerequisite: a prerequisite would run before `swift build`, against a stale CLI or none.
+#
+# Signing last is what makes a test run safe to leave behind. Every link SwiftPM performs
+# ad-hoc signs the product, dropping the dev identity the helper admits callers by, so
+# without this a green run leaves the next `lowtalker` refused with NSCocoaErrorDomain
+# 4097 - a failure reporting success. [LAW:no-silent-failure] Unconditional, because a
+# recipe cannot see what SwiftPM chose to link. [LAW:dataflow-not-control-flow]
 test:
 	swift build
 	$(MAKE) check-docs
 	scripts/virtual-hid-driver-test
 	swift test
+	$(MAKE) cli helper
 
 # [LAW:one-source-of-truth] `lowtalker driver pins` is the source for everything about
 # the driver extension's identity: the bundle id, the team, the IORegistry node, the
@@ -124,8 +132,8 @@ helper:
 	codesign --force --sign "$$(scripts/signing-identity)" --identifier com.lowtalker.keyboardd "$(HELPER)"
 	@echo "$(HELPER)"
 
-# Once per Mac. Until it has run, `make app`, `make cli` and `make helper` stop with
-# "No certificate matching".
+# Once per Mac. Until it has run, `make app`, `make cli`, `make helper` and `make test`
+# stop with "No certificate matching".
 signing-identity:
 	scripts/make-signing-identity "$$(scripts/signing-identity)"
 
