@@ -200,6 +200,16 @@ public extension Requirement {
         Requirement(name: "Keyboard helper", reads: reads(for: standing), step: step(for: standing, serviceName: serviceName, developmentLabel: developmentLabel))
     }
 
+    /// Every reading the helper's row can take, in the enum's own order.
+    ///
+    /// README.md lists these for a reader following the runbook by hand, and it cannot
+    /// read a Swift enum, so it keeps a copy and `make check-docs` reads this to prove the
+    /// copy still agrees. Derived from `reads(for:)` itself rather than written out a
+    /// second time, so the list cannot drift from what the two surfaces actually print: a
+    /// case added to `HelperStanding` reaches every reader that quotes the list.
+    /// [LAW:one-source-of-truth]
+    static var helperReadings: [String] { HelperStanding.allCases.map { reads(for: $0) } }
+
     private static func reads(for standing: HelperStanding) -> String {
         switch standing {
         case .holdingTheService: "answering"

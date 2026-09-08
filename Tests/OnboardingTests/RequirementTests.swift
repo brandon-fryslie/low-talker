@@ -86,6 +86,22 @@ import Testing
         }
     }
 
+    /// The list `make check-docs` holds README to is the vocabulary the row actually
+    /// prints, and no two standings share a line of it.
+    ///
+    /// Both halves are load-bearing. If the list stopped being derived from the row, the
+    /// check would prove README agreed with a list nobody reads. And a reading is how a
+    /// person - or an agent grepping the log, which is the only way to read the menu
+    /// without a screen - tells one standing from another, so two standings printing one
+    /// string would put back exactly the ambiguity that splitting them removed, while
+    /// leaving README and the enum in perfect agreement about it.
+    @Test func everyStandingReadsBackAsItsOwnLineAndNoTwoShareOne() {
+        #expect(Requirement.helperReadings == HelperStanding.allCases.map {
+            Requirement.keyboardHelper($0, serviceName: Self.service, developmentLabel: Self.devLabel).reads
+        })
+        #expect(Set(Requirement.helperReadings).count == HelperStanding.allCases.count)
+    }
+
     /// An app whose helper is enabled while another job holds the name reports enabled
     /// and types nothing. The step has to name the other job, because nothing else on
     /// the Mac will: launchd does not make the loser loud.

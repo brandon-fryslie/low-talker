@@ -83,6 +83,23 @@ check-docs:
 	  || { echo "check-docs: DriverState and README.md disagree about the verdicts (< enum, > README)" >&2; exit 1; }; \
 	echo "check-docs: README.md names every verdict DriverState emits"
 
+# The helper's readings are the other vocabulary README.md keeps a copy of: every case of
+# `HelperStanding` has one, and the prose lists them for a reader following the runbook by
+# hand. Compared as sets in both directions, so a reading added to the enum and a reading
+# left standing in README after the enum dropped it both fail. Empty on either side is a
+# broken reader, not agreement, and says so. There was no check here at all until a case
+# added to `HelperStanding` left README quoting a reading the code had stopped printing,
+# with every other check green; this is that check.
+	@set -euo pipefail; \
+	emitted=$$(.build/debug/lowtalker onboard readings | sort -u); \
+	quoted=$$(awk '/^So the helper.s row reads one of/{f=1;next} f&&/^- `/{print;seen=1;next} f&&seen{exit}' README.md \
+	  | sed -E 's/^- `([^`]*)`.*/\1/' | sort -u); \
+	[ -n "$$emitted" ] || { echo "check-docs: 'lowtalker onboard readings' emits no readings" >&2; exit 1; }; \
+	[ -n "$$quoted" ] || { echo "check-docs: README.md carries no list of the helper's readings" >&2; exit 1; }; \
+	diff <(echo "$$emitted") <(echo "$$quoted") \
+	  || { echo "check-docs: HelperStanding and README.md disagree about the helper's readings (< enum, > README)" >&2; exit 1; }; \
+	echo "check-docs: README.md names every reading the helper's row can take"
+
 # The CLI for engine work, and the keyboard helper it types through. Both are signed
 # with the dev identity rather than ad hoc: the helper admits exactly the certificate
 # that signed it, so the CLI has to carry the same one to press a key. The CLI's

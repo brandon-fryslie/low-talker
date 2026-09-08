@@ -14,7 +14,8 @@ struct OnboardCommand: ParsableCommand {
         discussion: """
             Exits 0 when nothing is left to do and 2 when something is. A fact that could \
             not be read is a row of its own naming why, and it never counts as met.
-            """
+            """,
+        subcommands: [Readings.self]
     )
 
     func run() throws {
@@ -27,5 +28,28 @@ struct OnboardCommand: ParsableCommand {
         // The code is a value computed the one way every time, rather than an exit taken
         // on some runs and not others. [LAW:dataflow-not-control-flow]
         throw ExitCode(readiness.ready ? 0 : 2)
+    }
+}
+
+extension OnboardCommand {
+    /// Every reading the keyboard helper's row can take, one to a line.
+    ///
+    /// README.md lists these for a reader following the runbook by hand. It cannot read a
+    /// Swift enum, so it keeps a copy, and `make check-docs` reads this to prove the copy
+    /// still agrees - the same proof the driver extension's verdict vocabulary already
+    /// gets, and the absence of which let a case added to `HelperStanding` leave README
+    /// stale with every check green. [LAW:one-source-of-truth]
+    ///
+    /// [CLI] One reading per line on stdout, because a reading is a phrase with spaces in
+    /// it and a line is the one delimiter that cannot collide with the content.
+    struct Readings: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "readings",
+            abstract: "Print every reading the keyboard helper's row can take, one per line."
+        )
+
+        func run() {
+            print(Requirement.helperReadings.joined(separator: "\n"))
+        }
     }
 }
