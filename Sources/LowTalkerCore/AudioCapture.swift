@@ -99,10 +99,6 @@ public final class AudioCapture {
         }
     }
 
-    /// The sample positions the ring still holds; `upperBound` is the position the
-    /// next sample from the microphone will take.
-    public var retained: Range<Int> { shared.stream.withLock { $0.ring.retained } }
-
     public func clip(in range: Range<Int>) -> AudioClip { shared.stream.withLock { $0.ring.clip(in: range) } }
 
     /// Marks where a session begins: the position the microphone had reached when
