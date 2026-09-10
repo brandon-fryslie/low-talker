@@ -1,6 +1,27 @@
+import Darwin
 import LowTalkerCore
+import Synchronization
 import Testing
 import TestProbes
+
+/// Whether the object it was given to watch was let go of on the main thread, once it has
+/// been let go of at all.
+private final class Release: Sendable {
+    private let onMainThread = Mutex<Bool?>(nil)
+
+    var seen: Bool? { onMainThread.withLock { $0 } }
+
+    func record() { onMainThread.withLock { $0 = pthread_main_np() != 0 } }
+}
+
+/// Tells its `Release` where it was let go of.
+private final class Held: Sendable {
+    let release: Release
+
+    init(_ release: Release) { self.release = release }
+
+    deinit { release.record() }
+}
 
 /// Counts operations in flight and remembers the most it ever saw at once.
 private actor Occupancy {
@@ -213,6 +234,25 @@ private struct Boom: Error {}
         try await queue.drain()
         #expect(finished.raised)
         try await submitted.value
+    }
+
+    /// What an operation holds is let go of on the actor that submitted it. `Dictation`
+    /// submits from the main actor holding what must end there, and when a test dropped
+    /// its dictation before the queue's task finished, the task's last release ended it on
+    /// the cooperative pool instead.
+    @Test @MainActor func whatAnOperationHoldsIsLetGoOnTheActorThatSubmittedIt() async throws {
+        let queue = SerialQueue()
+        let release = Release()
+        try await Self.submitHolding(Held(release), to: queue).value
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { release.seen != nil })
+        #expect(release.seen == true)
+    }
+
+    /// Submitted from a call of its own, so nothing but the operation still holds `held`
+    /// once the call returns.
+    @MainActor
+    private static func submitHolding(_ held: Held, to queue: SerialQueue) throws -> Task<Void, any Error> {
+        try queue.submit { _ = held }
     }
 
     /// Draining from inside an operation is the same wait-on-yourself a submission is -
