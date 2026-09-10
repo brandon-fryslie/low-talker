@@ -30,7 +30,7 @@ public protocol AudioHardware {
     func watchDefaultInput(_ onChange: @escaping @MainActor () -> Void) throws -> Disposal
 }
 
-public enum AudioHardwareError: Error, CustomStringConvertible {
+public enum AudioHardwareError: Error, Equatable, CustomStringConvertible {
     case defaultInputWatchFailed(OSStatus)
     /// A buffer arrived with no host clock behind its time.
     case bufferWithoutTime
