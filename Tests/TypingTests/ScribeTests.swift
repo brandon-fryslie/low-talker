@@ -20,9 +20,9 @@ import Typing
         return (Scribe(keyboard: keyboard), keyboard)
     }
 
-    @Test func aCharacterIsCheckedPressedAndReleasedInThatOrder() throws {
+    @Test func aCharacterIsCheckedPressedAndReleasedInThatOrder() async throws {
         var (scribe, keyboard) = scribe()
-        try scribe.type("a", [Keystroke(Usage(rawValue: 0x04))])
+        try await scribe.type("a", [Keystroke(Usage(rawValue: 0x04))])
         #expect(keyboard.log == ["check", "down 4", "up"])
         #expect(scribe.typed == 1)
         #expect(scribe.halfTyped == nil)
@@ -30,18 +30,18 @@ import Typing
 
     /// Every modifier goes down before the key it modifies, in one press, and the release
     /// takes them all back up together.
-    @Test func theModifiersOfAKeystrokeGoDownBeforeIt() throws {
+    @Test func theModifiersOfAKeystrokeGoDownBeforeIt() async throws {
         var (scribe, keyboard) = scribe()
-        try scribe.type("\u{2014}", Self.emDash)
+        try await scribe.type("\u{2014}", Self.emDash)
         #expect(keyboard.log == ["check", "down e1", "check", "down e2", "check", "down 2d", "up"])
         #expect(scribe.typed == 1)
     }
 
     /// A chord is one keystroke pressed the same way a character's is, and it composes
     /// nothing: pressed, it counts, and nothing is pending.
-    @Test func aChordIsPressedLikeAKeystrokeAndLeavesNothingPending() throws {
+    @Test func aChordIsPressedLikeAKeystrokeAndLeavesNothingPending() async throws {
         var (scribe, keyboard) = scribe()
-        try scribe.press(Keystroke(Usage(rawValue: 0x04), [.leftCommand, .leftShift]))
+        try await scribe.press(Keystroke(Usage(rawValue: 0x04), [.leftCommand, .leftShift]))
         #expect(keyboard.log == ["check", "down e1", "check", "down e3", "check", "down 4", "up"])
         #expect(scribe.typed == 1)
         #expect(scribe.halfTyped == nil)
@@ -55,18 +55,18 @@ import Typing
     ///
     /// The release is not checked, and that is not an oversight: a release that refuses to
     /// run leaves a key held for macOS to repeat.
-    @Test func everyKeyThatGoesDownIsCheckedAndNotJustEveryKeystroke() throws {
+    @Test func everyKeyThatGoesDownIsCheckedAndNotJustEveryKeystroke() async throws {
         var (scribe, keyboard) = scribe()
-        try scribe.type("\u{e9}", Self.acute)
+        try await scribe.type("\u{e9}", Self.acute)
         #expect(keyboard.log.filter { $0 == "check" }.count == keyboard.log.filter { $0.hasPrefix("down") }.count)
         #expect(keyboard.log == ["check", "down e2", "check", "down 8", "up", "check", "down 8", "up"])
     }
 
     /// Refused before anything was posted: nothing is on screen and nothing is pending, so
     /// both counts stay where they were.
-    @Test func aRunRefusedBeforeItsFirstKeystrokeLeavesNothingBehind() {
+    @Test func aRunRefusedBeforeItsFirstKeystrokeLeavesNothingBehind() async {
         var (scribe, _) = scribe(allowing: 0)
-        #expect(throws: Refused.self) { try scribe.type("\u{e9}", Self.acute) }
+        await #expect(throws: Refused.self) { try await scribe.type("\u{e9}", Self.acute) }
         #expect(scribe.typed == 0)
         #expect(scribe.halfTyped == nil)
     }
@@ -75,10 +75,10 @@ import Typing
     /// where that can happen: the dead key's own key-down, the release after it, the check
     /// before the letter, and the letter's key-down. The app may be holding an accent in
     /// all four, so all four say so.
-    @Test func aCharacterStoppedBeforeItsLastKeystrokeIsHalfTyped() {
+    @Test func aCharacterStoppedBeforeItsLastKeystrokeIsHalfTyped() async {
         for stoppedAfter in [3, 4, 5, 6] {
             var (scribe, _) = scribe(allowing: stoppedAfter)
-            #expect(throws: Refused.self) { try scribe.type("\u{e9}", Self.acute) }
+            await #expect(throws: Refused.self) { try await scribe.type("\u{e9}", Self.acute) }
             #expect(scribe.typed == 0, "stopped after \(stoppedAfter) calls")
             #expect(scribe.halfTyped == "\u{e9}", "stopped after \(stoppedAfter) calls")
         }
@@ -88,18 +88,18 @@ import Typing
     /// leaves - unlike a `down` that throws, which may have reached the driver anyway - so
     /// the dead key is not pending in the app and the run must not say it is. An operator
     /// told to clear a composition that is not there will clear something else.
-    @Test func aCharacterRefusedBeforeItsDeadKeyWasPostedLeavesNothingPending() {
+    @Test func aCharacterRefusedBeforeItsDeadKeyWasPostedLeavesNothingPending() async {
         var (scribe, _) = scribe(allowing: 2)
-        #expect(throws: Refused.self) { try scribe.type("\u{e9}", Self.acute) }
+        await #expect(throws: Refused.self) { try await scribe.type("\u{e9}", Self.acute) }
         #expect(scribe.typed == 0)
         #expect(scribe.halfTyped == nil)
     }
 
     /// The last key-down was acknowledged, so the character is on screen even though the
     /// release that follows it failed. Counted, and no longer pending.
-    @Test func aCharacterStoppedAfterItsLastKeystrokeIsTypedAndNotPending() {
+    @Test func aCharacterStoppedAfterItsLastKeystrokeIsTypedAndNotPending() async {
         var (scribe, _) = scribe(allowing: 7)
-        #expect(throws: Refused.self) { try scribe.type("\u{e9}", Self.acute) }
+        await #expect(throws: Refused.self) { try await scribe.type("\u{e9}", Self.acute) }
         #expect(scribe.typed == 1)
         #expect(scribe.halfTyped == nil)
     }
@@ -108,26 +108,26 @@ import Typing
     /// was posted, so there is no accent in the app to combine with the next one. True of
     /// the em dash's second modifier and of the dead key's own - `halfTyped` is recorded
     /// between the modifiers and the key, which is where the pending accent begins.
-    @Test func aKeystrokeStoppedAmongItsModifiersLeavesNothingPending() {
+    @Test func aKeystrokeStoppedAmongItsModifiersLeavesNothingPending() async {
         var (dash, _) = scribe(allowing: 3)
-        #expect(throws: Refused.self) { try dash.type("\u{2014}", Self.emDash) }
+        await #expect(throws: Refused.self) { try await dash.type("\u{2014}", Self.emDash) }
         #expect(dash.typed == 0)
         #expect(dash.halfTyped == nil)
 
         var (accent, _) = scribe(allowing: 1)
-        #expect(throws: Refused.self) { try accent.type("\u{e9}", Self.acute) }
+        await #expect(throws: Refused.self) { try await accent.type("\u{e9}", Self.acute) }
         #expect(accent.typed == 0)
         #expect(accent.halfTyped == nil)
     }
 
     /// The count carries across characters, and a stop mid-way reports the ones already
     /// posted rather than starting over.
-    @Test func theCountIsOfTheRunAndNotOfOneCharacter() throws {
+    @Test func theCountIsOfTheRunAndNotOfOneCharacter() async throws {
         var (scribe, keyboard) = scribe()
-        for character in "abc" { try scribe.type(character, [Keystroke(Usage(rawValue: 0x04))]) }
+        for character in "abc" { try await scribe.type(character, [Keystroke(Usage(rawValue: 0x04))]) }
         #expect(scribe.typed == 3)
         keyboard.allow = keyboard.log.count + 3
-        #expect(throws: Refused.self) { try scribe.type("\u{e9}", Self.acute) }
+        await #expect(throws: Refused.self) { try await scribe.type("\u{e9}", Self.acute) }
         #expect(scribe.typed == 3)
         #expect(scribe.halfTyped == "\u{e9}")
     }

@@ -30,14 +30,22 @@ public final class SerialQueue: Sendable {
     /// chain being extended, so an operation submitted is an operation every later
     /// `drain` owes a wait to - there is no window in which the queue has taken the work
     /// but cannot yet be seen to hold it. [LAW:no-ambient-temporal-coupling]
+    ///
+    /// What the operation holds is let go of on the actor that submitted it.
     @discardableResult
-    public func submit<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) throws -> Task<T, any Error> {
+    public func submit<T: Sendable>(
+        isolation: isolated (any Actor)? = #isolation,
+        _ operation: @escaping @Sendable () async throws -> T
+    ) throws -> Task<T, any Error> {
         let id = ObjectIdentifier(self)
         // [LAW:no-silent-failure] The alternative is a hang with no diagnostics.
         guard !Self.enclosing.contains(id) else { throw SerialQueueError.reentrantWait }
         return tail.withLock { tail in
             let earlier = tail
             let task = Task {
+                // Named rather than captured in a list, so the task is isolated to that actor
+                // and ends there, which is where a task lets go of its closure.
+                _ = isolation
                 await earlier?.value
                 return try await Self.$enclosing.withValue(Self.enclosing.union([id])) { try await operation() }
             }
@@ -49,7 +57,10 @@ public final class SerialQueue: Sendable {
     }
 
     /// The operation's turn and its outcome, for a caller with nothing to do until then.
-    public func run<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) async throws -> T {
+    public func run<T: Sendable>(
+        isolation: isolated (any Actor)? = #isolation,
+        _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
         try await submit(operation).value
     }
 

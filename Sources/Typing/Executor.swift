@@ -73,13 +73,13 @@ public struct Executor {
     /// `RouteStopped` from the action that stopped, carrying the earlier ones, which are
     /// done.
     @discardableResult
-    public func perform(_ actions: [Action], in context: Context, on layout: KeyboardLayout, since keyUp: ContinuousClock.Instant) throws -> [Performed] {
+    public func perform(_ actions: [Action], in context: Context, on layout: KeyboardLayout, since keyUp: ContinuousClock.Instant) async throws -> [Performed] {
         let lowered = try actions.map { try lower($0, in: context, on: layout) }
         let clock = ContinuousClock()
         var performed: [Performed] = []
         for step in lowered {
             let what: Performed.What
-            do { what = try step.perform() } catch { throw RouteStopped(performed: performed, cause: error) }
+            do { what = try await step.perform() } catch { throw RouteStopped(performed: performed, cause: error) }
             let done = Performed(what: what, into: step.into, acknowledged: clock.now - keyUp)
             log.info("\(done.description, privacy: .public)")
             performed.append(done)
@@ -90,7 +90,7 @@ public struct Executor {
     /// An action as reports on the device for its target, proven before any is posted.
     private struct Step {
         let into: BundleID
-        let perform: () throws -> Performed.What
+        let perform: @MainActor () async throws -> Performed.What
     }
 
     private func lower(_ action: Action, in context: Context, on layout: KeyboardLayout) throws -> Step {
@@ -106,30 +106,30 @@ public struct Executor {
             }
             let typist = Typist(keyboard: keyboard(into), hotkeys: hotkeys)
             let lowered = try typist.lower(text, on: layout)
-            return Step(into: into) { .typed(characters: try typist.type(lowered)) }
+            return Step(into: into) { .typed(characters: try await typist.type(lowered)) }
         case .sendKeys(let chord):
             let typist = Typist(keyboard: keyboard(context.frontmostApp), hotkeys: hotkeys)
             let lowered = try typist.lower(chord)
             return Step(into: context.frontmostApp) {
-                try typist.press(lowered)
+                try await typist.press(lowered)
                 return .pressed(chord)
             }
         case .click(let at, let button, let times):
             let pointer = mouse(context.frontmostApp)
             return Step(into: context.frontmostApp) {
-                let click = try pointer.click(at: at, button: button, times: times)
+                let click = try await pointer.click(at: at, button: button, times: times)
                 return .clicked(at: click.at, button: button, times: times, reports: click.reports)
             }
         case .scroll(let at, let vertical, let horizontal):
             let pointer = mouse(context.frontmostApp)
             return Step(into: context.frontmostApp) {
-                try pointer.scroll(at: at, vertical: vertical, horizontal: horizontal)
+                try await pointer.scroll(at: at, vertical: vertical, horizontal: horizontal)
                 return .scrolled(at: at, vertical: vertical, horizontal: horizontal)
             }
         case .clickElement(let role, let title):
             let pointer = mouse(context.frontmostApp)
             return Step(into: context.frontmostApp) {
-                let click = try pointer.click(element: role, title: title)
+                let click = try await pointer.click(element: role, title: title)
                 return .clicked(at: click.at, button: .left, times: .single, reports: click.reports)
             }
         case .activateApp, .openURL, .runShortcut, .pipe:

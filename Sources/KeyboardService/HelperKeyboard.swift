@@ -3,7 +3,7 @@ import Keystrokes
 /// The keyboard as a client reaches it: the same two acts, with a root process in the
 /// middle instead of the driver. A value over the connection, so a typist holds a
 /// `KeyPress` and not a connection. [LAW:composability]
-public struct HelperKeyboard: KeyPress, Sendable {
+public struct HelperKeyboard: KeyPress {
     let helper: HelperConnection
 
     public func down(_ usage: Usage) throws {

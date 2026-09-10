@@ -1,5 +1,6 @@
 import Foundation
 import Pointing
+import Synchronization
 
 /// The pointing input report as the driver's packed `pointing_input` lays it out: a
 /// 32-bit little-endian button field, then x, y, vertical wheel and horizontal wheel as
@@ -38,9 +39,11 @@ struct PointingReport {
 public final class VirtualPointing: Pointing {
     private let daemon: DaemonConnection
     private let reportTimeout: Duration
-    /// The buttons the device is holding. Nothing outside this type may set it, and every
-    /// report is a reading of it.
-    public private(set) var buttonsDown: Set<Button> = []
+    /// The buttons the device is holding, under the lock its reports are posted under, for
+    /// the reason `VirtualKeyboard` gives.
+    private let held = Mutex<Set<Button>>([])
+
+    public var buttonsDown: Set<Button> { held.withLock { $0 } }
 
     /// Over a connection the keyboard may share: pqrs's daemon keeps one keyboard and one
     /// pointing device per client connection, so the two devices of one helper ride one
@@ -60,44 +63,50 @@ public final class VirtualPointing: Pointing {
 
     /// Holds `button` down.
     public func down(_ button: Button) throws {
-        try post(held: buttonsDown.union([button]), move: .none, scroll: .none)
+        try post(move: .none, scroll: .none) { $0.union([button]) }
     }
 
     /// Every button up. Posted unconditionally, for the reason the keyboard's release is:
     /// a button the driver believes is down is a drag macOS continues into whatever the
     /// pointer crosses next.
     public func releaseAll() throws {
-        try post(held: [], move: .none, scroll: .none)
+        try post(move: .none, scroll: .none) { _ in [] }
     }
 
     /// Moves by `delta`, with whatever is held still held.
     public func move(by delta: Move) throws {
-        try post(held: buttonsDown, move: delta, scroll: .none)
+        try post(move: delta, scroll: .none) { $0 }
     }
 
     /// Rolls the wheel by `delta`, with whatever is held still held.
     public func scroll(by delta: Scroll) throws {
-        try post(held: buttonsDown, move: .none, scroll: delta)
+        try post(move: .none, scroll: delta) { $0 }
     }
 
     /// Clears the device's own state as well as this side's, for the case where the two
     /// might have drifted apart. The record is emptied on the daemon's answer and not
     /// before, for the reason `post` gives.
     public func reset() throws {
-        try daemon.request(.pointingReset, by: .now + reportTimeout)
-        buttonsDown.removeAll()
+        try held.withLock { buttonsDown in
+            try daemon.request(.pointingReset, by: .now + reportTimeout)
+            buttonsDown.removeAll()
+        }
     }
 
-    /// Posts the report for `held` with this report's motion, and makes `held` the record.
+    /// Posts the report for what `change` makes of the buttons held, with this report's
+    /// motion, and makes that the record.
     ///
-    /// The same bias `VirtualKeyboard.post` keeps, for the same reason: the record widens
-    /// before the request and narrows only on the answer, so a request that threw after
-    /// reaching the driver leaves a button `releaseAll` can still see.
-    /// [LAW:dataflow-not-control-flow]
-    private func post(held: Set<Button>, move: Move, scroll: Scroll) throws {
-        let report = PointingReport(held: held, move: move, scroll: scroll)
-        buttonsDown.formUnion(held)
-        try daemon.request(.postPointingInputReport, report.bytes, by: .now + reportTimeout)
-        buttonsDown = held
+    /// The same bias `VirtualKeyboard.post` keeps, under the same lock, for the same
+    /// reasons: the record widens before the request and narrows only on the answer, so a
+    /// request that threw after reaching the driver leaves a button `releaseAll` can still
+    /// see. [LAW:dataflow-not-control-flow]
+    private func post(move: Move, scroll: Scroll, holding change: (Set<Button>) -> Set<Button>) throws {
+        try held.withLock { buttonsDown in
+            let next = change(buttonsDown)
+            let report = PointingReport(held: next, move: move, scroll: scroll)
+            buttonsDown.formUnion(next)
+            try daemon.request(.postPointingInputReport, report.bytes, by: .now + reportTimeout)
+            buttonsDown = next
+        }
     }
 }

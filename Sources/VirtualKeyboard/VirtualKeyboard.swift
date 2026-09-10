@@ -1,6 +1,7 @@
 import DriverExtension
 import Foundation
 import Keystrokes
+import Synchronization
 
 /// The keyboard input report as the driver's packed `keyboard_input` lays it out: report
 /// id 1, one byte of modifier bits, one reserved byte, then 32 little-endian usages for
@@ -68,8 +69,11 @@ public final class VirtualKeyboard: KeyPress {
     private let daemon: DaemonConnection
     private let reportTimeout: Duration
     /// The keys the device is holding. Nothing outside this type may set it, and every
-    /// report is a reading of it.
-    public private(set) var keysDown: Set<Usage> = []
+    /// report is a reading of it - taken under the lock the report is posted under, so a
+    /// press made from one thread reads what a press from another left.
+    private let held = Mutex<Set<Usage>>([])
+
+    public var keysDown: Set<Usage> { held.withLock { $0 } }
 
     /// Connects to the daemon and takes nothing else on faith. The device is not up until
     /// `start` says so.
@@ -105,29 +109,31 @@ public final class VirtualKeyboard: KeyPress {
 
     /// Holds `usage` down.
     public func down(_ usage: Usage) throws {
-        try post(keysDown.union([usage]))
+        try post { $0.union([usage]) }
     }
 
     public func up(_ usage: Usage) throws {
-        try post(keysDown.subtracting([usage]))
+        try post { $0.subtracting([usage]) }
     }
 
     /// Every key up, which is what a report of nothing held says. This is the line between
     /// a run that ends and a key the driver goes on reporting for macOS to repeat, so it
     /// posts unconditionally rather than only when something is recorded as down.
     public func releaseAll() throws {
-        try post([])
+        try post { _ in [] }
     }
 
     /// Clears the device's own state as well as this side's. `keyboardReset` is what the
     /// daemon offers for the case where the two might have drifted apart. The record is
     /// emptied on the daemon's answer and not before, for the reason `post` gives.
     public func reset() throws {
-        try daemon.request(.keyboardReset, by: .now + reportTimeout)
-        keysDown.removeAll()
+        try held.withLock { keysDown in
+            try daemon.request(.keyboardReset, by: .now + reportTimeout)
+            keysDown.removeAll()
+        }
     }
 
-    /// Posts the report for `held` and makes it the record.
+    /// Posts the report for what `change` makes of the keys held, and makes that the record.
     ///
     /// `keysDown` may say a key is held that is not; it may never say a key is up that is.
     /// So the record widens before the request and narrows only on the answer to it: a
@@ -139,10 +145,17 @@ public final class VirtualKeyboard: KeyPress {
     /// The report is built first because `TooManyKeys` is this side refusing with nothing
     /// on the wire - the driver did not see that key, and a record that claims otherwise
     /// re-encodes the same over-capacity set and throws again on every later post.
-    private func post(_ held: Set<Usage>) throws {
-        let report = try KeyboardReport(held: held)
-        keysDown.formUnion(held)
-        try daemon.request(.postKeyboardInputReport, report.bytes, by: .now + reportTimeout)
-        keysDown = held
+    ///
+    /// The lock is held across the round trip: a change read from a record another post
+    /// has yet to settle would be a report missing that post's key, which the driver reads
+    /// as a release nobody sent.
+    private func post(_ change: (Set<Usage>) -> Set<Usage>) throws {
+        try held.withLock { keysDown in
+            let next = change(keysDown)
+            let report = try KeyboardReport(held: next)
+            keysDown.formUnion(next)
+            try daemon.request(.postKeyboardInputReport, report.bytes, by: .now + reportTimeout)
+            keysDown = next
+        }
     }
 }

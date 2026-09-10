@@ -2,6 +2,7 @@ import Foundation
 import KeyboardService
 import Keystrokes
 import Pointing
+import Synchronization
 import Testing
 @testable import lowtalker_keyboardd
 
@@ -9,23 +10,29 @@ import Testing
 /// the wire may carry that the device cannot, and what a client leaving lets go of.
 @Suite struct DevicesTests {
     final class RecordingKeyboard: KeyPress {
-        var log: [String] = []
-        var refusesRelease = false
+        private let recorded = Mutex<[String]>([])
+        let refusesRelease: Bool
 
-        func down(_ usage: Usage) throws { log.append("down \(usage.rawValue)") }
+        init(refusesRelease: Bool = false) { self.refusesRelease = refusesRelease }
+
+        var log: [String] { recorded.withLock { $0 } }
+
+        func down(_ usage: Usage) throws { recorded.withLock { $0.append("down \(usage.rawValue)") } }
         func releaseAll() throws {
-            log.append("up")
+            recorded.withLock { $0.append("up") }
             if refusesRelease { throw Refused() }
         }
     }
 
     final class RecordingMouse: Pointing {
-        var log: [String] = []
+        private let recorded = Mutex<[String]>([])
 
-        func down(_ button: Button) throws { log.append("down \(button.rawValue)") }
-        func releaseAll() throws { log.append("up") }
-        func move(by delta: Move) throws { log.append("move \(delta.x.value) \(delta.y.value)") }
-        func scroll(by delta: Scroll) throws { log.append("scroll \(delta.vertical.value) \(delta.horizontal.value)") }
+        var log: [String] { recorded.withLock { $0 } }
+
+        func down(_ button: Button) throws { recorded.withLock { $0.append("down \(button.rawValue)") } }
+        func releaseAll() throws { recorded.withLock { $0.append("up") } }
+        func move(by delta: Move) throws { recorded.withLock { $0.append("move \(delta.x.value) \(delta.y.value)") } }
+        func scroll(by delta: Scroll) throws { recorded.withLock { $0.append("scroll \(delta.vertical.value) \(delta.horizontal.value)") } }
     }
 
     struct Refused: Error {}
@@ -74,8 +81,7 @@ import Testing
 
     /// A client leaving has both devices released, the mouse whatever the keyboard said.
     @Test func releasingEverythingReleasesBothDevicesWhateverTheKeyboardAnswers() {
-        let keyboard = RecordingKeyboard()
-        keyboard.refusesRelease = true
+        let keyboard = RecordingKeyboard(refusesRelease: true)
         let mouse = RecordingMouse()
         Devices(keyboard: keyboard, mouse: mouse).releaseEverything(because: "the client went away")
         #expect(keyboard.log == ["up"])

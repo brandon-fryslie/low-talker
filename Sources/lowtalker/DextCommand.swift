@@ -97,7 +97,7 @@ struct DextTypeCommand: AsyncParsableCommand {
         // refused as it is in the app: this command types into the same session the
         // app's tap may be listening to.
         let screen = TargetApp(bundleID: into, interrupt: interrupt)
-        let typist = Typist(keyboard: GuardedKeyboard(keyboard: keyboard, interrupt: interrupt, screen: screen), hotkeys: [Hotkey.defaultChord])
+        let typist = Typist(keyboard: GuardedKeyboard(keyboard: keyboard, queue: DeviceQueue(), interrupt: interrupt, screen: screen), hotkeys: [Hotkey.defaultChord])
         // The first character alone, so its latency is the driver's and not the queue's,
         // and the rest as one run. Both are lowered from `expected`, which is already the
         // text as the keys will type it, so splitting it by character changes nothing.
@@ -123,12 +123,12 @@ struct DextTypeCommand: AsyncParsableCommand {
         var typed = 0
         let firstPosted = clock.now
         do {
-            typed += try typist.type(first)
+            typed += try await typist.type(first)
             let firstSeen = try await screen.wait(within: .seconds(3)) { $0.shows(String(expected.prefix(1)), moreThan: before) }
             print("first character on screen in \(into.rawValue) after \((clock.now - firstPosted).milliseconds) ms\(firstSeen ? "" : " (NEVER SEEN)")")
 
             let restPosted = clock.now
-            typed += try typist.type(rest)
+            typed += try await typist.type(rest)
             let acknowledged = clock.now - restPosted
             // Against a baseline, like the first character's check: an app already holding
             // this text would otherwise confirm a run that delivered nothing.

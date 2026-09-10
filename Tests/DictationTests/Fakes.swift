@@ -61,6 +61,9 @@ final class FakeTranscriber: Transcriber {
 final class LoggingKeyboard: Keyboard {
     private(set) var log: [String] = []
     var refusing = false
+    /// What a key-down waits for once it is recorded, as a real one waits for the device to
+    /// answer. Nothing, unless a test wants a session held mid-keystroke.
+    var acknowledgement: @MainActor () async -> Void = {}
 
     private func record(_ what: String) throws {
         guard !refusing else { throw Refused() }
@@ -68,7 +71,12 @@ final class LoggingKeyboard: Keyboard {
     }
 
     func check() throws { try record("check") }
-    func down(_ usage: Usage) throws { try record("down \(String(usage.rawValue, radix: 16))") }
+
+    func down(_ usage: Usage) async throws {
+        try record("down \(String(usage.rawValue, radix: 16))")
+        await acknowledgement()
+    }
+
     func releaseAll() throws { try record("up") }
 }
 
