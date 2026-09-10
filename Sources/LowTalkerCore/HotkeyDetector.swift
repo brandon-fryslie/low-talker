@@ -20,11 +20,10 @@ public struct KeyEvent: Hashable, Sendable {
     public let direction: Direction
     /// Every modifier held after this event.
     public let modifiers: Set<Modifier>
-    /// When the key moved, from an epoch the source picks; only the difference
-    /// between two events from one source means anything.
-    public let time: Duration
+    /// When the key moved.
+    public let time: HostTime
 
-    public init(key: ChordKey, direction: Direction, modifiers: Set<Modifier>, time: Duration) {
+    public init(key: ChordKey, direction: Direction, modifiers: Set<Modifier>, time: HostTime) {
         self.key = key
         self.direction = direction
         self.modifiers = modifiers
@@ -65,8 +64,10 @@ extension KeyChord {
 /// each event, so a test drives it with timestamps of its choosing.
 public struct HotkeyDetector: Sendable {
     public enum Transition: Hashable, Sendable {
-        /// The chord is down; listening begins now.
-        case began(KeyChord)
+        /// The chord went down at this moment; listening begins there rather than
+        /// wherever the handler happens to run, which is later by however late the
+        /// event was delivered.
+        case began(KeyChord, at: HostTime)
         /// Listening ends, with what the press turned out to be.
         case ended(KeyChord, PressKind)
     }
@@ -89,7 +90,7 @@ public struct HotkeyDetector: Sendable {
     public enum Phase: Hashable, Sendable {
         case idle
         /// The chord is down and the press is not yet known to be a hold or a tap.
-        case held(KeyChord, since: Duration)
+        case held(KeyChord, since: HostTime)
         /// A tap left listening on; the next chord press ends it.
         case latched(KeyChord)
     }
@@ -128,7 +129,7 @@ public struct HotkeyDetector: Sendable {
         case (.idle, let chord?):
             phase = .held(chord, since: event.time)
             swallowing.insert(event.key)
-            return Verdict(transition: .began(chord), delivery: .swallow)
+            return Verdict(transition: .began(chord, at: event.time), delivery: .swallow)
         case (.latched(let chord), .some):
             phase = .idle
             swallowing.insert(event.key)

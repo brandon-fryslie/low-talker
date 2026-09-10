@@ -75,7 +75,10 @@ extension KeyEvent {
         // code any process posts.
         let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
         let modifiers = Modifier.held(in: event.flags)
-        let time = Duration.nanoseconds(event.timestamp)
+        // The window server stamps events in nanoseconds on the clock the machine has
+        // been up on - the same one CoreAudio stamps microphone buffers with - so a
+        // press and a sample are comparable without converting between two clocks.
+        let time = HostTime(uptime: .nanoseconds(event.timestamp))
         switch type {
         case .flagsChanged:
             guard let modifier = Modifier(keyCode: keyCode) else { return nil }

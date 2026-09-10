@@ -14,12 +14,13 @@ public typealias Disposal = @MainActor () -> Void
 @MainActor
 public protocol AudioHardware {
     /// Launches an engine on the current default input device. Every buffer it captures
-    /// arrives at `appending` as pipeline samples, on the audio service queue. The
-    /// engine reports on the main actor: `onFailure` when a buffer could not be
-    /// converted, `onConfigurationChange` when macOS has stopped it because its device
-    /// changed. Throws when the current device cannot feed the pipeline.
+    /// arrives at `appending` as pipeline samples with the host time its first sample
+    /// was captured at, on the audio service queue. The engine reports on the main
+    /// actor: `onFailure` when a buffer could not be converted or placed in time,
+    /// `onConfigurationChange` when macOS has stopped it because its device changed.
+    /// Throws when the current device cannot feed the pipeline.
     func launch(
-        appending: @escaping @Sendable ([Float]) -> Void,
+        appending: @escaping @Sendable ([Float], HostTime) -> Void,
         onFailure: @escaping @MainActor (any Error) -> Void,
         onConfigurationChange: @escaping @MainActor () -> Void
     ) throws -> Disposal
@@ -31,11 +32,26 @@ public protocol AudioHardware {
 
 public enum AudioHardwareError: Error, CustomStringConvertible {
     case defaultInputWatchFailed(OSStatus)
+    /// A buffer arrived with no host clock behind its time.
+    case bufferWithoutTime
 
     public var description: String {
         switch self {
         case .defaultInputWatchFailed(let status): "CoreAudio refused a listener on the default input device (status \(status))"
+        case .bufferWithoutTime: "the input device delivered a buffer with no host time; nothing can say when its samples were captured"
         }
+    }
+}
+
+extension HostTime {
+    /// [LAW:parse-dont-validate] The one place a CoreAudio stamp becomes a host time.
+    /// It counts the machine's raw ticks rather than nanoseconds, and AVFoundation may
+    /// hand out a time with no host clock behind it at all - samples that cannot be
+    /// placed in time are samples no session can be cut from, so that is a failed
+    /// engine rather than a guess. [LAW:no-silent-failure]
+    init(_ when: AVAudioTime) throws {
+        guard when.isHostTimeValid else { throw AudioHardwareError.bufferWithoutTime }
+        self.init(uptime: .seconds(AVAudioTime.seconds(forHostTime: when.hostTime)))
     }
 }
 
@@ -48,7 +64,7 @@ public struct SystemAudioHardware: AudioHardware {
     public init() {}
 
     public func launch(
-        appending: @escaping @Sendable ([Float]) -> Void,
+        appending: @escaping @Sendable ([Float], HostTime) -> Void,
         onFailure: @escaping @MainActor (any Error) -> Void,
         onConfigurationChange: @escaping @MainActor () -> Void
     ) throws -> Disposal {
@@ -61,9 +77,10 @@ public struct SystemAudioHardware: AudioHardware {
         nonisolated(unsafe) let converter = try AudioClip.Converter(from: source)
         // Explicitly @Sendable: a closure formed here would otherwise inherit main-actor
         // isolation and trap when the tap fires on the audio service queue.
-        input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(source.sampleRate * Self.bufferDuration), format: source) { @Sendable buffer, _ in
+        input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(source.sampleRate * Self.bufferDuration), format: source) { @Sendable buffer, when in
             do {
-                appending(try converter.convert(buffer))
+                let captured = try HostTime(when)
+                appending(try converter.convert(buffer), captured)
             } catch {
                 Task { @MainActor in onFailure(error) }
             }

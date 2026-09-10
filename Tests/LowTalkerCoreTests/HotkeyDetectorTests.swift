@@ -19,24 +19,26 @@ private struct Keyboard {
 
     mutating func press(_ modifier: Modifier, at ms: Int64) -> HotkeyDetector.Verdict {
         held.insert(modifier)
-        return detector.handle(KeyEvent(key: .modifier(modifier), direction: .down, modifiers: held, time: .milliseconds(ms)))
+        return detector.handle(KeyEvent(key: .modifier(modifier), direction: .down, modifiers: held, time: at(ms)))
     }
 
     mutating func release(_ modifier: Modifier, at ms: Int64) -> HotkeyDetector.Verdict {
         held.remove(modifier)
-        return detector.handle(KeyEvent(key: .modifier(modifier), direction: .up, modifiers: held, time: .milliseconds(ms)))
+        return detector.handle(KeyEvent(key: .modifier(modifier), direction: .up, modifiers: held, time: at(ms)))
     }
 
     mutating func press(_ key: Key, at ms: Int64) -> HotkeyDetector.Verdict {
-        detector.handle(KeyEvent(key: .key(key), direction: .down, modifiers: held, time: .milliseconds(ms)))
+        detector.handle(KeyEvent(key: .key(key), direction: .down, modifiers: held, time: at(ms)))
     }
 
     mutating func release(_ key: Key, at ms: Int64) -> HotkeyDetector.Verdict {
-        detector.handle(KeyEvent(key: .key(key), direction: .up, modifiers: held, time: .milliseconds(ms)))
+        detector.handle(KeyEvent(key: .key(key), direction: .up, modifiers: held, time: at(ms)))
     }
 }
 
-private func began(_ chord: KeyChord) -> HotkeyDetector.Verdict { .init(transition: .began(chord), delivery: .swallow) }
+private func at(_ ms: Int64) -> HostTime { HostTime(uptime: .milliseconds(ms)) }
+
+private func began(_ chord: KeyChord, at ms: Int64) -> HotkeyDetector.Verdict { .init(transition: .began(chord, at: at(ms)), delivery: .swallow) }
 private func ended(_ chord: KeyChord, _ press: PressKind) -> HotkeyDetector.Verdict { .init(transition: .ended(chord, press), delivery: .swallow) }
 private let swallowed = HotkeyDetector.Verdict(transition: nil, delivery: .swallow)
 private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
@@ -44,8 +46,8 @@ private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
 @Suite struct HotkeyDetectorTests {
     @Test func aPressReleasedAfterTheThresholdIsAHold() {
         var keyboard = Keyboard()
-        #expect(keyboard.press(.rightOption, at: 0) == began(rightOption))
-        #expect(keyboard.detector.phase == .held(rightOption, since: .zero))
+        #expect(keyboard.press(.rightOption, at: 0) == began(rightOption, at: 0))
+        #expect(keyboard.detector.phase == .held(rightOption, since: at(0)))
         #expect(keyboard.release(.rightOption, at: 400) == ended(rightOption, .hold))
         #expect(keyboard.detector.phase == .idle)
     }
@@ -54,7 +56,7 @@ private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
     /// is consumed whole, however long it lasts.
     @Test func aPressReleasedWithinTheThresholdLatchesUntilTheNextPress() {
         var keyboard = Keyboard()
-        #expect(keyboard.press(.rightOption, at: 0) == began(rightOption))
+        #expect(keyboard.press(.rightOption, at: 0) == began(rightOption, at: 0))
         #expect(keyboard.release(.rightOption, at: 100) == swallowed)
         #expect(keyboard.detector.phase == .latched(rightOption))
         #expect(keyboard.press(.rightOption, at: 5000) == ended(rightOption, .tap))
@@ -106,9 +108,9 @@ private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
     /// changes nothing, though Right Option with Shift is itself a chord.
     @Test func aChordCompletedOnTopOfAHeldOneIsIgnored() {
         var keyboard = Keyboard(chords: [rightOption, command])
-        #expect(keyboard.press(.rightOption, at: 0) == began(rightOption))
+        #expect(keyboard.press(.rightOption, at: 0) == began(rightOption, at: 0))
         #expect(keyboard.press(.leftShift, at: 100) == passed)
-        #expect(keyboard.detector.phase == .held(rightOption, since: .zero))
+        #expect(keyboard.detector.phase == .held(rightOption, since: at(0)))
         #expect(keyboard.release(.leftShift, at: 200) == passed)
         #expect(keyboard.release(.rightOption, at: 400) == ended(rightOption, .hold))
     }
@@ -119,7 +121,7 @@ private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
     @Test func theOrderOfKeysPicksTheChord() {
         var keyboard = Keyboard(chords: [rightOption, command])
         #expect(keyboard.press(.leftShift, at: 0) == passed)
-        #expect(keyboard.press(.rightOption, at: 10) == began(command))
+        #expect(keyboard.press(.rightOption, at: 10) == began(command, at: 10))
         #expect(keyboard.release(.leftShift, at: 400) == HotkeyDetector.Verdict(transition: .ended(command, .hold), delivery: .pass))
         #expect(keyboard.detector.phase == .idle)
         #expect(keyboard.release(.rightOption, at: 410) == swallowed)
@@ -130,7 +132,7 @@ private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
     @Test func releasingTheUnswallowedKeyOfAChordWithinTheThresholdLatches() {
         var keyboard = Keyboard(chords: [rightOption, command])
         _ = keyboard.press(.leftShift, at: 0)
-        #expect(keyboard.press(.rightOption, at: 10) == began(command))
+        #expect(keyboard.press(.rightOption, at: 10) == began(command, at: 10))
         #expect(keyboard.release(.leftShift, at: 100) == passed)
         #expect(keyboard.detector.phase == .latched(command))
         #expect(keyboard.release(.rightOption, at: 110) == swallowed)
@@ -142,7 +144,7 @@ private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
     @Test func aChordWithAKeyCompletesOnTheKeyAndSwallowsItsRepeats() {
         var keyboard = Keyboard(chords: [optionSpace])
         #expect(keyboard.press(.leftOption, at: 0) == passed)
-        #expect(keyboard.press(Key(rawValue: 49), at: 10) == began(optionSpace))
+        #expect(keyboard.press(Key(rawValue: 49), at: 10) == began(optionSpace, at: 10))
         #expect(keyboard.press(Key(rawValue: 49), at: 500) == swallowed)
         #expect(keyboard.release(Key(rawValue: 49), at: 600) == ended(optionSpace, .hold))
         #expect(keyboard.release(.leftOption, at: 610) == passed)
@@ -175,9 +177,9 @@ private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
     @Test func aNewPressKeepsSwallowingTheLastOnesKeyUntilItComesUp() {
         var keyboard = Keyboard(chords: [optionSpace, rightOption])
         _ = keyboard.press(.leftOption, at: 0)
-        #expect(keyboard.press(Key(rawValue: 49), at: 10) == began(optionSpace))
+        #expect(keyboard.press(Key(rawValue: 49), at: 10) == began(optionSpace, at: 10))
         #expect(keyboard.release(.leftOption, at: 400) == HotkeyDetector.Verdict(transition: .ended(optionSpace, .hold), delivery: .pass))
-        #expect(keyboard.press(.rightOption, at: 410) == began(rightOption))
+        #expect(keyboard.press(.rightOption, at: 410) == began(rightOption, at: 410))
         #expect(keyboard.release(Key(rawValue: 49), at: 420) == swallowed)
         #expect(keyboard.release(.rightOption, at: 800) == ended(rightOption, .hold))
     }
@@ -211,7 +213,7 @@ private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
         _ = keyboard.press(.leftOption, at: 0)
         _ = keyboard.press(Key(rawValue: 49), at: 10)
         _ = keyboard.release(.leftOption, at: 400)
-        #expect(keyboard.press(.rightOption, at: 410) == began(rightOption))
+        #expect(keyboard.press(.rightOption, at: 410) == began(rightOption, at: 410))
         #expect(keyboard.detector.lapse() == .ended(rightOption, .hold))
         #expect(keyboard.release(Key(rawValue: 49), at: 460) == swallowed)
         #expect(keyboard.release(.rightOption, at: 470) == swallowed)

@@ -28,7 +28,7 @@ struct RecordCommand: AsyncParsableCommand {
         let capture = AudioCapture()
         try capture.start(grant)
         defer { capture.stop() }
-        let session = capture.beginSession()
+        let session = capture.beginSession(at: .now)
         try await Task.sleep(for: .seconds(seconds))
         if case .failed(let error) = capture.state { throw error }
 

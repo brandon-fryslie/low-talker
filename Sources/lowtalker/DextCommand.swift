@@ -173,10 +173,10 @@ struct DextWatchCommand: AsyncParsableCommand {
     @MainActor
     func run() async throws {
         setvbuf(stdout, nil, _IOLBF, 0)
-        let (events, continuation) = AsyncStream.makeStream(of: (KeyEvent, Duration).self)
+        let (events, continuation) = AsyncStream.makeStream(of: (KeyEvent, HostTime).self)
         _ = try SystemKeyboardTap().install(
             handling: { event in
-                continuation.yield((event, .nanoseconds(clock_gettime_nsec_np(CLOCK_UPTIME_RAW))))
+                continuation.yield((event, .now))
                 return .pass
             },
             onLapse: { print("the tap lapsed and was switched back on") }

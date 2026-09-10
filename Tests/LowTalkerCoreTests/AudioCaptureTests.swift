@@ -11,12 +11,12 @@ private struct BadBuffer: Error, Equatable {}
 @MainActor
 private final class FakeHardware: AudioHardware {
     final class Engine {
-        let appending: @Sendable ([Float]) -> Void
+        let appending: @Sendable ([Float], HostTime) -> Void
         let onFailure: @MainActor (any Error) -> Void
         let onConfigurationChange: @MainActor () -> Void
         var disposed = false
 
-        init(appending: @escaping @Sendable ([Float]) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) {
+        init(appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) {
             self.appending = appending
             self.onFailure = onFailure
             self.onConfigurationChange = onConfigurationChange
@@ -34,7 +34,7 @@ private final class FakeHardware: AudioHardware {
         self.launches = launches
     }
 
-    func launch(appending: @escaping @Sendable ([Float]) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) throws -> Disposal {
+    func launch(appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) throws -> Disposal {
         if let error = launches.isEmpty ? nil : launches.removeFirst() { throw error }
         let engine = Engine(appending: appending, onFailure: onFailure, onConfigurationChange: onConfigurationChange)
         engines.append(engine)
@@ -66,6 +66,11 @@ private struct Authorized: MicrophoneAuthority {
 @MainActor
 @Suite struct AudioCaptureTests {
     private let grant = try! MicrophonePermission(authority: Authorized()).current.grant()
+    /// Where every capture in this suite starts its timeline; any moment would do.
+    private let origin = HostTime(uptime: .zero)
+
+    /// The moment the sample at position `count` is captured, at the pipeline rate.
+    private func after(_ count: Int) -> HostTime { origin + .seconds(AudioClip.duration(for: count)) }
 
     private func isRunning(_ capture: AudioCapture) -> Bool {
         if case .running = capture.state { return true }
@@ -88,27 +93,51 @@ private struct Authorized: MicrophoneAuthority {
 
     @Test func whatTheEngineCapturesIsWhatTheRingHolds() throws {
         let hardware = FakeHardware()
-        let capture = AudioCapture(hardware: hardware)
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
         try capture.start(grant)
-        let session = capture.beginSession(preRoll: 0)
-        hardware.engines[0].appending([1, 2, 3])
+        let session = capture.beginSession(at: origin, preRoll: 0)
+        hardware.engines[0].appending([1, 2, 3], origin)
         #expect(capture.endSession(session).samples == [1, 2, 3])
+    }
+
+    /// The moment names a position, not the call: a session begun at a moment the
+    /// microphone has already passed reaches back to it.
+    @Test func aSessionBegunAtAnEarlierMomentReachesBackToIt() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant)
+        hardware.engines[0].appending([1, 2, 3, 4], origin)
+        let session = capture.beginSession(at: after(2), preRoll: 0)
+        #expect(capture.endSession(session).samples == [3, 4])
+    }
+
+    /// The key went down between two buffers, so the moment is later than anything
+    /// captured. A session cannot begin in audio that does not exist yet: it begins at
+    /// the newest sample and holds what comes after.
+    @Test func aSessionBegunAfterTheNewestSampleBeginsAtTheNewestSample() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant)
+        hardware.engines[0].appending([1, 2], origin)
+        let session = capture.beginSession(at: after(9), preRoll: 0)
+        hardware.engines[0].appending([3], after(2))
+        #expect(capture.endSession(session).samples == [3])
     }
 
     /// The ring survives the engine: samples from before the change are still there
     /// after it, followed by the new engine's.
     @Test func aConfigurationChangeReplacesTheEngineAndKeepsTheRing() throws {
         let hardware = FakeHardware()
-        let capture = AudioCapture(hardware: hardware)
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
         try capture.start(grant)
-        let session = capture.beginSession(preRoll: 0)
-        hardware.engines[0].appending([1])
+        let session = capture.beginSession(at: origin, preRoll: 0)
+        hardware.engines[0].appending([1], origin)
         hardware.engines[0].onConfigurationChange()
         #expect(hardware.engines[0].disposed)
         #expect(hardware.engines.count == 2)
         #expect(capture.deviceChanges == 1)
         #expect(isRunning(capture))
-        hardware.engines[1].appending([2])
+        hardware.engines[1].appending([2], after(1))
         #expect(capture.endSession(session).samples == [1, 2])
     }
 
