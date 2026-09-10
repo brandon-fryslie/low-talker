@@ -28,6 +28,7 @@ public protocol Mouse {
 /// alerts over it meet here and nowhere else. [LAW:decomposition]
 public struct GuardedMouse: Mouse {
     public let pointing: any Pointing
+    public let queue: DeviceQueue
     public let interrupt: Interrupt
     public let screen: TargetApp
     /// The alert reading taken as a parameter rather than read inside `down`, for the
@@ -38,11 +39,13 @@ public struct GuardedMouse: Mouse {
 
     public init(
         pointing: any Pointing,
+        queue: DeviceQueue,
         interrupt: Interrupt,
         screen: TargetApp,
         alerts: @escaping @MainActor () throws -> Void = SystemAlerts.requireNone
     ) {
         self.pointing = pointing
+        self.queue = queue
         self.interrupt = interrupt
         self.screen = screen
         self.alerts = alerts
@@ -61,10 +64,10 @@ public struct GuardedMouse: Mouse {
     /// last instant before the press, without a move paying for it once per motion report.
     public func down(_ button: Button) async throws {
         try alerts()
-        try await DeviceQueue.run { [pointing] in try pointing.down(button) }
+        try await queue.run { [pointing] in try pointing.down(button) }
     }
 
-    public func releaseAll() async throws { try await DeviceQueue.run { [pointing] in try pointing.releaseAll() } }
-    public func move(by delta: Move) async throws { try await DeviceQueue.run { [pointing] in try pointing.move(by: delta) } }
-    public func scroll(by delta: Scroll) async throws { try await DeviceQueue.run { [pointing] in try pointing.scroll(by: delta) } }
+    public func releaseAll() async throws { try await queue.run { [pointing] in try pointing.releaseAll() } }
+    public func move(by delta: Move) async throws { try await queue.run { [pointing] in try pointing.move(by: delta) } }
+    public func scroll(by delta: Scroll) async throws { try await queue.run { [pointing] in try pointing.scroll(by: delta) } }
 }

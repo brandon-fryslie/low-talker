@@ -29,11 +29,13 @@ public protocol Keyboard {
 /// presses keys without knowing what a window server is.
 public struct GuardedKeyboard: Keyboard {
     public let keyboard: any KeyPress
+    public let queue: DeviceQueue
     public let interrupt: Interrupt
     public let screen: TargetApp
 
-    public init(keyboard: any KeyPress, interrupt: Interrupt, screen: TargetApp) {
+    public init(keyboard: any KeyPress, queue: DeviceQueue, interrupt: Interrupt, screen: TargetApp) {
         self.keyboard = keyboard
+        self.queue = queue
         self.interrupt = interrupt
         self.screen = screen
     }
@@ -43,6 +45,6 @@ public struct GuardedKeyboard: Keyboard {
         try screen.requireFrontmost()
     }
 
-    public func down(_ usage: Usage) async throws { try await DeviceQueue.run { [keyboard] in try keyboard.down(usage) } }
-    public func releaseAll() async throws { try await DeviceQueue.run { [keyboard] in try keyboard.releaseAll() } }
+    public func down(_ usage: Usage) async throws { try await queue.run { [keyboard] in try keyboard.down(usage) } }
+    public func releaseAll() async throws { try await queue.run { [keyboard] in try keyboard.releaseAll() } }
 }

@@ -12,14 +12,18 @@ import Dispatch
 /// starved a three-core runner. A queue nothing else runs on is the one place the wait
 /// holds up nobody. [LAW:no-ambient-temporal-coupling]
 ///
-/// Serial, and one for both devices, because the helper takes a keyboard report and a
-/// mouse report from one client as one sequence: two in flight at once would be ordered
-/// by its lock rather than by the order they were asked in.
-enum DeviceQueue {
-    private static let queue = DispatchQueue(label: "Typing.DeviceQueue")
+/// Serial, and one shared by the keyboard and the mouse a client posts through, because
+/// the helper takes their reports as one sequence: two in flight at once would be ordered
+/// by its lock rather than by the order they were asked in. A value handed to both rather
+/// than a static, so one client never waits on another's. [LAW:no-shared-mutable-globals]
+public final class DeviceQueue: Sendable {
+    private let queue = DispatchQueue(label: "Typing.DeviceQueue")
 
-    /// Runs `call` on the queue and resumes with what it threw, if anything.
-    static func run(_ call: @escaping @Sendable () throws -> Void) async throws {
+    public init() {}
+
+    /// Runs `call` on the queue and resumes with what it threw, if anything. Handed over
+    /// on the caller's actor, so calls made there run in the order they were made.
+    func run(isolation: isolated (any Actor)? = #isolation, _ call: @escaping @Sendable () throws -> Void) async throws {
         try await withCheckedThrowingContinuation { continuation in
             queue.async { continuation.resume(with: Result(catching: call)) }
         }

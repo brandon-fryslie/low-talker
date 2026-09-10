@@ -17,6 +17,7 @@ import Testing
         let device = RecordingPointing()
         let guarded = GuardedMouse(
             pointing: device,
+            queue: DeviceQueue(),
             interrupt: Interrupt(),
             screen: TargetApp(bundleID: BundleID(rawValue: "com.example.nothing"), interrupt: Interrupt()),
             alerts: alerts

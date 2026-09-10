@@ -44,7 +44,7 @@ struct ClickCommand: AsyncParsableCommand {
         let target = TargetApp(bundleID: front, interrupt: interrupt)
         let helper = HelperConnection()
         let pointer = Pointer(
-            mouse: GuardedMouse(pointing: helper.mouse, interrupt: interrupt, screen: target),
+            mouse: GuardedMouse(pointing: helper.mouse, queue: DeviceQueue(), interrupt: interrupt, screen: target),
             cursor: Pointer.screenCursor,
             locate: target.frame(ofRole:titled:)
         )
