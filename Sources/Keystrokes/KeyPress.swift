@@ -11,7 +11,11 @@
 /// report from its own set of held keys, so a report composed anywhere else is a report
 /// that can disagree with what is actually down. Releasing everything is the act that
 /// cannot disagree. [LAW:one-source-of-truth]
-public protocol KeyPress {
+///
+/// Sendable, because a press blocks the thread it is made on until the far side answers,
+/// so it is made on a thread kept for waiting: the helper's listener presses from XPC's
+/// threads, and the typist from a queue that is not the one the hotkey is heard on.
+public protocol KeyPress: Sendable {
     func down(_ usage: Usage) throws
     func releaseAll() throws
 }

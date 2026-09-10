@@ -9,7 +9,9 @@ import Keystrokes
 /// score the run would have reported, without a driver or an app in front.
 ///
 /// Main-actor, because the refusal reads which app is in front and that is a question
-/// only the main actor may ask.
+/// only the main actor may ask. The keys are awaited rather than returned from: each one
+/// waits for the far side's acknowledgement, and a wait held on the main actor is a wait
+/// the hotkey's tap cannot be heard through.
 @MainActor
 public protocol Keyboard {
     /// Throws rather than let the next keystroke be posted: the operator interrupted, or
@@ -17,8 +19,8 @@ public protocol Keyboard {
     /// that must not be posted and a keystroke that fails to post are the same event to
     /// everything downstream. [LAW:one-type-per-behavior]
     func check() throws
-    func down(_ usage: Usage) throws
-    func releaseAll() throws
+    func down(_ usage: Usage) async throws
+    func releaseAll() async throws
 }
 
 /// A keyboard, refusing any keystroke this run has lost the right to post.
@@ -41,6 +43,6 @@ public struct GuardedKeyboard: Keyboard {
         try screen.requireFrontmost()
     }
 
-    public func down(_ usage: Usage) throws { try keyboard.down(usage) }
-    public func releaseAll() throws { try keyboard.releaseAll() }
+    public func down(_ usage: Usage) async throws { try await DeviceQueue.run { [keyboard] in try keyboard.down(usage) } }
+    public func releaseAll() async throws { try await DeviceQueue.run { [keyboard] in try keyboard.releaseAll() } }
 }

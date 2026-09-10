@@ -25,11 +25,10 @@ final class Devices: NSObject, ServedDevices, @unchecked Sendable {
     private let keyboard: any KeyPress
     private let mouse: any Pointing
     /// One report at a time, across both devices. [LAW:no-shared-mutable-globals] Each
-    /// device derives every report from the set it believes is down, so two calls
-    /// interleaving on one device would each post a report missing the other's - which
-    /// the driver reads as a release nobody sent. The two devices share the lock because
+    /// device keeps its own reports whole; this orders the two against each other, because
     /// they share the socket and the client: a keyboard report and a mouse report from one
-    /// client are one sequence, and ordering them is cheaper than reasoning about two.
+    /// client are one sequence, and ordering them is cheaper than reasoning about two. It
+    /// is also what holds a release of both as one act, which neither device can.
     ///
     /// A lock and not a queue, because every call here is a round trip the client is
     /// already waiting on: hopping to another thread to do synchronous work would add a

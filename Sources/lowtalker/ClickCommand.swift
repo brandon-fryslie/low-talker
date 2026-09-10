@@ -48,7 +48,7 @@ struct ClickCommand: AsyncParsableCommand {
             cursor: Pointer.screenCursor,
             locate: target.frame(ofRole:titled:)
         )
-        let click = try pointer.click(element: AccessibilityRole(rawValue: role), title: title)
+        let click = try await pointer.click(element: AccessibilityRole(rawValue: role), title: title)
         // The app is named in the report because it was discovered, not given: an agent
         // that aimed at a dialog and hit the app behind it has to be able to tell.
         print("clicked \(role) \(title.debugDescription) in \(front.rawValue) at \(click.at) after \(click.reports) motion reports")

@@ -9,17 +9,18 @@ import Pointing
 /// back every report it posted.
 ///
 /// Main-actor, because the refusal reads which app is in front and that is a question
-/// only the main actor may ask.
+/// only the main actor may ask. The reports are awaited, for the reason `Keyboard`'s keys
+/// are.
 @MainActor
 public protocol Mouse {
     /// Throws rather than let the next report be posted: the operator interrupted, or the
     /// target app is no longer frontmost. One member and not two, for the reason
     /// `Keyboard.check` gives. [LAW:one-type-per-behavior]
     func check() throws
-    func down(_ button: Button) throws
-    func releaseAll() throws
-    func move(by delta: Move) throws
-    func scroll(by delta: Scroll) throws
+    func down(_ button: Button) async throws
+    func releaseAll() async throws
+    func move(by delta: Move) async throws
+    func scroll(by delta: Scroll) async throws
 }
 
 /// A mouse, refusing any report this run has lost the right to post. The mirror of
@@ -58,12 +59,12 @@ public struct GuardedMouse: Mouse {
     /// motion or wheel report cannot answer somebody else's prompt, and a button going
     /// down can. `Pointer.click` calls `check` and then this, so it is still asked at the
     /// last instant before the press, without a move paying for it once per motion report.
-    public func down(_ button: Button) throws {
+    public func down(_ button: Button) async throws {
         try alerts()
-        try pointing.down(button)
+        try await DeviceQueue.run { [pointing] in try pointing.down(button) }
     }
 
-    public func releaseAll() throws { try pointing.releaseAll() }
-    public func move(by delta: Move) throws { try pointing.move(by: delta) }
-    public func scroll(by delta: Scroll) throws { try pointing.scroll(by: delta) }
+    public func releaseAll() async throws { try await DeviceQueue.run { [pointing] in try pointing.releaseAll() } }
+    public func move(by delta: Move) async throws { try await DeviceQueue.run { [pointing] in try pointing.move(by: delta) } }
+    public func scroll(by delta: Scroll) async throws { try await DeviceQueue.run { [pointing] in try pointing.scroll(by: delta) } }
 }

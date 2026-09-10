@@ -17,7 +17,9 @@ import Typing
 /// never interleave, however long the engine takes on either. Key-down and key-up
 /// themselves do almost nothing - a ring position, one read of which app is in
 /// front - because they run inside the tap's callback, where a slow handler is what
-/// makes macOS switch the tap off.
+/// makes macOS switch the tap off. Sessions are typed on this same actor, so the typing
+/// awaits each key's acknowledgement rather than holding the actor for it: a press made
+/// in the middle of an insert is marked on the ring when it is made.
 @MainActor
 public final class Dictation {
     /// One press, done: where it went, what was heard, how long after key-up, and what
@@ -171,7 +173,7 @@ public final class Dictation {
         let transcript = try await engine.transcribe(clip, expecting: .empty)
         let keyUpToTranscript = ContinuousClock.now - keyUp
         let actions = router.actions(for: transcript, in: context)
-        let performed = try executor.perform(actions, in: context, on: try layout(), since: keyUp)
+        let performed = try await executor.perform(actions, in: context, on: try layout(), since: keyUp)
         return Session(context: context, transcript: transcript, keyUpToTranscript: keyUpToTranscript, performed: performed)
     }
 }

@@ -168,6 +168,33 @@ extension Result {
         #expect(rig.keyboard.log == Self.typed("a") + Self.typed("b"))
     }
 
+    /// A hold made while a session is typing is marked when it is made, not when the typing
+    /// is done. The first session is held at its first key-down, waiting on the device as
+    /// every key-down does, and the second hold happens then: silence up to its key-down,
+    /// its words between the marks, a sample after its key-up. A mark that waited for the
+    /// typing would be made after the last of them, and the clip would show it.
+    @Test func aHoldMadeWhileASessionIsTypingIsMarkedWhenItIsMade() async throws {
+        let gate = Gate()
+        let engine = FakeTranscriber { clip in Transcript(typed: clip.samples == [1] ? "a" : "b") }
+        let rig = try Rig(hearing: engine)
+        rig.keyboard.acknowledgement = { await gate.wait() }
+        rig.hold(speaking: [1])
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { gate.waiting == 1 })
+        #expect(rig.keyboard.log == Array(Self.typed("a").prefix(2)))
+
+        let silence = [Float](repeating: 0, count: AudioClip.sampleCount(for: AudioSession.defaultPreRoll))
+        rig.hardware.engines[0].appending(silence)
+        rig.hold(speaking: [7, 8])
+        rig.hardware.engines[0].appending([9])
+        #expect(rig.keyboard.log == Array(Self.typed("a").prefix(2)))
+
+        gate.open()
+        #expect(try await rig.session().transcript.text == "a")
+        #expect(try await rig.session().transcript.text == "b")
+        #expect(engine.clips.last?.samples == silence + [7, 8])
+        #expect(rig.keyboard.log == Self.typed("a") + Self.typed("b"))
+    }
+
     @Test func aPressWithNothingToTypeIntoIsReportedAndTheNextPressTypes() async throws {
         let refused = Mutex(true)
         let rig = try Rig(transcriber: { FakeTranscriber { _ in Transcript(typed: "a") } }) {

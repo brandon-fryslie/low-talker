@@ -45,7 +45,7 @@ public struct Scribe {
     /// an accented letter, and nothing else. It travels with the call rather than being set
     /// beside it, so the one line that can record a pending accent is the one line that is
     /// ambiguous about whether it happened. [LAW:dataflow-not-control-flow]
-    private mutating func down(_ usage: Usage, composing pending: Character?) throws {
+    private mutating func down(_ usage: Usage, composing pending: Character?) async throws {
         try keyboard.check()
         // Recorded between the check and the down, and cleared after the character's last
         // key comes back. The two failures are not the same thing and must not report the
@@ -55,7 +55,7 @@ public struct Scribe {
         // and reporting an accent for it would tell the operator to clear a composition
         // that is not there.
         if let pending { halfTyped = pending }
-        try keyboard.down(usage)
+        try await keyboard.down(usage)
     }
 
     /// One keystroke: its modifiers down, the key down under them, everything up.
@@ -65,9 +65,9 @@ public struct Scribe {
     /// release - two for a bare letter, four for the em dash. That is the faithful count: a
     /// modifier and the key it modifies do not go down in the same scan on real hardware
     /// either.
-    private mutating func press(_ keystroke: Keystroke, composing: Character?) throws {
-        for modifier in keystroke.modifiers.usages { try down(modifier, composing: nil) }
-        try down(keystroke.usage, composing: composing)
+    private mutating func press(_ keystroke: Keystroke, composing: Character?) async throws {
+        for modifier in keystroke.modifiers.usages { try await down(modifier, composing: nil) }
+        try await down(keystroke.usage, composing: composing)
         // Counted on the key-down the daemon has acknowledged, not after the release: a
         // failure between the two still put the character on screen, and a count taken
         // after the release would report one fewer than is really there. It is the LAST
@@ -82,20 +82,20 @@ public struct Scribe {
             typed += 1
             halfTyped = nil
         }
-        try keyboard.releaseAll()
+        try await keyboard.releaseAll()
     }
 
     /// A chord: one keystroke that is a whole act, so it composes nothing and counts as
     /// one when its key has gone down.
-    public mutating func press(_ keystroke: Keystroke) throws {
-        try press(keystroke, composing: nil)
+    public mutating func press(_ keystroke: Keystroke) async throws {
+        try await press(keystroke, composing: nil)
     }
 
     /// A character, as the keystrokes the layout says it costs. Every keystroke but the
     /// last leaves the character pending in the app.
-    public mutating func type(_ character: Character, _ keystrokes: [Keystroke]) throws {
+    public mutating func type(_ character: Character, _ keystrokes: [Keystroke]) async throws {
         for (index, keystroke) in keystrokes.enumerated() {
-            try press(keystroke, composing: index == keystrokes.count - 1 ? nil : character)
+            try await press(keystroke, composing: index == keystrokes.count - 1 ? nil : character)
         }
     }
 }

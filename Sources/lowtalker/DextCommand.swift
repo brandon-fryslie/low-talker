@@ -123,12 +123,12 @@ struct DextTypeCommand: AsyncParsableCommand {
         var typed = 0
         let firstPosted = clock.now
         do {
-            typed += try typist.type(first)
+            typed += try await typist.type(first)
             let firstSeen = try await screen.wait(within: .seconds(3)) { $0.shows(String(expected.prefix(1)), moreThan: before) }
             print("first character on screen in \(into.rawValue) after \((clock.now - firstPosted).milliseconds) ms\(firstSeen ? "" : " (NEVER SEEN)")")
 
             let restPosted = clock.now
-            typed += try typist.type(rest)
+            typed += try await typist.type(rest)
             let acknowledged = clock.now - restPosted
             // Against a baseline, like the first character's check: an app already holding
             // this text would otherwise confirm a run that delivered nothing.

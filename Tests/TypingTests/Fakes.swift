@@ -2,6 +2,7 @@ import CoreGraphics
 import Keystrokes
 import LowTalkerCore
 import Pointing
+import Synchronization
 import Typing
 
 /// A keyboard that records what it was asked to do and refuses after a given number of
@@ -47,14 +48,17 @@ struct Refused: Error {}
 /// refusal was raised but whether anything reached the device before it.
 ///
 /// Not `@MainActor`, because `Pointing` is not: it is the seam under the mouse, shared with
-/// the helper, and `VirtualPointing` conforms unisolated for the same reason.
+/// the helper, and a guarded mouse calls it from the queue it waits on. So the log is
+/// behind a lock, as `VirtualPointing`'s record is.
 final class RecordingPointing: Pointing {
-    private(set) var log: [String] = []
+    private let recorded = Mutex<[String]>([])
 
-    func down(_ button: Button) throws { log.append("down \(button.rawValue)") }
-    func releaseAll() throws { log.append("up") }
-    func move(by delta: Move) throws { log.append("move \(delta.x.value) \(delta.y.value)") }
-    func scroll(by delta: Scroll) throws { log.append("scroll \(delta.vertical.value) \(delta.horizontal.value)") }
+    var log: [String] { recorded.withLock { $0 } }
+
+    func down(_ button: Button) throws { recorded.withLock { $0.append("down \(button.rawValue)") } }
+    func releaseAll() throws { recorded.withLock { $0.append("up") } }
+    func move(by delta: Move) throws { recorded.withLock { $0.append("move \(delta.x.value) \(delta.y.value)") } }
+    func scroll(by delta: Scroll) throws { recorded.withLock { $0.append("scroll \(delta.vertical.value) \(delta.horizontal.value)") } }
 }
 
 /// A mouse on a screen of its own, recording every report. The cursor moves by what a

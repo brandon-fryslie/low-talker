@@ -106,7 +106,7 @@ public struct Pointer {
     /// and once more on arrival, so a move that finds the cursor already there has still
     /// asked. [LAW:dataflow-not-control-flow]
     @discardableResult
-    public func move(to target: ScreenPoint) throws -> Int {
+    public func move(to target: ScreenPoint) async throws -> Int {
         var at = try cursor()
         var gain = 1.0
         var stalls = 0
@@ -114,8 +114,8 @@ public struct Pointer {
             try mouse.check()
             let step = Self.step(from: at, to: target, gain: gain)
             guard step != .none else { return reports }
-            try mouse.move(by: step)
-            let landed = try settled(from: at)
+            try await mouse.move(by: step)
+            let landed = try await settled(from: at)
             gain = Self.gain(after: step, from: at, to: landed, previous: gain)
             stalls = landed.distance(to: target) < at.distance(to: target) ? 0 : stalls + 1
             guard stalls < Self.stalls else { throw WouldNotReach(target: target, cursor: landed, reports: reports + 1) }
@@ -125,62 +125,62 @@ public struct Pointer {
     }
 
     /// The cursor once it has left `before`, or wherever it is when the settle time is up.
-    private func settled(from before: ScreenPoint) throws -> ScreenPoint {
+    private func settled(from before: ScreenPoint) async throws -> ScreenPoint {
         let deadline = ContinuousClock.now + Self.settle
         while true {
             let now = try cursor()
             if now != before || ContinuousClock.now >= deadline { return now }
-            Thread.sleep(forTimeInterval: 0.001)
+            try await Task.sleep(for: .milliseconds(1))
         }
     }
 
     /// Moves to `point` and clicks `button` there `times` times, each click a report with
     /// the button down and one with everything up, each awaited.
-    public func click(at point: ScreenPoint, button: MouseButton, times: Clicks) throws -> Click {
+    public func click(at point: ScreenPoint, button: MouseButton, times: Clicks) async throws -> Click {
         do {
-            let reports = try move(to: point)
+            let reports = try await move(to: point)
             for _ in 0..<times.rawValue {
                 try mouse.check()
-                try mouse.down(Button(button))
-                try mouse.releaseAll()
+                try await mouse.down(Button(button))
+                try await mouse.releaseAll()
             }
             return Click(at: point, reports: reports)
         } catch {
-            throw PointingStopped(cause: error, unreleased: release())
+            throw PointingStopped(cause: error, unreleased: await release())
         }
     }
 
     /// Moves to `point` and rolls the wheel there, in as many reports as the counts take:
     /// a report carries at most 127 on an axis, so 300 is 127, 127 and 46.
-    public func scroll(at point: ScreenPoint, vertical: WheelCounts, horizontal: WheelCounts) throws {
+    public func scroll(at point: ScreenPoint, vertical: WheelCounts, horizontal: WheelCounts) async throws {
         do {
-            try move(to: point)
+            try await move(to: point)
             var remaining = (vertical: vertical.rawValue, horizontal: horizontal.rawValue)
             while remaining != (0, 0) {
                 let chunk = Scroll(vertical: Count(clamping: remaining.vertical), horizontal: Count(clamping: remaining.horizontal))
                 try mouse.check()
-                try mouse.scroll(by: chunk)
+                try await mouse.scroll(by: chunk)
                 remaining = (remaining.vertical - Int(chunk.vertical.value), remaining.horizontal - Int(chunk.horizontal.value))
             }
         } catch {
-            throw PointingStopped(cause: error, unreleased: release())
+            throw PointingStopped(cause: error, unreleased: await release())
         }
     }
 
     /// Clicks the centre of the element with this role and title. An element with no area
     /// has no centre to click, so it is refused by name before a report goes out.
-    public func click(element role: AccessibilityRole, title: String) throws -> Click {
+    public func click(element role: AccessibilityRole, title: String) async throws -> Click {
         let frame = try locate(role, title)
         guard !frame.isEmpty else { throw NoAreaToClick(role: role, title: title, frame: frame) }
-        return try click(at: ScreenPoint(x: frame.midX, y: frame.midY), button: .left, times: .single)
+        return try await click(at: ScreenPoint(x: frame.midX, y: frame.midY), button: .left, times: .single)
     }
 
     /// Every button up, on the way out of a run that stopped, for the reason `Typist`'s
     /// release gives: a button the driver believes is down is a drag that continues.
     /// [LAW:no-silent-failure] A release that fails is reported beside the stop.
-    private func release() -> (any Error)? {
+    private func release() async -> (any Error)? {
         do {
-            try mouse.releaseAll()
+            try await mouse.releaseAll()
             return nil
         } catch {
             return error

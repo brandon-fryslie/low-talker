@@ -10,19 +10,19 @@ import Testing
     static let us = try! KeyboardLayout.named("com.apple.keylayout.US")
     static let rightOption = KeyChord(modifiers: .rightOption)
 
-    @Test func textIsTypedCharacterByCharacterAndCounted() throws {
+    @Test func textIsTypedCharacterByCharacterAndCounted() async throws {
         let keyboard = RefusingKeyboard()
         let typist = Typist(keyboard: keyboard, hotkeys: [Self.rightOption])
         let text = try typist.lower("aB", on: Self.us)
         #expect(text.count == 2)
-        #expect(try typist.type(text) == 2)
+        #expect(try await typist.type(text) == 2)
         #expect(keyboard.log == ["check", "down 4", "up", "check", "down e1", "check", "down 5", "up"])
     }
 
-    @Test func nothingIsTypedForNothing() throws {
+    @Test func nothingIsTypedForNothing() async throws {
         let keyboard = RefusingKeyboard()
         let typist = Typist(keyboard: keyboard, hotkeys: [Self.rightOption])
-        #expect(try typist.type(try typist.lower("", on: Self.us)) == 0)
+        #expect(try await typist.type(try typist.lower("", on: Self.us)) == 0)
         #expect(keyboard.log.isEmpty)
     }
 
@@ -81,20 +81,20 @@ import Testing
         _ = try typist.lower(KeyChord(key: Key(rawValue: 0x0E), modifiers: [.rightOption]))
     }
 
-    @Test func aChordIsPressedAsOneKeystroke() throws {
+    @Test func aChordIsPressedAsOneKeystroke() async throws {
         let keyboard = RefusingKeyboard()
         let typist = Typist(keyboard: keyboard, hotkeys: [Self.rightOption])
-        try typist.press(try typist.lower(KeyChord(key: Key(rawValue: 0x24))))
+        try await typist.press(try typist.lower(KeyChord(key: Key(rawValue: 0x24))))
         #expect(keyboard.log == ["check", "down 28", "up"])
     }
 
     /// A run that stops is reported with its count, and the keys are released on the way
     /// out: the modifiers of the keystroke it stopped inside would otherwise stay held.
-    @Test func aStoppedRunReleasesTheKeysAndReportsTheCount() throws {
+    @Test func aStoppedRunReleasesTheKeysAndReportsTheCount() async throws {
         let keyboard = StuckKeyboard()
         let typist = Typist(keyboard: keyboard, hotkeys: [Self.rightOption])
         let text = try typist.lower("abc", on: Self.us)
-        let stopped = try #require(throws: TypingStopped.self) { try typist.type(text) }
+        let stopped = try await #require(throws: TypingStopped.self) { try await typist.type(text) }
         #expect(stopped.typed == 0)
         #expect(stopped.of == 3)
         #expect(stopped.cause is Refused)
@@ -105,22 +105,22 @@ import Testing
 
     /// A release that fails after the stop is said beside the stop, not instead of it:
     /// the operator is told the count and that a key may be held.
-    @Test func aReleaseThatFailsAfterTheStopIsReported() throws {
+    @Test func aReleaseThatFailsAfterTheStopIsReported() async throws {
         let keyboard = RefusingKeyboard()
         keyboard.allow = 4
         let typist = Typist(keyboard: keyboard, hotkeys: [Self.rightOption])
-        let stopped = try #require(throws: TypingStopped.self) { try typist.type(try typist.lower("ab", on: Self.us)) }
+        let stopped = try await #require(throws: TypingStopped.self) { try await typist.type(try typist.lower("ab", on: Self.us)) }
         #expect(stopped.typed == 1)
         #expect(stopped.of == 2)
         #expect(stopped.unreleased is Refused)
         #expect("\(stopped)".hasSuffix("The keyboard was not released afterwards: Refused(). A key may be left held"))
     }
 
-    @Test func aStoppedChordReleasesTheKeysToo() throws {
+    @Test func aStoppedChordReleasesTheKeysToo() async throws {
         let keyboard = StuckKeyboard()
         let typist = Typist(keyboard: keyboard, hotkeys: [Self.rightOption])
         let chord = try typist.lower(KeyChord(key: Key(rawValue: 0x00), modifiers: [.leftCommand]))
-        let stopped = try #require(throws: ChordStopped.self) { try typist.press(chord) }
+        let stopped = try await #require(throws: ChordStopped.self) { try await typist.press(chord) }
         #expect(stopped.cause is Refused)
         #expect(stopped.unreleased == nil)
         #expect(keyboard.log == ["check", "down e3", "up"])

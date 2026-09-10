@@ -3,7 +3,7 @@ import Pointing
 /// The mouse as a client reaches it: the four acts of `Pointing`, each one report the
 /// helper posts and acknowledges. A `Count` is already inside the descriptor's range, so
 /// what crosses is its byte and nothing is checked on the way. [LAW:parse-dont-validate]
-public struct HelperMouse: Pointing, Sendable {
+public struct HelperMouse: Pointing {
     let helper: HelperConnection
 
     public func down(_ button: Button) throws {

@@ -68,22 +68,22 @@ public struct Typist {
     /// which is `text.count` on every return: a run that stops throws `TypingStopped`
     /// with the count instead.
     @discardableResult
-    public func type(_ text: Text) throws -> Int {
+    public func type(_ text: Text) async throws -> Int {
         var scribe = Scribe(keyboard: keyboard)
         do {
-            for (character, keystrokes) in text.characters { try scribe.type(character, keystrokes) }
+            for (character, keystrokes) in text.characters { try await scribe.type(character, keystrokes) }
         } catch {
-            throw TypingStopped(typed: scribe.typed, of: text.count, halfTyped: scribe.halfTyped, cause: error, unreleased: release())
+            throw TypingStopped(typed: scribe.typed, of: text.count, halfTyped: scribe.halfTyped, cause: error, unreleased: await release())
         }
         return scribe.typed
     }
 
-    public func press(_ chord: Chord) throws {
+    public func press(_ chord: Chord) async throws {
         var scribe = Scribe(keyboard: keyboard)
         do {
-            try scribe.press(chord.keystroke)
+            try await scribe.press(chord.keystroke)
         } catch {
-            throw ChordStopped(cause: error, unreleased: release())
+            throw ChordStopped(cause: error, unreleased: await release())
         }
     }
 
@@ -93,9 +93,9 @@ public struct Typist {
     /// reason `Scribe` gives; what it answers is whether the keys are known to be up.
     /// [LAW:no-silent-failure] A release that fails is reported beside the stop rather
     /// than thrown over it, so the operator is told both.
-    private func release() -> (any Error)? {
+    private func release() async -> (any Error)? {
         do {
-            try keyboard.releaseAll()
+            try await keyboard.releaseAll()
             return nil
         } catch {
             return error

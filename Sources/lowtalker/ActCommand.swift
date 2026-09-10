@@ -50,7 +50,7 @@ struct ActCommand: AsyncParsableCommand {
         try await TargetApp(bundleID: context.frontmostApp, interrupt: interrupt).raise(within: .seconds(5))
         // There was no key-up: the actions were handed over, and the moment they were
         // stands in for it, so the number printed is the executor's own time.
-        for performed in try executor.perform(actions, in: context, on: layout, since: ContinuousClock.now) {
+        for performed in try await executor.perform(actions, in: context, on: layout, since: ContinuousClock.now) {
             print(performed)
         }
     }
