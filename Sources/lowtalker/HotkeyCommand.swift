@@ -31,7 +31,7 @@ struct HotkeyCommand: AsyncParsableCommand {
         for await transition in transitions {
             switch transition {
             case .began: print("began")
-            case .ended(_, let press): print("ended (\(press.rawValue)), lapses \(hotkey.lapses)")
+            case .ended(_, let ending): print("ended (\(ending)), lapses \(hotkey.lapses)")
             }
         }
     }

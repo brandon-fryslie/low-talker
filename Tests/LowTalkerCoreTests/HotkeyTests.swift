@@ -53,7 +53,7 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         #expect(transitions == [.began(rightOption, at: at(0))])
         #expect(hotkey.phase == .held(rightOption, since: at(0)))
         #expect(installation.handle(rightOption(.up, at: 400)) == .swallow)
-        #expect(transitions == [.began(rightOption, at: at(0)), .ended(rightOption, .hold)])
+        #expect(transitions == [.began(rightOption, at: at(0)), .ended(rightOption, .released(.hold))])
     }
 
     @Test func aLapseIsCountedAndAStartResetsIt() throws {
@@ -70,7 +70,9 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
     }
 
     /// A lapse ends the press that was open, so the handler is not left waiting for
-    /// an end the tap never saw, and the next press begins from rest.
+    /// an end the tap never saw, and the next press begins from rest. The handler is
+    /// told a lapse ended it, not a release: the tap went deaf and the speaker may
+    /// still have been talking into it.
     @Test func aLapseEndsTheOpenPressAtTheHandler() throws {
         let tap = FakeTap()
         let hotkey = Hotkey(chords: [rightOption], tap: tap)
@@ -80,7 +82,7 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         _ = installation.handle(rightOption(.down, at: 0))
         installation.onLapse()
         #expect(hotkey.lapses == 1)
-        #expect(transitions == [.began(rightOption, at: at(0)), .ended(rightOption, .hold)])
+        #expect(transitions == [.began(rightOption, at: at(0)), .ended(rightOption, .lapsed)])
         #expect(hotkey.phase == .idle)
         #expect(installation.handle(rightOption(.down, at: 1000)) == .swallow)
         #expect(transitions.last == .began(rightOption, at: at(1000)))

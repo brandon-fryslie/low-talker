@@ -83,7 +83,15 @@ final class Rig {
     func hold(speaking samples: [Float] = [1, 2, 3]) {
         dictation.press(.began(Self.rightOption, at: now))
         speak(samples)
-        dictation.press(.ended(Self.rightOption, .hold))
+        dictation.press(.ended(Self.rightOption, .released(.hold)))
+    }
+
+    /// The same hold, ended by the tap going deaf rather than by the speaker letting
+    /// go: everything up to here was captured, and what came after it was not.
+    func lapse(speaking samples: [Float] = [1, 2, 3]) {
+        dictation.press(.began(Self.rightOption, at: now))
+        speak(samples)
+        dictation.press(.ended(Self.rightOption, .lapsed))
     }
 
     /// The next session's outcome, in press order.
@@ -155,7 +163,7 @@ extension Result {
         let held = [Float](repeating: 0, count: AudioClip.sampleCount(for: 1))
         rig.speak(held)
         rig.dictation.press(.began(Rig.rightOption, at: wentDown))
-        rig.dictation.press(.ended(Rig.rightOption, .hold))
+        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
         _ = try await rig.session()
         #expect(engine.clips.first?.samples == spoken + held)
     }
@@ -353,6 +361,29 @@ extension Result {
         let stopped = try #require(await rig.report().failure as? RouteStopped)
         #expect(stopped.cause is TypingStopped)
         #expect(stopped.performed.isEmpty)
+    }
+
+    /// [LAW:no-silent-failure] Two presses the speaker made identically, told apart by
+    /// nothing but how listening stopped. The tap goes deaf partway through the first,
+    /// so what it captured runs to the lapse and not to the release: it is reported as
+    /// lapsed and never reaches the engine, because a fragment typed into the user's
+    /// editor arrives unmarked as a fragment and cannot be marked there. The second is
+    /// released and types. The outcomes have nothing in common, which is the whole of
+    /// what the ending buys.
+    @Test func aPressTheTapLapsedOutOfIsReportedInsteadOfTypedAndTheNextPressTypes() async throws {
+        let engine = FakeTranscriber { _ in Transcript(typed: "a") }
+        let rig = try Rig(hearing: engine)
+
+        rig.lapse(speaking: [1, 2, 3])
+        let lapsed = try #require(await rig.report().failure as? PressLapsed)
+        #expect(lapsed.chord == Rig.rightOption)
+        #expect(engine.clips.isEmpty)
+        #expect(rig.keyboard.log.isEmpty)
+
+        rig.hold(speaking: [1, 2, 3])
+        #expect(try await rig.session().transcript.text == "a")
+        #expect(engine.clips.count == 1)
+        #expect(rig.keyboard.log == Self.typed("a"))
     }
 
     /// [LAW:no-silent-failure] A microphone that failed leaves a ring the engine would
