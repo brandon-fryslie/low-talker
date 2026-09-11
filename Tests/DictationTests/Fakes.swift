@@ -26,19 +26,26 @@ final class FakeHardware: AudioHardware {
     /// nothing to record with at the moment a key goes down.
     var failingToLaunch: (any Error)?
 
-    /// The engine capture is listening to now. macOS never delivers another buffer to a
-    /// replaced one, so the newest engine is what feeding the microphone means. There is
-    /// one only while a press is open - the microphone is shut between them - so speaking
-    /// outside a press is a test describing a Mac that does not exist.
+    /// The engine that is open, which a launch sets and its disposal gives back, so it is
+    /// empty exactly when the microphone is shut.
+    private var open: Engine?
+
+    /// The engine capture is listening to now. There is one only while a press is open -
+    /// the microphone is shut between them, and a replaced one never delivers again - so
+    /// speaking outside a press is a test describing a Mac that does not exist.
     var live: Engine {
-        guard let engine = engines.last else { preconditionFailure("nothing is capturing; the microphone is open only during a press") }
+        guard let engine = open else { preconditionFailure("nothing is capturing; the microphone is open only during a press") }
         return engine
     }
 
     func launch(appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) throws -> Disposal {
         if let failingToLaunch { throw failingToLaunch }
-        engines.append(Engine(appending: appending, onFailure: onFailure, onConfigurationChange: onConfigurationChange))
-        return {}
+        let engine = Engine(appending: appending, onFailure: onFailure, onConfigurationChange: onConfigurationChange)
+        engines.append(engine)
+        open = engine
+        // Only while it is still the one open: a disposal arriving after its replacement
+        // launched would shut a microphone that is listening.
+        return { [weak self] in if self?.open === engine { self?.open = nil } }
     }
 
     func watchDefaultInput(_ onChange: @escaping @MainActor () -> Void) throws -> Disposal { {} }
