@@ -1,3 +1,28 @@
+/// The system switching the keyboard tap off for being slow to answer, and it being
+/// switched back on. The events in between were lost.
+///
+/// Reported whether or not a press was open to end, because only one of the two leaves
+/// anything else behind. A lapse during a press also ends it as `.lapsed`, and the press
+/// is reported in its own right; a lapse with no press open is reported here and nowhere
+/// else, and that is the one that swallows the next key-down and takes the beginning of
+/// the next utterance with it.
+///
+/// [LAW:types-are-the-program] The count travels with the lapse rather than being left
+/// on the tap for a reader to ask for afterwards: a count read later is the count as of
+/// the asking, which by the second lapse is not the number that belongs to this one.
+public struct KeyboardTapLapse: Hashable, Sendable, CustomStringConvertible {
+    /// Lapses since `Hotkey.start`, this one counted: the first reports 1.
+    public let count: Int
+
+    public init(count: Int) {
+        self.count = count
+    }
+
+    public var description: String {
+        "the keyboard tap lapsed and was switched back on, losing the events in between; \(count) since listening began"
+    }
+}
+
 /// The hotkey for the life of the app: a tap in front of the session's keyboard,
 /// a detector reading its events, and the presses it finds handed on as they happen.
 ///
@@ -15,9 +40,10 @@ public final class Hotkey {
     private let tap: any KeyboardTap
     private var detector: HotkeyDetector
     private var installed: Disposal?
-    /// Times since `start()` that the system switched the tap off and it was switched
-    /// back on. Events in between were lost, so a lapse ends any press that was open.
-    public private(set) var lapses = 0
+    /// Lapses since `start()`, which each one is reported with. Private because a
+    /// second way to ask is a second answer: this one moves between the lapse and any
+    /// later reading of it. [LAW:one-source-of-truth]
+    private var lapses = 0
 
     public init(chords: Set<KeyChord>, tapThreshold: Duration = defaultTapThreshold, tap: any KeyboardTap = SystemKeyboardTap()) {
         self.tap = tap
@@ -26,14 +52,24 @@ public final class Hotkey {
 
     public var phase: HotkeyDetector.Phase { detector.phase }
 
-    /// Starts watching. Each press begins and ends at `onTransition`, on the main
-    /// actor, from inside the tap's callback.
-    public func start(_ onTransition: @escaping @MainActor (HotkeyDetector.Transition) -> Void) throws {
+    /// Starts watching. Each press begins and ends at `onTransition`, and every lapse
+    /// of the tap arrives at `onLapse`, both on the main actor, from inside the tap's
+    /// callback. The count begins again here: it counts the tap that is up now, not the
+    /// app's whole life.
+    ///
+    /// [LAW:no-silent-failure] `onLapse` has no default. A caller that watches the
+    /// keyboard is a caller that can find out the keyboard went unwatched, and a
+    /// default would let that be nothing, silently, at a call site that reads as
+    /// complete.
+    public func start(
+        _ onTransition: @escaping @MainActor (HotkeyDetector.Transition) -> Void,
+        onLapse: @escaping @MainActor (KeyboardTapLapse) -> Void
+    ) throws {
         stop()
         lapses = 0
         installed = try tap.install(
             handling: { [weak self] event in self?.handle(event, onTransition) ?? .pass },
-            onLapse: { [weak self] in self?.lapse(onTransition) }
+            onLapse: { [weak self] in self?.lapse(onTransition, onLapse) }
         )
     }
 
@@ -53,8 +89,14 @@ public final class Hotkey {
         return verdict.delivery
     }
 
-    private func lapse(_ onTransition: @MainActor (HotkeyDetector.Transition) -> Void) {
+    private func lapse(
+        _ onTransition: @MainActor (HotkeyDetector.Transition) -> Void,
+        _ onLapse: @MainActor (KeyboardTapLapse) -> Void
+    ) {
         lapses += 1
+        // The lapse before what it did to the press, so a reader of either meets the
+        // cause ahead of the consequence.
+        onLapse(KeyboardTapLapse(count: lapses))
         detector.lapse().map(onTransition)
     }
 }

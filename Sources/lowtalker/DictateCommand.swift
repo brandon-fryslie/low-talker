@@ -48,7 +48,7 @@ struct DictateCommand: AsyncParsableCommand {
             }
         )
         let hotkey = Hotkey(chords: chords)
-        try hotkey.start(dictation.press)
+        try hotkey.start(dictation.press) { print("\($0)") }
         print("ready: hold \(Hotkey.defaultChord.spelled) to dictate")
         // The tap runs on the main run loop; this keeps the command on it until the
         // operator's interrupt, which is read rather than let end the process, so a

@@ -160,7 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func listen() async {
         do {
             try capture.start(try await MicrophonePermission().request().grant())
-            try hotkey.start { [unowned self] in dictation.press($0) }
+            try hotkey.start { [unowned self] in dictation.press($0) } onLapse: { [unowned self] in report($0) }
             showHotkeyStatus("hold \(Hotkey.defaultChord.spelled) to dictate")
         } catch {
             // Whatever got as far as starting is put back: a tap that failed after
@@ -223,6 +223,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // dictated. [LAW:no-silent-failure] The type alone still says what broke.
             sessions.error("session failed: \(String(describing: type(of: error)), privacy: .public) — \(String(describing: error), privacy: .private)")
         }
+    }
+
+    /// Every lapse, in the dictation log beside the sessions it damaged, so the cause of
+    /// a missing sentence reads in the order it happened rather than being pieced back
+    /// together from two categories by timestamp.
+    ///
+    /// [LAW:no-silent-failure] This is the app's only voice for a lapse that ended no
+    /// press, which is the lapse that eats the beginning of the next utterance.
+    ///
+    /// Public in full, unlike the session line beneath it: a lapse is a count and a
+    /// fixed sentence, and no part of it is anything the user dictated.
+    private func report(_ lapse: KeyboardTapLapse) {
+        sessions.error("\(lapse.description, privacy: .public)")
     }
 
     // MARK: - the menu
