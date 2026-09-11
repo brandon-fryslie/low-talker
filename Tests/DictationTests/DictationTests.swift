@@ -238,6 +238,58 @@ extension Result {
         #expect(rig.keyboard.log == Self.typed("a") + Self.typed("b"))
     }
 
+    /// The epic's contract, as one run: speech spoken into a press appears in that
+    /// press's clip, whatever the loop is doing at the time. [LAW:behavior-not-structure]
+    /// It asserts the audio each session was given and the text each one typed - not
+    /// which actor ran what, which is how the loop keeps the promise and not the promise.
+    ///
+    /// The run is the one that was reported from live use: a press says a sentence, and
+    /// while that sentence is still being typed the speaker starts the next utterance and
+    /// presses the key again. The insert is held at its first keystroke, where a real one
+    /// waits for the device to answer - the epic measured about 29 ms a key, so these 43
+    /// characters hold it well over a second. Held at a gate rather than for a duration:
+    /// a loop that only kept its words when the machine typed fast enough would be the
+    /// same bug wearing a stopwatch. [LAW:no-ambient-temporal-coupling]
+    ///
+    /// What the second press costs is being heard late. Its key-down is stamped before
+    /// the words that follow it and reaches the loop only after them, with 0.4 s of
+    /// speech in between - more than the 0.3 s pre-roll reaches back over, so a mark
+    /// taken when the handler ran would drop those words and leave nothing that said so.
+    @Test func everyWordSpokenIntoAPressMadeDuringAnInsertIsInThatPressesClip() async throws {
+        let gate = Gate()
+        let sentence = "the quick brown fox jumps over the lazy dog"
+        // Each press is spoken in a sample value of its own, so a clip says which press's
+        // words it is holding and speech that landed in the wrong one cannot pass for the
+        // right one. The silence between them is exactly the pre-roll, which puts the
+        // second clip's first sample where the first press's last one ended: the pad
+        // reaches back over the gap without reaching into the utterance before it.
+        let said = [Float](repeating: 1, count: AudioClip.sampleCount(for: 0.5))
+        let between = [Float](repeating: 0, count: AudioClip.sampleCount(for: AudioSession.defaultPreRoll))
+        let beforeTheHandlerRan = [Float](repeating: 2, count: AudioClip.sampleCount(for: 0.4))
+        let afterIt = [Float](repeating: 3, count: AudioClip.sampleCount(for: 0.4))
+        let engine = FakeTranscriber { clip in Transcript(typed: clip.samples.contains(1) ? sentence : "b") }
+        let rig = try Rig(hearing: engine)
+        rig.keyboard.acknowledgement = { await gate.wait() }
+        let insert = sentence.flatMap(Self.typed)
+
+        rig.hold(speaking: said)
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { gate.waiting == 1 })
+        #expect(rig.keyboard.log == Array(insert.prefix(2)))
+
+        rig.speak(between)
+        let keyWentDown = rig.now
+        rig.speak(beforeTheHandlerRan)
+        rig.dictation.press(.began(Rig.rightOption, at: keyWentDown))
+        rig.speak(afterIt)
+        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+
+        gate.open()
+        #expect(try await rig.session().transcript.text == sentence)
+        #expect(try await rig.session().transcript.text == "b")
+        #expect(engine.clips.map(\.samples) == [said, between + beforeTheHandlerRan + afterIt])
+        #expect(rig.keyboard.log == insert + Self.typed("b"))
+    }
+
     @Test func aPressWithNothingToTypeIntoIsReportedAndTheNextPressTypes() async throws {
         let refused = Mutex(true)
         let rig = try Rig(transcriber: { FakeTranscriber { _ in Transcript(typed: "a") } }) {
