@@ -3,9 +3,10 @@ import AVFoundation
 import Testing
 
 @Suite struct AudioHardwareTests {
-    /// A CoreAudio stamp counts the machine's raw ticks. Stated against
-    /// `hostTime(forSeconds:)`, the inverse of what the parse calls, so the claim is
-    /// the contract rather than the arithmetic.
+    /// A CoreAudio stamp counts the machine's raw ticks, so 1.5 s of them comes back as
+    /// 1.5 s - which catches reading them as nanoseconds only where the timebase makes
+    /// the two differ, since where it is 1:1 they are the same arithmetic. Built with
+    /// `hostTime(forSeconds:)`; 1.5 round-trips exactly, where most literals do not.
     @Test func aStampInHostTicksBecomesTheSecondsItStandsFor() throws {
         let parsed = try HostTime(AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: 1.5)))
         #expect(parsed.uptime == .seconds(1.5))
