@@ -4,7 +4,14 @@ import LowTalkerCore
 
 /// Captures the microphone for a while and writes what the ring holds, so the
 /// capture engine can be heard, and a device switch mid-run tried, before the
-/// hotkey exists.
+/// hotkey exists. The microphone is open for the recording and no longer.
+///
+/// The warm-up is not visible in the wav's length - the run is timed from after the
+/// engine is up, so a one-second run writes a full second whenever it wrote anything.
+/// It shows in the line instead: every run of this command is the first launch in its
+/// process, which costs what `AudioCapture.warmUpAllowance` says a cold one costs, so
+/// the clip says it is cut where the microphone was not open. That is the reading, not
+/// a fault in the run.
 struct RecordCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "record",
@@ -28,15 +35,17 @@ struct RecordCommand: AsyncParsableCommand {
         let capture = AudioCapture()
         try capture.start(grant)
         defer { capture.stop() }
-        let session = capture.beginSession(at: .now)
+        // The microphone opens here and closes at `endSession`, so this command holds the
+        // device for exactly the seconds it records - the same lifetime a hold gets.
+        let session = try capture.beginSession(at: .now)
         try await Task.sleep(for: .seconds(seconds))
-        if case .failed(let error) = capture.state { throw error }
 
-        // A run longer than the ring retains, or one a device switch was tried during, is
-        // exactly what this command is for: the wav is written either way and the line
-        // says what is missing from it. [LAW:no-silent-failure] Refusing is `Dictation`'s
-        // answer because its destination is the user's editor; here the operator is
-        // reading the line and can see the gap for what it is.
+        // A run longer than the ring retains, one a device switch was tried during, or one
+        // whose microphone died partway is exactly what this command is for: the wav is
+        // written either way and the line says what is missing from it.
+        // [LAW:no-silent-failure] Refusing is `Dictation`'s answer because its destination
+        // is the user's editor; here the operator is reading the line and can see the gap
+        // for what it is.
         let captured = capture.endSession(session)
         let clip = switch captured {
         case .whole(let clip), .partial(let clip, _): clip

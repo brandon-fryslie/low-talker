@@ -2,9 +2,10 @@ import KeyboardLayout
 import LowTalkerCore
 import Typing
 
-/// The loop from a press of the hotkey to words in the app: key-down marks where the
-/// utterance begins on the ring and names the app in front, key-up ends it, and what
-/// was said is heard, routed and typed while the next press can already begin.
+/// The loop from a press of the hotkey to words in the app: key-down names the app in
+/// front and opens the microphone, marking where the utterance begins on the ring;
+/// key-up ends it and closes the microphone again; and what was said is heard, routed
+/// and typed while the next press can already begin.
 ///
 /// [LAW:decomposition] Presses in, sessions out. The microphone, the engine, the
 /// router and the keyboard are values it is given, so the whole loop runs in a test
@@ -14,10 +15,14 @@ import Typing
 ///
 /// [LAW:no-ambient-temporal-coupling] Sessions are heard and typed on one serial
 /// queue, so two presses in quick succession type in the order they were spoken and
-/// never interleave, however long the engine takes on either. Key-down and key-up
-/// themselves do almost nothing - a ring position, one read of which app is in
-/// front - because they run inside the tap's callback, where a slow handler is what
-/// makes macOS switch the tap off. Sessions are typed on this same actor, so the typing
+/// never interleave, however long the engine takes on either. Key-down and key-up run
+/// inside the tap's callback, where a slow handler is what makes macOS switch the tap
+/// off, so what they do is counted: one read of which app is in front, two ring
+/// positions, and the microphone opening and shutting. The opening is the expensive
+/// one - what it costs is measured at `AudioCapture.warmUpAllowance` - and it is spent
+/// here rather than behind an await because an engine started off the callback would
+/// start later still, and every millisecond of it is speech the microphone was not open
+/// for. Sessions are typed on this same actor, so the typing
 /// awaits each key's acknowledgement rather than holding the actor for it: a press made
 /// in the middle of an insert is marked on the ring when it is made.
 @MainActor
@@ -100,13 +105,17 @@ public final class Dictation {
         switch transition {
         case .began(_, let moment):
             guard case .up = press else { preconditionFailure("a press began while one was open; the detector pairs every began with an ended") }
-            // The mark comes from the event's own stamp, so a key-down the tap delivered
-            // late marks the ring where the key went down, and the pre-roll is left to
-            // pad a key pressed a little after speech started rather than to cover a
-            // handler that was slow to run.
-            let session = capture.beginSession(at: moment)
             do {
-                press = .down(session, into: try frontmost())
+                // The app in front before the microphone, so a reading that throws cannot
+                // leave a microphone open with no session to close it; it is one read of
+                // the workspace, which the engine's start dwarfs. [LAW:no-ambient-temporal-coupling]
+                let into = try frontmost()
+                // The mark comes from the event's own stamp, so a key-down the tap
+                // delivered late marks the ring where the key went down. It reaches back
+                // over nothing: the microphone opens here too, and an engine that has just
+                // started has nothing behind it, so the pre-roll clamps to zero for every
+                // press made through this loop.
+                press = .down(try capture.beginSession(at: moment), into: into)
             } catch {
                 press = .refused(error)
             }
@@ -126,25 +135,24 @@ public final class Dictation {
             case .refused(let error):
                 heard = .failure(error)
             case .down(let session, let into):
-                // The marks are closed however the press ended, so a session left open
-                // cannot carry its beginning into the next press's clip.
+                // The marks are closed and the microphone with them, however the press
+                // ended, so a session left open cannot carry its beginning into the next
+                // press's clip and cannot leave the device held after the key came up.
                 let audio = capture.endSession(session)
-                // What there was to hear, read once. [LAW:no-silent-failure] A microphone
-                // that stopped mid-hold, a tap that lapsed, and audio the ring could not
-                // hand over whole all leave something this loop must not report as an
-                // utterance. They are asked in that order, most total failure first: a
-                // dead device is never reported as a lapsed tap, and a press the tap
-                // lapsed out of says so rather than describing the clip it left behind.
-                // The focused element's role is a synchronous call into another process,
-                // up to half a second of it, which the tap's callback cannot afford; a
-                // route that wants it reads it off this thread.
-                heard = switch (capture.state, ending, audio) {
-                case (.running, .released(let kind), .whole(let clip)):
+                // What there was to hear, read once. [LAW:no-silent-failure] A tap that
+                // lapsed and audio the capture could not hand over whole each leave
+                // something this loop must not report as an utterance. The lapse is asked
+                // first: a press the tap lapsed out of says so rather than describing the
+                // clip it left behind, which was never the whole utterance anyway. A
+                // microphone that was not there at all was refused at key-down, so it
+                // never reaches here. The focused element's role is a synchronous call
+                // into another process, up to half a second of it, which the tap's
+                // callback cannot afford; a route that wants it reads it off this thread.
+                heard = switch (ending, audio) {
+                case (.lapsed, _): .failure(PressLapsed(chord: chord))
+                case (.released(let kind), .whole(let clip)):
                     .success((clip, Context(chord: chord, press: kind, frontmostApp: into, focusedElementRole: nil)))
-                case (.running, .released, .partial(_, let lost)): .failure(SpeechLost(chord: chord, lost: lost))
-                case (.running, .lapsed, _): .failure(PressLapsed(chord: chord))
-                case (.stopped, _, _): .failure(NoMicrophone.stopped)
-                case (.failed(let error), _, _): .failure(NoMicrophone.failed(error))
+                case (.released, .partial(_, let lost)): .failure(SpeechLost(chord: chord, lost: lost))
                 }
             }
             do {
@@ -211,12 +219,11 @@ public struct PressLapsed: Error, CustomStringConvertible {
     public var description: String { "the keyboard tap lapsed during a press of \(chord); what was said was not typed" }
 }
 
-/// A press whose audio the ring could not hand over whole, reported instead of typed.
+/// A press whose audio the capture could not hand over whole, reported instead of typed.
 ///
-/// Either door leaves the same thing in the user's editor. The ring retains only so
-/// much, so a hold longer than that loses its head to its own tail; and capture restarts
-/// when the input device changes - AirPods connecting mid-sentence - which splices the
-/// audio on either side of the change together with an unknown stretch missing between.
+/// Every door leaves the same thing in the user's editor, which is why they arrive here
+/// as one failure rather than several. Which doors there are is `CapturedAudio.Loss`'s to
+/// say, and `lost` carries the ones this press took. [LAW:one-source-of-truth]
 ///
 /// [LAW:no-silent-failure] Typing it is the one thing this must not do, for the reason
 /// `PressLapsed` gives: what a fragment transcribes to is a sentence, just not the one
@@ -229,19 +236,4 @@ public struct SpeechLost: Error, CustomStringConvertible {
     public let lost: CapturedAudio.Loss
 
     public var description: String { "the audio of a press of \(chord) is \(lost); what was said was not typed" }
-}
-
-/// A press with no microphone behind it.
-public enum NoMicrophone: Error, CustomStringConvertible {
-    /// Capture was never started, or has been stopped.
-    case stopped
-    /// Capture stopped on its own and has not recovered.
-    case failed(any Error)
-
-    public var description: String {
-        switch self {
-        case .stopped: "the microphone is not being captured; nothing was heard"
-        case .failed(let error): "microphone capture failed: \(error); nothing was heard"
-        }
-    }
 }
