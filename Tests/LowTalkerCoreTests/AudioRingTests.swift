@@ -40,6 +40,20 @@ import Testing
         #expect(ring.clip(in: 3..<3).samples.isEmpty)
     }
 
+    /// What the clamp cost, which the clip it returns cannot show. Samples the ring held
+    /// and has since overwritten count; positions no sample ever took do not, however far
+    /// the range reaches past them.
+    @Test func scrolledOffIsWhatWasCapturedAndNoLongerHeld() {
+        var ring = AudioRing(capacity: 4)
+        ring.append([1, 2])
+        #expect(ring.scrolledOff(from: -3..<2) == 0)
+        ring.append([3, 4, 5, 6])
+        #expect(ring.scrolledOff(from: 0..<6) == 2)
+        #expect(ring.scrolledOff(from: -3..<6) == 2)
+        #expect(ring.scrolledOff(from: 2..<6) == 0)
+        #expect(ring.scrolledOff(from: 10..<12) == 0)
+    }
+
     @Test func capacityFollowsThePipelineRate() {
         #expect(AudioRing(retaining: 1).capacity == Int(AudioClip.sampleRate))
         #expect(AudioRing(retaining: 60).retained.isEmpty)

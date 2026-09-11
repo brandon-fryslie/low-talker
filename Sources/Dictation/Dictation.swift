@@ -27,8 +27,9 @@ public final class Dictation {
     /// that performed nothing, not a failure.
     ///
     /// [LAW:types-are-the-program] A press the tap lapsed out of never reaches one of
-    /// these; it is reported as `PressLapsed`. That is a fact about how the press ended,
-    /// not a promise that the ring held every word spoken into it.
+    /// these, and neither does one whose audio the ring could not hand over whole; those
+    /// are reported as `PressLapsed` and `SpeechLost`. What is left is the press this
+    /// type says it is: one the speaker ended, heard from every sample it covered.
     public struct Session: Sendable, CustomStringConvertible {
         public let context: Context
         public let transcript: Transcript
@@ -127,20 +128,23 @@ public final class Dictation {
             case .down(let session, let into):
                 // The marks are closed however the press ended, so a session left open
                 // cannot carry its beginning into the next press's clip.
-                let clip = capture.endSession(session)
-                // What there was to hear, read once. [LAW:no-silent-failure] Neither a
-                // microphone that stopped mid-hold nor a tap that lapsed leaves audio
-                // this loop may report as an utterance; the microphone is asked first,
-                // being the more total failure of the two, so a dead device is never
-                // reported as a lapsed tap. The focused element's role is a synchronous
-                // call into another process, up to half a second of it, which the tap's
-                // callback cannot afford; a route that wants it reads it off this thread.
-                heard = switch (capture.state, ending) {
-                case (.running, .released(let kind)):
+                let audio = capture.endSession(session)
+                // What there was to hear, read once. [LAW:no-silent-failure] A microphone
+                // that stopped mid-hold, a tap that lapsed, and audio the ring could not
+                // hand over whole all leave something this loop must not report as an
+                // utterance. They are asked in that order, most total failure first: a
+                // dead device is never reported as a lapsed tap, and a press the tap
+                // lapsed out of says so rather than describing the clip it left behind.
+                // The focused element's role is a synchronous call into another process,
+                // up to half a second of it, which the tap's callback cannot afford; a
+                // route that wants it reads it off this thread.
+                heard = switch (capture.state, ending, audio) {
+                case (.running, .released(let kind), .whole(let clip)):
                     .success((clip, Context(chord: chord, press: kind, frontmostApp: into, focusedElementRole: nil)))
-                case (.running, .lapsed): .failure(PressLapsed(chord: chord))
-                case (.stopped, _): .failure(NoMicrophone.stopped)
-                case (.failed(let error), _): .failure(NoMicrophone.failed(error))
+                case (.running, .released, .partial(_, let lost)): .failure(SpeechLost(chord: chord, lost: lost))
+                case (.running, .lapsed, _): .failure(PressLapsed(chord: chord))
+                case (.stopped, _, _): .failure(NoMicrophone.stopped)
+                case (.failed(let error), _, _): .failure(NoMicrophone.failed(error))
                 }
             }
             do {
@@ -205,6 +209,26 @@ public struct PressLapsed: Error, CustomStringConvertible {
     public let chord: KeyChord
 
     public var description: String { "the keyboard tap lapsed during a press of \(chord); what was said was not typed" }
+}
+
+/// A press whose audio the ring could not hand over whole, reported instead of typed.
+///
+/// Either door leaves the same thing in the user's editor. The ring retains only so
+/// much, so a hold longer than that loses its head to its own tail; and capture restarts
+/// when the input device changes - AirPods connecting mid-sentence - which splices the
+/// audio on either side of the change together with an unknown stretch missing between.
+///
+/// [LAW:no-silent-failure] Typing it is the one thing this must not do, for the reason
+/// `PressLapsed` gives: what a fragment transcribes to is a sentence, just not the one
+/// that was said, and it arrives in the user's editor unmarked as a fragment where
+/// nothing here can mark it. A press that says what it lost is something the speaker can
+/// act on by saying it again.
+public struct SpeechLost: Error, CustomStringConvertible {
+    /// The chord that was down while the audio went missing.
+    public let chord: KeyChord
+    public let lost: CapturedAudio.Loss
+
+    public var description: String { "the audio of a press of \(chord) is \(lost); what was said was not typed" }
 }
 
 /// A press with no microphone behind it.

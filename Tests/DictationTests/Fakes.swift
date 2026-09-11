@@ -11,17 +11,26 @@ final class FakeHardware: AudioHardware {
     final class Engine {
         let appending: @Sendable ([Float], HostTime) -> Void
         let onFailure: @MainActor (any Error) -> Void
+        let onConfigurationChange: @MainActor () -> Void
 
-        init(appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void) {
+        init(appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) {
             self.appending = appending
             self.onFailure = onFailure
+            self.onConfigurationChange = onConfigurationChange
         }
     }
 
     private(set) var engines: [Engine] = []
 
+    /// The engine capture is listening to now. macOS never delivers another buffer to a
+    /// replaced one, so the newest engine is what feeding the microphone means.
+    var live: Engine {
+        guard let engine = engines.last else { preconditionFailure("no engine has launched yet") }
+        return engine
+    }
+
     func launch(appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) throws -> Disposal {
-        engines.append(Engine(appending: appending, onFailure: onFailure))
+        engines.append(Engine(appending: appending, onFailure: onFailure, onConfigurationChange: onConfigurationChange))
         return {}
     }
 

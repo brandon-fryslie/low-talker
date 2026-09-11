@@ -10,7 +10,9 @@ import Synchronization
 /// that engine never delivers another buffer (tried with stop, reset, prepare, and a
 /// delay); only a fresh engine on the new device does. So a device change launches a
 /// new engine by the same routine as `start()`, and the ring, which lives here rather
-/// than in any engine, carries across.
+/// than in any engine, carries across. What it carries across is spliced: no audio is
+/// captured between the two engines, so the position the new one resumes at is kept and
+/// a session that spans it is told its clip is not whole.
 ///
 /// When the only input device is unplugged, the replacement cannot launch (there is
 /// nothing to convert from) and capture is failed. A failed capture has no engine, so
@@ -62,6 +64,12 @@ public final class AudioCapture {
     private struct Stream: Sendable {
         var ring: AudioRing
         var timeline: AudioTimeline
+        /// The first position the engine now feeding the ring will write to. Everything
+        /// before it came from an engine that has since stopped, with a stretch of
+        /// speech missing in between: nothing is captured while no engine is running,
+        /// and positions advance only on capture, so the audio on either side of the
+        /// break is spliced together with no seam in the samples to find it by.
+        var continuousSince = 0
     }
 
     /// The stream behind a lock, shared between the tap's queue and the main actor.
@@ -74,7 +82,10 @@ public final class AudioCapture {
     private let shared: Shared
     private var phase: Phase = .stopped
     private var generation = 0
-    /// Input device changes survived without a gap since `start()`.
+    /// Input device changes capture stayed running across since `start()`: the engine was
+    /// replaced without ever failing. Not a claim that no audio was lost to them - the
+    /// audio on either side of each one is spliced, which is what a session's
+    /// `CapturedAudio` says and this count does not.
     public private(set) var deviceChanges = 0
     public private(set) var outages = Outages()
 
@@ -99,8 +110,6 @@ public final class AudioCapture {
         }
     }
 
-    public func clip(in range: Range<Int>) -> AudioClip { shared.stream.withLock { $0.ring.clip(in: range) } }
-
     /// Marks where a session begins: the position the microphone had reached when
     /// `moment` passed, with the pre-roll it will reach back over. Costs one read; the
     /// microphone keeps running.
@@ -117,10 +126,29 @@ public final class AudioCapture {
     }
 
     /// Marks where `session` ends and yields its audio: the pre-roll, then everything
-    /// captured since it began. The end mark and the slice are taken under one lock,
-    /// so a buffer arriving in between cannot separate them.
-    public func endSession(_ session: AudioSession) -> AudioClip {
-        shared.stream.withLock { $0.ring.clip(in: session.range(endingAt: $0.ring.end)) }
+    /// captured since it began, and whether that is all of it. The end mark, the slice
+    /// and what the slice is missing are taken under one lock, so a buffer arriving in
+    /// between cannot separate them.
+    ///
+    /// [LAW:parse-dont-validate] This is the border a press's audio crosses, and it is
+    /// the last place either loss can be seen: the ring clamps a range it cannot fill and
+    /// hands back a shorter clip, and a break between two engines leaves no mark in the
+    /// samples at all. So what crosses is a `CapturedAudio`, which cannot be read as
+    /// whole unless it is.
+    public func endSession(_ session: AudioSession) -> CapturedAudio {
+        shared.stream.withLock { stream in
+            let range = session.range(endingAt: stream.ring.end)
+            // Where the session's own audio starts among the positions that exist: the
+            // pre-roll may reach back before the first sample ever captured, and audio
+            // that never existed was not lost.
+            let began = range.clamped(to: 0..<stream.ring.end).lowerBound
+            let clip = stream.ring.clip(in: range)
+            let lost = CapturedAudio.Loss(
+                scrolledOff: stream.ring.scrolledOff(from: range),
+                interrupted: began < stream.continuousSince
+            )
+            return lost.map { .partial(clip, lost: $0) } ?? .whole(clip)
+        }
     }
 
     /// Starts listening. The grant is the proof the user allowed it: without one,
@@ -165,6 +193,13 @@ public final class AudioCapture {
         let shared = shared
         generation += 1
         let generation = generation
+        // Everything the engine about to launch captures lands from here on, and
+        // everything already in the ring came from one that stopped. Marked before the
+        // launch rather than after it: the new engine delivers on its own thread, and a
+        // buffer that landed before the mark was taken would move the mark past audio
+        // the break had already cost, so a session begun after the break would be told
+        // it spanned one. [LAW:no-ambient-temporal-coupling]
+        shared.stream.withLock { $0.continuousSince = $0.ring.end }
         let dispose = try hardware.launch(
             appending: { samples, time in
                 shared.stream.withLock {
