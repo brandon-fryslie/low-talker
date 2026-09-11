@@ -318,6 +318,27 @@ private struct Authorized: MicrophoneAuthority {
         #expect(try capture.endSession(session) == .partial(AudioClip(samples: [1, 2]), lost: loss(interrupted: true)))
     }
 
+    /// The same splice with the reconnect actually taking time. Positions advance only on
+    /// capture, so the two engines' samples sit adjacent while the clock between them ran
+    /// for a third of a second, and that gap is exactly what a head measured off the newest
+    /// buffer would charge to this session's warm-up. The head was captured on time: what
+    /// this press lost is its middle, and saying it was also cut where the microphone was
+    /// not open would be a second loss that never happened.
+    ///
+    /// The splice tests either side of this one stamp the replacement at `after(1)`, which
+    /// simulates a reconnect that took no time at all - the one quantity that makes the
+    /// error visible. This is the unit-level guard on it; `DictationTests` holds the same
+    /// press end to end.
+    @Test func aSessionSplicedAcrossARealOutageIsNotAlsoUnopened() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        let session = try opened(capture)
+        hardware.engines[0].appending([1], origin)
+        hardware.engines[0].onConfigurationChange()
+        hardware.engines[1].appending([2], after(1 + AudioClip.sampleCount(for: 0.3)))
+        #expect(try capture.endSession(session) == .partial(AudioClip(samples: [1, 2]), lost: loss(interrupted: true)))
+    }
+
     /// The press after the one the device changed under hears one engine only: the break
     /// is behind it, so its clip is whole.
     @Test func aSessionBegunAfterAConfigurationChangeIsWhole() throws {
