@@ -153,10 +153,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { await listen() }
     }
 
-    /// From the microphone up: the grant, then capture on it, then the tap in front of
-    /// the keyboard, last, so no press can arrive before there is audio behind it.
-    /// [LAW:no-ambient-temporal-coupling] A fresh install sees the system prompt for
-    /// the microphone here; macOS remembers the answer, so later launches ask nothing.
+    /// From the microphone up: the grant, then capture holding it, then the tap in front
+    /// of the keyboard, last, so no press can arrive before there is a capture to open a
+    /// microphone for it. [LAW:no-ambient-temporal-coupling] A fresh install sees the
+    /// system prompt for the microphone here; macOS remembers the answer, so later
+    /// launches ask nothing.
+    ///
+    /// Nothing is listening when this returns. `capture.start` takes the grant and
+    /// watches the input device; the microphone itself opens on a press and shuts on the
+    /// release, which is what keeps the menu-bar indicator a record of use rather than of
+    /// how long the app has been running.
     private func listen() async {
         do {
             try capture.start(try await MicrophonePermission().request().grant())
@@ -164,9 +170,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             showHotkeyStatus("hold \(Hotkey.defaultChord.spelled) to dictate")
         } catch {
             // Whatever got as far as starting is put back: a tap that failed after
-            // capture began would otherwise leave the microphone open with nothing
-            // reading it, under a menu saying dictation is off. Stopping is idempotent,
-            // so both failures leave by this one path. [LAW:dataflow-not-control-flow]
+            // capture began would otherwise leave capture holding the grant and watching
+            // the device with nothing able to press, under a menu saying dictation is off.
+            // Stopping is idempotent, so both failures leave by this one path.
+            // [LAW:dataflow-not-control-flow]
             capture.stop()
             // [LAW:no-silent-failure] An app that cannot listen must say so on the
             // one surface it has, in the words the user can act on.

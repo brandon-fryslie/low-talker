@@ -21,15 +21,22 @@ final class FakeHardware: AudioHardware {
     }
 
     private(set) var engines: [Engine] = []
+    /// What a launch does, once set: throw, as a device that cannot feed the pipeline
+    /// does. The microphone opens per press now, so this is the shape of a Mac with
+    /// nothing to record with at the moment a key goes down.
+    var failingToLaunch: (any Error)?
 
     /// The engine capture is listening to now. macOS never delivers another buffer to a
-    /// replaced one, so the newest engine is what feeding the microphone means.
+    /// replaced one, so the newest engine is what feeding the microphone means. There is
+    /// one only while a press is open - the microphone is shut between them - so speaking
+    /// outside a press is a test describing a Mac that does not exist.
     var live: Engine {
-        guard let engine = engines.last else { preconditionFailure("no engine has launched yet") }
+        guard let engine = engines.last else { preconditionFailure("nothing is capturing; the microphone is open only during a press") }
         return engine
     }
 
     func launch(appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) throws -> Disposal {
+        if let failingToLaunch { throw failingToLaunch }
         engines.append(Engine(appending: appending, onFailure: onFailure, onConfigurationChange: onConfigurationChange))
         return {}
     }
