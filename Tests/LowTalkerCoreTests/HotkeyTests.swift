@@ -47,7 +47,7 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         let tap = FakeTap()
         let hotkey = Hotkey(chords: [rightOption], tap: tap)
         var transitions: [HotkeyDetector.Transition] = []
-        try hotkey.start { transitions.append($0) }
+        try hotkey.start({ transitions.append($0) }, onLapse: { _ in })
         let installation = try #require(tap.installations.first)
         #expect(installation.handle(rightOption(.down, at: 0)) == .swallow)
         #expect(transitions == [.began(rightOption, at: at(0))])
@@ -56,15 +56,33 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         #expect(transitions == [.began(rightOption, at: at(0)), .ended(rightOption, .released(.hold))])
     }
 
-    @Test func aLapseIsCountedAndAStartResetsIt() throws {
+    /// Every lapse is told, as it happens, carrying how many there have been. A lapse
+    /// with no press open tells nothing else — no press ended, so no session is reported
+    /// — and that is the lapse that swallows the next key-down, so it is the one that
+    /// must not pass in silence.
+    @Test func everyLapseIsReportedWithItsRunningCount() throws {
         let tap = FakeTap()
         let hotkey = Hotkey(chords: [rightOption], tap: tap)
-        try hotkey.start { _ in }
+        var transitions: [HotkeyDetector.Transition] = []
+        var lapses: [KeyboardTapLapse] = []
+        try hotkey.start({ transitions.append($0) }, onLapse: { lapses.append($0) })
         tap.installations[0].onLapse()
         tap.installations[0].onLapse()
-        #expect(hotkey.lapses == 2)
-        try hotkey.start { _ in }
-        #expect(hotkey.lapses == 0)
+        #expect(lapses == [KeyboardTapLapse(count: 1), KeyboardTapLapse(count: 2)])
+        #expect(transitions.isEmpty)
+    }
+
+    /// The count belongs to the tap that is up now: a start puts a fresh one in front of
+    /// the keyboard, and what the last one lost is not charged to it.
+    @Test func aStartCountsFromTheTapItInstalls() throws {
+        let tap = FakeTap()
+        let hotkey = Hotkey(chords: [rightOption], tap: tap)
+        var lapses: [KeyboardTapLapse] = []
+        try hotkey.start({ _ in }, onLapse: { lapses.append($0) })
+        tap.installations[0].onLapse()
+        try hotkey.start({ _ in }, onLapse: { lapses.append($0) })
+        tap.installations[1].onLapse()
+        #expect(lapses == [KeyboardTapLapse(count: 1), KeyboardTapLapse(count: 1)])
         #expect(tap.installations[0].disposed)
         #expect(tap.installations.count == 2)
     }
@@ -77,11 +95,13 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         let tap = FakeTap()
         let hotkey = Hotkey(chords: [rightOption], tap: tap)
         var transitions: [HotkeyDetector.Transition] = []
-        try hotkey.start { transitions.append($0) }
+        var lapses: [KeyboardTapLapse] = []
+        try hotkey.start({ transitions.append($0) }, onLapse: { lapses.append($0) })
         let installation = try #require(tap.installations.first)
         _ = installation.handle(rightOption(.down, at: 0))
         installation.onLapse()
-        #expect(hotkey.lapses == 1)
+        // Both told: the lapse in its own right, and the press it ended.
+        #expect(lapses == [KeyboardTapLapse(count: 1)])
         #expect(transitions == [.began(rightOption, at: at(0)), .ended(rightOption, .lapsed)])
         #expect(hotkey.phase == .idle)
         #expect(installation.handle(rightOption(.down, at: 1000)) == .swallow)
@@ -92,7 +112,7 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
     @Test func stopDisposesTheTapAndReturnsToIdle() throws {
         let tap = FakeTap()
         let hotkey = Hotkey(chords: [rightOption], tap: tap)
-        try hotkey.start { _ in }
+        try hotkey.start({ _ in }, onLapse: { _ in })
         _ = tap.installations[0].handle(rightOption(.down, at: 0))
         hotkey.stop()
         #expect(tap.installations[0].disposed)
@@ -101,7 +121,7 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
 
     @Test func aRefusedTapThrowsFromStart() {
         let hotkey = Hotkey(chords: [rightOption], tap: FakeTap(refusing: Refused()))
-        #expect(throws: Refused.self) { try hotkey.start { _ in } }
+        #expect(throws: Refused.self) { try hotkey.start({ _ in }, onLapse: { _ in }) }
         #expect(hotkey.phase == .idle)
     }
 
@@ -109,7 +129,7 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         let tap = FakeTap()
         do {
             let hotkey = Hotkey(chords: [rightOption], tap: tap)
-            try hotkey.start { _ in }
+            try hotkey.start({ _ in }, onLapse: { _ in })
         }
         #expect(tap.installations[0].disposed)
     }

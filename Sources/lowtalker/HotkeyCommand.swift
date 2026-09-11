@@ -26,12 +26,12 @@ struct HotkeyCommand: AsyncParsableCommand {
         setvbuf(stdout, nil, _IOLBF, 0)
         let hotkey = Hotkey(chords: [Hotkey.defaultChord], tapThreshold: .milliseconds(tapThreshold))
         let (transitions, continuation) = AsyncStream.makeStream(of: HotkeyDetector.Transition.self)
-        try hotkey.start { continuation.yield($0) }
+        try hotkey.start { continuation.yield($0) } onLapse: { print("\($0)") }
         print("watching Right Option")
         for await transition in transitions {
             switch transition {
             case .began: print("began")
-            case .ended(_, let ending): print("ended (\(ending)), lapses \(hotkey.lapses)")
+            case .ended(_, let ending): print("ended (\(ending))")
             }
         }
     }
