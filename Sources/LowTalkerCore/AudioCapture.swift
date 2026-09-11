@@ -304,13 +304,20 @@ public final class AudioCapture {
         return true
     }
 
-    /// Retires an engine: the tap comes down, and the stream stops accepting what it
-    /// delivers. Every path that lets an engine go comes through here, because one that
+    /// Retires an engine: the stream stops accepting what it delivers, and then the tap
+    /// comes down. Every path that lets an engine go comes through here, because one that
     /// retired an engine without telling the stream would leave a disposed tap a buffer's
     /// reach into the audio the next press begins from. [LAW:single-enforcer]
+    ///
+    /// [LAW:no-ambient-temporal-coupling] The order is the whole of it. Tearing the tap
+    /// down first leaves a window in which a buffer already on its way can take the lock
+    /// before the clearing does, read the generation it was formed for, and be admitted -
+    /// so the guard would hold only as often as it won a race. Clearing first closes it
+    /// from both sides: nothing sets `accepting` again until the next `launch()`, so a
+    /// straggler is refused whether it arrives before `dispose()` returns or after.
     private func dispose(_ live: Live) {
-        live.dispose()
         shared.stream.withLock { $0.accepting = nil }
+        live.dispose()
     }
 
     /// Closes the microphone, whatever the open session's engine was doing.
