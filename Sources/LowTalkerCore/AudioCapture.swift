@@ -43,12 +43,11 @@ import Synchronization
 /// between the two engines, so the position the new one resumes at is kept and a session
 /// that spans it is told its clip is not whole.
 ///
-/// When the only input device is unplugged mid-session, the replacement cannot launch
-/// (there is nothing to convert from) and capture is failed. A failed capture has no
-/// engine, so the plug-back-in reaches it another way: the system default input device
-/// is watched for the whole started period, and a change while failed launches again.
-/// A change while no session is open launches nothing at all - that is the whole point
-/// of the watch outliving the engine without implying one.
+/// When the only input device is unplugged, the replacement cannot launch (there is
+/// nothing to convert from) and capture is failed. A failed capture has no engine, so
+/// the plug-back-in reaches it another way: the system default input device is watched
+/// for the whole started period, and a change launches again wherever the engine is
+/// failed - mid-press, or held at rest and dead. A shut one it leaves shut.
 @MainActor
 public final class AudioCapture {
     public enum State {
@@ -63,8 +62,8 @@ public final class AudioCapture {
         case failed(any Error)
     }
 
-    /// The gaps in capture since `start()`, each ended by a device appearing: how
-    /// many, and how long without audio all together.
+    /// The gaps in capture since `start()`: how many, and how long without audio all
+    /// together.
     public struct Outages: Sendable {
         public var count = 0
         public var total: Duration = .zero
