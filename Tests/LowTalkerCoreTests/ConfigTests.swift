@@ -10,6 +10,9 @@ import Testing
     static let full = """
         model = "base.en"
 
+        [microphone]
+        at_rest = "open"
+
         [[modes]]
         name = "dictation"
         chord = { modifiers = ["rightOption"] }
@@ -31,6 +34,7 @@ import Testing
     @Test func aFullFileParses() throws {
         let config = try Config(toml: Self.full)
         #expect(config.model == "base.en")
+        #expect(config.microphone == .open)
         #expect(config.modes.map(\.name) == ["dictation", "slack", "notes"])
 
         let slack = try #require(config.modes.first { $0.name == "slack" })
@@ -55,6 +59,45 @@ import Testing
         let config = try Config(toml: #"model = "base.en""#)
         #expect(config.model == "base.en")
         #expect(config.modes == Config.default.modes)
+    }
+
+    /// The epic's rule, pinned where the only writer of it is: a microphone held while
+    /// nobody is dictating is one the user asked for in writing. A file that says nothing
+    /// about it - which is every file anyone has written so far, and the absence of a file
+    /// too - leaves the device closed.
+    @Test func aFileThatAsksForNothingLeavesTheMicrophoneShutAtRest() throws {
+        #expect(Config.default.microphone == .shut)
+        #expect(try Config(toml: "").microphone == .shut)
+        #expect(try Config(toml: #"model = "base.en""#).microphone == .shut)
+    }
+
+    /// Asking for it is one line, and it is the line the epic wants a user to have to
+    /// write on purpose.
+    @Test func aFileCanAskForTheMicrophoneToBeHeld() throws {
+        #expect(try Config(toml: """
+            [microphone]
+            at_rest = "open"
+            """).microphone == .open)
+    }
+
+    /// [LAW:no-silent-failure] A resting state nobody can spell is the one place a typo
+    /// would decide whether the device is open, so it is refused in the word the file
+    /// wrote rather than falling back to either reading.
+    @Test func aWordThatIsNotARestingStateIsRefused() {
+        #expect(throws: ConfigError.wrongShape(#"microphone.at_rest: "sometimes" is not something the microphone does at rest"#)) {
+            try Config(toml: """
+                [microphone]
+                at_rest = "sometimes"
+                """)
+        }
+    }
+
+    /// A heading with nothing under it is a file whose author meant something by writing
+    /// it, and the one thing it cannot be read as is the default they were already getting.
+    @Test func aMicrophoneTableThatSaysNothingIsRefused() {
+        #expect(throws: ConfigError.wrongShape("microphone.at_rest is missing")) {
+            try Config(toml: "[microphone]")
+        }
     }
 
     /// [LAW:one-source-of-truth] The defaults are the values their own owners name, so

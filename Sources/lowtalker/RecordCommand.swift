@@ -33,7 +33,10 @@ struct RecordCommand: AsyncParsableCommand {
         // Prompts on a Mac that has never been asked; the grant is what `start` requires.
         let grant = try await MicrophonePermission().request().grant()
         let capture = AudioCapture()
-        try capture.start(grant)
+        // Shut at rest whatever the config says: this command exists to hold the device for
+        // a named number of seconds and give it back, and a resting mode that held it open
+        // would make the recording it takes a different length from the one it reports.
+        try capture.start(grant, atRest: .shut)
         defer { capture.stop() }
         // The microphone opens here and closes at `endSession`, so this command holds the
         // device for exactly the seconds it records - the same lifetime a hold gets.

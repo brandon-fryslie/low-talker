@@ -1,7 +1,8 @@
 import Foundation
 
-/// The settings the app runs on: the model the engine loads, and the modes a chord can
-/// start. Nothing here is read from disk; `Config(toml:)` is where a file becomes one.
+/// The settings the app runs on: the model the engine loads, what the microphone does
+/// between presses, and the modes a chord can start. Nothing here is read from disk;
+/// `Config(toml:)` is where a file becomes one.
 ///
 /// [LAW:parse-dont-validate] A Config in hand is one that holds together: it has at
 /// least one mode, no two modes answer to the same chord, and no two share a name or
@@ -10,11 +11,15 @@ import Foundation
 /// `mode(for:)` can speak of *the* mode a chord selects.
 public struct Config: Hashable, Sendable {
     public let model: ModelName
+    /// What the microphone does while nobody is dictating. The config file is its only
+    /// writer, so a microphone held at rest is one the user asked for in writing.
+    /// [LAW:single-enforcer]
+    public let microphone: MicrophoneAtRest
     /// In the order the file declared them, because that is the order `lowtalker
     /// config check` and any listing should speak of them in.
     public let modes: [Mode]
 
-    public init(model: ModelName, modes: [Mode]) throws(ConfigError) {
+    public init(model: ModelName, microphone: MicrophoneAtRest, modes: [Mode]) throws(ConfigError) {
         guard !modes.isEmpty else { throw ConfigError.noModes }
         var names: Set<String> = []
         var chords: Set<KeyChord> = []
@@ -24,17 +29,20 @@ public struct Config: Hashable, Sendable {
             guard chords.insert(mode.chord).inserted else { throw ConfigError.twoModesOnOneChord(mode.name) }
         }
         self.model = model
+        self.microphone = microphone
         self.modes = modes
     }
 
     /// What the app runs on when no file says otherwise: dictation, on the default
-    /// chord, with the default model.
+    /// chord, with the default model, and the microphone shut between presses.
     ///
-    /// [LAW:one-source-of-truth] Every part of it is the value its own owner already
-    /// names, so the no-file behaviour cannot drift from the behaviour those owners
-    /// describe. The force-try says the author vouches for this one: a default that
-    /// does not hold together is a bug in this file, and it traps where it is written.
-    public static let `default` = try! Config(model: .default, modes: [.dictation])
+    /// [LAW:one-source-of-truth] The model and the modes are the values their own owners
+    /// already name, so the no-file behaviour cannot drift from the behaviour those owners
+    /// describe. `shut` has no owner elsewhere to name, and is spelled here because here
+    /// is what it means: with no file to ask for anything, the microphone is closed. The
+    /// force-try says the author vouches for this one: a default that does not hold
+    /// together is a bug in this file, and it traps where it is written.
+    public static let `default` = try! Config(model: .default, microphone: .shut, modes: [.dictation])
 
     /// The mode the chord that started listening selects, or none when no mode claims
     /// it. `chords` is what the tap is told to listen for, so in a running app a

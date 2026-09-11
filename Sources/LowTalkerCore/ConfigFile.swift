@@ -37,6 +37,7 @@ public extension Config {
         // spelled a second time here to drift from it.
         try self.init(
             model: file.model ?? Config.default.model,
+            microphone: file.microphone?.atRest ?? Config.default.microphone,
             modes: file.modes?.map { $0.mode() } ?? Config.default.modes
         )
     }
@@ -104,7 +105,36 @@ public extension Config {
 /// mapping between them is what parsing this file means.
 private struct ConfigFile: Decodable {
     let model: ModelName?
+    let microphone: MicrophoneEntry?
     let modes: [ModeEntry]?
+}
+
+/// `[microphone] at_rest = "shut"`. A table rather than a bare key, so the one setting
+/// that decides when the device is open is read under a heading named for the device.
+private struct MicrophoneEntry: Decodable {
+    private enum CodingKeys: String, CodingKey { case atRest = "at_rest" }
+
+    let atRest: MicrophoneAtRest
+
+    /// Hand-written for the sentence a synthesised decoder would not write: its refusal
+    /// names a Swift type the file's author has never heard of, where this one names the
+    /// word they wrote. [LAW:no-silent-failure]
+    ///
+    /// [LAW:single-enforcer] Which words name a resting state is `MicrophoneAtRest`'s to
+    /// say, through its own raw value, so a case added there is spellable in the file
+    /// without this one being taught about it.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let name = try container.decode(String.self, forKey: .atRest)
+        guard let atRest = MicrophoneAtRest(rawValue: name) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .atRest,
+                in: container,
+                debugDescription: "\"\(name)\" is not something the microphone does at rest"
+            )
+        }
+        self.atRest = atRest
+    }
 }
 
 /// One `[[modes]]` table.

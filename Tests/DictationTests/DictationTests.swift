@@ -48,10 +48,13 @@ final class Rig {
         transcriber: @escaping @Sendable @MainActor () async throws -> any Transcriber,
         router: Router = Router(routes: [.dictation]),
         retaining: TimeInterval = AudioCapture.defaultRetention,
+        atRest: MicrophoneAtRest = .shut,
         frontmost: @escaping @Sendable @MainActor () throws -> BundleID = { textEdit }
     ) throws {
         capture = AudioCapture(retaining: retaining, hardware: hardware, startingAt: Self.origin)
-        try capture.start(try MicrophonePermission(authority: Authorized()).current.grant())
+        // Shut between presses unless a test says otherwise, which is the loop the app
+        // runs when no config file asks for the microphone to be held.
+        try capture.start(try MicrophonePermission(authority: Authorized()).current.grant(), atRest: atRest)
         let (stream, feed) = AsyncStream.makeStream(of: Result<Dictation.Session, any Error>.self)
         reports = stream
         let keyboard = keyboard

@@ -162,10 +162,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Nothing is listening when this returns. `capture.start` takes the grant and
     /// watches the input device; the microphone itself opens on a press and shuts on the
     /// release, which is what keeps the menu-bar indicator a record of use rather than of
-    /// how long the app has been running.
+    /// how long the app has been running - unless the config asks for it to be held open,
+    /// which is the one thing that can make this app hold the device at rest.
+    ///
+    /// A config that cannot be read stops the app listening rather than being answered
+    /// with the defaults, which is `ConfigError`'s own rule: "there is no config" and
+    /// "there is a config I could not read" are different facts, and running the second
+    /// one as the first would hold or release the microphone on settings its owner never
+    /// chose. The menu says which file and what is wrong with it.
+    /// [LAW:no-silent-failure]
     private func listen() async {
         do {
-            try capture.start(try await MicrophonePermission().request().grant())
+            let config = try Config.load().config
+            try capture.start(try await MicrophonePermission().request().grant(), atRest: config.microphone)
             try hotkey.start { [unowned self] in dictation.press($0) } onLapse: { [unowned self] in report($0) }
             showHotkeyStatus("hold \(Hotkey.defaultChord.spelled) to dictate")
         } catch {
@@ -273,8 +282,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             log.notice("onboarding: \(requirement.name, privacy: .public): \(requirement.reads, privacy: .public)")
         }
 
+        // What the user's microphone is doing between presses, on the surface the epic
+        // exists for: the menu-bar indicator says the device is open and only this says
+        // why, so a lit microphone on an idle Mac is either explained here or is a bug.
+        // [LAW:no-silent-failure]
+        let microphone = capture.atRest.map(String.init(describing:)) ?? "not being captured"
+        log.notice("microphone at rest: \(microphone, privacy: .public)")
+
         menu.removeAllItems()
         menu.addItem(readout("Whisper model: \(engineStatus)"))
+        menu.addItem(readout("Microphone: \(microphone)"))
         menu.addItem(readout("Hotkey: \(hotkeyStatus)"))
         // Every requirement, met or not, and its step under it as the lines it was
         // written in - one item per line, so nothing here wraps text the requirement

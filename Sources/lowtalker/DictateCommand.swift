@@ -27,7 +27,12 @@ struct DictateCommand: AsyncParsableCommand {
         let reporter = PhaseReporter()
         let transcriber = try await WhisperKitTranscriber.load(options.model, from: options.store(), phase: reporter.report)
         let capture = AudioCapture()
-        try capture.start(try await MicrophonePermission().request().grant())
+        // The resting mode is not read from the config here, and not because the config is
+        // unavailable: a command run from a terminal is watched by the operator who ran it
+        // and ends when they interrupt it, so the reason to hold the microphone between
+        // presses - an agent running all day that the user has to be able to trust - is
+        // not this command's situation. The app is where that setting is honoured.
+        try capture.start(try await MicrophonePermission().request().grant(), atRest: .shut)
         // Watched before the tap goes up, so no key can be down when an interrupt lands.
         let interrupt = Interrupt.watched()
         let helper = HelperConnection()

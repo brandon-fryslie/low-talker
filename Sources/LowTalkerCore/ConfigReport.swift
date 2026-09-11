@@ -30,7 +30,7 @@ public struct ConfigReport: CustomStringConvertible {
                 + ["  routes:"]
                 + mode.router.routes.map { "    \($0)" }
         }
-        return (["\(loaded)", "", "model: \(config.model)"]
+        return (["\(loaded)", "", "model: \(config.model)", "microphone: \(config.microphone)"]
             + modes
             + ["", "gaps:"]
             + gaps.map { "  \($0)" }).joined(separator: "\n")

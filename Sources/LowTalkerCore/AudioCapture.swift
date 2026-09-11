@@ -1,11 +1,13 @@
 import Foundation
 import Synchronization
 
-/// Microphone capture whose engine lives for one session. `start` holds the grant and
-/// watches the input device; it opens nothing, so a Mac with low-talker running and
-/// nobody dictating shows no microphone in the menu bar. `beginSession` opens the
-/// microphone, `endSession` closes it, and between the two the ring fills as before: a
-/// session is still two positions on the ring.
+/// Microphone capture whose engine lives for one session, or for the whole run when the
+/// user has asked for that. `start` holds the grant and watches the input device, and
+/// brings the microphone to what `MicrophoneAtRest` says it does between presses. Under
+/// the default, `shut`, it opens nothing, so a Mac with low-talker running and nobody
+/// dictating shows no microphone in the menu bar; `beginSession` opens the microphone,
+/// `endSession` closes it, and between the two the ring fills as before: a session is
+/// still two positions on the ring.
 ///
 /// What that costs is the look-back. A session's pre-roll reaches back over audio the
 /// microphone was already capturing, and an engine opened at key-down has none behind
@@ -16,6 +18,12 @@ import Synchronization
 /// down, and no engine can be started in the past. What a warm launch costs, what a cold
 /// one costs, and why the cold one is not paid at launch are measured at
 /// `warmUpAllowance`, which is the one place any of those numbers live.
+///
+/// `open` is the other side of that trade, and buying the look-back back is the whole of
+/// what it does here: the engine started at `start` is never given up between presses, so
+/// the ring is continuous and a press reaches back over real audio. Nothing in this file
+/// decides which one is in force - `start` is told, and `rest` is the one place the answer
+/// is read.
 ///
 /// That argument covers the warm engine and nothing else, so the gap is measured rather
 /// than assumed: `endSession` reads the stretch between the key going down and the first
@@ -46,12 +54,13 @@ public final class AudioCapture {
     public enum State {
         case stopped
         /// Started, with no session open: the grant is held and the input device is
-        /// watched, and the microphone is shut.
+        /// watched, and the microphone is doing whatever the resting mode says.
         case listening
         /// A session is open, so the microphone is too.
         case running
-        /// The session's engine stopped on its own. It stays that way until the default
-        /// input device changes, when it launches again, or until the session ends.
+        /// The engine stopped on its own. It stays that way until the default input
+        /// device changes, when it launches again, or until the session that was open
+        /// ends.
         case failed(any Error)
     }
 
@@ -71,22 +80,34 @@ public final class AudioCapture {
         let generation: Int
     }
 
-    /// What the microphone is doing, which is what the session it belongs to is doing.
+    /// What the microphone is doing.
     private enum Engine {
-        /// No session is open, so nothing is running and macOS shows nothing.
+        /// Nothing is running and macOS shows nothing.
         case shut
         case running(Live)
-        /// The open session's engine has been gone since `since`.
+        /// The engine has been gone since `since`.
         case failed(any Error, since: ContinuousClock.Instant)
     }
 
-    /// [LAW:types-are-the-program] The grant and the default-input watch exist exactly
-    /// between `start()` and `stop()`, whatever the microphone is doing, so they live
-    /// beside the engine rather than in optionals every reader would have to reconcile.
+    /// [LAW:types-are-the-program] The grant, the default-input watch and the resting mode
+    /// exist exactly between `start()` and `stop()`, whatever the microphone is doing, so
+    /// they live beside the engine rather than in optionals every reader would have to
+    /// reconcile.
     private struct Started {
         let watch: Disposal
         let grant: MicrophoneGrant
+        /// What the microphone does whenever no session is open. Fixed for this run of
+        /// capture: it is what capture was started for, and a run started to hold the
+        /// microphone open cannot become one that does not without giving the device up,
+        /// which is `stop()` and a fresh `start()`.
+        let atRest: MicrophoneAtRest
         var engine: Engine
+        /// Whether a press is in flight. The engine's own state answered this while the
+        /// microphone's lifetime was one session's; a resting mode that holds the engine
+        /// across presses takes that reading away, so the fact is kept rather than
+        /// inferred from a microphone that is now open for two different reasons.
+        /// [FRAMING:representation]
+        var sessionIsOpen = false
     }
 
     private enum Phase {
@@ -116,8 +137,13 @@ public final class AudioCapture {
         var accepting: Int?
         /// When the first sample delivered since the open session began was captured, and
         /// nothing once it is set: it dates that session's head, so a later engine's
-        /// buffers must not re-date it. Empty means nothing has been delivered since the
-        /// session began, which is a microphone that never opened for it at all.
+        /// buffers must not re-date it. A microphone opened for the press is dated by the
+        /// first sample it captures, which is after the key; one the resting mode was
+        /// already holding is dated by a sample captured at or before the key, since its
+        /// buffers were already running, and `AudioSession.unheard` answers zero for
+        /// those. Empty means nothing has been delivered since the session began, which is
+        /// a microphone that never opened for it at all - and which a held microphone can
+        /// arrive at too, by dying quietly rather than by opening late.
         var openedForSession: HostTime?
     }
 
@@ -172,14 +198,26 @@ public final class AudioCapture {
         case .stopped: .stopped
         case .started(let started):
             switch started.engine {
-            case .shut: .listening
-            case .running: .running
             case .failed(let error, _): .failed(error)
+            // A running engine is a press's while one is in flight and the resting mode's
+            // the rest of the time. `running` names the press, not the microphone: which
+            // of the two is holding the device open is what `atRest` says.
+            case .shut, .running: started.sessionIsOpen ? .running : .listening
             }
         }
     }
 
-    /// Opens the microphone and marks where the session begins: the position capture had
+    /// What the microphone does between presses for the run of capture that is started,
+    /// and nothing at all when none is. Read from here rather than from the config, so a
+    /// reader is told what capture is doing rather than what a file asked for.
+    /// [LAW:one-source-of-truth]
+    public var atRest: MicrophoneAtRest? {
+        guard case .started(let started) = phase else { return nil }
+        return started.atRest
+    }
+
+    /// Takes the microphone for a session - opening one, or using the one the resting mode
+    /// is already holding - and marks where the session begins: the position capture had
     /// reached when `moment` passed, with the pre-roll it will reach back over.
     ///
     /// Throws when there is no microphone to open - capture is not started, or the input
@@ -193,9 +231,10 @@ public final class AudioCapture {
     /// capture and nowhere else: a moment later than the newest sample marks the newest
     /// sample, since a session cannot begin in audio that has not been captured, and a
     /// moment earlier than the engine's first sample marks that first sample, since the
-    /// audio before it is some earlier press's and belongs to no part of this one. With
-    /// the microphone opening for the session both clamps land on the same position, and
-    /// the session begins where the microphone did.
+    /// audio before it is some earlier press's and belongs to no part of this one. Where
+    /// the microphone opens for the session both clamps land on the same position, and the
+    /// session begins where the microphone did; where the resting mode has held it open
+    /// since `start()`, this run of capture reaches back that far and so may the pre-roll.
     ///
     /// What the forward clamp moves the mark past is not thrown away with it: the moment
     /// rides along on the session, and `endSession` reports the distance between them as
@@ -205,19 +244,37 @@ public final class AudioCapture {
     /// [LAW:no-silent-failure]
     public func beginSession(at moment: HostTime, preRoll: TimeInterval = AudioSession.defaultPreRoll) throws -> AudioSession {
         guard case .started(var started) = phase else { throw NoMicrophone.stopped }
-        guard case .shut = started.engine else {
-            preconditionFailure("a session began while one was open; the microphone's lifetime is one session's")
+        guard !started.sessionIsOpen else {
+            preconditionFailure("a session began while one was open; a press is one session")
         }
-        // Cleared before the tap is installed, so the first buffer this session's
-        // microphone delivers is the one that dates its head. Cleared here and not in
-        // `launch()` because a mid-session replacement launches too, and its first buffer
-        // dates its own audio rather than the moment this session's microphone opened.
+        // Cleared before any tap is installed, so the first buffer delivered after the key
+        // is the one that dates this session's head. Cleared here and not in `launch()`
+        // because a mid-session replacement launches too, and its first buffer dates its
+        // own audio rather than the moment this session's microphone opened.
         shared.stream.withLock { $0.openedForSession = nil }
-        do {
-            started.engine = .running(try launch())
-        } catch {
-            throw NoMicrophone.failed(error)
+        switch started.engine {
+        // Held open by the resting mode, and left alone: relaunching splices the ring, and
+        // the audio it would splice off is exactly the look-back this mode is held open to
+        // keep. The clearing above is right for a held microphone too, and dating the head
+        // by the key instead would be wrong. Its buffers run continuously, so the first to
+        // arrive after the key was captured at or before the key went down and the head
+        // reads as heard; and a press a held engine delivers nothing for leaves this empty
+        // and is reported unopened, exactly as a press whose own microphone never opened
+        // is. Dating by the key would answer zero either way and take that door off a mode
+        // that runs for hours. [LAW:no-silent-failure]
+        case .running:
+            break
+        // Opened for this press. A failed engine reaches here too: a press is a reason to
+        // try the device again, and the alternative is a resting microphone that stays
+        // dead until one is replugged.
+        case .shut, .failed:
+            do {
+                started.engine = .running(try launch())
+            } catch {
+                throw NoMicrophone.failed(error)
+            }
         }
+        started.sessionIsOpen = true
         phase = .started(started)
         return shared.stream.withLock { stream in
             // One floor for the mark and for what the mark reaches back over: the
@@ -232,7 +289,8 @@ public final class AudioCapture {
         }
     }
 
-    /// Marks where `session` ends, yields its audio, and closes the microphone: the
+    /// Marks where `session` ends, yields its audio, and gives the microphone back to its
+    /// resting state - which closes it unless the user asked for it to be held: the
     /// pre-roll, then everything captured since it began, and whether that is all of it.
     /// The end mark, the slice and what the slice is missing are taken under one lock, so
     /// a buffer arriving in between cannot separate them.
@@ -270,21 +328,33 @@ public final class AudioCapture {
             )
             return lost.map { .partial(clip, lost: $0) } ?? .whole(clip)
         }
-        shut()
+        rest()
         return captured
     }
 
-    /// Holds the grant and watches the input device. The grant is the proof the user
-    /// allowed it: without one, macOS lets an engine run and hands it silence, which
-    /// nothing downstream could tell from a quiet room.
+    /// Holds the grant, watches the input device, and brings the microphone to its resting
+    /// state. The grant is the proof the user allowed it: without one, macOS lets an engine
+    /// run and hands it silence, which nothing downstream could tell from a quiet room.
     ///
-    /// No engine launches here. The microphone opens when a session does, which is what
-    /// keeps the menu-bar indicator a record of use rather than of uptime.
-    public func start(_ grant: MicrophoneGrant) throws {
+    /// Under `shut`, which is what the app runs on when no config file asks for anything
+    /// else, no engine launches here: the microphone opens when a session does, which is
+    /// what keeps the menu-bar indicator a record of use rather than of uptime. Under
+    /// `open` the engine launched here is the one every press speaks into, and an
+    /// indicator lit for the life of the process is what the user asked for by writing it
+    /// down. A launch that fails leaves capture started and failed rather than throwing:
+    /// the device watch is up by then, so a microphone that appears later is picked up the
+    /// same way one that disappears mid-press is.
+    public func start(_ grant: MicrophoneGrant, atRest: MicrophoneAtRest) throws {
         stop()
         deviceChanges = 0
         outages = Outages()
-        phase = .started(Started(watch: try hardware.watchDefaultInput { [weak self] in self?.recover() }, grant: grant, engine: .shut))
+        phase = .started(Started(
+            watch: try hardware.watchDefaultInput { [weak self] in self?.recover() },
+            grant: grant,
+            atRest: atRest,
+            engine: .shut
+        ))
+        rest()
     }
 
     public func stop() {
@@ -320,11 +390,33 @@ public final class AudioCapture {
         live.dispose()
     }
 
-    /// Closes the microphone, whatever the open session's engine was doing.
-    private func shut() {
+    /// Lets the press go and brings the microphone to what it does while no session is
+    /// open.
+    ///
+    /// [LAW:single-enforcer] The one place the resting mode is read. `start()` and the
+    /// key-up that ends a press are the two moments no session is open, and both arrive
+    /// here, so neither can leave the microphone in a state the other would not have left
+    /// it in - which is what makes "the device is closed unless the file says otherwise" a
+    /// property of one function rather than an agreement between two.
+    private func rest() {
         guard case .started(var started) = phase else { return }
-        if case .running(let live) = started.engine { dispose(live) }
-        started.engine = .shut
+        started.sessionIsOpen = false
+        switch started.atRest {
+        case .shut:
+            if case .running(let live) = started.engine { dispose(live) }
+            started.engine = .shut
+        case .open:
+            switch started.engine {
+            // Already open, and kept open across the key-up: the ring stays continuous, so
+            // the next press's pre-roll has audio to reach back over. A failed one waits
+            // on the device watch exactly as it does mid-press.
+            case .running, .failed:
+                break
+            case .shut:
+                do { started.engine = .running(try launch()) }
+                catch { started.engine = .failed(error, since: .now) }
+            }
+        }
         phase = .started(started)
     }
 
