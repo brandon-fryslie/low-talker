@@ -10,20 +10,18 @@ import Synchronization
 /// What that costs is the look-back. A session's pre-roll reaches back over audio the
 /// microphone was already capturing, and an engine opened at key-down has none behind
 /// it, so the pre-roll clamps to nothing and the utterance starts where the microphone
-/// did. Measured on this Mac's built-in input, `AVAudioEngine.start()` returns 39 ms
-/// after it is called and the first sample it captures was taken 37 ms after
-/// (±1 ms over launches spaced 0 to 3 s apart; without `prepare()` first, 65 ms; the
-/// first launch in a process costs 240-280 ms and only an engine that actually ran the
-/// device pays that down, which is why it is not paid at launch). 37 ms is shorter than
-/// the gap between deciding to press a key and beginning to say a word, so a press
-/// followed by speech loses nothing; a press made *during* a word loses the part of it
-/// that was said before the key went down, and no engine can be started in the past.
+/// did. A warm engine's first sample lands well inside the gap between deciding to press
+/// a key and beginning to say a word, so a press followed by speech loses nothing; a
+/// press made *during* a word loses the part of it that was said before the key went
+/// down, and no engine can be started in the past. What a warm launch costs, what a cold
+/// one costs, and why the cold one is not paid at launch are measured at
+/// `warmUpAllowance`, which is the one place any of those numbers live.
 ///
 /// That argument covers the warm engine and nothing else, so the gap is measured rather
 /// than assumed: `endSession` reads the stretch between the key going down and the first
 /// sample anything captured, and a press missing more of it than `warmUpAllowance` comes
 /// back partial instead of whole. Two things reach that door - the first press in a
-/// process, which pays the cold 244 ms, and a key-down the tap delivered late, which pays
+/// process, which pays a cold launch, and a key-down the tap delivered late, which pays
 /// whatever was ahead of it. Both are speech the speaker addressed to a shut microphone,
 /// and a press that says so is one they can repeat; a sentence quietly missing its front
 /// is not. [LAW:no-silent-failure]
@@ -318,7 +316,7 @@ public final class AudioCapture {
     /// Closes the microphone, whatever the open session's engine was doing.
     private func shut() {
         guard case .started(var started) = phase else { return }
-        if case .running(let live) = started.engine { live.dispose() }
+        if case .running(let live) = started.engine { dispose(live) }
         started.engine = .shut
         phase = .started(started)
     }
