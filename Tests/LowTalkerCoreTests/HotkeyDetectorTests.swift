@@ -39,7 +39,7 @@ private struct Keyboard {
 private func at(_ ms: Int64) -> HostTime { HostTime(uptime: .milliseconds(ms)) }
 
 private func began(_ chord: KeyChord, at ms: Int64) -> HotkeyDetector.Verdict { .init(transition: .began(chord, at: at(ms)), delivery: .swallow) }
-private func ended(_ chord: KeyChord, _ press: PressKind) -> HotkeyDetector.Verdict { .init(transition: .ended(chord, press), delivery: .swallow) }
+private func ended(_ chord: KeyChord, _ press: PressKind) -> HotkeyDetector.Verdict { .init(transition: .ended(chord, .released(press)), delivery: .swallow) }
 private let swallowed = HotkeyDetector.Verdict(transition: nil, delivery: .swallow)
 private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
 
@@ -122,7 +122,7 @@ private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
         var keyboard = Keyboard(chords: [rightOption, command])
         #expect(keyboard.press(.leftShift, at: 0) == passed)
         #expect(keyboard.press(.rightOption, at: 10) == began(command, at: 10))
-        #expect(keyboard.release(.leftShift, at: 400) == HotkeyDetector.Verdict(transition: .ended(command, .hold), delivery: .pass))
+        #expect(keyboard.release(.leftShift, at: 400) == HotkeyDetector.Verdict(transition: .ended(command, .released(.hold)), delivery: .pass))
         #expect(keyboard.detector.phase == .idle)
         #expect(keyboard.release(.rightOption, at: 410) == swallowed)
     }
@@ -156,7 +156,7 @@ private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
         var keyboard = Keyboard(chords: [optionSpace])
         _ = keyboard.press(.leftOption, at: 0)
         _ = keyboard.press(Key(rawValue: 49), at: 10)
-        #expect(keyboard.release(.leftOption, at: 400) == HotkeyDetector.Verdict(transition: .ended(optionSpace, .hold), delivery: .pass))
+        #expect(keyboard.release(.leftOption, at: 400) == HotkeyDetector.Verdict(transition: .ended(optionSpace, .released(.hold)), delivery: .pass))
         #expect(keyboard.detector.phase == .idle)
         #expect(keyboard.release(Key(rawValue: 49), at: 410) == swallowed)
     }
@@ -178,7 +178,7 @@ private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
         var keyboard = Keyboard(chords: [optionSpace, rightOption])
         _ = keyboard.press(.leftOption, at: 0)
         #expect(keyboard.press(Key(rawValue: 49), at: 10) == began(optionSpace, at: 10))
-        #expect(keyboard.release(.leftOption, at: 400) == HotkeyDetector.Verdict(transition: .ended(optionSpace, .hold), delivery: .pass))
+        #expect(keyboard.release(.leftOption, at: 400) == HotkeyDetector.Verdict(transition: .ended(optionSpace, .released(.hold)), delivery: .pass))
         #expect(keyboard.press(.rightOption, at: 410) == began(rightOption, at: 410))
         #expect(keyboard.release(Key(rawValue: 49), at: 420) == swallowed)
         #expect(keyboard.release(.rightOption, at: 800) == ended(rightOption, .hold))
@@ -191,19 +191,36 @@ private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
         #expect(keyboard.detector.phase == .idle)
     }
 
-    /// A lapse ends whatever press is open, a hold or a latched tap. The key still
-    /// held through it is swallowed when it comes up, as its down was.
+    /// A lapse ends whatever press is open, a hold or a latched tap, and says that is
+    /// what ended it. The key still held through it is swallowed when it comes up, as
+    /// its down was.
     @Test func aLapseEndsWhateverPressIsOpen() {
         var keyboard = Keyboard()
         #expect(keyboard.detector.lapse() == nil)
         _ = keyboard.press(.rightOption, at: 0)
-        #expect(keyboard.detector.lapse() == .ended(rightOption, .hold))
+        #expect(keyboard.detector.lapse() == .ended(rightOption, .lapsed))
         #expect(keyboard.detector.phase == .idle)
         #expect(keyboard.release(.rightOption, at: 10) == swallowed)
         _ = keyboard.press(.rightOption, at: 100)
         _ = keyboard.release(.rightOption, at: 150)
-        #expect(keyboard.detector.lapse() == .ended(rightOption, .tap))
+        #expect(keyboard.detector.lapse() == .ended(rightOption, .lapsed))
         #expect(keyboard.detector.phase == .idle)
+    }
+
+    /// The requirement in one line: what a lapse ends a press with and what a release
+    /// ends one with are not equal, so no consumer can read either as the other.
+    @Test func aLapseAndAReleaseAreNotTheSameValue() {
+        var lapsing = Keyboard()
+        _ = lapsing.press(.rightOption, at: 0)
+        let lapsed = lapsing.detector.lapse()
+
+        var releasing = Keyboard()
+        _ = releasing.press(.rightOption, at: 0)
+        let released = releasing.release(.rightOption, at: 400).transition
+
+        #expect(lapsed == .ended(rightOption, .lapsed))
+        #expect(released == .ended(rightOption, .released(.hold)))
+        #expect(lapsed != released)
     }
 
     /// A lapse forgets no swallowed key: the one carried over from the last press and
@@ -214,7 +231,7 @@ private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
         _ = keyboard.press(Key(rawValue: 49), at: 10)
         _ = keyboard.release(.leftOption, at: 400)
         #expect(keyboard.press(.rightOption, at: 410) == began(rightOption, at: 410))
-        #expect(keyboard.detector.lapse() == .ended(rightOption, .hold))
+        #expect(keyboard.detector.lapse() == .ended(rightOption, .lapsed))
         #expect(keyboard.release(Key(rawValue: 49), at: 460) == swallowed)
         #expect(keyboard.release(.rightOption, at: 470) == swallowed)
     }

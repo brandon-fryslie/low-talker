@@ -68,8 +68,35 @@ public struct HotkeyDetector: Sendable {
         /// wherever the handler happens to run, which is later by however late the
         /// event was delivered.
         case began(KeyChord, at: HostTime)
-        /// Listening ends, with what the press turned out to be.
-        case ended(KeyChord, PressKind)
+        /// Listening ends, and why.
+        case ended(KeyChord, Ending)
+    }
+
+    /// What stopped the listening: the speaker let go, or the tap went deaf and the
+    /// press was ended without them.
+    ///
+    /// [LAW:types-are-the-program] Two facts a caller could never pull back apart if
+    /// they shared a value - "that was the whole utterance" and "that is as much of it
+    /// as reached us". Only a release carries a press kind, because a tap and a hold
+    /// are told apart by how long the key was down and only a release has the key-up
+    /// that measures it. `began` carries the moment its event was stamped with for the
+    /// same reason: an ending with no event behind it could only invent one.
+    public enum Ending: Hashable, Sendable, CustomStringConvertible {
+        /// The key came up on a hold, or the chord went down again on a latched tap.
+        case released(PressKind)
+        /// Events were missed while the press was open. Nothing was heard past the last
+        /// event the tap delivered, and whether the speaker had even finished is unknown
+        /// - their release may be among the events that were lost.
+        case lapsed
+
+        /// An ending in a person's words. A case added here has to say what it is before
+        /// it compiles, so nothing prints an ending it has no word for.
+        public var description: String {
+            switch self {
+            case .released(let kind): kind.rawValue
+            case .lapsed: "lapsed"
+            }
+        }
     }
 
     /// What the frontmost app gets: the event, or nothing.
@@ -133,7 +160,7 @@ public struct HotkeyDetector: Sendable {
         case (.latched(let chord), .some):
             phase = .idle
             swallowing.insert(event.key)
-            return Verdict(transition: .ended(chord, .tap), delivery: .swallow)
+            return Verdict(transition: .ended(chord, .released(.tap)), delivery: .swallow)
         case (.held, _), (_, nil):
             // A key still swallowed repeats while held; the app sees none of the repeats.
             return Verdict(transition: nil, delivery: swallowing.contains(event.key) ? .swallow : .pass)
@@ -151,7 +178,7 @@ public struct HotkeyDetector: Sendable {
                 return Verdict(transition: nil, delivery: delivery)
             case .hold:
                 phase = .idle
-                return Verdict(transition: .ended(chord, .hold), delivery: delivery)
+                return Verdict(transition: .ended(chord, .released(.hold)), delivery: delivery)
             }
         case .held, .latched, .idle:
             return Verdict(transition: nil, delivery: delivery)
@@ -160,11 +187,14 @@ public struct HotkeyDetector: Sendable {
 
     /// Events were missed: the open press ends, since its release may have gone by
     /// unseen. What was swallowed stays so; the app never saw those keys go down.
+    ///
+    /// A hold and a latched tap end the same way here, because what ends them is the
+    /// same thing and it is not the speaker. Naming one `.hold` and the other `.tap`
+    /// was the invention this ending exists to stop.
     public mutating func lapse() -> Transition? {
         let transition: Transition? = switch phase {
         case .idle: nil
-        case .held(let chord, _): .ended(chord, .hold)
-        case .latched(let chord): .ended(chord, .tap)
+        case .held(let chord, _), .latched(let chord): .ended(chord, .lapsed)
         }
         phase = .idle
         return transition
