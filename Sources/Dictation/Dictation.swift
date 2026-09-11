@@ -27,9 +27,8 @@ public final class Dictation {
     /// that performed nothing, not a failure.
     ///
     /// [LAW:types-are-the-program] A press the tap lapsed out of never reaches one of
-    /// these; it is reported as `PressLapsed`. So a Session is a whole utterance by
-    /// construction, and nothing reading one has to wonder whether it is all of what was
-    /// said.
+    /// these; it is reported as `PressLapsed`. That is a fact about how the press ended,
+    /// not a promise that the ring held every word spoken into it.
     public struct Session: Sendable, CustomStringConvertible {
         public let context: Context
         public let transcript: Transcript

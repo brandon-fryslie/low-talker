@@ -207,11 +207,9 @@ private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
         #expect(keyboard.detector.phase == .idle)
     }
 
-    /// The whole point of the ending: a press held past the tap threshold and then
-    /// lapsed out of does not end as the press that was held for exactly as long and
-    /// released. The two differ in nothing a detector can see but the release itself,
-    /// and that is the difference the value has to carry.
-    @Test func aLapsedHoldAndAReleasedHoldOfTheSameLengthAreDifferentEndings() {
+    /// The requirement in one line: what a lapse ends a press with and what a release
+    /// ends one with are not equal, so no consumer can read either as the other.
+    @Test func aLapseAndAReleaseAreNotTheSameValue() {
         var lapsing = Keyboard()
         _ = lapsing.press(.rightOption, at: 0)
         let lapsed = lapsing.detector.lapse()
