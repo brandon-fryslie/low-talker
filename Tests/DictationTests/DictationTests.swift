@@ -88,10 +88,9 @@ final class Rig {
         now = now + .seconds(AudioClip.duration(for: samples.count))
     }
 
-    /// Time passing with the microphone shut. Nothing is appended, because between two
-    /// presses there is no engine to append to - the speaker may be talking, and that is
-    /// exactly what nothing is capturing. This is how a test says a key-down reached the
-    /// loop late: the stamp is taken before the wait and the press is made after it.
+    /// Time passing with nothing appended: the speaker may be talking, and that is exactly
+    /// what nothing is capturing. This is how a test says a key-down reached the loop late:
+    /// the stamp is taken before the wait and the press is made after it.
     func wait(_ duration: TimeInterval) {
         now = now + .seconds(duration)
     }
