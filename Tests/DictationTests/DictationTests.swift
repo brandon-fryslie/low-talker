@@ -534,6 +534,35 @@ extension Result {
         #expect(engine.clips.map(\.samples) == [[5, 6]])
     }
 
+    /// A device change that really took time is still only a splice: the head of the press
+    /// was captured, so what it lost is its middle and nothing else.
+    ///
+    /// The reconnect is what the other splice tests leave out. They stamp the audio either
+    /// side of the change as if no time passed, and a press that loses a third of a second
+    /// to AirPods is the everyday shape of one. The distinction matters because the two
+    /// losses are different sentences: this press is spliced, and telling its speaker the
+    /// microphone was not open for it would be false - it was open, on time, and heard the
+    /// first word.
+    @Test func aPressSplicedAcrossARealReconnectIsNotAlsoReportedAsUnopened() async throws {
+        let engine = FakeTranscriber { _ in Transcript(typed: "a") }
+        let rig = try Rig(hearing: engine)
+
+        rig.dictation.press(.began(Rig.rightOption, at: rig.now))
+        rig.speak([1, 2])
+        rig.changeDevice()
+        // The outage itself: real time in which no engine is running, so nothing is
+        // captured over it and the positions either side of it are adjacent.
+        rig.wait(0.3)
+        rig.speak([3, 4])
+        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+
+        let press = try #require(await rig.report().failure as? SpeechLost)
+        #expect(press.lost.interrupted)
+        #expect(!press.lost.unopened)
+        #expect(press.lost.scrolledOff == 0)
+        #expect(press.lost.description == "spliced where capture restarted")
+    }
+
     /// [LAW:no-silent-failure] There is no microphone to open - the device cannot feed the
     /// pipeline - so the press is refused at the key and reported. A loop that carried on
     /// would hand the engine the empty clip a shut microphone leaves behind, and an empty
@@ -555,6 +584,39 @@ extension Result {
         // The device comes back, and the next press opens a microphone and types.
         rig.hardware.failingToLaunch = nil
         rig.hold(speaking: [1, 2])
+        #expect(try await rig.session().transcript.text == "a")
+        #expect(rig.keyboard.log == Self.typed("a"))
+    }
+
+    /// [LAW:no-silent-failure] The engine failed under an open press - a driver going down
+    /// mid-sentence, with no device change and nothing to recover onto before the key came
+    /// up. The microphone was gone for the tail of the press, so what the ring holds ends
+    /// somewhere inside the sentence, and a fragment that transcribes fluently is the one
+    /// thing that must not be typed.
+    ///
+    /// This is the door the loop's own `.stopped`/`.failed` branches used to hold open.
+    /// They are gone: a press that lost its microphone is reported because its audio comes
+    /// back partial, the same as any other loss, so the report rests entirely on capture
+    /// marking it - which is what this press checks.
+    @Test func aPressWhoseMicrophoneFailedMidHoldIsReportedInsteadOfTyped() async throws {
+        let engine = FakeTranscriber { _ in Transcript(typed: "a") }
+        let rig = try Rig(hearing: engine)
+
+        rig.dictation.press(.began(Rig.rightOption, at: rig.now))
+        rig.speak([1, 2])
+        rig.hardware.live.onFailure(BadBuffer())
+        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+
+        let press = try #require(await rig.report().failure as? SpeechLost)
+        #expect(press.chord == Rig.rightOption)
+        #expect(press.lost.unopened)
+        #expect(!press.lost.interrupted)
+        #expect(engine.clips.isEmpty)
+        #expect(rig.keyboard.log.isEmpty)
+
+        // The failed engine was let go with the press, so the next one opens a microphone
+        // of its own rather than finding capture wedged on the engine that died.
+        rig.hold(speaking: [3, 4])
         #expect(try await rig.session().transcript.text == "a")
         #expect(rig.keyboard.log == Self.typed("a"))
     }

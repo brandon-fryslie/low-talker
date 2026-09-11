@@ -64,8 +64,8 @@ public enum CapturedAudio: Sendable, Equatable {
 }
 
 extension CapturedAudio.Loss: CustomStringConvertible {
-    /// What is missing, in the words a surface can hand the user: both doors when both
-    /// were taken, since a clip can lose its head to the ring and its middle to a swap.
+    /// What is missing, in the words a surface can hand the user: every door that was
+    /// taken, joined, since one press can lose audio through more than one of them.
     public var description: String {
         [
             scrolledOff > 0 ? String(format: "missing its first %.1f s", AudioClip.duration(for: scrolledOff)) : nil,

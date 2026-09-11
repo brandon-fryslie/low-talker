@@ -36,21 +36,25 @@ public struct AudioSession: Sendable, Equatable {
         self.preRoll = min(AudioClip.sampleCount(for: preRoll), max(0, begin - floor))
     }
 
-    /// Samples at the head of the session the microphone was not open for: the stretch
-    /// between the key going down and the first sample anything captured.
+    /// How long at the head of the session the microphone was not open for: the stretch
+    /// between the key going down and `firstSample`, the capture time of the first sample
+    /// delivered since the session began.
     ///
     /// Every press has some of this - an engine takes a moment to open, and no engine can
-    /// be started in the past - so the number matters rather than its existence, and
-    /// `AudioCapture.warmUpAllowance` is what says how much of it is ordinary. It is
-    /// measured off `timeline` rather than carried from the opening because only a
-    /// captured sample dates one: at the moment the microphone is told to open, when this
-    /// session gets its marks, nothing has been captured for the timeline to measure
-    /// from. [LAW:no-ambient-temporal-coupling]
+    /// be started in the past - so the length matters rather than its existence, and
+    /// `AudioCapture.warmUpAllowance` is what says how much of it is ordinary.
     ///
-    /// Answers zero for a session that began at or after the first captured sample, which
-    /// is audio that was never lost because it was never addressed.
-    public func unheard(by timeline: AudioTimeline) -> Int {
-        max(0, begin - timeline.position(at: began))
+    /// A duration, not a count of samples: nothing was captured over this stretch to
+    /// count, and counting it would mean carrying a sample rate back across it. Where a
+    /// session outlived a break in capture, that back-extrapolation charged the break's
+    /// elapsed time to samples that never existed and reported a head the microphone had
+    /// caught in full as one it missed. Two moments subtracted have nothing to extrapolate
+    /// across. [LAW:no-ambient-temporal-coupling]
+    ///
+    /// Answers zero for a session whose first sample was captured before the key went
+    /// down, which is audio that was never lost because it was never addressed.
+    public func unheard(since firstSample: HostTime) -> Duration {
+        max(.zero, firstSample - began)
     }
 
     /// The positions the session covers once it ends at `end`. The pre-roll reaches no

@@ -109,6 +109,18 @@ public final class AudioCapture {
         /// running, and positions advance only on capture, so the audio on either side
         /// of the break is spliced together with no seam in the samples to find it by.
         var continuousSince = 0
+        /// The generation whose buffers this stream is the audio of. An engine's tap can
+        /// deliver once more after `dispose()` returns, and that buffer belongs to a press
+        /// the speaker has already let go of; appending it would move the positions the
+        /// next press begins from. Read on the tap's queue, which cannot ask the main
+        /// actor, so the answer lives here beside the samples it admits.
+        /// [LAW:no-ambient-temporal-coupling]
+        var accepting: Int?
+        /// When the first sample delivered since the open session began was captured, and
+        /// nothing once it is set: it dates that session's head, so a later engine's
+        /// buffers must not re-date it. Empty means nothing has been delivered since the
+        /// session began, which is a microphone that never opened for it at all.
+        var openedForSession: HostTime?
     }
 
     /// The stream behind a lock, shared between the tap's queue and the main actor.
@@ -198,6 +210,11 @@ public final class AudioCapture {
         guard case .shut = started.engine else {
             preconditionFailure("a session began while one was open; the microphone's lifetime is one session's")
         }
+        // Cleared before the tap is installed, so the first buffer this session's
+        // microphone delivers is the one that dates its head. Cleared here and not in
+        // `launch()` because a mid-session replacement launches too, and its first buffer
+        // dates its own audio rather than the moment this session's microphone opened.
+        shared.stream.withLock { $0.openedForSession = nil }
         do {
             started.engine = .running(try launch())
         } catch {
@@ -236,21 +253,22 @@ public final class AudioCapture {
             // that never existed was not lost.
             let began = range.clamped(to: 0..<stream.ring.end).lowerBound
             let clip = stream.ring.clip(in: range)
+            // How long the session waited for its microphone, and a wait that never ended
+            // for one nothing was ever delivered for - a hold shorter than the engine took
+            // to start, or one whose engine never started. That is the same sentence about
+            // the whole press that lateness is about its head, so it is the same reading
+            // rather than one of its own. [LAW:one-source-of-truth]
+            let openedLate = stream.openedForSession
+                .map { session.unheard(since: $0) > .seconds(Self.warmUpAllowance) } ?? true
             let lost = CapturedAudio.Loss(
                 scrolledOff: stream.ring.scrolledOff(from: range),
                 interrupted: began < stream.continuousSince,
-                // Three readings of one fact - the microphone was not open for part of
-                // this session. It delivered nothing at all between the marks (a hold
-                // shorter than the engine took to start, or one whose engine never
-                // started); it opened so long after the key went down that the stretch in
+                // Two readings of one fact - the microphone was not open for part of this
+                // session. It opened so long after the key went down that the stretch in
                 // between is speech rather than warm-up, which takes the head; or it was
                 // gone by the time the key came up and never came back, which takes the
-                // tail. The head is asked second because the first reading is what makes
-                // it answerable: with nothing captured, no sample has dated the timeline
-                // this measures against. [LAW:no-ambient-temporal-coupling]
-                unopened: stream.ring.end == session.begin
-                    || session.unheard(by: stream.timeline) > AudioClip.sampleCount(for: Self.warmUpAllowance)
-                    || !open
+                // tail.
+                unopened: openedLate || !open
             )
             return lost.map { .partial(clip, lost: $0) } ?? .whole(clip)
         }
@@ -273,7 +291,7 @@ public final class AudioCapture {
 
     public func stop() {
         if case .started(let started) = phase {
-            if case .running(let live) = started.engine { live.dispose() }
+            if case .running(let live) = started.engine { dispose(live) }
             started.watch()
         }
         phase = .stopped
@@ -286,6 +304,15 @@ public final class AudioCapture {
     private var isOpen: Bool {
         guard case .started(let started) = phase, case .running = started.engine else { return false }
         return true
+    }
+
+    /// Retires an engine: the tap comes down, and the stream stops accepting what it
+    /// delivers. Every path that lets an engine go comes through here, because one that
+    /// retired an engine without telling the stream would leave a disposed tap a buffer's
+    /// reach into the audio the next press begins from. [LAW:single-enforcer]
+    private func dispose(_ live: Live) {
+        live.dispose()
+        shared.stream.withLock { $0.accepting = nil }
     }
 
     /// Closes the microphone, whatever the open session's engine was doing.
@@ -320,15 +347,22 @@ public final class AudioCapture {
         let resuming = shared.stream.withLock { stream -> Int in
             let previous = stream.continuousSince
             stream.continuousSince = stream.ring.end
+            stream.accepting = generation
             return previous
         }
         do {
             let dispose = try hardware.launch(
                 appending: { samples, time in
                     shared.stream.withLock {
+                        // Resolved by generation rather than trusted by arrival, as the
+                        // other two callbacks already are: a buffer from an engine that has
+                        // been disposed is a let-go press's audio, and the ring it would
+                        // land in is where the next press begins.
+                        guard $0.accepting == generation else { return }
                         // The buffer's first sample takes the position the ring is at, and
                         // that is the sample its stamp dates.
                         $0.timeline.mark($0.ring.end, at: time)
+                        $0.openedForSession = $0.openedForSession ?? time
                         $0.ring.append(samples)
                     }
                 },
@@ -351,7 +385,7 @@ public final class AudioCapture {
     /// it never delivers again.
     private func replaceEngine(from generation: Int) {
         guard let running = live(of: generation) else { return }
-        running.live.dispose()
+        dispose(running.live)
         var started = running.started
         do {
             started.engine = .running(try launch())
@@ -386,7 +420,7 @@ public final class AudioCapture {
     /// engine it came from is gone and the one running is healthy.
     private func fail(_ error: any Error, from generation: Int) {
         guard let running = live(of: generation) else { return }
-        running.live.dispose()
+        dispose(running.live)
         var started = running.started
         started.engine = .failed(error, since: .now)
         phase = .started(started)
