@@ -221,13 +221,9 @@ public struct PressLapsed: Error, CustomStringConvertible {
 
 /// A press whose audio the capture could not hand over whole, reported instead of typed.
 ///
-/// Every door leaves the same thing in the user's editor. The ring retains only so much,
-/// so a hold longer than that loses its head to its own tail; capture restarts when the
-/// input device changes - AirPods connecting mid-sentence - which splices the audio on
-/// either side of the change together with an unknown stretch missing between; and the
-/// microphone opens for the press rather than for the app, so a hold shorter than the
-/// engine takes to start ends before a sample of it was ever captured, and one whose
-/// key-down reached the loop late begins after the words it was pressed for.
+/// Every door leaves the same thing in the user's editor, which is why they arrive here
+/// as one failure rather than several. Which doors there are is `CapturedAudio.Loss`'s to
+/// say, and `lost` carries the ones this press took. [LAW:one-source-of-truth]
 ///
 /// [LAW:no-silent-failure] Typing it is the one thing this must not do, for the reason
 /// `PressLapsed` gives: what a fragment transcribes to is a sentence, just not the one
