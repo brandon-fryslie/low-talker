@@ -431,6 +431,55 @@ private struct Authorized: MicrophoneAuthority {
         #expect(dead.contains("\(NoDevice())"))
     }
 
+    /// What the mode promises after the device has gone: it comes back by itself. Under
+    /// `shut` a dead engine is relaunched by the next press, so the user finds out within
+    /// one hold; under `open` nobody presses for hours, and the device watch outliving the
+    /// engine is the only thing that can end the gap unattended. A recovery is not a swap -
+    /// nothing was replaced, capture simply resumed - so it is booked as the outage it ends
+    /// and not as a device change.
+    @Test func aHeldMicrophoneThatDiedWhileIdleComesBackWhenADeviceAppears() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .open)
+        hardware.engines[0].onFailure(NoDevice())
+        #expect(failure(of: capture, as: NoDevice.self) == NoDevice())
+        // The gap is open, so it is not booked yet: an outage is counted where it ends.
+        #expect(capture.outages.count == 0)
+
+        try hardware.changeDefaultInput()
+        #expect(isListening(capture))
+        #expect(hardware.engines.count == 2)
+        #expect(capture.outages.count == 1)
+        #expect(capture.outages.total > .zero)
+        #expect(capture.deviceChanges == 0)
+        // And the surface stops saying it stopped, without anyone having pressed anything.
+        #expect(capture.doing == "\(MicrophoneAtRest.open)")
+    }
+
+    /// The key-up hands the microphone back to its resting state, and under `open` that
+    /// state is one a dead engine cannot be quietly restored to. Compare
+    /// `aSessionWhoseMicrophoneDiedAndDidNotComeBackIsPartial`, where the same death under
+    /// `shut` leaves capture `.listening` after the key-up: there the failure is cleared by
+    /// closing a microphone that is meant to be closed, and the next press relaunches. Here
+    /// the run is holding the device, so a failure that outlived the press is the truth
+    /// about it until something launches again - and it is what leaves the engine in the
+    /// one state `recover()` will act on. [LAW:no-silent-failure]
+    @Test func aHeldMicrophoneThatDiedMidPressIsStillDeadAfterTheKeyComesUp() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .open)
+        let session = try capture.beginSession(at: origin, preRoll: 0)
+        hardware.engines[0].appending([1, 2], origin)
+        hardware.engines[0].onFailure(NoDevice())
+
+        // The speaker went on talking to a microphone that was no longer there, so the tail
+        // of what they said was never captured however complete the clip looks.
+        #expect(try capture.endSession(session) == .partial(AudioClip(samples: [1, 2]), lost: loss(unopened: true)))
+        #expect(failure(of: capture, as: NoDevice.self) == NoDevice())
+        #expect(hardware.engines.count == 1)
+        #expect(capture.doing.contains("\(NoDevice())"))
+    }
+
     // MARK: - what a press was missing
 
     /// The engine took longer to start than the key was held, so not one sample of what
