@@ -181,7 +181,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Whatever got as far as starting is put back: a tap that failed after
             // capture began would otherwise leave capture holding the grant and watching
             // the device with nothing able to press, under a menu saying dictation is off.
-            // Stopping is idempotent, so both failures leave by this one path.
+            // Stopping is idempotent, so every failure leaves by this one path.
             // [LAW:dataflow-not-control-flow]
             capture.stop()
             // [LAW:no-silent-failure] An app that cannot listen must say so on the
