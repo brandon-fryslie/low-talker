@@ -329,8 +329,58 @@ private struct Authorized: MicrophoneAuthority {
 
         let session = try capture.beginSession(at: origin, preRoll: 0)
         #expect(hardware.engines.count == 1)
+        // The device did come back, and a press is simply where that was noticed: the gap
+        // it ends is booked the same as one the device watch ends, or the count would
+        // depend on which of the two got there first. [LAW:single-enforcer]
+        #expect(capture.outages.count == 1)
+        #expect(capture.outages.total > .zero)
         hardware.engines[0].appending([1, 2], origin)
         #expect(capture.endSession(session) == .whole(AudioClip(samples: [1, 2])))
+    }
+
+    /// The press tried the device and the device is still gone. What the user is owed then
+    /// is the reason it is dead *now* - a microphone unplugged an hour ago and a cable that
+    /// has just failed are the same silence, and only the newest error tells them apart. No
+    /// gap is booked, because none ended: this retry extends the outage it found.
+    /// [LAW:no-silent-failure]
+    @Test func aPressThatCannotReviveAHeldMicrophoneLeavesItFailedAndCountsNoGap() throws {
+        let hardware = FakeHardware(launches: [NoDevice(), BadBuffer()])
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .open)
+        #expect(failure(of: capture, as: NoDevice.self) == NoDevice())
+
+        #expect(throws: NoMicrophone.self) { try capture.beginSession(at: origin, preRoll: 0) }
+        #expect(failure(of: capture, as: BadBuffer.self) == BadBuffer())
+        #expect(hardware.engines.isEmpty)
+        #expect(capture.outages.count == 0)
+    }
+
+    /// Device churn while nobody is dictating, which only a held microphone can meet: the
+    /// engine runs for hours, so a docking station waking up replaces it with no press in
+    /// flight. The press that follows hears the new device only, and the audio the old one
+    /// captured is on the far side of a splice - so the look-back this mode is held open
+    /// for stops at the new engine's first sample rather than reaching across the break
+    /// into a clip whose seam is in no sample.
+    @Test func aDeviceChangedWhileIdleIsReplacedAndTheNextPressIsWhole() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .open)
+        hardware.engines[0].appending([1, 2, 3, 4, 5, 6], origin)
+
+        hardware.engines[0].onConfigurationChange()
+        #expect(hardware.engines[0].disposed)
+        #expect(hardware.engines.count == 2)
+        #expect(capture.deviceChanges == 1)
+        // A swap is not an outage and not a press: nothing failed, and nobody is dictating.
+        #expect(capture.outages.count == 0)
+        #expect(isListening(capture))
+
+        // A second of pre-roll, against a key stamped back among the old device's samples:
+        // both reach for audio this run of capture no longer continues from.
+        let session = try capture.beginSession(at: after(1), preRoll: 1)
+        #expect(session.preRoll == 0)
+        hardware.engines[1].appending([7, 8], after(6))
+        #expect(capture.endSession(session) == .whole(AudioClip(samples: [7, 8])))
     }
 
     /// Quitting gives the device back, however the run was holding it.
@@ -354,6 +404,31 @@ private struct Authorized: MicrophoneAuthority {
         #expect(capture.atRest == .open)
         capture.stop()
         #expect(capture.atRest == nil)
+    }
+
+    /// The resting mode is what the user asked for; this is what they got, and under `open`
+    /// they are the two things most likely to disagree. An engine held across presses can
+    /// die while nobody is pressing anything, and nothing will try the device again until
+    /// someone does - so for as long as that takes, a status surface reading the mode alone
+    /// reports a live microphone on a Mac that has none. This is the one reading that puts
+    /// the failure in front of the user before their next press does.
+    /// [LAW:no-silent-failure]
+    @Test func aHeldMicrophoneThatDiedSaysSoRatherThanThatItIsStillHeldOpen() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        // Not started is its own answer, and not the same one as "shut between presses".
+        #expect(capture.doing == "not being captured")
+
+        try capture.start(grant, atRest: .open)
+        #expect(capture.doing == "\(MicrophoneAtRest.open)")
+
+        hardware.engines[0].onFailure(NoDevice())
+        let dead = capture.doing
+        #expect(dead != "\(MicrophoneAtRest.open)")
+        // Still says which mode the run is in - the user's arrangement did not change - and
+        // now says the device is not keeping to it, in the failure's own words.
+        #expect(dead.contains("\(MicrophoneAtRest.open)"))
+        #expect(dead.contains("\(NoDevice())"))
     }
 
     // MARK: - what a press was missing

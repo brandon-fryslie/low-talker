@@ -280,11 +280,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             log.notice("onboarding: \(requirement.name, privacy: .public): \(requirement.reads, privacy: .public)")
         }
 
-        // What the user's microphone is doing between presses, on the surface the epic
-        // exists for: the menu-bar indicator says the device is open and only this says
-        // why, so a lit microphone on an idle Mac is either explained here or is a bug.
-        // [LAW:no-silent-failure]
-        let microphone = capture.atRest.map(String.init(describing:)) ?? "not being captured"
+        // What the user's microphone is doing, on the surface the epic exists for: the
+        // menu-bar indicator says the device is open and only this says why, so a lit
+        // microphone on an idle Mac is either explained here or is a bug - and a dark one
+        // the config asked to hold open says so here too. [LAW:no-silent-failure]
+        let microphone = capture.doing
         log.notice("microphone at rest: \(microphone, privacy: .public)")
 
         menu.removeAllItems()

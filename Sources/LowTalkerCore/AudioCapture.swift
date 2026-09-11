@@ -58,9 +58,8 @@ public final class AudioCapture {
         case listening
         /// A session is open, so the microphone is too.
         case running
-        /// The engine stopped on its own, and stays that way until something launches one
-        /// again: the input device changing, the next press, or a key-up that shuts the
-        /// microphone.
+        /// The engine stopped on its own, until a launch clears it - the input device
+        /// changing, or the next press - or, under `shut`, a key-up closes it instead.
         case failed(any Error)
     }
 
@@ -216,6 +215,26 @@ public final class AudioCapture {
         return started.atRest
     }
 
+    /// What to tell the user their microphone is doing, in one sentence.
+    ///
+    /// The resting mode alone cannot say it. That is what was asked for, and an engine
+    /// that died while nobody was pressing anything leaves it asked for and untrue - so a
+    /// surface reading the mode alone reports a live device for as long as the app runs.
+    /// [FRAMING:representation] The mode is the map and the engine is the territory, and
+    /// this is the one place they are read together.
+    ///
+    /// It matters most where the failure is quietest. Under `shut` the next press
+    /// relaunches a dead engine and the user learns within one hold; under `open` nobody
+    /// presses for hours, and this is the only surface that could say the device is gone.
+    /// [LAW:no-silent-failure]
+    public var doing: String {
+        guard case .started(let started) = phase else { return "not being captured" }
+        switch started.engine {
+        case .shut, .running: return "\(started.atRest)"
+        case .failed(let error, _): return "\(started.atRest), but it stopped: \(error)"
+        }
+    }
+
     /// Takes the microphone for a session - opening one, or using the one the resting mode
     /// is already holding - and marks where the session begins: the position capture had
     /// reached when `moment` passed, with the pre-roll it will reach back over.
@@ -264,13 +283,28 @@ public final class AudioCapture {
         // that runs for hours. [LAW:no-silent-failure]
         case .running:
             break
-        // Opened for this press. A failed engine reaches here too: a press is a reason to
-        // try the device again, and the alternative is a resting microphone that stays
-        // dead until one is replugged.
-        case .shut, .failed:
+        // Opened for this press.
+        case .shut:
             do {
                 started.engine = .running(try launch())
             } catch {
+                throw NoMicrophone.failed(error)
+            }
+        // A press is a reason to try the device again, and the alternative is a resting
+        // microphone that stays dead until one is replugged. Recorded either way, which
+        // `shut` above deliberately does not do: leaving a failed engine behind there
+        // would let the next device change reach `recover()` with no session open and
+        // hold the microphone a config asked to keep closed.
+        case .failed(_, let since):
+            do {
+                started.engine = .running(try launch())
+                closeOutage(since: since)
+            } catch {
+                // The gap runs from where it began, carrying the newest reason: a retry
+                // that failed again started no new gap, and the reason it is dead now is
+                // the one the status surface has to show. [LAW:no-silent-failure]
+                started.engine = .failed(error, since: since)
+                phase = .started(started)
                 throw NoMicrophone.failed(error)
             }
         }
@@ -420,6 +454,14 @@ public final class AudioCapture {
         phase = .started(started)
     }
 
+    /// Books the end of a gap in capture. [LAW:single-enforcer] A device that came back is
+    /// the same event whether the watch noticed it or a press did, so both arrive here and
+    /// the count cannot depend on which of the two got there first.
+    private func closeOutage(since: ContinuousClock.Instant) {
+        outages.count += 1
+        outages.total += .now - since
+    }
+
     /// The running engine, only while it is still the one a callback was formed for.
     /// [LAW:no-ambient-temporal-coupling] An observer block already queued when
     /// `dispose()` removes the observer still runs, and the tap's failure arrives
@@ -505,8 +547,7 @@ public final class AudioCapture {
         guard case .started(var started) = phase, case .failed(_, let since) = started.engine else { return }
         do {
             started.engine = .running(try launch())
-            outages.count += 1
-            outages.total += .now - since
+            closeOutage(since: since)
         } catch {
             started.engine = .failed(error, since: since)
         }
