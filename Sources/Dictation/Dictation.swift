@@ -19,10 +19,10 @@ import Typing
 /// inside the tap's callback, where a slow handler is what makes macOS switch the tap
 /// off, so what they do is counted: one read of which app is in front, two ring
 /// positions, and the microphone opening and shutting. The opening is the expensive
-/// one - 39 ms of `AVAudioEngine.start` on this Mac, 240 ms for the first press after
-/// launch - and it is spent here rather than behind an await because an engine started
-/// off the callback would start later still, and every millisecond of it is speech the
-/// microphone was not open for. Sessions are typed on this same actor, so the typing
+/// one - what it costs is measured at `AudioCapture.warmUpAllowance` - and it is spent
+/// here rather than behind an await because an engine started off the callback would
+/// start later still, and every millisecond of it is speech the microphone was not open
+/// for. Sessions are typed on this same actor, so the typing
 /// awaits each key's acknowledgement rather than holding the actor for it: a press made
 /// in the middle of an insert is marked on the ring when it is made.
 @MainActor
@@ -111,11 +111,10 @@ public final class Dictation {
                 // the workspace, which the engine's start dwarfs. [LAW:no-ambient-temporal-coupling]
                 let into = try frontmost()
                 // The mark comes from the event's own stamp, so a key-down the tap
-                // delivered late marks the ring where the key went down. What the mark
-                // can reach back over is another matter: this is also where the
-                // microphone opens, and an engine that has just started has nothing
-                // behind it, so the pre-roll pads a press only while some earlier
-                // session's engine is still running.
+                // delivered late marks the ring where the key went down. It reaches back
+                // over nothing: the microphone opens here too, and an engine that has just
+                // started has nothing behind it, so the pre-roll clamps to zero for every
+                // press made through this loop.
                 press = .down(try capture.beginSession(at: moment), into: into)
             } catch {
                 press = .refused(error)

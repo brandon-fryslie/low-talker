@@ -9,9 +9,9 @@ import LowTalkerCore
 /// The warm-up is not visible in the wav's length - the run is timed from after the
 /// engine is up, so a one-second run writes a full second whenever it wrote anything.
 /// It shows in the line instead: every run of this command is the first launch in its
-/// process, which on this Mac takes 244 ms against 38 ms for an engine that has run the
-/// device before, so the clip says it is cut where the microphone was not open. That is
-/// the reading, not a fault in the run.
+/// process, which costs what `AudioCapture.warmUpAllowance` says a cold one costs, so
+/// the clip says it is cut where the microphone was not open. That is the reading, not
+/// a fault in the run.
 struct RecordCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "record",
