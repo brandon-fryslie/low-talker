@@ -159,17 +159,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// system prompt for the microphone here; macOS remembers the answer, so later
     /// launches ask nothing.
     ///
-    /// Nothing is listening when this returns. `capture.start` takes the grant and
-    /// watches the input device; the microphone itself opens on a press and shuts on the
-    /// release, which is what keeps the menu-bar indicator a record of use rather than of
-    /// how long the app has been running - unless the config asks for it to be held open,
-    /// which is the one thing that can make this app hold the device at rest.
+    /// What the microphone is doing when this returns is the resting mode's to say, which
+    /// is the one thing the config decides here; `AudioCapture.start` is where that is
+    /// written down. [LAW:one-source-of-truth]
     ///
     /// A config that cannot be read stops the app listening rather than being answered
     /// with the defaults, which is `ConfigError`'s own rule: "there is no config" and
     /// "there is a config I could not read" are different facts, and running the second
     /// one as the first would hold or release the microphone on settings its owner never
-    /// chose. The menu says which file and what is wrong with it.
+    /// chose. The menu says what is wrong with it.
     /// [LAW:no-silent-failure]
     private func listen() async {
         do {

@@ -58,9 +58,9 @@ public final class AudioCapture {
         case listening
         /// A session is open, so the microphone is too.
         case running
-        /// The engine stopped on its own. It stays that way until the default input
-        /// device changes, when it launches again, or until the session that was open
-        /// ends.
+        /// The engine stopped on its own, and stays that way until something launches one
+        /// again: the input device changing, the next press, or a key-up that shuts the
+        /// microphone.
         case failed(any Error)
     }
 
@@ -157,8 +157,8 @@ public final class AudioCapture {
     private let shared: Shared
     private var phase: Phase = .stopped
     private var generation = 0
-    /// Input device changes an open session's capture stayed running across since
-    /// `start()`: the engine was replaced without ever failing. Not a claim that no audio
+    /// Input device changes capture stayed running across since `start()`, session or no
+    /// session: the engine was replaced without ever failing. Not a claim that no audio
     /// was lost to them - the audio on either side of each one is spliced, which is what
     /// a session's `CapturedAudio` says and this count does not.
     public private(set) var deviceChanges = 0
@@ -478,8 +478,8 @@ public final class AudioCapture {
         }
     }
 
-    /// The device changed under an open session: macOS already stopped the engine, and
-    /// it never delivers again.
+    /// The device changed under a running engine: macOS already stopped it, and it never
+    /// delivers again.
     private func replaceEngine(from generation: Int) {
         guard let running = live(of: generation) else { return }
         dispose(running.live)

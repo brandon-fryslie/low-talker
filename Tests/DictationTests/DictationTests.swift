@@ -73,8 +73,12 @@ final class Rig {
         )
     }
 
-    convenience init(hearing transcriber: FakeTranscriber, retaining: TimeInterval = AudioCapture.defaultRetention) throws {
-        try self.init(transcriber: { transcriber }, retaining: retaining)
+    convenience init(
+        hearing transcriber: FakeTranscriber,
+        retaining: TimeInterval = AudioCapture.defaultRetention,
+        atRest: MicrophoneAtRest = .shut
+    ) throws {
+        try self.init(transcriber: { transcriber }, retaining: retaining, atRest: atRest)
     }
 
     /// Audio captured from `now` on, stamped as the microphone would stamp it, into
@@ -178,6 +182,19 @@ extension Result {
         rig.hold(speaking: [7, 8])
         _ = try await rig.session()
         #expect(engine.clips.map(\.samples) == [[1, 2], [7, 8]])
+    }
+
+    /// The other side of that trade, driven through the same loop: a microphone the resting
+    /// mode has held open since `start()` has audio behind the key, so a press made a word
+    /// into a sentence carries the word it was pressed a moment too late for. The test above
+    /// pins what `shut` gives the indicator up for; this one pins what `open` buys back.
+    @Test func aPressMadeWhileTheMicrophoneIsHeldOpenHearsTheWordsBeforeIt() async throws {
+        let engine = FakeTranscriber { _ in Transcript(typed: "") }
+        let rig = try Rig(hearing: engine, atRest: .open)
+        rig.speak([1, 2])
+        rig.hold(speaking: [7, 8])
+        _ = try await rig.session()
+        #expect(engine.clips.map(\.samples) == [[1, 2, 7, 8]])
     }
 
     /// The mark still comes from the key event's own stamp rather than from the moment

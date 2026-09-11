@@ -111,10 +111,9 @@ public final class Dictation {
                 // the workspace, which the engine's start dwarfs. [LAW:no-ambient-temporal-coupling]
                 let into = try frontmost()
                 // The mark comes from the event's own stamp, so a key-down the tap
-                // delivered late marks the ring where the key went down. It reaches back
-                // over nothing: the microphone opens here too, and an engine that has just
-                // started has nothing behind it, so the pre-roll clamps to zero for every
-                // press made through this loop.
+                // delivered late marks the ring where the key went down. What it reaches
+                // back over is the resting mode's to say: nothing behind a microphone that
+                // opens here, and the look-back behind one held open since `start()`.
                 press = .down(try capture.beginSession(at: moment), into: into)
             } catch {
                 press = .refused(error)
