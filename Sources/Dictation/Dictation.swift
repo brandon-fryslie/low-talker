@@ -93,11 +93,13 @@ public final class Dictation {
     /// press out of order is a broken detector, not a session.
     public func press(_ transition: HotkeyDetector.Transition) {
         switch transition {
-        case .began:
+        case .began(_, let moment):
             guard case .up = press else { preconditionFailure("a press began while one was open; the detector pairs every began with an ended") }
-            // The mark first: the ring is running either way, and the earlier the mark
-            // the less the pre-roll has to reach back for.
-            let session = capture.beginSession()
+            // The mark comes from the event's own stamp, so a key-down the tap delivered
+            // late marks the ring where the key went down, and the pre-roll is left to
+            // pad a key pressed a little after speech started rather than to cover a
+            // handler that was slow to run.
+            let session = capture.beginSession(at: moment)
             do {
                 press = .down(session, into: try frontmost())
             } catch {

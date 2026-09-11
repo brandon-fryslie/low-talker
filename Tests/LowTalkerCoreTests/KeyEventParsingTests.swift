@@ -20,19 +20,19 @@ private func event(type: CGEventType, keyCode: CGKeyCode, flags: UInt64, at nano
     /// A modifier's own flags-changed event says which way it moved.
     @Test func aModifierComingDownIsADownWithTheModifiersHeld() throws {
         let parsed = KeyEvent(try event(type: .flagsChanged, keyCode: 61, flags: CGEventFlags.maskAlternate.rawValue | rightOptionBits, at: 1_500), type: .flagsChanged)
-        #expect(parsed == KeyEvent(key: .modifier(.rightOption), direction: .down, modifiers: [.rightOption], time: .nanoseconds(1_500)))
+        #expect(parsed == KeyEvent(key: .modifier(.rightOption), direction: .down, modifiers: [.rightOption], time: HostTime(uptime: .nanoseconds(1_500))))
     }
 
     @Test func aModifierGoingUpIsAnUpWithoutIt() throws {
         let parsed = KeyEvent(try event(type: .flagsChanged, keyCode: 61, flags: CGEventFlags.maskShift.rawValue | leftShiftBits), type: .flagsChanged)
-        #expect(parsed == KeyEvent(key: .modifier(.rightOption), direction: .up, modifiers: [.leftShift], time: .zero))
+        #expect(parsed == KeyEvent(key: .modifier(.rightOption), direction: .up, modifiers: [.leftShift], time: HostTime(uptime: .zero)))
     }
 
     @Test func keysCarryTheModifiersHeldWithThem() throws {
         let down = KeyEvent(try event(type: .keyDown, keyCode: 0, flags: CGEventFlags.maskAlternate.rawValue | rightOptionBits), type: .keyDown)
-        #expect(down == KeyEvent(key: .key(Key(rawValue: 0)), direction: .down, modifiers: [.rightOption], time: .zero))
+        #expect(down == KeyEvent(key: .key(Key(rawValue: 0)), direction: .down, modifiers: [.rightOption], time: HostTime(uptime: .zero)))
         let up = KeyEvent(try event(type: .keyUp, keyCode: 0, flags: 0), type: .keyUp)
-        #expect(up == KeyEvent(key: .key(Key(rawValue: 0)), direction: .up, modifiers: [], time: .zero))
+        #expect(up == KeyEvent(key: .key(Key(rawValue: 0)), direction: .up, modifiers: [], time: HostTime(uptime: .zero)))
     }
 
     /// Every modifier, stated against the Carbon key code and the IOLLEvent device bit
@@ -50,12 +50,12 @@ private func event(type: CGEventType, keyCode: CGKeyCode, flags: UInt64, at nano
     ])
     func eachModifierIsToldBySideFromItsKeyCodeAndDeviceBit(modifier: Modifier, keyCode: Int, deviceBit: Int32) throws {
         let parsed = KeyEvent(try event(type: .flagsChanged, keyCode: CGKeyCode(keyCode), flags: UInt64(deviceBit)), type: .flagsChanged)
-        #expect(parsed == KeyEvent(key: .modifier(modifier), direction: .down, modifiers: [modifier], time: .zero))
+        #expect(parsed == KeyEvent(key: .modifier(modifier), direction: .down, modifiers: [modifier], time: HostTime(uptime: .zero)))
     }
 
     @Test func modifiersHeldTogetherAreAllReported() throws {
         let parsed = KeyEvent(try event(type: .flagsChanged, keyCode: CGKeyCode(kVK_Shift), flags: UInt64(NX_DEVICELSHIFTKEYMASK | NX_DEVICERALTKEYMASK)), type: .flagsChanged)
-        #expect(parsed == KeyEvent(key: .modifier(.leftShift), direction: .down, modifiers: [.leftShift, .rightOption], time: .zero))
+        #expect(parsed == KeyEvent(key: .modifier(.leftShift), direction: .down, modifiers: [.leftShift, .rightOption], time: HostTime(uptime: .zero)))
     }
 
     /// Any process can post an event with a key code beyond 16 bits; the parse must

@@ -56,14 +56,22 @@ public final class AudioCapture {
         case started(watch: Disposal, Engine)
     }
 
-    /// The ring behind a lock, shared between the tap's queue and the main actor.
-    private final class SharedRing: Sendable {
-        let ring: Mutex<AudioRing>
-        init(_ ring: AudioRing) { self.ring = Mutex(ring) }
+    /// The samples and where their positions sit in time. [LAW:no-ambient-temporal-coupling]
+    /// One value under one lock: a position read off the timeline and a slice taken
+    /// from the ring must not straddle a buffer that arrived between them.
+    private struct Stream: Sendable {
+        var ring: AudioRing
+        var timeline: AudioTimeline
+    }
+
+    /// The stream behind a lock, shared between the tap's queue and the main actor.
+    private final class Shared: Sendable {
+        let stream: Mutex<Stream>
+        init(_ stream: Stream) { self.stream = Mutex(stream) }
     }
 
     private let hardware: any AudioHardware
-    private let shared: SharedRing
+    private let shared: Shared
     private var phase: Phase = .stopped
     private var generation = 0
     /// Input device changes survived without a gap since `start()`.
@@ -72,9 +80,15 @@ public final class AudioCapture {
 
     nonisolated public static let defaultRetention: TimeInterval = 60
 
-    public init(retaining duration: TimeInterval = defaultRetention, hardware: any AudioHardware = SystemAudioHardware()) {
+    /// `origin` is when the first sample is expected: nothing has been captured yet,
+    /// so the timeline starts on that prediction and the first buffer corrects it.
+    public init(
+        retaining duration: TimeInterval = defaultRetention,
+        hardware: any AudioHardware = SystemAudioHardware(),
+        startingAt origin: HostTime = .now
+    ) {
         self.hardware = hardware
-        shared = SharedRing(AudioRing(retaining: duration))
+        shared = Shared(Stream(ring: AudioRing(retaining: duration), timeline: AudioTimeline(startingAt: origin)))
     }
 
     public var state: State {
@@ -85,23 +99,28 @@ public final class AudioCapture {
         }
     }
 
-    /// The sample positions the ring still holds; `upperBound` is the position the
-    /// next sample from the microphone will take.
-    public var retained: Range<Int> { shared.ring.withLock { $0.retained } }
+    public func clip(in range: Range<Int>) -> AudioClip { shared.stream.withLock { $0.ring.clip(in: range) } }
 
-    public func clip(in range: Range<Int>) -> AudioClip { shared.ring.withLock { $0.clip(in: range) } }
-
-    /// Marks where a session begins: the next sample's position, with the pre-roll it
-    /// will reach back over. Costs one read; the microphone keeps running.
-    public func beginSession(preRoll: TimeInterval = AudioSession.defaultPreRoll) -> AudioSession {
-        AudioSession(beginningAt: retained.upperBound, preRoll: preRoll)
+    /// Marks where a session begins: the position the microphone had reached when
+    /// `moment` passed, with the pre-roll it will reach back over. Costs one read; the
+    /// microphone keeps running.
+    ///
+    /// [LAW:one-source-of-truth] The moment is the one the event that began the session
+    /// was stamped with, not the one this is called at, so a handler that ran late still
+    /// marks the ring where the key went down. A moment later than the newest sample -
+    /// the key went down between two buffers - marks the newest sample, since a session
+    /// cannot begin in audio that has not been captured.
+    public func beginSession(at moment: HostTime, preRoll: TimeInterval = AudioSession.defaultPreRoll) -> AudioSession {
+        shared.stream.withLock {
+            AudioSession(beginningAt: min($0.timeline.position(at: moment), $0.ring.end), preRoll: preRoll)
+        }
     }
 
     /// Marks where `session` ends and yields its audio: the pre-roll, then everything
     /// captured since it began. The end mark and the slice are taken under one lock,
     /// so a buffer arriving in between cannot separate them.
     public func endSession(_ session: AudioSession) -> AudioClip {
-        shared.ring.withLock { $0.clip(in: session.range(endingAt: $0.end)) }
+        shared.stream.withLock { $0.ring.clip(in: session.range(endingAt: $0.ring.end)) }
     }
 
     /// Starts listening. The grant is the proof the user allowed it: without one,
@@ -147,7 +166,14 @@ public final class AudioCapture {
         generation += 1
         let generation = generation
         let dispose = try hardware.launch(
-            appending: { samples in shared.ring.withLock { $0.append(samples) } },
+            appending: { samples, time in
+                shared.stream.withLock {
+                    // The buffer's first sample takes the position the ring is at, and
+                    // that is the sample its stamp dates.
+                    $0.timeline.mark($0.ring.end, at: time)
+                    $0.ring.append(samples)
+                }
+            },
             onFailure: { [weak self] error in self?.fail(error, from: generation) },
             onConfigurationChange: { [weak self] in self?.replaceEngine(from: generation) }
         )

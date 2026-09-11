@@ -35,8 +35,10 @@ private final class FakeTap: KeyboardTap {
 
 private let rightOption = KeyChord(modifiers: .rightOption)
 
+private func at(_ ms: Int64) -> HostTime { HostTime(uptime: .milliseconds(ms)) }
+
 private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEvent {
-    KeyEvent(key: .modifier(.rightOption), direction: direction, modifiers: direction == .down ? [.rightOption] : [], time: .milliseconds(ms))
+    KeyEvent(key: .modifier(.rightOption), direction: direction, modifiers: direction == .down ? [.rightOption] : [], time: at(ms))
 }
 
 @MainActor
@@ -48,10 +50,10 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         try hotkey.start { transitions.append($0) }
         let installation = try #require(tap.installations.first)
         #expect(installation.handle(rightOption(.down, at: 0)) == .swallow)
-        #expect(transitions == [.began(rightOption)])
-        #expect(hotkey.phase == .held(rightOption, since: .zero))
+        #expect(transitions == [.began(rightOption, at: at(0))])
+        #expect(hotkey.phase == .held(rightOption, since: at(0)))
         #expect(installation.handle(rightOption(.up, at: 400)) == .swallow)
-        #expect(transitions == [.began(rightOption), .ended(rightOption, .hold)])
+        #expect(transitions == [.began(rightOption, at: at(0)), .ended(rightOption, .hold)])
     }
 
     @Test func aLapseIsCountedAndAStartResetsIt() throws {
@@ -78,10 +80,10 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         _ = installation.handle(rightOption(.down, at: 0))
         installation.onLapse()
         #expect(hotkey.lapses == 1)
-        #expect(transitions == [.began(rightOption), .ended(rightOption, .hold)])
+        #expect(transitions == [.began(rightOption, at: at(0)), .ended(rightOption, .hold)])
         #expect(hotkey.phase == .idle)
         #expect(installation.handle(rightOption(.down, at: 1000)) == .swallow)
-        #expect(transitions.last == .began(rightOption))
+        #expect(transitions.last == .began(rightOption, at: at(1000)))
     }
 
     /// Stopping mid-press forgets the press: a later start begins from rest.

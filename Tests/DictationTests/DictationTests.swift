@@ -28,6 +28,13 @@ final class Rig {
 
     let hardware = FakeHardware()
     let capture: AudioCapture
+    /// Where the fake microphone's clock starts; any moment would do, since a timeline
+    /// is measured in differences.
+    static let origin = HostTime(uptime: .zero)
+    /// The host clock the fake microphone stamps its buffers with. It starts where the
+    /// capture's timeline does and advances by the audio the test feeds, so a test can
+    /// name the moment a key went down in the middle of speech already spoken.
+    private(set) var now = Rig.origin
     let keyboard = LoggingKeyboard()
     let dictation: Dictation
     private let reports: AsyncStream<Result<Dictation.Session, any Error>>
@@ -41,7 +48,7 @@ final class Rig {
         router: Router = Router(routes: [.dictation]),
         frontmost: @escaping @Sendable @MainActor () throws -> BundleID = { textEdit }
     ) throws {
-        capture = AudioCapture(hardware: hardware)
+        capture = AudioCapture(hardware: hardware, startingAt: Self.origin)
         try capture.start(try MicrophonePermission(authority: Authorized()).current.grant())
         let (stream, feed) = AsyncStream.makeStream(of: Result<Dictation.Session, any Error>.self)
         reports = stream
@@ -65,10 +72,17 @@ final class Rig {
         try self.init(transcriber: { transcriber })
     }
 
-    /// A hold of the hotkey with `samples` captured during it.
+    /// Audio captured from `now` on, stamped as the microphone would stamp it.
+    func speak(_ samples: [Float]) {
+        hardware.engines[0].appending(samples, now)
+        now = now + .seconds(AudioClip.duration(for: samples.count))
+    }
+
+    /// A hold of the hotkey with `samples` captured during it, the key-down heard the
+    /// moment it was made.
     func hold(speaking samples: [Float] = [1, 2, 3]) {
-        dictation.press(.began(Self.rightOption))
-        hardware.engines[0].appending(samples)
+        dictation.press(.began(Self.rightOption, at: now))
+        speak(samples)
         dictation.press(.ended(Self.rightOption, .hold))
     }
 
@@ -117,12 +131,33 @@ extension Result {
     @Test func theEngineHearsOnlyTheHold() async throws {
         let engine = FakeTranscriber { _ in Transcript(typed: "") }
         let rig = try Rig(hearing: engine)
-        rig.hardware.engines[0].appending(Array(repeating: 0, count: AudioClip.sampleCount(for: AudioSession.defaultPreRoll) + 2))
+        rig.speak(Array(repeating: 0, count: AudioClip.sampleCount(for: AudioSession.defaultPreRoll) + 2))
         rig.hold(speaking: [7, 8])
         _ = try await rig.session()
         let heard = try #require(engine.clips.first?.samples)
         #expect(heard.count == AudioClip.sampleCount(for: AudioSession.defaultPreRoll) + 2)
         #expect(heard.suffix(2) == [7, 8])
+    }
+
+    /// The mark comes from the key event's own stamp, not from the moment the handler
+    /// ran. The speaker holds the key and talks; the handler is stuck behind an insert
+    /// and the key-down only reaches the loop a second later, long past what the
+    /// pre-roll reaches back over. The clip begins at the first word all the same,
+    /// because the event says when the key went down.
+    @Test func aKeyDownDeliveredLateIsMarkedWhereTheKeyWentDown() async throws {
+        let engine = FakeTranscriber { _ in Transcript(typed: "") }
+        let rig = try Rig(hearing: engine)
+        let wentDown = rig.now
+        let spoken: [Float] = [1, 2, 3]
+        rig.speak(spoken)
+        // A second of hold the handler could not be reached for: more than three times
+        // the pre-roll, so a mark taken when it finally ran would begin after the words.
+        let held = [Float](repeating: 0, count: AudioClip.sampleCount(for: 1))
+        rig.speak(held)
+        rig.dictation.press(.began(Rig.rightOption, at: wentDown))
+        rig.dictation.press(.ended(Rig.rightOption, .hold))
+        _ = try await rig.session()
+        #expect(engine.clips.first?.samples == spoken + held)
     }
 
     @Test func nothingSaidIsASessionThatTypesNothing() async throws {
@@ -183,9 +218,9 @@ extension Result {
         #expect(rig.keyboard.log == Array(Self.typed("a").prefix(2)))
 
         let silence = [Float](repeating: 0, count: AudioClip.sampleCount(for: AudioSession.defaultPreRoll))
-        rig.hardware.engines[0].appending(silence)
+        rig.speak(silence)
         rig.hold(speaking: [7, 8])
-        rig.hardware.engines[0].appending([9])
+        rig.speak([9])
         #expect(rig.keyboard.log == Array(Self.typed("a").prefix(2)))
 
         gate.open()

@@ -9,10 +9,10 @@ import Typing
 @MainActor
 final class FakeHardware: AudioHardware {
     final class Engine {
-        let appending: @Sendable ([Float]) -> Void
+        let appending: @Sendable ([Float], HostTime) -> Void
         let onFailure: @MainActor (any Error) -> Void
 
-        init(appending: @escaping @Sendable ([Float]) -> Void, onFailure: @escaping @MainActor (any Error) -> Void) {
+        init(appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void) {
             self.appending = appending
             self.onFailure = onFailure
         }
@@ -20,7 +20,7 @@ final class FakeHardware: AudioHardware {
 
     private(set) var engines: [Engine] = []
 
-    func launch(appending: @escaping @Sendable ([Float]) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) throws -> Disposal {
+    func launch(appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) throws -> Disposal {
         engines.append(Engine(appending: appending, onFailure: onFailure))
         return {}
     }
