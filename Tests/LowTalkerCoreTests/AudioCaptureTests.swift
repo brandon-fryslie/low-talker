@@ -82,6 +82,12 @@ private struct Authorized: MicrophoneAuthority {
         return nil
     }
 
+    /// The loss a partial capture is expected to carry. A `Loss` refuses to be nothing,
+    /// so an expectation of one is spelled out here and the test reads as an equality.
+    private func loss(scrolledOff: Int = 0, interrupted: Bool = false) throws -> CapturedAudio.Loss {
+        try #require(CapturedAudio.Loss(scrolledOff: scrolledOff, interrupted: interrupted))
+    }
+
     @Test func startLaunchesAnEngineAndWatchesTheDefaultInput() throws {
         let hardware = FakeHardware()
         let capture = AudioCapture(hardware: hardware)
@@ -97,7 +103,7 @@ private struct Authorized: MicrophoneAuthority {
         try capture.start(grant)
         let session = capture.beginSession(at: origin, preRoll: 0)
         hardware.engines[0].appending([1, 2, 3], origin)
-        #expect(capture.endSession(session).samples == [1, 2, 3])
+        #expect(capture.endSession(session) == .whole(AudioClip(samples: [1, 2, 3])))
     }
 
     /// The moment names a position, not the call: a session begun at a moment the
@@ -108,7 +114,7 @@ private struct Authorized: MicrophoneAuthority {
         try capture.start(grant)
         hardware.engines[0].appending([1, 2, 3, 4], origin)
         let session = capture.beginSession(at: after(2), preRoll: 0)
-        #expect(capture.endSession(session).samples == [3, 4])
+        #expect(capture.endSession(session) == .whole(AudioClip(samples: [3, 4])))
     }
 
     /// The key went down between two buffers, so the moment is later than anything
@@ -121,12 +127,38 @@ private struct Authorized: MicrophoneAuthority {
         hardware.engines[0].appending([1, 2], origin)
         let session = capture.beginSession(at: after(9), preRoll: 0)
         hardware.engines[0].appending([3], after(2))
-        #expect(capture.endSession(session).samples == [3])
+        #expect(capture.endSession(session) == .whole(AudioClip(samples: [3])))
+    }
+
+    /// A hold longer than the ring retains: the first of what was said was overwritten by
+    /// the last of it before the key came up. What comes back is the tail, and it says how
+    /// much of the head is gone rather than passing for the whole utterance.
+    @Test func aSessionWhoseHeadTheRingDroppedSaysHowMuchIsGone() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(retaining: AudioClip.duration(for: 4), hardware: hardware, startingAt: origin)
+        try capture.start(grant)
+        let session = capture.beginSession(at: origin, preRoll: 0)
+        hardware.engines[0].appending([1, 2, 3, 4, 5, 6], origin)
+        #expect(try capture.endSession(session) == .partial(AudioClip(samples: [3, 4, 5, 6]), lost: loss(scrolledOff: 2)))
+    }
+
+    /// A pre-roll reaching back before the first sample ever captured is not lost audio:
+    /// there was none there to lose, which is the ordinary state of the first press after
+    /// a start.
+    @Test func aPreRollReachingBeforeTheFirstSampleIsNotALoss() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant)
+        let session = capture.beginSession(at: origin)
+        hardware.engines[0].appending([1, 2], origin)
+        #expect(capture.endSession(session) == .whole(AudioClip(samples: [1, 2])))
     }
 
     /// The ring survives the engine: samples from before the change are still there
-    /// after it, followed by the new engine's.
-    @Test func aConfigurationChangeReplacesTheEngineAndKeepsTheRing() throws {
+    /// after it, followed by the new engine's - spliced, since nothing was captured in
+    /// between and no position advanced while nothing was. A session open across the
+    /// change is told so; the samples themselves have no seam to find it by.
+    @Test func aConfigurationChangeReplacesTheEngineAndSplicesTheRing() throws {
         let hardware = FakeHardware()
         let capture = AudioCapture(hardware: hardware, startingAt: origin)
         try capture.start(grant)
@@ -138,7 +170,35 @@ private struct Authorized: MicrophoneAuthority {
         #expect(capture.deviceChanges == 1)
         #expect(isRunning(capture))
         hardware.engines[1].appending([2], after(1))
-        #expect(capture.endSession(session).samples == [1, 2])
+        #expect(try capture.endSession(session) == .partial(AudioClip(samples: [1, 2]), lost: loss(interrupted: true)))
+    }
+
+    /// A session begun after the change hears one engine only: the break is behind it,
+    /// so its clip is whole.
+    @Test func aSessionBegunAfterAConfigurationChangeIsWhole() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant)
+        hardware.engines[0].appending([1], origin)
+        hardware.engines[0].onConfigurationChange()
+        let session = capture.beginSession(at: after(1), preRoll: 0)
+        hardware.engines[1].appending([2], after(1))
+        #expect(capture.endSession(session) == .whole(AudioClip(samples: [2])))
+    }
+
+    /// The same splice by the other door: capture failed mid-session and the device that
+    /// appeared brought it back, so the clip is two engines' audio with the outage taken
+    /// out of the middle of it.
+    @Test func aSessionThatSpansAnOutageIsPartial() throws {
+        let hardware = FakeHardware(launches: [nil, NoDevice()])
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant)
+        let session = capture.beginSession(at: origin, preRoll: 0)
+        hardware.engines[0].appending([1], origin)
+        hardware.engines[0].onConfigurationChange()
+        try hardware.changeDefaultInput()
+        hardware.engines[1].appending([2], after(1))
+        #expect(try capture.endSession(session) == .partial(AudioClip(samples: [1, 2]), lost: loss(interrupted: true)))
     }
 
     /// The only microphone is unplugged: the replacement cannot launch, capture is

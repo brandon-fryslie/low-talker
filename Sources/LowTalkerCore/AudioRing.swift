@@ -41,9 +41,22 @@ public struct AudioRing: Sendable, Equatable {
     /// The samples at the positions in `range` that are still retained; positions
     /// that scrolled off or are not yet written contribute nothing, so a session
     /// that began before the ring filled, or whose pre-roll reaches before the first
-    /// sample, yields what exists rather than failing.
+    /// sample, yields what exists rather than failing. What the clamp cost is
+    /// `scrolledOff(from:)`, since a shorter clip looks like no other clip.
     public func clip(in range: Range<Int>) -> AudioClip {
         let held = range.clamped(to: retained)
         return AudioClip(samples: held.map { storage[$0 % capacity] })
+    }
+
+    /// How many samples of `range` the ring held once and no longer does: what
+    /// `clip(in:)` clamped away at the head. Positions no sample ever took are not among
+    /// them - a pre-roll reaching back before the first sample reaches over audio that
+    /// never existed, which is the ordinary state of the first session after a start.
+    ///
+    /// [LAW:parse-dont-validate] The clamp is where a caller's range quietly becomes a
+    /// shorter one, and the clip it returns carries no sign of it. This is the proof the
+    /// clamp discards, kept so a session can tell a whole capture from a truncated one.
+    public func scrolledOff(from range: Range<Int>) -> Int {
+        range.clamped(to: 0..<end).count - range.clamped(to: retained).count
     }
 }

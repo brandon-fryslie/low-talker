@@ -1,4 +1,5 @@
 import Dictation
+import Foundation
 import KeyboardLayout
 import LowTalkerCore
 import Synchronization
@@ -46,9 +47,10 @@ final class Rig {
     init(
         transcriber: @escaping @Sendable @MainActor () async throws -> any Transcriber,
         router: Router = Router(routes: [.dictation]),
+        retaining: TimeInterval = AudioCapture.defaultRetention,
         frontmost: @escaping @Sendable @MainActor () throws -> BundleID = { textEdit }
     ) throws {
-        capture = AudioCapture(hardware: hardware, startingAt: Self.origin)
+        capture = AudioCapture(retaining: retaining, hardware: hardware, startingAt: Self.origin)
         try capture.start(try MicrophonePermission(authority: Authorized()).current.grant())
         let (stream, feed) = AsyncStream.makeStream(of: Result<Dictation.Session, any Error>.self)
         reports = stream
@@ -68,14 +70,23 @@ final class Rig {
         )
     }
 
-    convenience init(hearing transcriber: FakeTranscriber) throws {
-        try self.init(transcriber: { transcriber })
+    convenience init(hearing transcriber: FakeTranscriber, retaining: TimeInterval = AudioCapture.defaultRetention) throws {
+        try self.init(transcriber: { transcriber }, retaining: retaining)
     }
 
-    /// Audio captured from `now` on, stamped as the microphone would stamp it.
+    /// Audio captured from `now` on, stamped as the microphone would stamp it, into
+    /// whichever engine is running: a replaced one is deaf, as it is on a real Mac.
     func speak(_ samples: [Float]) {
-        hardware.engines[0].appending(samples, now)
+        hardware.live.appending(samples, now)
         now = now + .seconds(AudioClip.duration(for: samples.count))
+    }
+
+    /// The input device changes: macOS stops the engine and posts the change, and capture
+    /// launches a fresh one on the new device. Nothing is captured in between, and the
+    /// test's clock does not advance over it either - the gap leaves no samples behind to
+    /// be measured by, which is the whole of why it has to be marked when it happens.
+    func changeDevice() {
+        hardware.live.onConfigurationChange()
     }
 
     /// A hold of the hotkey with `samples` captured during it, the key-down heard the
@@ -436,6 +447,71 @@ extension Result {
         #expect(try await rig.session().transcript.text == "a")
         #expect(engine.clips.count == 1)
         #expect(rig.keyboard.log == Self.typed("a"))
+    }
+
+    /// [LAW:no-silent-failure] The speaker held the key for longer than the ring retains,
+    /// so the first of what they said was overwritten by the last of it before the key
+    /// came up. What is left is a plausible utterance: nothing in the samples says where
+    /// it was cut, and - as the epic's contract test found by losing 0.4 s of speech with
+    /// every assertion over typed text still passing - nothing in the text says it either.
+    /// So the press is reported rather than typed, the same answer a lapsed press gets and
+    /// for the same reason: the destination is the user's editor, where a fragment cannot
+    /// be marked as one. The loss is named in samples, which is what makes this an
+    /// assertion and not a hope. [LAW:behavior-not-structure]
+    @Test func aPressTheRingCouldNotHoldWholeIsReportedInsteadOfTypedAndTheNextPressTypes() async throws {
+        let engine = FakeTranscriber { _ in Transcript(typed: "a") }
+        let rig = try Rig(hearing: engine, retaining: 0.5)
+
+        rig.hold(speaking: [Float](repeating: 1, count: AudioClip.sampleCount(for: 0.8)))
+        let press = try #require(await rig.report().failure as? SpeechLost)
+        #expect(press.chord == Rig.rightOption)
+        // A 0.8 s hold into a ring that keeps 0.5 s: the missing 0.3 s is the head of the
+        // utterance, and the pre-roll reaching back before the microphone started is not
+        // part of it - there was no audio there to lose.
+        #expect(press.lost.scrolledOff == AudioClip.sampleCount(for: 0.3))
+        #expect(!press.lost.interrupted)
+        #expect(engine.clips.isEmpty)
+        #expect(rig.keyboard.log.isEmpty)
+
+        rig.hold(speaking: [2, 3])
+        #expect(try await rig.session().transcript.text == "a")
+        #expect(engine.clips.count == 1)
+        #expect(rig.keyboard.log == Self.typed("a"))
+    }
+
+    /// [LAW:no-silent-failure] The input device changed in the middle of a press - AirPods
+    /// connecting mid-sentence, the everyday case. macOS stops the engine and capture
+    /// launches a new one on the new device, and the speech in between is not captured by
+    /// either. What the ring holds is the words before the change butted straight against
+    /// the words after it, with nothing in the samples marking the join: ring positions
+    /// advance only on capture, so the stretch that was lost left nothing behind, not even
+    /// a hole. The press is reported instead of typed, because what a splice transcribes
+    /// to is a sentence - just not the one that was said.
+    @Test func aPressTheInputDeviceChangedDuringIsReportedInsteadOfTyped() async throws {
+        let engine = FakeTranscriber { _ in Transcript(typed: "a") }
+        let rig = try Rig(hearing: engine)
+
+        rig.dictation.press(.began(Rig.rightOption, at: rig.now))
+        rig.speak([1, 2])
+        rig.changeDevice()
+        rig.speak([3, 4])
+        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+
+        let press = try #require(await rig.report().failure as? SpeechLost)
+        #expect(press.chord == Rig.rightOption)
+        #expect(press.lost.interrupted)
+        #expect(press.lost.scrolledOff == 0)
+        #expect(engine.clips.isEmpty)
+        #expect(rig.keyboard.log.isEmpty)
+
+        // The next press is whole, once it is clear of the seam. Clear means its pre-roll
+        // too: a press made right after the change reaches back over it, and a clip that
+        // holds audio from both sides of a break is spliced whoever made it.
+        let between = [Float](repeating: 0, count: AudioClip.sampleCount(for: AudioSession.defaultPreRoll))
+        rig.speak(between)
+        rig.hold(speaking: [5, 6])
+        #expect(try await rig.session().transcript.text == "a")
+        #expect(engine.clips.map(\.samples) == [between + [5, 6]])
     }
 
     /// [LAW:no-silent-failure] A microphone that failed leaves a ring the engine would

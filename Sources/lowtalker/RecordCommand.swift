@@ -32,10 +32,22 @@ struct RecordCommand: AsyncParsableCommand {
         try await Task.sleep(for: .seconds(seconds))
         if case .failed(let error) = capture.state { throw error }
 
-        let clip = capture.endSession(session)
+        // A run longer than the ring retains, or one a device switch was tried during, is
+        // exactly what this command is for: the wav is written either way and the line
+        // says what is missing from it. [LAW:no-silent-failure] Refusing is `Dictation`'s
+        // answer because its destination is the user's editor; here the operator is
+        // reading the line and can see the gap for what it is.
+        let captured = capture.endSession(session)
+        let clip = switch captured {
+        case .whole(let clip), .partial(let clip, _): clip
+        }
+        let wholeness = switch captured {
+        case .whole: "whole"
+        case .partial(_, let lost): "\(lost)"
+        }
         try clip.write(to: output)
         // Pinned like TranscribeCommand's numbers, so the line reads the same on every machine.
         let without = capture.outages.total.formatted(.units(allowed: [.seconds], fractionalPart: .show(length: 1)).locale(Locale(identifier: "en_US_POSIX")))
-        print("\(output.path): \(clip.duration) s, peak \(clip.peak), device changes \(capture.deviceChanges), outages \(capture.outages.count) (\(without) without audio)")
+        print("\(output.path): \(clip.duration) s, peak \(clip.peak), \(wholeness), device changes \(capture.deviceChanges), outages \(capture.outages.count) (\(without) without audio)")
     }
 }
