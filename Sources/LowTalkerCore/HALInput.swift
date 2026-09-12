@@ -131,13 +131,15 @@ final class HALInput: PreparedInput {
     /// this one. [LAW:one-source-of-truth] `AudioCapture` is the one place that knows the
     /// device changed, and asking it for a fresh input is how that knowledge arrives here.
     let device: AudioObjectID
-    /// Listeners on the bound device, dropped with the input.
-    private var watches: [Disposal] = []
+    /// Listeners on the bound device, held for as long as this input is - which is as long
+    /// as the binding they watch. They were a press's once, and the stretch that left
+    /// unwatched is what low-privacy-o1z.aa1 was.
+    private let watches: [Disposal]
 
     /// Everything a press should not have to pay for: the component, the device binding,
     /// the format, the converter and the buffers, all the way to `AudioUnitInitialize`.
     /// No device is opened here, and macOS lights no indicator for it.
-    init() throws {
+    init(onStale: @escaping @MainActor () -> Void) throws {
         var description = AudioComponentDescription(
             componentType: kAudioUnitType_Output,
             componentSubType: kAudioUnitSubType_HALOutput,
@@ -163,6 +165,9 @@ final class HALInput: PreparedInput {
         // every retry prepared another. [LAW:single-enforcer]
         let device: AudioObjectID
         let sink: Sink
+        // Appended one at a time below, and read by the catch, so a second registration that
+        // throws still leaves the first one disposable.
+        var registered: [Disposal] = []
         do {
             // Output off, then the input device, then input on. The order is load-bearing
             // and nothing here shows it, so it is written down.
@@ -261,9 +266,26 @@ final class HALInput: PreparedInput {
             // Which device the unit came out of initialization bound to, which is
             // CoreAudio's answer and not the one we asked for. It has answered differently
             // once already - the aggregate above - and a unit swapped onto one would leave
-            // the guard below questioning a device the unit no longer uses and `open()`
-            // watching that same wrong device for changes. [FRAMING:representation]
+            // both of the things below pointed at a device the unit no longer uses: the
+            // watches listening to it for changes, and the guard asking it whether the
+            // preparation took a microphone. [FRAMING:representation]
             device = try Self.boundDevice(unit)
+
+            // This unit is bound to one device, so a device that goes away or changes shape
+            // under it is capture's cue to ready another against whatever replaced it. Both
+            // watches live here rather than in `open()` because what they watch is the
+            // binding, and the binding lasts as long as this input: registered at the press
+            // they left the resting stretch between presses unwatched, and a device that
+            // renegotiated its format there was heard by nobody. See
+            // `AudioHardware.prepareInput` for what that cost. A switch of which device is
+            // the *default* leaves both of these quiet and is `AudioCapture`'s to see.
+            //
+            // Ahead of the guard below, so the claim that a listener costs no device is made
+            // the same way every other claim about preparing is: by reading the device back.
+            // Registering one should not run a device, and this is the line that would fail
+            // the preparation rather than trust it.
+            registered.append(try Self.watch(device, kAudioDevicePropertyDeviceIsAlive, scope: kAudioObjectPropertyScopeGlobal, onStale))
+            registered.append(try Self.watch(device, kAudioDevicePropertyStreamFormat, scope: kAudioObjectPropertyScopeInput, onStale))
 
             // [LAW:parse-dont-validate] The border between a microphone reached and a
             // microphone taken. Everything above claims to cross it without opening a
@@ -281,6 +303,7 @@ final class HALInput: PreparedInput {
             guard try !Self.isRunning(device) else { throw AudioHardwareError.preparingOpenedTheDevice(device) }
             sink = built
         } catch {
+            registered.forEach { $0() }
             Self.discard(unit)
             throw error
         }
@@ -288,13 +311,13 @@ final class HALInput: PreparedInput {
         self.unit = unit
         self.device = device
         self.sink = sink
+        self.watches = registered
     }
 
     /// Opens the device. What a press pays.
     func open(
         appending: @escaping @Sendable ([Float], HostTime) -> Void,
-        onFailure: @escaping @MainActor (any Error) -> Void,
-        onConfigurationChange: @escaping @MainActor () -> Void
+        onFailure: @escaping @MainActor (any Error) -> Void
     ) throws -> Disposal {
         sink.aim(at: Sink.Target(
             appending: appending,
@@ -307,22 +330,6 @@ final class HALInput: PreparedInput {
             // last, so the resampler starts from nothing rather than carrying the previous
             // press's tail into the head of this one. [LAW:one-source-of-truth]
             sink.converter.reset()
-            // This unit is bound to one device, so a device that goes away or changes shape
-            // under it is the capture's cue to launch another. A switch of the system
-            // default input leaves both of these quiet and is `AudioCapture`'s to see.
-            //
-            // Appended one at a time, and inside this `do`, so a second registration that
-            // throws still leaves the first disposable.
-            //
-            // Both only watch between here and `close()`. Under `shut` that is the length of
-            // a press, so a device that is still the default and renegotiates its format
-            // while the microphone rests - a headset changing codec - is heard by nothing,
-            // and the next press opens against the format this was prepared for. The unit
-            // still converts to the format we asked it for, so that press is resampled twice
-            // rather than wrong, which is why this is written down here and tracked in
-            // low-privacy-o1z.aa1 rather than paid for on every press.
-            watches.append(try watch(kAudioDevicePropertyDeviceIsAlive, scope: kAudioObjectPropertyScopeGlobal, onConfigurationChange))
-            watches.append(try watch(kAudioDevicePropertyStreamFormat, scope: kAudioObjectPropertyScopeInput, onConfigurationChange))
             try AudioHardwareError.check(AudioOutputUnitStart(unit), AudioHardwareError.inputUnavailable)
         } catch {
             close()
@@ -336,11 +343,14 @@ final class HALInput: PreparedInput {
     /// here, including the one `deinit` takes and the one an `open()` that failed partway
     /// takes.
     ///
-    /// Every step is idempotent - stopping a stopped unit, clearing a cleared target and
-    /// disposing an empty list all do nothing - so this needs no flag saying whether the
-    /// device is open. It had one, and because it was set only after a successful start,
-    /// it made this a no-op on exactly the path that had listeners to unwind.
-    /// [LAW:polishing-by-subtraction]
+    /// Both steps are idempotent - stopping a stopped unit and clearing a cleared target do
+    /// nothing - so this needs no flag saying whether the device is open. It had one, and
+    /// because it was set only after a successful start, it made this a no-op on exactly the
+    /// path that had something to unwind. [LAW:polishing-by-subtraction]
+    ///
+    /// What it does not do is drop the device watches. They belong to the input rather than
+    /// to the press, and a key-up that took them down is what left an idle microphone
+    /// unwatched.
     private func close() {
         // [LAW:no-silent-failure] exception: this is the one CoreAudio call here whose
         // status is dropped, and it is dropped because nothing this function can reach
@@ -354,8 +364,6 @@ final class HALInput: PreparedInput {
         // After the stop, so a render already in flight still has somewhere to put the
         // audio it holds rather than dropping it on the floor.
         sink.aim(at: nil)
-        watches.forEach { $0() }
-        watches = []
     }
 
     /// The scope is the caller's because it is the property's, not this function's:
@@ -363,14 +371,19 @@ final class HALInput: PreparedInput {
     /// and a listener whose address names a different scope than the notification is
     /// published on is never called. Registering an input device's stream format globally
     /// succeeds and then hears nothing, which is the quietest way this could be wrong.
-    private func watch(_ selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope, _ onChange: @escaping @MainActor () -> Void) throws -> Disposal {
+    ///
+    /// Static, with the device passed in, so nothing a listener holds is an input. CoreAudio
+    /// keeps the block until it is removed, which is now for the whole life of the input
+    /// rather than the length of a press, and a block that captured `self` would keep that
+    /// input alive past the last reference to it - with its unit, and with `deinit` never
+    /// reached to give either back.
+    private static func watch(_ device: AudioObjectID, _ selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope, _ onChange: @escaping @MainActor () -> Void) throws -> Disposal {
         var address = AudioObjectPropertyAddress(
             mSelector: selector,
             mScope: scope,
             mElement: kAudioObjectPropertyElementMain
         )
         let listener: AudioObjectPropertyListenerBlock = { _, _ in MainActor.assumeIsolated { onChange() } }
-        let device = device
         try AudioHardwareError.check(
             AudioObjectAddPropertyListenerBlock(device, &address, .main, listener),
             AudioHardwareError.deviceWatchFailed
@@ -467,8 +480,14 @@ final class HALInput: PreparedInput {
         // The unit is stopped before the sink it renders into is let go: a render already
         // under way holds a pointer to it. `close` is idempotent, so a disposal that
         // already ran leaves nothing for this to do.
+        //
+        // The one place the watches are given back other than the catch in `init`, and the
+        // two cannot both run: a throwing initializer reaches `deinit` only once every
+        // stored property is assigned, which is the line after that catch can no longer be
+        // taken. [LAW:single-enforcer] per path, which is what the unit already relies on.
         MainActor.assumeIsolated {
             close()
+            watches.forEach { $0() }
             Self.discard(unit)
         }
     }

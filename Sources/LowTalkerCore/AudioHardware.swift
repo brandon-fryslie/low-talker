@@ -20,19 +20,20 @@ public typealias Disposal = @MainActor () -> Void
 public protocol PreparedInput {
     /// Opens the device. Every buffer it captures arrives at `appending` as pipeline
     /// samples with the host time its first sample was captured at, on the audio service
-    /// queue. Reports on the main actor: `onFailure` when a buffer could not be converted
-    /// or placed in time, `onConfigurationChange` when the device this was prepared
-    /// against has gone or changed shape underneath it. Throws when the device cannot
-    /// feed the pipeline - including when there was nothing to prepare, which is the one
-    /// moment that matters and the one place every caller already answers it.
-    /// [LAW:single-enforcer]
+    /// queue, and `onFailure` reports on the main actor when one could not be converted or
+    /// placed in time. Throws when the device cannot feed the pipeline - including when
+    /// there was nothing to prepare, which is the one moment that matters and the one place
+    /// every caller already answers it. [LAW:single-enforcer]
+    ///
+    /// Both of those are facts about a press, which is why they are asked for here and why
+    /// the device going away or changing shape is not: that one is a fact about the binding,
+    /// and it is asked for where the binding is made, in `AudioHardware.prepareInput`.
     ///
     /// The disposal gives the device back and leaves the input prepared, so the next
     /// press opens it at the prepared price rather than at the first one's.
     func open(
         appending: @escaping @Sendable ([Float], HostTime) -> Void,
-        onFailure: @escaping @MainActor (any Error) -> Void,
-        onConfigurationChange: @escaping @MainActor () -> Void
+        onFailure: @escaping @MainActor (any Error) -> Void
     ) throws -> Disposal
 }
 
@@ -45,7 +46,23 @@ public protocol PreparedInput {
 /// and on a CI machine that has no microphone at all.
 @MainActor
 public protocol AudioHardware {
-    /// Readies a microphone without opening it.
+    /// Readies a microphone without opening it, and watches the device it was readied
+    /// against for the whole life of the input that comes back: `onStale` is called on the
+    /// main actor when that device goes away or changes shape, whether or not a press has it
+    /// open.
+    ///
+    /// That lifetime is why the callback is asked for here rather than at `open`. A prepared
+    /// input is bound to one device and fixes its format, its render buffer and its
+    /// converter against the shape that device had when it was readied, so it can go stale
+    /// for exactly as long as it exists - and watching only from `open` to its disposal left
+    /// a device that renegotiates its format while the microphone rests heard by nobody, a
+    /// headset changing codec being the ordinary way that happens. The next press then opened
+    /// against the shape before it and resampled the utterance twice.
+    /// [LAW:no-ambient-temporal-coupling] The fact and the watch on it have one lifetime now.
+    ///
+    /// A switch of *which* device is the default is a different event with a different
+    /// answer - the bound device is still healthy and a press on it need not be cut - and it
+    /// is `watchDefaultInput`'s to report.
     ///
     /// Never throws, and that is deliberate: what can go wrong about reaching a
     /// microphone is not a thing the resting state can answer. Capture rests between
@@ -53,7 +70,7 @@ public protocol AudioHardware {
     /// microphone is a failed capture - which would leave a device change relaunching an
     /// engine a config asked to keep shut. So a preparation that could not happen is
     /// carried in the input and thrown when a press opens it. [LAW:no-silent-failure]
-    func prepareInput() -> any PreparedInput
+    func prepareInput(onStale: @escaping @MainActor () -> Void) -> any PreparedInput
 
     /// Calls `onChange` on the main actor each time the system default input device
     /// changes, until disposed.
@@ -79,6 +96,13 @@ public enum AudioHardwareError: Error, Equatable, CustomStringConvertible {
     /// The device would not say whether it is running, so nothing can say what the
     /// menu-bar indicator is showing for it.
     case runningStateUnreadable(OSStatus)
+    /// The device would not say what shape it is in or what shapes it offers. Read by
+    /// `ShapeChangeAtRest` rather than by a press: what a press needs of the format it
+    /// already asked the unit for.
+    case deviceShapeUnreadable(OSStatus)
+    /// The device refused to be moved to a shape it advertises, so the change a reading
+    /// meant to make was never made.
+    case deviceShapeUnchangeable(OSStatus)
     case renderFailed(OSStatus)
     /// The device asked to hand over more audio at once than the unit said it would.
     case overlongSlice(frames: Int, capacity: Int)
@@ -94,6 +118,8 @@ public enum AudioHardwareError: Error, Equatable, CustomStringConvertible {
         case .noDefaultInput(let status): "this Mac has no default input device (status \(status))"
         case .preparingOpenedTheDevice(let device): "readying a microphone opened device \(device) instead of only reaching it"
         case .runningStateUnreadable(let status): "CoreAudio would not say whether the input device is running (status \(status))"
+        case .deviceShapeUnreadable(let status): "CoreAudio would not say what shape the input device is in (status \(status))"
+        case .deviceShapeUnchangeable(let status): "the input device would not be moved to a shape it offers (status \(status))"
         case .renderFailed(let status): "the input device refused to hand over a buffer it had announced (status \(status))"
         case .overlongSlice(let frames, let capacity): "the input device asked to hand over \(frames) frames at once, past the \(capacity) it was prepared for"
         }
@@ -126,9 +152,11 @@ extension HostTime {
 public struct SystemAudioHardware: AudioHardware {
     public init() {}
 
-    public func prepareInput() -> any PreparedInput {
-        do { return try HALInput() }
-        // Carried rather than raised: see `AudioHardware.prepareInput`.
+    public func prepareInput(onStale: @escaping @MainActor () -> Void) -> any PreparedInput {
+        do { return try HALInput(onStale: onStale) }
+        // Carried rather than raised: see `AudioHardware.prepareInput`. Nothing will call
+        // `onStale` for one of these, and nothing should: there is no device behind an input
+        // that could not be readied, so there is none to change shape.
         catch { return UnreachableInput(fault: error) }
     }
 
@@ -164,8 +192,7 @@ private struct UnreachableInput: PreparedInput {
 
     func open(
         appending: @escaping @Sendable ([Float], HostTime) -> Void,
-        onFailure: @escaping @MainActor (any Error) -> Void,
-        onConfigurationChange: @escaping @MainActor () -> Void
+        onFailure: @escaping @MainActor (any Error) -> Void
     ) throws -> Disposal {
         throw fault
     }

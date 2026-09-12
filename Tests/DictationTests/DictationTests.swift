@@ -100,7 +100,7 @@ final class Rig {
     /// test's clock does not advance over it either - the gap leaves no samples behind to
     /// be measured by, which is the whole of why it has to be marked when it happens.
     func changeDevice() {
-        hardware.live.onConfigurationChange()
+        hardware.readied.onStale()
     }
 
     /// A hold of the hotkey with `samples` captured during it, the key-down heard the
