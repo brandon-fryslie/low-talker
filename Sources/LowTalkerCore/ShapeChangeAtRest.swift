@@ -124,9 +124,9 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
     /// throws at the press, because resting has no answer for a failure. A reading does, and
     /// it is to throw here rather than time out at the wait and call the Mac deaf.
     ///
-    /// Nothing here reads the indicator, because nothing here needs to: `HALInput.init` ends
-    /// by refusing a preparation that left the device running on this process's account, so
-    /// "readying opened nothing" is enforced where it is done rather than re-checked here.
+    /// The indicator is read to refuse and never to judge. Whether readying opened a device is
+    /// `HALInput.init`'s own guard, which ends the preparation rather than reporting it, so
+    /// there is nothing for this to re-check. [LAW:single-enforcer]
     @MainActor
     public static func measure(waiting wait: Duration) async throws -> ShapeChangeAtRest {
         guard try MicrophoneIndicator.read() == .dark else { throw MicrophoneAlreadyRunning() }
@@ -143,6 +143,8 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
         // `--wait` is where an operator says how long this Mac gets.
         // [LAW:no-ambient-temporal-coupling]
         try await Task.sleep(for: wait)
+        // Taken before the device is moved back, because moving it back is another change of
+        // shape that the same watch reports. The reading is about the first one.
         let report = arrival.report
 
         // [LAW:no-silent-failure] exception: the status of the ask is dropped because the
