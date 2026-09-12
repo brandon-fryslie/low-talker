@@ -18,24 +18,35 @@ private final class FakeHardware: AudioHardware {
     /// outcome, so preparing one costs a test nothing and proves nothing was opened.
     final class Input: PreparedInput {
         private unowned let hardware: FakeHardware
-        init(_ hardware: FakeHardware) { self.hardware = hardware }
+        /// Which readying this one came from, counting from one. A prepared input is
+        /// bound to the device that was default when it was readied, so this is the only
+        /// thing a test can say "the press opened the microphone readied against the new
+        /// device" with - a count of readyings says one happened, not which one was used.
+        let readying: Int
+        init(_ hardware: FakeHardware, readying: Int) {
+            self.hardware = hardware
+            self.readying = readying
+        }
 
         func open(
             appending: @escaping @Sendable ([Float], HostTime) -> Void,
             onFailure: @escaping @MainActor (any Error) -> Void,
             onConfigurationChange: @escaping @MainActor () -> Void
         ) throws -> Disposal {
-            try hardware.open(appending: appending, onFailure: onFailure, onConfigurationChange: onConfigurationChange)
+            try hardware.open(readying: readying, appending: appending, onFailure: onFailure, onConfigurationChange: onConfigurationChange)
         }
     }
 
     final class Engine {
+        /// The readying whose input this engine was opened on.
+        let readying: Int
         let appending: @Sendable ([Float], HostTime) -> Void
         let onFailure: @MainActor (any Error) -> Void
         let onConfigurationChange: @MainActor () -> Void
         var disposed = false
 
-        init(appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) {
+        init(readying: Int, appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) {
+            self.readying = readying
             self.appending = appending
             self.onFailure = onFailure
             self.onConfigurationChange = onConfigurationChange
@@ -61,12 +72,12 @@ private final class FakeHardware: AudioHardware {
 
     func prepareInput() -> any PreparedInput {
         prepared += 1
-        return Input(self)
+        return Input(self, readying: prepared)
     }
 
-    fileprivate func open(appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) throws -> Disposal {
+    fileprivate func open(readying: Int, appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) throws -> Disposal {
         if let error = launches.isEmpty ? nil : launches.removeFirst() { throw error }
-        let engine = Engine(appending: appending, onFailure: onFailure, onConfigurationChange: onConfigurationChange)
+        let engine = Engine(readying: readying, appending: appending, onFailure: onFailure, onConfigurationChange: onConfigurationChange)
         engines.append(engine)
         return { engine.disposed = true }
     }
@@ -534,6 +545,82 @@ private struct Authorized: MicrophoneAuthority {
 
         hardware.engines[0].appending([3, 4], after(2))
         #expect(capture.endSession(session) == .whole(AudioClip(samples: [1, 2, 3, 4])))
+    }
+
+    /// The other half of that sentence, and the half a green suite was missing: leaving the
+    /// press alone is not the same as forgetting it happened. The default-input watch fires
+    /// once per change, so the notification a press swallows is the only one coming - a user
+    /// who switches from mic A to mic B mid-dictation was left speaking into A on every
+    /// press afterwards, with nothing able to notice until the default changed a second time
+    /// or A was unplugged. [LAW:no-ambient-temporal-coupling] The key-up is when "no session
+    /// is open" becomes true, so that is where the deferred work is spent.
+    ///
+    /// Under `shut` that means the key-up readies against B and opens nothing, and the press
+    /// after it is the one that opens B.
+    @Test func aDefaultInputChangedMidPressReadiesTheNewDeviceAtTheKeyUp() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .shut)
+        let session = try capture.beginSession(at: origin, preRoll: 0)
+        #expect(hardware.engines[0].readying == 1)
+
+        // The press keeps the device it began on, and keeps every sample of it.
+        try hardware.changeDefaultInput()
+        #expect(hardware.engines.count == 1)
+        #expect(!hardware.engines[0].disposed)
+        #expect(hardware.prepared == 1)
+        hardware.engines[0].appending([1, 2], origin)
+        #expect(capture.endSession(session) == .whole(AudioClip(samples: [1, 2])))
+
+        // And the key-up answers what the press deferred: readied against the new default,
+        // still opening nothing, which is what `shut` promises whatever else happened.
+        #expect(hardware.prepared == 2)
+        #expect(hardware.engines[0].disposed)
+        #expect(hardware.engines.count == 1)
+        #expect(isListening(capture))
+
+        let next = try capture.beginSession(at: after(2), preRoll: 0)
+        #expect(hardware.engines.count == 2)
+        #expect(hardware.engines[1].readying == 2)
+        #expect(hardware.prepared == 2)
+        hardware.engines[1].appending([3, 4], after(2))
+        #expect(capture.endSession(next) == .whole(AudioClip(samples: [3, 4])))
+    }
+
+    /// The same deferral under `open`, where the microphone the press was speaking into is
+    /// held across the key-up rather than closed at it - so answering the change means
+    /// moving what is held, not readying what is shut. A run that kept the old engine would
+    /// hold a microphone the user stopped choosing, for hours, and light the indicator for
+    /// it.
+    ///
+    /// No device change is booked, and that is not an oversight: the count is of a running
+    /// engine swapped out in place, which `replaceEngine` is the only place that does
+    /// [LAW:single-enforcer]. This is the press ending - the microphone comes to rest, and
+    /// the mode opens the one it now holds - so it reads the way the same event reads under
+    /// `shut`, where nothing is replaced at all.
+    @Test func aDefaultInputChangedMidPressMovesTheHeldMicrophoneAtTheKeyUp() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .open)
+        let session = try capture.beginSession(at: origin, preRoll: 0)
+        #expect(hardware.engines[0].readying == 1)
+
+        try hardware.changeDefaultInput()
+        hardware.engines[0].appending([1, 2], origin)
+        #expect(capture.endSession(session) == .whole(AudioClip(samples: [1, 2])))
+
+        #expect(hardware.prepared == 2)
+        #expect(hardware.engines[0].disposed)
+        #expect(hardware.engines.count == 2)
+        #expect(hardware.engines[1].readying == 2)
+        #expect(isListening(capture))
+        #expect(capture.deviceChanges == 0)
+
+        // The press that follows speaks into the microphone now held, which is the new one.
+        let next = try capture.beginSession(at: after(2), preRoll: 0)
+        #expect(hardware.engines.count == 2)
+        hardware.engines[1].appending([3, 4], after(2))
+        #expect(capture.endSession(next) == .whole(AudioClip(samples: [3, 4])))
     }
 
     /// Quitting gives the device back, however the run was holding it.

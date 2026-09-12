@@ -7,11 +7,11 @@ public typealias Disposal = @MainActor () -> Void
 /// A microphone that has paid everything it can pay before being opened.
 ///
 /// Preparing one takes no device: nothing is captured and macOS lights no indicator until
-/// `open`. That is why this is a value rather than a step inside `open`. Reaching a
-/// microphone on this Mac costs 175 ms the first time in a process and 31 ms after, and
-/// none of it opens a device; opening the device costs 40 ms. An app that prepares while
-/// it is idle leaves a press paying only the second, which is what lets `shut` keep both
-/// the closed microphone and the head of the first word.
+/// `open`. That is why this is a value rather than a step inside `open`: reaching a
+/// microphone costs far more than opening one already reached, and none of the reaching
+/// opens a device, so an app that prepares while it is idle leaves a press paying only the
+/// opening - which is what lets `shut` keep both the closed microphone and the head of the
+/// first word. What each part costs is measured in `HALInput`, where the split is made.
 ///
 /// [LAW:types-are-the-program] Prepared and open are two facts about the microphone, and
 /// this type carries the first: a press cannot reach a device nothing prepared, and

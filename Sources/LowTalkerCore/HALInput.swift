@@ -35,7 +35,11 @@ final class HALInput: PreparedInput {
         /// then, and a render that was already in flight has nowhere to put audio the
         /// speaker has let go of.
         private let target = Mutex<Target?>(nil)
-        /// Touched only on the audio thread, one render at a time.
+        /// Touched on the audio thread, one render at a time - and by the main actor only
+        /// while the unit is stopped, which is where `open()` resets the converter for the
+        /// press it is about to begin. `AudioOutputUnitStop` returns with the IO thread
+        /// quiesced, so the two never overlap; a lock here would put an acquisition in the
+        /// render path to guard a call that cannot race it.
         nonisolated(unsafe) let converter: AudioClip.Converter
         nonisolated(unsafe) let buffer: AVAudioPCMBuffer
         nonisolated(unsafe) var unit: AudioUnit?
@@ -257,8 +261,16 @@ final class HALInput: PreparedInput {
             //
             // Appended one at a time, and inside this `do`, so a second registration that
             // throws still leaves the first disposable.
-            watches.append(try watch(kAudioDevicePropertyDeviceIsAlive, onConfigurationChange))
-            watches.append(try watch(kAudioDevicePropertyStreamFormat, onConfigurationChange))
+            //
+            // Both only watch between here and `close()`. Under `shut` that is the length of
+            // a press, so a device that is still the default and renegotiates its format
+            // while the microphone rests - a headset changing codec - is heard by nothing,
+            // and the next press opens against the format this was prepared for. The unit
+            // still converts to the format we asked it for, so that press is resampled twice
+            // rather than wrong, which is why this is written down here and tracked in
+            // low-privacy-o1z.aa1 rather than paid for on every press.
+            watches.append(try watch(kAudioDevicePropertyDeviceIsAlive, scope: kAudioObjectPropertyScopeGlobal, onConfigurationChange))
+            watches.append(try watch(kAudioDevicePropertyStreamFormat, scope: kAudioObjectPropertyScopeInput, onConfigurationChange))
             try AudioHardwareError.check(AudioOutputUnitStart(unit), AudioHardwareError.inputUnavailable)
         } catch {
             close()
@@ -286,10 +298,15 @@ final class HALInput: PreparedInput {
         watches = []
     }
 
-    private func watch(_ selector: AudioObjectPropertySelector, _ onChange: @escaping @MainActor () -> Void) throws -> Disposal {
+    /// The scope is the caller's because it is the property's, not this function's:
+    /// `kAudioObjectPropertyScopeGlobal` is a scope like any other rather than a wildcard,
+    /// and a listener whose address names a different scope than the notification is
+    /// published on is never called. Registering an input device's stream format globally
+    /// succeeds and then hears nothing, which is the quietest way this could be wrong.
+    private func watch(_ selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope, _ onChange: @escaping @MainActor () -> Void) throws -> Disposal {
         var address = AudioObjectPropertyAddress(
             mSelector: selector,
-            mScope: kAudioObjectPropertyScopeGlobal,
+            mScope: scope,
             mElement: kAudioObjectPropertyElementMain
         )
         let listener: AudioObjectPropertyListenerBlock = { _, _ in MainActor.assumeIsolated { onChange() } }

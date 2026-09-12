@@ -21,9 +21,9 @@ import Synchronization
 /// Reaching a microphone costs far more than opening one already reached, and a press
 /// that paid both was losing a third of a second off every utterance - so `start` readies
 /// one while the app is idle, which opens no device and lights nothing, and the press
-/// pays only the opening. What each of those costs is measured at `warmUpAllowance`,
-/// which is the one place any of those numbers live; how the microphone is reached at all
-/// is `HALInput`'s.
+/// pays only the opening. What a press is allowed to miss is `warmUpAllowance`; what
+/// reaching and opening each cost, and how the microphone is reached at all, is
+/// `HALInput`'s.
 ///
 /// `open` is the other side of that trade, and buying the look-back back is the whole of
 /// what it does here: the engine started at `start` is never given up between presses, so
@@ -122,6 +122,15 @@ public final class AudioCapture {
         /// inferred from a microphone that is now open for two different reasons.
         /// [FRAMING:representation]
         var sessionIsOpen = false
+        /// The default input changed while a session was open, and readying against it was
+        /// put off until the press ended rather than cutting the recording in flight.
+        ///
+        /// [LAW:no-ambient-temporal-coupling] The watch fires once and does not fire again
+        /// until the default changes a second time, so a press that swallowed the one
+        /// notification would leave every later press on the device that stopped being the
+        /// default. Deferring the work is not dropping it, and this is where the deferral
+        /// is written down until `rest()` can do it.
+        var readyAgainAtRest = false
     }
 
     private enum Phase {
@@ -479,6 +488,17 @@ public final class AudioCapture {
     private func rest() {
         guard case .started(var started) = phase else { return }
         started.sessionIsOpen = false
+        // The default input changed under the press that just ended, and answering it was
+        // put off to here rather than cutting the recording. Done before the resting mode
+        // is read, so what the mode does next it does with the new device: `shut` holds a
+        // microphone readied against it, and `open` launches on it rather than relaunching
+        // on the one the press was holding.
+        if started.readyAgainAtRest {
+            started.readyAgainAtRest = false
+            if case .running(let live) = started.engine { dispose(live) }
+            started.engine = .shut
+            started.prepared = hardware.prepareInput()
+        }
         switch started.atRest {
         case .shut:
             if case .running(let live) = started.engine { dispose(live) }
@@ -571,7 +591,8 @@ public final class AudioCapture {
         dispose(running.live)
         var started = running.started
         do {
-            // The device this was prepared against is the one that just went away.
+            // The device this was prepared against is not the one to open any more: it went
+            // away, or it stopped being the default while nothing was recording it.
             started.prepared = hardware.prepareInput()
             started.engine = .running(try launch(on: started.prepared))
             deviceChanges += 1
@@ -605,7 +626,14 @@ public final class AudioCapture {
         // session open there is nothing to cut, and the engine is replaced on the new
         // default the same way a device that went away replaces it.
         case .running(let live):
-            guard !started.sessionIsOpen else { return }
+            // A press is in flight: cutting it is not the answer, but neither is forgetting
+            // this happened. `rest()` is the moment "no session is open" becomes true, so
+            // the work is booked for it and done there.
+            guard !started.sessionIsOpen else {
+                started.readyAgainAtRest = true
+                phase = .started(started)
+                return
+            }
             replaceEngine(from: live.generation)
             return
         case .shut:

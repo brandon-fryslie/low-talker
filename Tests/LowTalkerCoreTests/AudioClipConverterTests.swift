@@ -66,6 +66,29 @@ import Testing
         #expect(abs(streamed.count + tail.count - Self.expectedSamples) <= 2)
     }
 
+    /// What lets one converter serve two presses. The microphone's device is closed
+    /// between them, so the audio either side of a key-up is two streams and not one, and
+    /// `reset` is the sentence that says so: the second press begins exactly where a
+    /// converter that had never heard the first would begin.
+    ///
+    /// Both halves are asserted, because the first alone would pass on a `reset` that did
+    /// nothing at all. Continued without one, the same converter carries the tail it was
+    /// holding into the head of the second stream - measured here, the head arrives a
+    /// resampler's delay out of phase and the stream runs six samples long - which is the
+    /// bleed a press hears as a click and this test fails on.
+    @Test func resetBeginsTheStreamWhereANewConverterWould() throws {
+        let fresh = try AudioClip.Converter(from: Self.source).convert(Self.tone(from: 0, frames: Self.sourceFrames))
+
+        let reused = try AudioClip.Converter(from: Self.source)
+        _ = try reused.convert(Self.tone(from: 0, frames: Self.sourceFrames))
+        reused.reset()
+        #expect(try reused.convert(Self.tone(from: 0, frames: Self.sourceFrames)) == fresh)
+
+        let carried = try AudioClip.Converter(from: Self.source)
+        _ = try carried.convert(Self.tone(from: 0, frames: Self.sourceFrames))
+        #expect(try carried.convert(Self.tone(from: 0, frames: Self.sourceFrames)) != fresh)
+    }
+
     @Test func rejectsAFormatWithNoConversionPath() {
         let silent = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 0)
         // A zero-channel format is what an input node reports with no device attached;
