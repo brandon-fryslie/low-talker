@@ -275,6 +275,13 @@ final class HALInput: PreparedInput {
             guard try !Self.isRunning(device) else { throw AudioHardwareError.preparingOpenedTheDevice(device) }
             sink = built
         } catch {
+            // What `preparingOpenedTheDevice` promises - that the microphone was given back
+            // - rests on this, rather than on disposal stopping IO of its own accord.
+            // [LAW:dataflow-not-control-flow] Unconditional, because stopping a unit that
+            // never ran is a no-op: one unwind, not one per way a preparation can fail.
+            // [LAW:no-silent-failure] exception: the status is dropped for the reason
+            // `close()` drops it, which is that an unwind has no caller to throw it to.
+            AudioOutputUnitStop(unit)
             AudioComponentInstanceDispose(unit)
             throw error
         }
