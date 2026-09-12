@@ -1,4 +1,5 @@
 import ArgumentParser
+import Flavors
 import Foundation
 import KeyboardService
 import LowTalkerCore
@@ -37,12 +38,14 @@ struct ClickCommand: AsyncParsableCommand {
     @Argument(help: "Its title, exactly as the screen shows it, e.g. Allow.")
     var title: String
 
+    @OptionGroup var installation: FlavorOption
+
     @MainActor
     func run() async throws {
         let front = try TargetApp.frontmost()
         let interrupt = Interrupt.watched()
         let target = TargetApp(bundleID: front, interrupt: interrupt)
-        let helper = HelperConnection()
+        let helper = HelperConnection(flavor: installation.flavor)
         let pointer = Pointer(
             mouse: GuardedMouse(pointing: helper.mouse, queue: DeviceQueue(), interrupt: interrupt, screen: target),
             cursor: Pointer.screenCursor,

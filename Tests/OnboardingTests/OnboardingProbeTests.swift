@@ -1,6 +1,7 @@
 import DriverExtension
 import Foundation
 import KeyboardService
+import Flavors
 import Testing
 @testable import Onboarding
 
@@ -56,36 +57,21 @@ import Testing
         #expect(try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service) == .anotherJobHoldsTheService)
     }
 
-    /// Only a development job that actually holds the name is reported as the holder.
-    /// Every other reading of it - absent, or loaded and empty-handed - leaves the holder
-    /// unidentified, because it is: the app read one other label, not every job on the
-    /// Mac. Naming a holder nobody read is the mistake this reading exists to stop.
-    @Test func onlyADevelopmentJobHoldingTheNameIsReportedAsTheHolder() {
-        #expect(OnboardingProbe.lostName(toDevelopment: .holdingTheService) == .theDevelopmentJobHoldsTheService)
-        for development in HelperStanding.allCases where development != .holdingTheService {
-            #expect(OnboardingProbe.lostName(toDevelopment: development) == .anotherJobHoldsTheService, "\(development)")
-        }
-    }
-
     /// The whole way from what launchd printed to what the reader is told, on the Mac
-    /// where reading it as "is the app's own helper answering" got it wrong: the
-    /// development job holds the name, so a real helper is running and has already been
-    /// through its filing - and a reader whose answer is still missing needs the log,
-    /// not a wait for something that already happened and already failed.
+    /// where reading it as "is the app's own helper answering" got it wrong: a helper is
+    /// up and holding the name, so it has already been through its filing - and a reader
+    /// whose answer is still missing needs the log, not a wait for something that already
+    /// happened and already failed.
     ///
     /// Taken through the readings rather than by handing the step a bool, because the
     /// bool is what was wrong: every piece here was right on its own while what they
     /// composed to was a reader told to wait forever. [LAW:behavior-not-structure]
-    @Test func aDevelopmentHelperHoldingTheNameSendsTheReaderToTheLog() throws {
-        let mine = try OnboardingProbe.standing(
-            from: Command.Output(status: 0, stdout: Self.holdingNothing, stderr: ""),
-            label: Self.label, service: Self.service)
-        #expect(mine == .anotherJobHoldsTheService, "the app's own job is read as holding a name it lost")
-        let standing = OnboardingProbe.lostName(toDevelopment: try OnboardingProbe.standing(
+    @Test func aHelperHoldingTheNameSendsTheReaderToTheLog() throws {
+        let standing = try OnboardingProbe.standing(
             from: Command.Output(status: 0, stdout: Self.holdingTheService, stderr: ""),
-            label: Helper.developmentLabel, service: Self.service))
+            label: Self.label, service: Self.service)
             .sharpenedByTheAppsOwnRegistration(approvalPending: nil)
-        #expect(standing == .theDevelopmentJobHoldsTheService)
+        #expect(standing == .holdingTheService)
 
         let step = Requirement.keyboardSetupAssistant(
             answered: false, aHelperHasRun: standing.aHelperHasRun, helperSubsystem: Self.service).step ?? ""
@@ -93,13 +79,13 @@ import Testing
         #expect(!step.contains("clears itself"), "the reader is told to wait for a filing that already happened")
     }
 
-    /// Which standings mean a helper has already had its chance to file the answer. Both
-    /// jobs run the same helper and it files before it can win or lose a name, so both
-    /// have been through it; a holder nobody could identify has not earned the claim,
-    /// because nothing was read that says a helper is what took the name.
+    /// Which standings mean a helper has already had its chance to file the answer. Only
+    /// a helper that holds the name was read as running; a holder nobody could identify
+    /// has not earned the claim, because nothing was read that says a helper is what
+    /// took the name.
     /// [LAW:no-silent-failure] Exhaustive, so a standing added later has to answer this.
     @Test func onlyAStandingThatNamesARunningHelperSaysOneHasRun() {
-        let ran: Set<HelperStanding> = [.holdingTheService, .theDevelopmentJobHoldsTheService]
+        let ran: Set<HelperStanding> = [.holdingTheService]
         for standing in HelperStanding.allCases {
             #expect(standing.aHelperHasRun == ran.contains(standing), "\(standing)")
         }
@@ -190,7 +176,7 @@ import Testing
     /// on one that is fully set up - which is what makes it a check on the assembly and
     /// not on the Mac it runs on.
     @Test func theListIsTheSameThreeRequirementsInTheSameOrder() {
-        #expect(OnboardingProbe.readiness(approvalPending: nil).requirements.map(\.name)
+        #expect(OnboardingProbe.readiness(flavor: .development, approvalPending: nil).requirements.map(\.name)
             == ["Driver extension", "Keyboard helper", "Keyboard Setup Assistant"])
     }
 
@@ -198,8 +184,8 @@ import Testing
     /// cannot ask `SMAppService` passes nil and gets launchd's answer unsharpened, which
     /// is the difference between the CLI and the app and the whole of it.
     @Test func onlyTheHelperCanDifferBetweenTheTwoSurfaces() {
-        let asTheCLISeesIt = OnboardingProbe.readiness(approvalPending: nil).requirements
-        let asAnUnapprovedAppSeesIt = OnboardingProbe.readiness(approvalPending: true).requirements
+        let asTheCLISeesIt = OnboardingProbe.readiness(flavor: .development, approvalPending: nil).requirements
+        let asAnUnapprovedAppSeesIt = OnboardingProbe.readiness(flavor: .development, approvalPending: true).requirements
         #expect(asTheCLISeesIt.filter { $0.name != "Keyboard helper" }
             == asAnUnapprovedAppSeesIt.filter { $0.name != "Keyboard helper" })
     }

@@ -1,4 +1,5 @@
 import DriverExtension
+import Flavors
 import Foundation
 import KeyboardService
 
@@ -17,27 +18,16 @@ public enum OnboardingProbe {
     /// shape is already what `scripts/keyboard-helper install` reads back to find out
     /// whether its own job got the name; both now ask through here.
     /// [LAW:one-source-of-truth]
-    public static func helperStanding(label: String, developmentLabel: String, service: String) throws -> HelperStanding {
-        let mine = try standing(ofLabel: label, service: service)
-        // Who took the name is a question only a lost name asks, so the healthy path - the
-        // one the menu takes on every open, on the main actor - still costs one subprocess.
-        // A development record that cannot be read throws rather than answering: naming a
-        // holder nobody read is the mistake this reading exists to stop making.
-        guard mine == .anotherJobHoldsTheService else { return mine }
-        return lostName(toDevelopment: try standing(ofLabel: developmentLabel, service: service))
-    }
-
-    /// Which lost-name state a development reading means. Only a development job that
-    /// actually holds the name earns being named; every other reading of it - absent,
-    /// loaded but empty-handed - leaves the holder unidentified, because it is.
-    /// [LAW:effects-at-boundaries] Pure, so both arms are reachable on a Mac in neither.
-    static func lostName(toDevelopment development: HelperStanding) -> HelperStanding {
-        development == .holdingTheService ? .theDevelopmentJobHoldsTheService : .anotherJobHoldsTheService
-    }
-
-    /// Where one label stands. Two labels are asked the same question, so they are asked
-    /// through the same reading. [LAW:one-type-per-behavior]
-    private static func standing(ofLabel label: String, service: String) throws -> HelperStanding {
+    /// Where this flavor's helper stands, asked of the one label that can hold it.
+    ///
+    /// One question and no second reading, because there is no second label to ask about.
+    /// A flavor's launchd job and its Mach service carry one name, so a rival job cannot
+    /// exist: `launchctl bootstrap` refuses a duplicate label outright (exit 5, measured),
+    /// where it used to accept a second label naming the same service and hand it no
+    /// endpoint. What remains unaccounted for is a helper running outside launchd
+    /// entirely, and that one is reported as what it is - a holder that can be found but
+    /// not named. [LAW:no-silent-failure]
+    public static func helperStanding(label: String, service: String) throws -> HelperStanding {
         try standing(
             from: Command("/bin/launchctl", "print", "system/\(label)").run(),
             label: label, service: service)
@@ -115,17 +105,20 @@ public extension OnboardingProbe {
     /// only one of them - which is exactly what low-hotkey-a6m.2 is about to do.
     /// [LAW:one-source-of-truth]
     ///
+    /// - Parameter flavor: which installation is being read. The two run side by side and
+    ///   each has its own helper, service and label, so every reading below is a reading
+    ///   about one of them and there is no such thing as the readiness of "the app".
     /// - Parameter approvalPending: what `SMAppService` told the app that owns the
     ///   helper's registration, and nil from a caller that owns none. See
     ///   `HelperStanding.sharpenedByTheAppsOwnRegistration(approvalPending:)`.
-    static func readiness(approvalPending: Bool?) -> Readiness {
+    static func readiness(flavor: Flavor, approvalPending: Bool?) -> Readiness {
         // The helper's row is read before the assistant's because the assistant's step
         // depends on it: the answer is filed BY the helper, so what is left to do about a
         // missing answer is a different thing depending on whether the helper has run.
         // The dependency is in the data rather than in the order two independent readings
         // happen to be taken in. [LAW:no-ambient-temporal-coupling]
-        let helper = helperRow(approvalPending: approvalPending)
-        return Readiness(driverRow() + helper.rows + keyboardSetupAssistantRow(aHelperHasRun: helper.aHelperHasRun))
+        let helper = helperRow(flavor: flavor, approvalPending: approvalPending)
+        return Readiness(driverRow() + helper.rows + keyboardSetupAssistantRow(flavor: flavor, aHelperHasRun: helper.aHelperHasRun))
     }
 
     /// Each reading is taken and turned into its row here, at the edge, and a reading
@@ -150,24 +143,23 @@ public extension OnboardingProbe {
     /// beside it - the helper's own, which reads `could not be read` and names the
     /// reason - so the failure is reported where it belongs rather than inferred from the
     /// assistant's step. [LAW:no-silent-failure]
-    private static func helperRow(approvalPending: Bool?) -> (rows: [Requirement], aHelperHasRun: Bool) {
+    private static func helperRow(flavor: Flavor, approvalPending: Bool?) -> (rows: [Requirement], aHelperHasRun: Bool) {
         do {
             let standing = try helperStanding(
-                label: Helper.launchdLabel,
-                developmentLabel: Helper.developmentLabel,
-                service: Helper.machServiceName)
+                label: flavor.launchdLabel,
+                service: flavor.machServiceName)
                 .sharpenedByTheAppsOwnRegistration(approvalPending: approvalPending)
-            return ([.keyboardHelper(standing, serviceName: Helper.machServiceName, developmentLabel: Helper.developmentLabel)],
+            return ([.keyboardHelper(standing, serviceName: flavor.machServiceName)],
                     standing.aHelperHasRun)
         } catch { return ([.unreadable(.keyboardHelper, error)], false) }
     }
 
-    private static func keyboardSetupAssistantRow(aHelperHasRun: Bool) -> [Requirement] {
+    private static func keyboardSetupAssistantRow(flavor: Flavor, aHelperHasRun: Bool) -> [Requirement] {
         do {
             return [.keyboardSetupAssistant(
                 answered: try keyboardSetupAssistantAnswered(),
                 aHelperHasRun: aHelperHasRun,
-                helperSubsystem: Helper.machServiceName)]
+                helperSubsystem: flavor.machServiceName)]
         } catch { return [.unreadable(.keyboardSetupAssistant, error)] }
     }
 }

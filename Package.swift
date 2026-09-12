@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [
         .library(name: "LowTalkerCore", targets: ["LowTalkerCore"]),
+        .library(name: "Flavors", targets: ["Flavors"]),
         .library(name: "Keystrokes", targets: ["Keystrokes"]),
         .library(name: "KeyboardLayout", targets: ["KeyboardLayout"]),
         .library(name: "Pointing", targets: ["Pointing"]),
@@ -28,9 +29,16 @@ let package = Package(
     ],
     targets: [
         // [LAW:one-way-deps] Core knows nothing of the CLI or the app; both link it.
+        // Which installation this is: the one name every other name in a flavor is
+        // built from. It depends on nothing, so the root helper and the app's upper
+        // layers can both read it without either depending on the other.
+        // [LAW:one-way-deps]
+        .target(name: "Flavors"),
+        .testTarget(name: "FlavorsTests", dependencies: ["Flavors"]),
         .target(
             name: "LowTalkerCore",
             dependencies: [
+                "Flavors",
                 .product(name: "WhisperKit", package: "argmax-oss-swift"),
                 .product(name: "TOMLKit", package: "TOMLKit"),
             ]
@@ -73,16 +81,16 @@ let package = Package(
         // links the driver's vocabulary and the service seam and nothing else - no
         // device and no window server - so both the CLI and the menu-bar app can show
         // the same words. [LAW:one-source-of-truth]
-        .target(name: "Onboarding", dependencies: ["DriverExtension", "KeyboardService"]),
+        .target(name: "Onboarding", dependencies: ["DriverExtension", "KeyboardService", "Flavors"]),
         // The steps are what a person acts on, so they are asserted as values rather
         // than scraped off a terminal.
-        .testTarget(name: "OnboardingTests", dependencies: ["Onboarding", "DriverExtension", "KeyboardService"]),
+        .testTarget(name: "OnboardingTests", dependencies: ["Onboarding", "DriverExtension", "KeyboardService", "Flavors"]),
         // What crosses the privilege boundary, and the client's side of it. It links the
         // two vocabularies and nothing else: not the layout, because a root helper must
         // never read one, and not the device, because a client must never open one.
         // [LAW:one-way-deps]
-        .target(name: "KeyboardService", dependencies: ["Keystrokes", "Pointing"]),
-        .testTarget(name: "KeyboardServiceTests", dependencies: ["KeyboardService", "Keystrokes", "Pointing"]),
+        .target(name: "KeyboardService", dependencies: ["Flavors", "Keystrokes", "Pointing"]),
+        .testTarget(name: "KeyboardServiceTests", dependencies: ["KeyboardService", "Flavors", "Keystrokes", "Pointing"]),
         // The app's one inserter and its one pointer: text and chords lowered to keystrokes,
         // clicks and scrolls to pointing reports, with the hotkey refused and the target app
         // re-proven in front before each one. It links the core for the actions it performs,
@@ -105,18 +113,19 @@ let package = Package(
         // text never reaches this process.
         .executableTarget(
             name: "lowtalker-keyboardd",
-            dependencies: ["KeyboardService", "VirtualKeyboard", "DriverExtension", "Keystrokes", "Pointing", "Signals"]
+            dependencies: ["KeyboardService", "VirtualKeyboard", "DriverExtension", "Keystrokes", "Pointing", "Signals", "Flavors"]
         ),
         // The authorization boundary of a root keystroke service, checked against the
         // test process's own identity and audit token: real code signing, no root.
         .testTarget(
             name: "lowtalker-keyboarddTests",
-            dependencies: ["lowtalker-keyboardd", "KeyboardService", "VirtualKeyboard", "DriverExtension", "Keystrokes", "Pointing", "Signals"]
+            dependencies: ["lowtalker-keyboardd", "KeyboardService", "VirtualKeyboard", "DriverExtension", "Keystrokes", "Pointing", "Signals", "Flavors"]
         ),
         .executableTarget(
             name: "lowtalker",
             dependencies: [
                 "LowTalkerCore",
+                "Flavors",
                 "DriverExtension",
                 "Onboarding",
                 "VirtualKeyboard",

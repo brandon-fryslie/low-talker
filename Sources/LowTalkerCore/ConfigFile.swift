@@ -1,10 +1,14 @@
+import Flavors
 import Foundation
 import TOMLKit
 
 public extension Config {
     /// The one file, at the one path.
-    static var fileURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appending(path: ".config/low-talker/config.toml")
+    /// The one file, at the one path, per installation. One directory with two files in
+    /// it: a reader editing one copy's settings finds the other's beside it rather than
+    /// somewhere else entirely. [LAW:one-source-of-truth]
+    static func fileURL(for flavor: Flavor) -> URL {
+        FileManager.default.homeDirectoryForCurrentUser.appending(path: ".config/low-talker/\(flavor.configFileName)")
     }
 
     /// [LAW:parse-dont-validate] The one place config text becomes a Config. What comes
@@ -13,7 +17,7 @@ public extension Config {
     ///
     /// [LAW:effects-at-boundaries] Pure. It opens nothing and reads no clock, so a test
     /// hands it a string rather than a filesystem.
-    init(toml: String) throws(ConfigError) {
+    init(toml: String, flavor: Flavor) throws(ConfigError) {
         var decoder = TOMLDecoder()
         // A key this schema has no place for is a typo the author wants told, not a
         // line quietly doing nothing. [LAW:no-silent-failure]
@@ -36,9 +40,9 @@ public extension Config {
         // Config.default, which is where the no-file behaviour is written; no default is
         // spelled a second time here to drift from it.
         try self.init(
-            model: file.model ?? Config.default.model,
-            microphone: file.microphone?.atRest ?? Config.default.microphone,
-            modes: file.modes?.map { $0.mode() } ?? Config.default.modes
+            model: file.model ?? Config.default(for: flavor).model,
+            microphone: file.microphone?.atRest ?? Config.default(for: flavor).microphone,
+            modes: file.modes?.map { $0.mode() } ?? Config.default(for: flavor).modes
         )
     }
 
@@ -48,16 +52,16 @@ public extension Config {
     /// [LAW:no-silent-failure] Only a file that is not there yields the defaults. One
     /// that exists and cannot be read, or cannot be understood, throws - so a config the
     /// user wrote is never quietly replaced by one they did not.
-    static func load(from url: URL = fileURL) throws(ConfigError) -> Loaded {
+    static func load(from url: URL, flavor: Flavor) throws(ConfigError) -> Loaded {
         let text: String
         do {
             text = try String(contentsOf: url, encoding: .utf8)
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
-            return .noFile(at: url)
+            return .noFile(at: url, defaults: Config.default(for: flavor))
         } catch {
             throw ConfigError.unreadable(path: url.path, why: error.localizedDescription)
         }
-        return .file(try Config(toml: text), at: url)
+        return .file(try Config(toml: text, flavor: flavor), at: url)
     }
 
     /// A config and where it came from.
@@ -69,13 +73,18 @@ public extension Config {
     /// so a `noFile` carrying settings somebody chose is unrepresentable.
     enum Loaded: Hashable, Sendable, CustomStringConvertible {
         case file(Config, at: URL)
-        case noFile(at: URL)
+        /// No file, and the settings that therefore apply. The defaults travel with the
+        /// reading rather than being looked up from it, because which defaults they are
+        /// is a fact about the installation that read - and this type would otherwise
+        /// have to carry the installation just to answer one question.
+        /// [LAW:dataflow-not-control-flow]
+        case noFile(at: URL, defaults: Config)
 
         /// What the app runs on either way, which is the only thing most callers want.
         public var config: Config {
             switch self {
             case .file(let config, _): config
-            case .noFile: .default
+            case .noFile(_, let defaults): defaults
             }
         }
 
@@ -155,7 +164,7 @@ private struct ModeEntry: Decodable {
             // A mode that names no routes dictates, which is the only thing it could
             // have meant; one that names an empty list claims nothing, and `lowtalker
             // config check` is where that gap is reported.
-            router: routes.map { Router(routes: $0.map(\.route)) } ?? Mode.dictation.router
+            router: routes.map { Router(routes: $0.map(\.route)) } ?? .dictation
         )
     }
 }

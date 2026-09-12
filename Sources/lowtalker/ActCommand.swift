@@ -1,4 +1,5 @@
 import ArgumentParser
+import Flavors
 import Foundation
 import KeyboardLayout
 import KeyboardService
@@ -30,6 +31,8 @@ struct ActCommand: AsyncParsableCommand {
     )
     var context: Context
 
+    @OptionGroup var installation: FlavorOption
+
     @MainActor
     func run() async throws {
         let actions = try JSONDecoder().decode([Action].self, from: FileHandle.standardInput.readDataToEndOfFile())
@@ -42,7 +45,7 @@ struct ActCommand: AsyncParsableCommand {
         // One connection for every action, held open across them: the helper answers a
         // lazy connection's first call after launchd has started the job, and that is a
         // cost to pay once and not per action.
-        let helper = HelperConnection()
+        let helper = HelperConnection(flavor: installation.flavor)
         let executor = Executor.guarding(keyboard: helper.keyboard, mouse: helper.mouse, interrupt: interrupt, hotkeys: [Hotkey.defaultChord])
         // The app types into whatever was in front when the hotkey went down. Here the
         // shell was, so the context's app is brought forward first, and a run whose app

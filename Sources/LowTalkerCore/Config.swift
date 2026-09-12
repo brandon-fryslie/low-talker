@@ -1,3 +1,4 @@
+import Flavors
 import Foundation
 
 /// The settings the app runs on: the model the engine loads, what the microphone does
@@ -42,7 +43,11 @@ public struct Config: Hashable, Sendable {
     /// is what it means: with no file to ask for anything, the microphone is closed. The
     /// force-try says the author vouches for this one: a default that does not hold
     /// together is a bug in this file, and it traps where it is written.
-    public static let `default` = try! Config(model: .default, microphone: .shut, modes: [.dictation])
+    /// What the app runs on when no file says otherwise. Per installation, because the
+    /// hotkey is: the two copies must not listen for one chord. [LAW:one-source-of-truth]
+    public static func `default`(for flavor: Flavor) -> Config {
+        try! Config(model: .default, microphone: .shut, modes: [.dictation(for: flavor)])
+    }
 
     /// The mode the chord that started listening selects, or none when no mode claims
     /// it. `chords` is what the tap is told to listen for, so in a running app a
@@ -83,12 +88,9 @@ public struct Mode: Hashable, Sendable {
     }
 
     /// Hold the hotkey, speak, and the words are typed wherever the focus is.
-    public static let dictation = Mode(
-        name: "dictation",
-        chord: Hotkey.defaultChord,
-        vocabulary: .empty,
-        router: Router(routes: [.dictation])
-    )
+    public static func dictation(for flavor: Flavor) -> Mode {
+        Mode(name: "dictation", chord: Hotkey.defaultChord(for: flavor), vocabulary: .empty, router: .dictation)
+    }
 }
 
 /// What is wrong with a config, in the words a person editing the file needs.

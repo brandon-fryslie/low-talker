@@ -65,21 +65,3 @@ import Foundation
     func scroll(vertical: Int8, horizontal: Int8, reply: @escaping (Error?) -> Void)
 }
 
-/// The Mach service the helper answers on, and the launchd job that owns it.
-///
-/// [LAW:one-source-of-truth] One string, named once. It appears in the plist, in the
-/// helper's listener, and in every client's connection, and a copy of it in any of those
-/// is a way for three things to disagree about where the keyboard is.
-public enum Helper {
-    public static let machServiceName = "com.lowtalker.keyboardd"
-    public static let launchdLabel = machServiceName
-    /// The label `scripts/keyboard-helper` registers its job under: the same program and
-    /// the same Mach service, registered the way that needs nobody's approval.
-    ///
-    /// Two labels on purpose. Background Task Management files every job under its label,
-    /// so a development job under the app's label would be the app's record - measured,
-    /// an app launched while that record stood had its daemon bound to the development
-    /// plist's path and never spawned. Distinct labels make them two records; the Mach
-    /// service name stays one, which is why only one of them holds it at a time.
-    public static let developmentLabel = machServiceName + ".dev"
-}

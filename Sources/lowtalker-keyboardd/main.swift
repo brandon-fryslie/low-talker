@@ -1,17 +1,39 @@
 import DriverExtension
+import Flavors
 import Foundation
 import KeyboardService
 import Signals
 import VirtualKeyboard
 import os
 
-/// Said where `log show` will find it, under this service's name. A daemon's only voice
-/// is its log, and a daemon that fails silently at startup looks exactly like one that
-/// is working. Public on purpose: nothing here is the user's data, and a redacted reason
-/// is no reason.
+/// Which installation this helper serves, from the `--flavor` its plist passes.
+///
+/// Resolved before anything else, because every name below is read off it - the service
+/// listened on, the subsystem logged under - and a helper that does not know which copy
+/// it belongs to has nothing it can correctly do. A plist that does not say is a broken
+/// installation rather than a passing condition, so this ends the process rather than
+/// choosing for it. Exit 0 is the one code that stops launchd's KeepAlive from starting
+/// it again, which is right here: starting again will not add the argument.
+/// [LAW:no-silent-failure]
+///
+/// The refusal is logged under the program's own name, not a service's: which service
+/// this would have been is exactly what is not known.
+let flavor: Flavor = {
+    guard let flavor = flavorArgument(CommandLine.arguments) else {
+        Logger(subsystem: "lowtalker-keyboardd", category: "helper").fault(
+            "will not start: no --flavor \(Flavor.allCases.map(\.description).joined(separator: " or "), privacy: .public) in \(CommandLine.arguments, privacy: .public)")
+        exit(0)
+    }
+    return flavor
+}()
+
+/// Said where `log show` will find it, under this flavor's service name - which is what
+/// keeps the two installations' logs apart. A daemon's only voice is its log, and a
+/// daemon that fails silently at startup looks exactly like one that is working. Public
+/// on purpose: nothing here is the user's data, and a redacted reason is no reason.
 ///
 ///     log show --last 10m --predicate 'subsystem == "com.lowtalker.keyboardd"'
-private let logger = Logger(subsystem: Helper.machServiceName, category: "helper")
+private let logger = Logger(subsystem: flavor.machServiceName, category: "helper")
 func log(_ message: String) {
     logger.notice("\(message, privacy: .public)")
 }
@@ -84,11 +106,11 @@ do {
         leave(origin, because: "asked to stop", status: 0)
     }
 
-    let listener = NSXPCListener(machServiceName: Helper.machServiceName)
+    let listener = NSXPCListener(machServiceName: flavor.machServiceName)
     let delegate = Listener(devices: devices, callers: callers)
     listener.delegate = delegate
     listener.resume()
-    log("listening on \(Helper.machServiceName)")
+    log("listening on \(flavor.machServiceName) as the \(flavor) installation")
     // Held so the delegate and the watch outlive this scope; `resume` retains neither
     // the listener nor the sources the watch owns.
     withExtendedLifetime((delegate, termination)) { dispatchMain() }

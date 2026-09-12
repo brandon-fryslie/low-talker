@@ -1,3 +1,4 @@
+import Flavors
 /// The system switching the keyboard tap off for being slow to answer, and it being
 /// switched back on. The events in between were lost.
 ///
@@ -32,10 +33,31 @@ public struct KeyboardTapLapse: Hashable, Sendable, CustomStringConvertible {
 @MainActor
 public final class Hotkey {
     nonisolated public static let defaultTapThreshold: Duration = .milliseconds(250)
-    /// Right Option, the chord the app listens for until a config file says otherwise.
-    /// Named once: the tap listens for it and the typist refuses to press it, and two
-    /// spellings of it would be a hotkey the typist could type. [LAW:one-source-of-truth]
-    nonisolated public static let defaultChord = KeyChord(modifiers: .rightOption)
+    /// The chord an installation listens for until its config file says otherwise.
+    ///
+    /// Right Option for the installed copy, and Right Option held together with Right
+    /// Command for the development one. The development chord is a superset of the
+    /// release chord rather than a different key, which works because a chord is matched
+    /// by exact equality of what is held: `{rightOption, rightCommand}` is not
+    /// `{rightOption}`, so holding both is the development hotkey and neither
+    /// installation has to know the other's. [LAW:dataflow-not-control-flow]
+    ///
+    /// **Right Command goes down first.** A chord completes on whichever of its
+    /// modifiers comes down last, and the press it begins owns the hold until one of its
+    /// keys comes up. Pressing Right Option first therefore completes the release chord
+    /// exactly, starting a press there before Right Command can make it the development
+    /// one, and both installations then listen. Right Command alone completes nothing, so
+    /// starting with it leaves only the development chord to complete.
+    ///
+    /// Named once per installation: the tap listens for it and the typist refuses to
+    /// press it, and two spellings of one chord would be a hotkey the typist could type.
+    /// [LAW:one-source-of-truth]
+    nonisolated public static func defaultChord(for flavor: Flavor) -> KeyChord {
+        switch flavor {
+        case .release: KeyChord(modifiers: .rightOption)
+        case .development: KeyChord(modifiers: .rightOption, .rightCommand)
+        }
+    }
 
     private let tap: any KeyboardTap
     private var detector: HotkeyDetector

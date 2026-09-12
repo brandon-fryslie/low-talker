@@ -1,4 +1,5 @@
 import ArgumentParser
+import Flavors
 import Dictation
 import Foundation
 import KeyboardService
@@ -21,6 +22,8 @@ struct DictateCommand: AsyncParsableCommand {
 
     @OptionGroup var options: ModelOptions
 
+    @OptionGroup var installation: FlavorOption
+
     @MainActor
     func run() async throws {
         setvbuf(stdout, nil, _IOLBF, 0)
@@ -35,7 +38,7 @@ struct DictateCommand: AsyncParsableCommand {
         try capture.start(try await MicrophonePermission().request().grant(), atRest: .shut)
         // Watched before the tap goes up, so no key can be down when an interrupt lands.
         let interrupt = Interrupt.watched()
-        let helper = HelperConnection()
+        let helper = HelperConnection(flavor: installation.flavor)
         let chords: Set<KeyChord> = [Hotkey.defaultChord]
         let dictation = Dictation(
             capture: capture,
