@@ -533,6 +533,44 @@ private struct Authorized: MicrophoneAuthority {
         #expect(capture.endSession(session) == .whole(AudioClip(samples: [1, 2])))
     }
 
+    /// The third arm of the stale report, and one only this arrangement makes reachable: the
+    /// watch used to come down with the engine, so a failed engine could never be told its
+    /// device had changed shape. It outlives the press now, and it can.
+    ///
+    /// Left failed, where `recover()` would relaunch and close the gap. A default input that
+    /// changed is a device that may have *appeared*, which is worth trying a dead engine
+    /// against; a bound device that changed shape is the same device it was, and nothing about
+    /// that says the reason this engine died has passed. So the failure stands with its gap
+    /// still open - a press or a default-input change is what ends it, and both ready a
+    /// microphone of their own - and all this owes is an input a press could open, because the
+    /// one being held is bound to a device that has moved.
+    @Test func aBoundDeviceThatChangedShapeUnderAFailedEngineLeavesItFailedAndReadiesAnother() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .open)
+        hardware.engines[0].onFailure(BadBuffer())
+        #expect(failure(of: capture, as: BadBuffer.self) == BadBuffer())
+        #expect(hardware.prepared == 1)
+
+        hardware.inputs[0].onStale()
+        // Still failed, and with the error it already had: a device changing shape under an
+        // engine that is already dead is not news that the device is well.
+        #expect(failure(of: capture, as: BadBuffer.self) == BadBuffer())
+        // The gap is still open, so it is still uncounted - an outage is booked where it ends.
+        #expect(capture.outages.count == 0)
+        // A microphone readied against the device as it is now, and nothing opened to do it.
+        #expect(hardware.prepared == 2)
+        #expect(hardware.engines.count == 1)
+
+        // What that readying was for: the press that ends the outage opens on the device as it
+        // is now rather than on the shape the failed engine was bound to.
+        let session = try capture.beginSession(at: after(1), preRoll: 0)
+        #expect(capture.outages.count == 1)
+        #expect(capture.outages.total > .zero)
+        hardware.engines[1].appending([1, 2], after(1))
+        #expect(capture.endSession(session) == .whole(AudioClip(samples: [1, 2])))
+    }
+
     /// A press that could not open leaves the next one something that can. What went away
     /// may be the device the input was readied against, and under `shut` no failure is
     /// recorded for the watch to act on - so a press that kept its stale input would refuse
