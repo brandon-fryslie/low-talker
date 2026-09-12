@@ -5,9 +5,24 @@ import Pointing
 import Synchronization
 import Typing
 
-/// Hardware a test feeds: one engine per launch, its samples the test's to append.
+/// Hardware a test feeds: one engine per opening, its samples the test's to append.
 @MainActor
 final class FakeHardware: AudioHardware {
+    /// A microphone readied and not open. Readying one takes no device and cannot fail,
+    /// which is what lets capture rest with one in hand.
+    final class Input: PreparedInput {
+        private unowned let hardware: FakeHardware
+        init(_ hardware: FakeHardware) { self.hardware = hardware }
+
+        func open(
+            appending: @escaping @Sendable ([Float], HostTime) -> Void,
+            onFailure: @escaping @MainActor (any Error) -> Void,
+            onConfigurationChange: @escaping @MainActor () -> Void
+        ) throws -> Disposal {
+            try hardware.openEngine(appending: appending, onFailure: onFailure, onConfigurationChange: onConfigurationChange)
+        }
+    }
+
     final class Engine {
         let appending: @Sendable ([Float], HostTime) -> Void
         let onFailure: @MainActor (any Error) -> Void
@@ -39,7 +54,9 @@ final class FakeHardware: AudioHardware {
         return engine
     }
 
-    func launch(appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) throws -> Disposal {
+    func prepareInput() -> any PreparedInput { Input(self) }
+
+    fileprivate func openEngine(appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) throws -> Disposal {
         if let failingToLaunch { throw failingToLaunch }
         let engine = Engine(appending: appending, onFailure: onFailure, onConfigurationChange: onConfigurationChange)
         engines.append(engine)
