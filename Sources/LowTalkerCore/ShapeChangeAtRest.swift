@@ -155,11 +155,12 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
     /// What the readied microphone was told while `device` stood in a shape it was not readied
     /// against, and the only place this Mac is moved or put back.
     ///
-    /// [LAW:no-ambient-temporal-coupling] A device moved and a device put back are one
-    /// lifetime, so they are one scope with one owner rather than two calls a happy path
-    /// happens to reach in order. Every way out of here goes through the `defer` - the wait
-    /// returning, the wait cancelled by an interrupt, a throw from anywhere between - and none
-    /// of them leaves a Mac at a rate its owner did not choose.
+    /// [LAW:no-ambient-temporal-coupling] A device moved and a device put back are one lifetime,
+    /// so they are one scope with one owner rather than two calls a happy path reaches in order:
+    /// every way out of the scope runs the `defer`, a cancelled wait included.
+    ///
+    /// SIGINT is not a way out of a scope. It kills the process where it stands and runs no
+    /// `defer` at all, so Ctrl-C during the wait leaves the device moved - low-privacy-o1z.lwn.
     ///
     /// [LAW:no-silent-failure] exception: the status of the ask is dropped because `measure`
     /// reads the rate back off the device afterwards, which answers the same question better

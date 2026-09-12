@@ -16,7 +16,7 @@ import LowTalkerCore
 struct MicCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "mic",
-        abstract: "Show, request, or follow microphone authorization, or read the indicator across a hold.",
+        abstract: "Show, request, or follow microphone authorization, or read the indicator across a hold and a resting microphone across a change of shape.",
         subcommands: [Status.self, Request.self, Watch.self, Indicator.self, Shape.self],
         defaultSubcommand: Status.self
     )
