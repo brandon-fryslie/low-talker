@@ -17,7 +17,7 @@ struct MicCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "mic",
         abstract: "Show, request, or follow microphone authorization, or read the indicator across a hold.",
-        subcommands: [Status.self, Request.self, Watch.self, Indicator.self],
+        subcommands: [Status.self, Request.self, Watch.self, Indicator.self, Shape.self],
         defaultSubcommand: Status.self
     )
 
@@ -85,6 +85,37 @@ struct MicCommand: ParsableCommand {
             // Prompts on a Mac that has never been asked; the grant is what a hold requires.
             let grant = try await MicrophonePermission().request().grant()
             let across = try await IndicatorAcrossHold.measure(holding: .milliseconds(hold), with: grant)
+            print(across)
+            guard across.kept else { throw ExitCode.failure }
+        }
+    }
+
+    /// The other half of what the resting microphone promises, and the half no suite can
+    /// reach: a microphone readied and then left alone still hears the device under it change
+    /// shape. Moves the default input to another rate it offers while nothing has it open,
+    /// and reports whether the readied microphone was told - then puts the rate back.
+    ///
+    /// This Mac is changed for the length of the run, which is why it is a command someone
+    /// asks for rather than anything the app does: the reading names the rate it left the
+    /// device at, so a run that could not put it back says so instead of leaving it to be
+    /// noticed later.
+    struct Shape: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Change the input device's shape while a microphone rests, and report whether it was heard."
+        )
+
+        /// Whole milliseconds, like `indicator`'s hold. Spent twice: once waiting for the
+        /// report, once giving the device time to take the shape it started in back.
+        @Option(help: "Milliseconds to wait for the report, and again for the device to change back.")
+        var wait: Int = 1000
+
+        func validate() throws {
+            guard wait > 0 else { throw ValidationError("--wait must be positive.") }
+        }
+
+        @MainActor
+        func run() async throws {
+            let across = try await ShapeChangeAtRest.measure(waiting: .milliseconds(wait))
             print(across)
             guard across.kept else { throw ExitCode.failure }
         }

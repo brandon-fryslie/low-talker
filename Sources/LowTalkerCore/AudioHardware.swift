@@ -96,6 +96,13 @@ public enum AudioHardwareError: Error, Equatable, CustomStringConvertible {
     /// The device would not say whether it is running, so nothing can say what the
     /// menu-bar indicator is showing for it.
     case runningStateUnreadable(OSStatus)
+    /// The device would not say what shape it is in or what shapes it offers. Read by
+    /// `ShapeChangeAtRest` rather than by a press: what a press needs of the format it
+    /// already asked the unit for.
+    case deviceShapeUnreadable(OSStatus)
+    /// The device refused to be moved to a shape it advertises, so the change a reading
+    /// meant to make was never made.
+    case deviceShapeUnchangeable(OSStatus)
     case renderFailed(OSStatus)
     /// The device asked to hand over more audio at once than the unit said it would.
     case overlongSlice(frames: Int, capacity: Int)
@@ -111,6 +118,8 @@ public enum AudioHardwareError: Error, Equatable, CustomStringConvertible {
         case .noDefaultInput(let status): "this Mac has no default input device (status \(status))"
         case .preparingOpenedTheDevice(let device): "readying a microphone opened device \(device) instead of only reaching it"
         case .runningStateUnreadable(let status): "CoreAudio would not say whether the input device is running (status \(status))"
+        case .deviceShapeUnreadable(let status): "CoreAudio would not say what shape the input device is in (status \(status))"
+        case .deviceShapeUnchangeable(let status): "the input device would not be moved to a shape it offers (status \(status))"
         case .renderFailed(let status): "the input device refused to hand over a buffer it had announced (status \(status))"
         case .overlongSlice(let frames, let capacity): "the input device asked to hand over \(frames) frames at once, past the \(capacity) it was prepared for"
         }
