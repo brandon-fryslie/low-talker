@@ -1,4 +1,5 @@
 import DriverExtension
+import Flavors
 
 /// One thing that must hold before low-talker can type, as this Mac actually stands.
 ///
@@ -289,8 +290,13 @@ public enum HelperStanding: Sendable, Hashable, CaseIterable {
 
 public extension Requirement {
     /// The root helper that owns the virtual keyboard.
-    static func keyboardHelper(_ standing: HelperStanding, serviceName: String) -> Requirement {
-        Requirement(name: Row.keyboardHelper.rawValue, reads: reads(for: standing), step: step(for: standing, serviceName: serviceName))
+    /// [LAW:one-source-of-truth] The flavor itself, not names lifted off it. A step tells a
+    /// person which app to turn on and which service was lost, and with two installations
+    /// those are two readings of one installation - so they are derived here, together,
+    /// from the value that holds both. Passing a name instead lets a step address one copy
+    /// while naming the other's, which is the confusion the two flavors exist to prevent.
+    static func keyboardHelper(_ standing: HelperStanding, flavor: Flavor) -> Requirement {
+        Requirement(name: Row.keyboardHelper.rawValue, reads: reads(for: standing), step: step(for: standing, flavor: flavor))
     }
 
     private static func reads(for standing: HelperStanding) -> String {
@@ -302,25 +308,25 @@ public extension Requirement {
         }
     }
 
-    private static func step(for standing: HelperStanding, serviceName: String) -> String? {
+    private static func step(for standing: HelperStanding, flavor: Flavor) -> String? {
         switch standing {
         case .holdingTheService:
             nil
         case .awaitingApproval:
             """
             Open \(loginItemsPane)
-            and turn on LowTalker. The helper is registered as a login item
+            and turn on \(flavor.displayName). The helper is registered as a login item
             and waits there until you do.
             """
         case .noJob:
             """
-            launchd holds no job for the helper. Launch LowTalker once - it
+            launchd holds no job for the helper. Launch \(flavor.displayName) once - it
             registers on every launch - and turn it on in
             \(loginItemsPane) if it asks.
             """
         case .anotherJobHoldsTheService:
             """
-            Something else holds \(serviceName), so this app's
+            Something else holds \(flavor.machServiceName), so this app's
             helper never got the name and answers nothing, however
             healthy it looks. It cannot be another launchd job - a
             job and its service share one label here, and a second

@@ -149,7 +149,7 @@ public extension OnboardingProbe {
                 label: flavor.launchdLabel,
                 service: flavor.machServiceName)
                 .sharpenedByTheAppsOwnRegistration(approvalPending: approvalPending)
-            return ([.keyboardHelper(standing, serviceName: flavor.machServiceName)],
+            return ([.keyboardHelper(standing, flavor: flavor)],
                     standing.aHelperHasRun)
         } catch { return ([.unreadable(.keyboardHelper, error)], false) }
     }
