@@ -12,26 +12,32 @@ final class FakeHardware: AudioHardware {
     /// which is what lets capture rest with one in hand.
     final class Input: PreparedInput {
         private unowned let hardware: FakeHardware
-        init(_ hardware: FakeHardware) { self.hardware = hardware }
+        /// Fired by a test to say the device this was readied against went away or changed
+        /// shape. It belongs to the readied input rather than to an engine because that is
+        /// where the real one lives, and that is what lets a test reach the stretch where
+        /// the microphone is readied and nothing is open.
+        let onStale: @MainActor () -> Void
+
+        init(_ hardware: FakeHardware, onStale: @escaping @MainActor () -> Void) {
+            self.hardware = hardware
+            self.onStale = onStale
+        }
 
         func open(
             appending: @escaping @Sendable ([Float], HostTime) -> Void,
-            onFailure: @escaping @MainActor (any Error) -> Void,
-            onConfigurationChange: @escaping @MainActor () -> Void
+            onFailure: @escaping @MainActor (any Error) -> Void
         ) throws -> Disposal {
-            try hardware.openEngine(appending: appending, onFailure: onFailure, onConfigurationChange: onConfigurationChange)
+            try hardware.openEngine(appending: appending, onFailure: onFailure)
         }
     }
 
     final class Engine {
         let appending: @Sendable ([Float], HostTime) -> Void
         let onFailure: @MainActor (any Error) -> Void
-        let onConfigurationChange: @MainActor () -> Void
 
-        init(appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) {
+        init(appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void) {
             self.appending = appending
             self.onFailure = onFailure
-            self.onConfigurationChange = onConfigurationChange
         }
     }
 
@@ -54,11 +60,24 @@ final class FakeHardware: AudioHardware {
         return engine
     }
 
-    func prepareInput() -> any PreparedInput { Input(self) }
+    /// The microphone capture is holding readied, which each readying replaces. Watched for
+    /// its whole life on a real Mac, so it is reachable here for its whole life too.
+    private var latestReadied: Input?
 
-    fileprivate func openEngine(appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) throws -> Disposal {
+    var readied: Input {
+        guard let latestReadied else { preconditionFailure("nothing has readied a microphone; capture readies one when it starts") }
+        return latestReadied
+    }
+
+    func prepareInput(onStale: @escaping @MainActor () -> Void) -> any PreparedInput {
+        let input = Input(self, onStale: onStale)
+        latestReadied = input
+        return input
+    }
+
+    fileprivate func openEngine(appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void) throws -> Disposal {
         if let failingToLaunch { throw failingToLaunch }
-        let engine = Engine(appending: appending, onFailure: onFailure, onConfigurationChange: onConfigurationChange)
+        let engine = Engine(appending: appending, onFailure: onFailure)
         engines.append(engine)
         open = engine
         // Only while it is still the one open: a disposal arriving after its replacement

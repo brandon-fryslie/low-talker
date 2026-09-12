@@ -5,9 +5,9 @@ import Testing
 private struct NoDevice: Error, Equatable {}
 private struct BadBuffer: Error, Equatable {}
 
-/// Hardware a test controls: each opening takes the next scripted outcome, every
-/// engine's callbacks are the test's to fire, and the default input device changes
-/// when the test says so.
+/// Hardware a test controls: each opening takes the next scripted outcome, every engine's
+/// and every readied input's callbacks are the test's to fire, and the default input device
+/// changes when the test says so.
 ///
 /// Readying a microphone and opening one are counted apart, because the difference is
 /// what keeps `shut` affordable and a test that could not see it could not hold the
@@ -23,33 +23,43 @@ private final class FakeHardware: AudioHardware {
         /// thing a test can say "the press opened the microphone readied against the new
         /// device" with - a count of readyings says one happened, not which one was used.
         let readying: Int
-        init(_ hardware: FakeHardware, readying: Int) {
+        /// Fired by a test to say the device this was readied against went away or changed
+        /// shape. It belongs to the readied input rather than to an engine because that is
+        /// where the real one lives, and that is what lets a test reach the stretch where the
+        /// microphone is readied and nothing is open - the stretch nothing could reach while
+        /// this was a parameter of `open`.
+        let onStale: @MainActor () -> Void
+
+        init(_ hardware: FakeHardware, readying: Int, onStale: @escaping @MainActor () -> Void) {
             self.hardware = hardware
             self.readying = readying
+            self.onStale = onStale
         }
 
         func open(
             appending: @escaping @Sendable ([Float], HostTime) -> Void,
-            onFailure: @escaping @MainActor (any Error) -> Void,
-            onConfigurationChange: @escaping @MainActor () -> Void
+            onFailure: @escaping @MainActor (any Error) -> Void
         ) throws -> Disposal {
-            try hardware.open(readying: readying, appending: appending, onFailure: onFailure, onConfigurationChange: onConfigurationChange)
+            try hardware.open(on: self, appending: appending, onFailure: onFailure)
         }
     }
 
     final class Engine {
-        /// The readying whose input this engine was opened on.
-        let readying: Int
+        /// The readied microphone this engine was opened on. Held rather than copied from, so
+        /// `engine.input.onStale()` is how a test says the device under a running engine
+        /// changed and the two cannot come apart. [LAW:one-source-of-truth]
+        let input: Input
         let appending: @Sendable ([Float], HostTime) -> Void
         let onFailure: @MainActor (any Error) -> Void
-        let onConfigurationChange: @MainActor () -> Void
         var disposed = false
 
-        init(readying: Int, appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) {
-            self.readying = readying
+        /// Which readying this engine was opened on, read off that input.
+        var readying: Int { input.readying }
+
+        init(input: Input, appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void) {
+            self.input = input
             self.appending = appending
             self.onFailure = onFailure
-            self.onConfigurationChange = onConfigurationChange
         }
     }
 
@@ -61,23 +71,29 @@ private final class FakeHardware: AudioHardware {
     private(set) var engines: [Engine] = []
     private var onDefaultInputChange: (@MainActor () -> Void)?
     private(set) var watchDisposals = 0
+    /// Every microphone readied, in the order they were readied. Kept rather than counted,
+    /// because a readied input is watched for its whole life and a test that could only
+    /// count them could not reach one that was never opened.
+    private(set) var inputs: [Input] = []
+
     /// How many microphones have been readied. Never a device: the count exists so a
     /// test can say that resting readied one and opened nothing.
-    private(set) var prepared = 0
+    var prepared: Int { inputs.count }
 
     init(launches: [(any Error)?] = [], watch: (any Error)? = nil) {
         self.launches = launches
         self.watch = watch
     }
 
-    func prepareInput() -> any PreparedInput {
-        prepared += 1
-        return Input(self, readying: prepared)
+    func prepareInput(onStale: @escaping @MainActor () -> Void) -> any PreparedInput {
+        let input = Input(self, readying: inputs.count + 1, onStale: onStale)
+        inputs.append(input)
+        return input
     }
 
-    fileprivate func open(readying: Int, appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) throws -> Disposal {
+    fileprivate func open(on input: Input, appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void) throws -> Disposal {
         if let error = launches.isEmpty ? nil : launches.removeFirst() { throw error }
-        let engine = Engine(readying: readying, appending: appending, onFailure: onFailure, onConfigurationChange: onConfigurationChange)
+        let engine = Engine(input: input, appending: appending, onFailure: onFailure)
         engines.append(engine)
         return { engine.disposed = true }
     }
@@ -434,7 +450,7 @@ private struct Authorized: MicrophoneAuthority {
         try capture.start(grant, atRest: .open)
         hardware.engines[0].appending([1, 2, 3, 4, 5, 6], origin)
 
-        hardware.engines[0].onConfigurationChange()
+        hardware.engines[0].input.onStale()
         #expect(hardware.engines[0].disposed)
         #expect(hardware.engines.count == 2)
         // The device this was readied against is the one that just went away, so the
@@ -477,6 +493,42 @@ private struct Authorized: MicrophoneAuthority {
         let session = try capture.beginSession(at: origin, preRoll: 0)
         #expect(hardware.prepared == 2)
         #expect(hardware.engines.count == 1)
+        hardware.engines[0].appending([1, 2], origin)
+        #expect(capture.endSession(session) == .whole(AudioClip(samples: [1, 2])))
+    }
+
+    /// The window this arrangement exists to close, and the one no test could reach while the
+    /// watch was a parameter of `open`: the device stays the default and changes shape under a
+    /// microphone that is readied and shut, a headset renegotiating its codec being the
+    /// ordinary way. The default-input watch stays quiet for that - the default did not change
+    /// - so only something watching the bound device hears it, and under `shut` nothing was:
+    /// the watch went up at the press and came down at the key-up.
+    ///
+    /// What the stretch cost is the press after it. A readied input fixes its client format,
+    /// its render buffer and its converter against the shape it found, and the unit goes on
+    /// converting whatever the device now delivers into what it was asked for - so the
+    /// utterance was resampled twice rather than captured wrong, which is why this was a
+    /// quality defect and not a corrupt one. Readying opens no device, so answering it costs
+    /// the mode nothing: the microphone stays shut and is simply ready against the shape the
+    /// device has now.
+    @Test func aBoundDeviceThatChangedShapeWhileShutReadiesAnotherAndOpensNothing() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .shut)
+        #expect(hardware.prepared == 1)
+
+        hardware.inputs[0].onStale()
+        #expect(hardware.prepared == 2)
+        // Readied, not opened: nobody is holding the key, and a device changing shape is no
+        // more a reason to start listening than a device appearing is.
+        #expect(hardware.engines.isEmpty)
+        #expect(isListening(capture))
+
+        // And the press that follows opens what was readied after the change rather than the
+        // input prepared against the shape before it.
+        let session = try capture.beginSession(at: origin, preRoll: 0)
+        #expect(hardware.engines.count == 1)
+        #expect(hardware.engines[0].readying == 2)
         hardware.engines[0].appending([1, 2], origin)
         #expect(capture.endSession(session) == .whole(AudioClip(samples: [1, 2])))
     }
@@ -828,7 +880,7 @@ private struct Authorized: MicrophoneAuthority {
         let capture = AudioCapture(hardware: hardware, startingAt: origin)
         let session = try opened(capture)
         hardware.engines[0].appending([1, 2], origin)
-        hardware.engines[0].onConfigurationChange()
+        hardware.engines[0].input.onStale()
         #expect(failure(of: capture, as: NoDevice.self) == NoDevice())
         #expect(try capture.endSession(session) == .partial(AudioClip(samples: [1, 2]), lost: loss(unopened: true)))
         #expect(isListening(capture))
@@ -862,7 +914,7 @@ private struct Authorized: MicrophoneAuthority {
         let capture = AudioCapture(hardware: hardware, startingAt: origin)
         let session = try opened(capture)
         hardware.engines[0].appending([1], origin)
-        hardware.engines[0].onConfigurationChange()
+        hardware.engines[0].input.onStale()
         #expect(hardware.engines[0].disposed)
         #expect(hardware.engines.count == 2)
         #expect(capture.deviceChanges == 1)
@@ -887,7 +939,7 @@ private struct Authorized: MicrophoneAuthority {
         let capture = AudioCapture(hardware: hardware, startingAt: origin)
         let session = try opened(capture)
         hardware.engines[0].appending([1], origin)
-        hardware.engines[0].onConfigurationChange()
+        hardware.engines[0].input.onStale()
         hardware.engines[1].appending([2], after(1 + AudioClip.sampleCount(for: 0.3)))
         #expect(try capture.endSession(session) == .partial(AudioClip(samples: [1, 2]), lost: loss(interrupted: true)))
     }
@@ -899,7 +951,7 @@ private struct Authorized: MicrophoneAuthority {
         let capture = AudioCapture(hardware: hardware, startingAt: origin)
         let spanning = try opened(capture)
         hardware.engines[0].appending([1], origin)
-        hardware.engines[0].onConfigurationChange()
+        hardware.engines[0].input.onStale()
         _ = capture.endSession(spanning)
 
         let session = try capture.beginSession(at: after(1), preRoll: 0)
@@ -915,7 +967,7 @@ private struct Authorized: MicrophoneAuthority {
         let capture = AudioCapture(hardware: hardware, startingAt: origin)
         let session = try opened(capture)
         hardware.engines[0].appending([1], origin)
-        hardware.engines[0].onConfigurationChange()
+        hardware.engines[0].input.onStale()
         try hardware.changeDefaultInput()
         hardware.engines[1].appending([2], after(1))
         #expect(try capture.endSession(session) == .partial(AudioClip(samples: [1, 2]), lost: loss(interrupted: true)))
@@ -928,7 +980,7 @@ private struct Authorized: MicrophoneAuthority {
         let hardware = FakeHardware(launches: [nil, NoDevice()])
         let capture = AudioCapture(hardware: hardware)
         _ = try opened(capture)
-        hardware.engines[0].onConfigurationChange()
+        hardware.engines[0].input.onStale()
         #expect(failure(of: capture, as: NoDevice.self) == NoDevice())
         #expect(hardware.engines.count == 1)
         #expect(capture.outages.count == 0)
@@ -947,7 +999,7 @@ private struct Authorized: MicrophoneAuthority {
         let hardware = FakeHardware(launches: [nil, NoDevice(), BadBuffer()])
         let capture = AudioCapture(hardware: hardware)
         _ = try opened(capture)
-        hardware.engines[0].onConfigurationChange()
+        hardware.engines[0].input.onStale()
         try hardware.changeDefaultInput()
         #expect(failure(of: capture, as: BadBuffer.self) == BadBuffer())
         try hardware.changeDefaultInput()
@@ -955,9 +1007,10 @@ private struct Authorized: MicrophoneAuthority {
         #expect(capture.outages.count == 1)
     }
 
-    /// While a session's engine is running, a default input change is that engine's to
-    /// notice (macOS posts it a configuration change); relaunching here too would launch
-    /// twice per change.
+    /// A default input change under a live press launches nothing. The device the press is
+    /// recording on is still alive and still the shape it was - what changed is which device
+    /// the *next* press should open - so cutting this one buys nothing, and the readying it
+    /// does owe is booked for the key-up.
     @Test func aDefaultInputChangeWhileRunningLaunchesNothing() throws {
         let hardware = FakeHardware()
         let capture = AudioCapture(hardware: hardware)
@@ -987,7 +1040,7 @@ private struct Authorized: MicrophoneAuthority {
         let hardware = FakeHardware(launches: [nil, NoDevice()])
         let capture = AudioCapture(hardware: hardware)
         let session = try opened(capture)
-        hardware.engines[0].onConfigurationChange()
+        hardware.engines[0].input.onStale()
         _ = capture.endSession(session)
         try hardware.changeDefaultInput()
         #expect(hardware.engines.count == 1)
@@ -1003,14 +1056,19 @@ private struct Authorized: MicrophoneAuthority {
         #expect(hardware.engines[0].disposed)
     }
 
-    /// A replaced engine's late failure says nothing about the engine now running.
+    /// A replaced engine's late failure says nothing about the engine now running, and neither
+    /// does a let-go input's late staleness. Both watches outlive what they were formed for -
+    /// the tap's failure arrives asynchronously, and the device listeners behind `onStale` can
+    /// have posted before their input was let go and arrive after - so each callback carries
+    /// the generation it belongs to and is matched rather than trusted. Acting on the second
+    /// one here would give up an engine running healthily on the input that took over.
     @Test func aCallbackFromAReplacedEngineIsStale() throws {
         let hardware = FakeHardware()
         let capture = AudioCapture(hardware: hardware)
         _ = try opened(capture)
-        hardware.engines[0].onConfigurationChange()
+        hardware.engines[0].input.onStale()
         hardware.engines[0].onFailure(BadBuffer())
-        hardware.engines[0].onConfigurationChange()
+        hardware.engines[0].input.onStale()
         #expect(isRunning(capture))
         #expect(hardware.engines.count == 2)
         #expect(!hardware.engines[1].disposed)
@@ -1042,7 +1100,7 @@ private struct Authorized: MicrophoneAuthority {
         let hardware = FakeHardware(launches: [nil, NoDevice()])
         let capture = AudioCapture(hardware: hardware)
         _ = try opened(capture)
-        hardware.engines[0].onConfigurationChange()
+        hardware.engines[0].input.onStale()
         capture.stop()
         #expect(!hardware.isWatching)
     }
@@ -1062,9 +1120,9 @@ private struct Authorized: MicrophoneAuthority {
         let hardware = FakeHardware(launches: [nil, NoDevice(), nil, nil])
         let capture = AudioCapture(hardware: hardware)
         _ = try opened(capture)
-        hardware.engines[0].onConfigurationChange()
+        hardware.engines[0].input.onStale()
         try hardware.changeDefaultInput()
-        hardware.engines[1].onConfigurationChange()
+        hardware.engines[1].input.onStale()
         #expect(capture.deviceChanges == 1)
         #expect(capture.outages.count == 1)
         try capture.start(grant, atRest: .shut)

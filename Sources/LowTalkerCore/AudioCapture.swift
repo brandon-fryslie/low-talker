@@ -73,10 +73,9 @@ public final class AudioCapture {
         public var total: Duration = .zero
     }
 
-    /// An engine on the input device of its moment. The generation is what this
-    /// engine's callbacks carry (the tap's failure, the observer's change), so a
-    /// callback from a replaced engine is recognized as stale (a counter, because a
-    /// replaced engine's address can be reused).
+    /// An engine on the input device of its moment. The generation is what this engine's
+    /// tap carries with a failure, so a failure from a replaced engine is recognized as
+    /// stale (a counter, because a replaced engine's address can be reused).
     private struct Live {
         let dispose: Disposal
         let generation: Int
@@ -180,6 +179,13 @@ public final class AudioCapture {
     private let shared: Shared
     private var phase: Phase = .stopped
     private var generation = 0
+    /// Microphones readied since this capture was made. What the staleness callback of each
+    /// readied input carries, for the reason an engine's generation is carried: the watch
+    /// behind it lives as long as the input does, a notification already posted when that
+    /// input was let go still arrives, and the input it speaks about is not the one a press
+    /// would open any more. Never reset - `start()` resets what it counts, and a counter that
+    /// went back to zero would let the previous run's stragglers match.
+    private var preparations = 0
     /// Running engines `replaceEngine` swapped in place since `start()`: the device
     /// changed, capture stayed running, and nothing failed. Not a claim that no audio was
     /// lost to them - the audio on either side of each one is spliced, which is what a
@@ -435,7 +441,7 @@ public final class AudioCapture {
             // the moment the app has time to spare, and a press is the moment it has
             // none. No device is opened by it, so a Mac nobody has dictated to still
             // shows no microphone.
-            prepared: hardware.prepareInput()
+            prepared: readiedInput()
         ))
         rest()
     }
@@ -483,8 +489,20 @@ public final class AudioCapture {
     /// paid, and a `rest()` that still saw it standing would tear down a microphone
     /// pointing at the right device to ready an identical one.
     private func ready(_ started: inout Started) {
-        started.prepared = hardware.prepareInput()
+        started.prepared = readiedInput()
         started.readyAgainAtRest = false
+    }
+
+    /// A microphone readied against whatever the default input is now, wired so that the
+    /// device it ends up bound to going away or changing shape arrives at `inputWentStale`.
+    ///
+    /// [LAW:one-source-of-truth] The one place a preparation is wired, so the two moments one
+    /// is made - starting capture, and replacing a stale one - cannot disagree about what
+    /// watches it.
+    private func readiedInput() -> any PreparedInput {
+        preparations += 1
+        let preparation = preparations
+        return hardware.prepareInput { [weak self] in self?.inputWentStale(from: preparation) }
     }
 
     /// Lets the press go and brings the microphone to what it does while no session is
@@ -544,17 +562,6 @@ public final class AudioCapture {
         outages.total += .now - since
     }
 
-    /// The running engine, only while it is still the one a callback was formed for.
-    /// [LAW:no-ambient-temporal-coupling] An observer block already queued when
-    /// `dispose()` removes the observer still runs, and the tap's failure arrives
-    /// asynchronously, so both callbacks are resolved here by generation rather than
-    /// trusted by arrival - and a session that has since ended matches nothing, so a
-    /// callback cannot reopen a microphone the speaker let go of.
-    private func live(of generation: Int) -> (started: Started, live: Live)? {
-        guard case .started(let started) = phase, case .running(let live) = started.engine, live.generation == generation else { return nil }
-        return (started, live)
-    }
-
     private func launch(on prepared: any PreparedInput) throws -> Live {
         let shared = shared
         generation += 1
@@ -587,8 +594,7 @@ public final class AudioCapture {
                         $0.ring.append(samples)
                     }
                 },
-                onFailure: { [weak self] error in self?.fail(error, from: generation) },
-                onConfigurationChange: { [weak self] in self?.replaceEngine(from: generation) }
+                onFailure: { [weak self] error in self?.fail(error, from: generation) }
             )
             return Live(dispose: dispose, generation: generation)
         } catch {
@@ -604,10 +610,13 @@ public final class AudioCapture {
 
     /// The device changed under a running engine: macOS already stopped it, and it never
     /// delivers again.
-    private func replaceEngine(from generation: Int) {
-        guard let running = live(of: generation) else { return }
-        dispose(running.live)
-        var started = running.started
+    ///
+    /// Takes the engine to give up rather than a generation to find one by. Both callers have
+    /// just matched one from the phase they are holding, and the callback that had to be
+    /// resolved by generation - the engine's own configuration change - is the readied
+    /// input's now and arrives at `inputWentStale`. [LAW:polishing-by-subtraction]
+    private func replaceEngine(_ started: inout Started, _ live: Live) {
+        dispose(live)
         do {
             // The device this was prepared against is not the one to open any more: it went
             // away, or it stopped being the default while nothing was recording it.
@@ -617,13 +626,44 @@ public final class AudioCapture {
         } catch {
             started.engine = .failed(error, since: .now)
         }
+    }
+
+    /// The device a readied microphone is bound to went away or changed shape. It can happen
+    /// at any point in that microphone's life and not only while a press holds it open, which
+    /// is the whole of why the watch behind this belongs to the input - see
+    /// `AudioHardware.prepareInput`. Either way the input is no longer one to open, so both
+    /// arms of this end in a fresh one.
+    ///
+    /// A running engine is replaced here and now, where `recover()` may leave a press
+    /// recording: the device under that one is still the device it was opened on, and this is
+    /// the case where it is not. macOS has already stopped the engine and it never delivers
+    /// again, so a press left on it would record its remaining seconds into silence - a new
+    /// engine on the device that replaced it salvages the rest of the utterance, and the
+    /// splice is what the session reports. [LAW:no-silent-failure]
+    ///
+    /// A microphone that is merely readied has nothing to give up, so it is simply readied
+    /// again - which opens no device, and is what closes the resting stretch this whole
+    /// change is about.
+    private func inputWentStale(from preparation: Int) {
+        // Not the microphone a press would open any more, so nothing it says is about one.
+        // A notification posted before its input was let go can arrive after, and acting on
+        // it would give up an engine running healthily on the input that replaced it.
+        guard case .started(var started) = phase, preparation == preparations else { return }
+        switch started.engine {
+        case .running(let live): replaceEngine(&started, live)
+        // A failed engine is left failed: it is not this device's turn again until a press
+        // or the default-input watch says so, and both ready a microphone of their own.
+        case .shut, .failed: ready(&started)
+        }
         phase = .started(started)
     }
 
-    /// The default input device changed. An open session's running engine hears that
-    /// itself, through its configuration change; a failed one has no engine to hear
-    /// with, so this is how a device that appears reaches it. A launch that fails again
-    /// (the device that appeared cannot feed the pipeline either) extends the same
+    /// The default input device changed - which device a press should open, not anything
+    /// about the one it is open on. That is the whole difference from `inputWentStale`: the
+    /// bound device is still alive and still the shape it was, so a press on it is left
+    /// recording and only the *next* one owes anything. A failed engine has no device to
+    /// stay on, so this is also how one reaches a device that appeared; a launch that fails
+    /// again (the device that appeared cannot feed the pipeline either) extends the same
     /// outage.
     ///
     /// A shut microphone is not woken by this. Nobody is holding the key, so nobody is
@@ -636,24 +676,19 @@ public final class AudioCapture {
     private func recover() {
         guard case .started(var started) = phase else { return }
         switch started.engine {
-        // A running engine owns the input it was launched on: the disposal it holds is
-        // weak, so `prepared` is the only strong reference to the open input and replacing
-        // it here would deinit the device out from under a live press. While a session is
-        // open that is also the right answer - a switch of the default input is not a
-        // reason to cut the recording the speaker is in the middle of making. With no
-        // session open there is nothing to cut, and the engine is replaced on the new
+        // A running engine owns the input it was launched on: the disposal it holds is weak,
+        // so `prepared` is the only strong reference to the open input and replacing it under
+        // a live press would deinit the device out from under it. That is also the right
+        // answer on its own terms - a switch of the default input is not a reason to cut the
+        // recording the speaker is in the middle of making - but forgetting it happened is
+        // not, so the work is booked for `rest()`, the moment "no session is open" becomes
+        // true, and done there.
+        case .running where started.sessionIsOpen:
+            started.readyAgainAtRest = true
+        // With no session open there is nothing to cut, and the engine is replaced on the new
         // default the same way a device that went away replaces it.
         case .running(let live):
-            // A press is in flight: cutting it is not the answer, but neither is forgetting
-            // this happened. `rest()` is the moment "no session is open" becomes true, so
-            // the work is booked for it and done there.
-            guard !started.sessionIsOpen else {
-                started.readyAgainAtRest = true
-                phase = .started(started)
-                return
-            }
-            replaceEngine(from: live.generation)
-            return
+            replaceEngine(&started, live)
         case .shut:
             ready(&started)
         case .failed(_, let since):
@@ -670,10 +705,15 @@ public final class AudioCapture {
 
     /// A failure from an engine a device change has since replaced is stale: the
     /// engine it came from is gone and the one running is healthy.
+    ///
+    /// [LAW:no-ambient-temporal-coupling] The tap's failure arrives asynchronously, so the
+    /// engine it is about is resolved by generation rather than trusted by arrival - a
+    /// replaced engine's late failure would otherwise fail the one that took over from it.
     private func fail(_ error: any Error, from generation: Int) {
-        guard let running = live(of: generation) else { return }
-        dispose(running.live)
-        var started = running.started
+        guard case .started(var started) = phase,
+              case .running(let live) = started.engine,
+              live.generation == generation else { return }
+        dispose(live)
         started.engine = .failed(error, since: .now)
         phase = .started(started)
     }
