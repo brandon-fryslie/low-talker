@@ -40,10 +40,8 @@ import Synchronization
 /// and a press that says so is one they can repeat; a sentence quietly missing its front
 /// is not. [LAW:no-silent-failure]
 ///
-/// The engine is disposable and the ring is not. When the input device changes, macOS
-/// stops the engine and posts a configuration change, and a tap reinstalled on that
-/// engine never delivers another buffer (tried with stop, reset, prepare, and a delay);
-/// only a fresh engine on the new device does. So a device change launches a new engine
+/// The engine is disposable and the ring is not. A microphone is prepared against one
+/// device and cannot be re-pointed at another, so a device change launches a new engine
 /// by the same routine as opening one, and the ring, which lives here rather than in any
 /// engine, carries across. What it carries across is spliced: no audio is captured
 /// between the two engines, so the position the new one resumes at is kept and a session
@@ -112,8 +110,8 @@ public final class AudioCapture {
         /// what it costs to open a microphone already reached.
         ///
         /// Replaced rather than re-pointed when the input device changes, because an
-        /// input is prepared against one device. [LAW:one-source-of-truth] This class is
-        /// the one place that learns the device changed, so it is the one place that
+        /// input is prepared against one device. [LAW:one-source-of-truth] `AudioCapture`
+        /// is the one place that learns the device changed, so it is the one place that
         /// decides a prepared input has gone stale.
         var prepared: any PreparedInput
         /// Whether a press is in flight. The engine's own state answered this while the
@@ -182,13 +180,10 @@ public final class AudioCapture {
     private let shared: Shared
     private var phase: Phase = .stopped
     private var generation = 0
-    /// Running engines replaced under a press since `start()`: the device changed, capture
-    /// stayed running, and nothing failed. `replaceEngine` is the only thing that counts
-    /// here, which is what makes the number readable - a change answered while the
-    /// microphone is at rest is not a replacement and is not counted, whether that is a
-    /// resting microphone readying another or a mid-press change spent at the key-up. Not
-    /// a claim that no audio was lost to them either - the audio on either side of each one
-    /// is spliced, which is what a session's `CapturedAudio` says and this count does not.
+    /// Running engines `replaceEngine` swapped in place since `start()`: the device
+    /// changed, capture stayed running, and nothing failed. Not a claim that no audio was
+    /// lost to them - the audio on either side of each one is spliced, which is what a
+    /// session's `CapturedAudio` says and this count does not.
     public private(set) var deviceChanges = 0
     public private(set) var outages = Outages()
 
