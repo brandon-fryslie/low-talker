@@ -314,6 +314,15 @@ public final class AudioCapture {
             do {
                 started.engine = .running(try launch(on: started.prepared))
             } catch {
+                // What failed may have been the device going away, and the input prepared
+                // against it cannot open the one that replaced it. Readying another costs
+                // no device and leaves the next press something that can open, where
+                // keeping this one would refuse every press until capture is restarted.
+                // The engine stays shut: recording a failure here is what the case below
+                // exists not to do, because a failed engine left behind lets the next
+                // device change hold open a microphone `shut` asked to keep closed.
+                started.prepared = hardware.prepareInput()
+                phase = .started(started)
                 throw NoMicrophone.failed(error)
             }
         // A press is a reason to try the device again, and the alternative is a resting
@@ -579,17 +588,36 @@ public final class AudioCapture {
     /// outage.
     ///
     /// A shut microphone is not woken by this. Nobody is holding the key, so nobody is
-    /// dictating, and a device appearing is not a reason to start listening to it.
+    /// dictating, and a device appearing is not a reason to start listening to it. What a
+    /// shut microphone does do is ready itself against the device that is now the default:
+    /// preparing opens nothing and lights no indicator, and skipping it left the next press
+    /// launching on an input bound to a device that had stopped being the default - which a
+    /// press has no way to notice and no way to recover from, because the `shut` branch of
+    /// `beginSession` deliberately records no failure.
     private func recover() {
-        guard case .started(var started) = phase, case .failed(_, let since) = started.engine else { return }
-        do {
-            // This runs because the default input device changed, so whatever was
-            // prepared was prepared against the device that is no longer it.
+        guard case .started(var started) = phase else { return }
+        switch started.engine {
+        // A running engine owns the input it was launched on: the disposal it holds is
+        // weak, so `prepared` is the only strong reference to the open input and replacing
+        // it here would deinit the device out from under a live press. While a session is
+        // open that is also the right answer - a switch of the default input is not a
+        // reason to cut the recording the speaker is in the middle of making. With no
+        // session open there is nothing to cut, and the engine is replaced on the new
+        // default the same way a device that went away replaces it.
+        case .running(let live):
+            guard !started.sessionIsOpen else { return }
+            replaceEngine(from: live.generation)
+            return
+        case .shut:
             started.prepared = hardware.prepareInput()
-            started.engine = .running(try launch(on: started.prepared))
-            closeOutage(since: since)
-        } catch {
-            started.engine = .failed(error, since: since)
+        case .failed(_, let since):
+            do {
+                started.prepared = hardware.prepareInput()
+                started.engine = .running(try launch(on: started.prepared))
+                closeOutage(since: since)
+            } catch {
+                started.engine = .failed(error, since: since)
+            }
         }
         phase = .started(started)
     }

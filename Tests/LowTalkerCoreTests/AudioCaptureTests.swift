@@ -383,6 +383,9 @@ private struct Authorized: MicrophoneAuthority {
 
         let session = try capture.beginSession(at: origin, preRoll: 0)
         #expect(hardware.engines.count == 1)
+        // Readied again, not reused: what failed may have been the device going away, and
+        // an input prepared against that one cannot open the one that replaced it.
+        #expect(hardware.prepared == 2)
         // The device did come back, and a press is simply where that was noticed: the gap
         // it ends is booked the same as one the device watch ends, or the count would
         // depend on which of the two got there first. [LAW:single-enforcer]
@@ -424,6 +427,9 @@ private struct Authorized: MicrophoneAuthority {
         hardware.engines[0].onConfigurationChange()
         #expect(hardware.engines[0].disposed)
         #expect(hardware.engines.count == 2)
+        // The device this was readied against is the one that just went away, so the
+        // replacement launches on a fresh input rather than the stale one.
+        #expect(hardware.prepared == 2)
         #expect(capture.deviceChanges == 1)
         // A swap is not an outage and not a press: nothing failed, and nobody is dictating.
         #expect(capture.outages.count == 0)
@@ -435,6 +441,99 @@ private struct Authorized: MicrophoneAuthority {
         #expect(session.preRoll == 0)
         hardware.engines[1].appending([7, 8], after(6))
         #expect(capture.endSession(session) == .whole(AudioClip(samples: [7, 8])))
+    }
+
+    /// What readying early costs, and what a green suite hid: a prepared input is bound to
+    /// one device, so a default input that changes while the microphone rests shut leaves
+    /// the readied one pointing at a device that is no longer the one to open. Nothing
+    /// noticed - the watch acted only on a failed engine, and `shut` records no failure -
+    /// so every press afterwards launched on a stale input and no later device change could
+    /// clear it. Readying opens no device, so answering this costs the mode nothing: the
+    /// microphone stays shut, and is simply ready against the right device.
+    @Test func aDefaultInputChangedWhileShutReadiesAnotherAndOpensNothing() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .shut)
+        #expect(hardware.prepared == 1)
+
+        try hardware.changeDefaultInput()
+        #expect(hardware.prepared == 2)
+        // Readied, not opened: nobody is holding the key, and a device appearing is not a
+        // reason to start listening to it.
+        #expect(hardware.engines.isEmpty)
+        #expect(isListening(capture))
+
+        // And the press that follows opens what was readied against the new device.
+        let session = try capture.beginSession(at: origin, preRoll: 0)
+        #expect(hardware.prepared == 2)
+        #expect(hardware.engines.count == 1)
+        hardware.engines[0].appending([1, 2], origin)
+        #expect(capture.endSession(session) == .whole(AudioClip(samples: [1, 2])))
+    }
+
+    /// A press that could not open leaves the next one something that can. What went away
+    /// may be the device the input was readied against, and under `shut` no failure is
+    /// recorded for the watch to act on - so a press that kept its stale input would refuse
+    /// every press after it until capture was restarted.
+    @Test func aPressThatCouldNotOpenAShutMicrophoneReadiesAnotherForTheNext() throws {
+        let hardware = FakeHardware(launches: [NoDevice()])
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .shut)
+        #expect(hardware.prepared == 1)
+
+        #expect(throws: NoMicrophone.self) { try capture.beginSession(at: origin, preRoll: 0) }
+        #expect(hardware.prepared == 2)
+        // Shut rather than failed: a failure left behind here would let the next device
+        // change hold open a microphone this mode asked to keep closed.
+        #expect(isListening(capture))
+        #expect(hardware.engines.isEmpty)
+
+        let session = try capture.beginSession(at: after(1), preRoll: 0)
+        #expect(hardware.engines.count == 1)
+        hardware.engines[0].appending([1, 2], after(1))
+        #expect(capture.endSession(session) == .whole(AudioClip(samples: [1, 2])))
+    }
+
+    /// Under `open` the engine runs while nobody is dictating, and a default input that
+    /// changes then is a device the run should follow. A HAL unit bound to one device hears
+    /// nothing of a switch to a different one that is still alive - neither its liveness nor
+    /// its format changed - so the system-wide watch is the only thing that can notice, and
+    /// with no session open there is no recording to cut.
+    @Test func aDefaultInputChangedWhileHeldAndIdleReplacesTheEngine() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .open)
+        #expect(hardware.prepared == 1)
+        #expect(hardware.engines.count == 1)
+
+        try hardware.changeDefaultInput()
+        #expect(hardware.engines[0].disposed)
+        #expect(hardware.engines.count == 2)
+        #expect(hardware.prepared == 2)
+        // A swap, not a recovery: nothing failed, so no gap opened and none is booked.
+        #expect(capture.deviceChanges == 1)
+        #expect(capture.outages.count == 0)
+        #expect(isListening(capture))
+    }
+
+    /// The one case the watch leaves alone. A default input that changes mid-press is not a
+    /// reason to cut the recording the speaker is in the middle of making: the engine keeps
+    /// running on the device the press began on, and the input it is running on keeps the
+    /// only strong reference the open device has.
+    @Test func aDefaultInputChangedMidPressDoesNotCutTheRecording() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .open)
+        let session = try capture.beginSession(at: origin, preRoll: 0)
+        hardware.engines[0].appending([1, 2], origin)
+
+        try hardware.changeDefaultInput()
+        #expect(hardware.engines.count == 1)
+        #expect(!hardware.engines[0].disposed)
+        #expect(hardware.prepared == 1)
+
+        hardware.engines[0].appending([3, 4], after(2))
+        #expect(capture.endSession(session) == .whole(AudioClip(samples: [1, 2, 3, 4])))
     }
 
     /// Quitting gives the device back, however the run was holding it.
@@ -503,6 +602,9 @@ private struct Authorized: MicrophoneAuthority {
         try hardware.changeDefaultInput()
         #expect(isListening(capture))
         #expect(hardware.engines.count == 2)
+        // The default input is what changed, so the input readied against the old one is
+        // stale and the relaunch happens on another.
+        #expect(hardware.prepared == 2)
         #expect(capture.outages.count == 1)
         #expect(capture.outages.total > .zero)
         #expect(capture.deviceChanges == 0)
