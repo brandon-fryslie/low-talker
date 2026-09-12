@@ -72,6 +72,10 @@ public enum AudioHardwareError: Error, Equatable, CustomStringConvertible {
     case componentUnavailable(OSStatus)
     case inputUnavailable(OSStatus)
     case noDefaultInput(OSStatus)
+    /// Readying a microphone left the device running on this process's account, so the
+    /// split the whole resting state rests on - reach a microphone without taking one - did
+    /// not hold for this device.
+    case preparingOpenedTheDevice(AudioObjectID)
     /// The device would not say whether it is running, so nothing can say what the
     /// menu-bar indicator is showing for it.
     case runningStateUnreadable(OSStatus)
@@ -88,6 +92,7 @@ public enum AudioHardwareError: Error, Equatable, CustomStringConvertible {
         case .componentUnavailable(let status): "the HAL audio unit could not be instantiated (status \(status))"
         case .inputUnavailable(let status): "the input device would not be made ready to capture (status \(status))"
         case .noDefaultInput(let status): "this Mac has no default input device (status \(status))"
+        case .preparingOpenedTheDevice(let device): "readying a microphone opened device \(device) instead of only reaching it"
         case .runningStateUnreadable(let status): "CoreAudio would not say whether the input device is running (status \(status))"
         case .renderFailed(let status): "the input device refused to hand over a buffer it had announced (status \(status))"
         case .overlongSlice(let frames, let capacity): "the input device asked to hand over \(frames) frames at once, past the \(capacity) it was prepared for"
