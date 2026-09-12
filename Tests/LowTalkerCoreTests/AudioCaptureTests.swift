@@ -5,11 +5,30 @@ import Testing
 private struct NoDevice: Error, Equatable {}
 private struct BadBuffer: Error, Equatable {}
 
-/// Hardware a test controls: each launch takes the next scripted outcome, every
+/// Hardware a test controls: each opening takes the next scripted outcome, every
 /// engine's callbacks are the test's to fire, and the default input device changes
 /// when the test says so.
+///
+/// Readying a microphone and opening one are counted apart, because the difference is
+/// what keeps `shut` affordable and a test that could not see it could not hold the
+/// difference in place.
 @MainActor
 private final class FakeHardware: AudioHardware {
+    /// A microphone readied and not open: opening it is what takes the next scripted
+    /// outcome, so preparing one costs a test nothing and proves nothing was opened.
+    final class Input: PreparedInput {
+        private unowned let hardware: FakeHardware
+        init(_ hardware: FakeHardware) { self.hardware = hardware }
+
+        func open(
+            appending: @escaping @Sendable ([Float], HostTime) -> Void,
+            onFailure: @escaping @MainActor (any Error) -> Void,
+            onConfigurationChange: @escaping @MainActor () -> Void
+        ) throws -> Disposal {
+            try hardware.open(appending: appending, onFailure: onFailure, onConfigurationChange: onConfigurationChange)
+        }
+    }
+
     final class Engine {
         let appending: @Sendable ([Float], HostTime) -> Void
         let onFailure: @MainActor (any Error) -> Void
@@ -23,21 +42,29 @@ private final class FakeHardware: AudioHardware {
         }
     }
 
-    /// What each launch does, in order: an error to throw, or nil to succeed. A launch
-    /// past the end of the script succeeds.
+    /// What each opening does, in order: an error to throw, or nil to succeed. An
+    /// opening past the end of the script succeeds.
     private var launches: [(any Error)?]
     /// What `watchDefaultInput` does: an error to throw, or nil to watch.
     private let watch: (any Error)?
     private(set) var engines: [Engine] = []
     private var onDefaultInputChange: (@MainActor () -> Void)?
     private(set) var watchDisposals = 0
+    /// How many microphones have been readied. Never a device: the count exists so a
+    /// test can say that resting readied one and opened nothing.
+    private(set) var prepared = 0
 
     init(launches: [(any Error)?] = [], watch: (any Error)? = nil) {
         self.launches = launches
         self.watch = watch
     }
 
-    func launch(appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) throws -> Disposal {
+    func prepareInput() -> any PreparedInput {
+        prepared += 1
+        return Input(self)
+    }
+
+    fileprivate func open(appending: @escaping @Sendable ([Float], HostTime) -> Void, onFailure: @escaping @MainActor (any Error) -> Void, onConfigurationChange: @escaping @MainActor () -> Void) throws -> Disposal {
         if let error = launches.isEmpty ? nil : launches.removeFirst() { throw error }
         let engine = Engine(appending: appending, onFailure: onFailure, onConfigurationChange: onConfigurationChange)
         engines.append(engine)

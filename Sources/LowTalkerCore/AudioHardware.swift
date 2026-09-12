@@ -4,26 +4,56 @@ import CoreAudio
 /// Gives back something the hardware handed out: an engine, a listener. Called once.
 public typealias Disposal = @MainActor () -> Void
 
-/// What the system does for capture: run an engine on the default input device, and
-/// say when that device changes.
+/// A microphone that has paid everything it can pay before being opened.
 ///
-/// [LAW:effects-at-boundaries] Both are effects against CoreAudio and AVFoundation.
-/// They sit behind this seam so the state machine above them (which engine is live,
-/// when to relaunch, what an outage was) runs in tests against hardware a test
-/// controls, and on a CI machine that has no microphone at all.
+/// Preparing one takes no device: nothing is captured and macOS lights no indicator until
+/// `open`. That is why this is a value rather than a step inside `open`. Reaching a
+/// microphone on this Mac costs 175 ms the first time in a process and 31 ms after, and
+/// none of it opens a device; opening the device costs 40 ms. An app that prepares while
+/// it is idle leaves a press paying only the second, which is what lets `shut` keep both
+/// the closed microphone and the head of the first word.
+///
+/// [LAW:types-are-the-program] Prepared and open are two facts about the microphone, and
+/// this type carries the first: a press cannot reach a device nothing prepared, and
+/// preparing cannot open one. The second is the `Disposal` `open` hands back.
 @MainActor
-public protocol AudioHardware {
-    /// Launches an engine on the current default input device. Every buffer it captures
-    /// arrives at `appending` as pipeline samples with the host time its first sample
-    /// was captured at, on the audio service queue. The engine reports on the main
-    /// actor: `onFailure` when a buffer could not be converted or placed in time,
-    /// `onConfigurationChange` when macOS has stopped it because its device changed.
-    /// Throws when the current device cannot feed the pipeline.
-    func launch(
+public protocol PreparedInput {
+    /// Opens the device. Every buffer it captures arrives at `appending` as pipeline
+    /// samples with the host time its first sample was captured at, on the audio service
+    /// queue. Reports on the main actor: `onFailure` when a buffer could not be converted
+    /// or placed in time, `onConfigurationChange` when the device this was prepared
+    /// against has gone or changed shape underneath it. Throws when the device cannot
+    /// feed the pipeline - including when there was nothing to prepare, which is the one
+    /// moment that matters and the one place every caller already answers it.
+    /// [LAW:single-enforcer]
+    ///
+    /// The disposal gives the device back and leaves the input prepared, so the next
+    /// press opens it at the prepared price rather than at the first one's.
+    func open(
         appending: @escaping @Sendable ([Float], HostTime) -> Void,
         onFailure: @escaping @MainActor (any Error) -> Void,
         onConfigurationChange: @escaping @MainActor () -> Void
     ) throws -> Disposal
+}
+
+/// What the system does for capture: ready a microphone, open it, and say when the
+/// default input device changes.
+///
+/// [LAW:effects-at-boundaries] Every one of these is an effect against CoreAudio. They
+/// sit behind this seam so the state machine above them (which microphone is open, when
+/// to open another, what an outage was) runs in tests against hardware a test controls,
+/// and on a CI machine that has no microphone at all.
+@MainActor
+public protocol AudioHardware {
+    /// Readies a microphone without opening it.
+    ///
+    /// Never throws, and that is deliberate: what can go wrong about reaching a
+    /// microphone is not a thing the resting state can answer. Capture rests between
+    /// presses, and a rest that could fail would have to decide whether a Mac with no
+    /// microphone is a failed capture - which would leave a device change relaunching an
+    /// engine a config asked to keep shut. So a preparation that could not happen is
+    /// carried in the input and thrown when a press opens it. [LAW:no-silent-failure]
+    func prepareInput() -> any PreparedInput
 
     /// Calls `onChange` on the main actor each time the system default input device
     /// changes, until disposed.
@@ -34,72 +64,58 @@ public enum AudioHardwareError: Error, Equatable, CustomStringConvertible {
     case defaultInputWatchFailed(OSStatus)
     /// A buffer arrived with no host clock behind its time.
     case bufferWithoutTime
+    case noInputComponent
+    case componentUnavailable(OSStatus)
+    case inputUnavailable(OSStatus)
+    case noDefaultInput(OSStatus)
+    case renderFailed(OSStatus)
+    /// The device asked to hand over more audio at once than the unit said it would.
+    case overlongSlice(frames: Int, capacity: Int)
 
     public var description: String {
         switch self {
         case .defaultInputWatchFailed(let status): "CoreAudio refused a listener on the default input device (status \(status))"
         case .bufferWithoutTime: "the input device delivered a buffer with no host time; nothing can say when its samples were captured"
+        case .noInputComponent: "this Mac has no HAL audio unit to capture through"
+        case .componentUnavailable(let status): "the HAL audio unit could not be instantiated (status \(status))"
+        case .inputUnavailable(let status): "the input device would not be made ready to capture (status \(status))"
+        case .noDefaultInput(let status): "this Mac has no default input device (status \(status))"
+        case .renderFailed(let status): "the input device refused to hand over a buffer it had announced (status \(status))"
+        case .overlongSlice(let frames, let capacity): "the input device asked to hand over \(frames) frames at once, past the \(capacity) it was prepared for"
         }
+    }
+
+    /// [LAW:no-silent-failure] The one place an OSStatus becomes a thrown error, so no
+    /// call in the capture path can be checked by eye and then not checked.
+    static func check(_ status: OSStatus, _ fault: (OSStatus) -> AudioHardwareError) throws {
+        guard status == noErr else { throw fault(status) }
     }
 }
 
 extension HostTime {
     /// [LAW:parse-dont-validate] The one place a CoreAudio stamp becomes a host time.
-    /// It counts the machine's raw ticks rather than nanoseconds, and AVFoundation may
-    /// hand out a time with no host clock behind it at all - samples that cannot be
-    /// placed in time are samples no session can be cut from, so that is a failed
-    /// engine rather than a guess. [LAW:no-silent-failure]
+    /// It counts the machine's raw ticks rather than nanoseconds, and CoreAudio may hand
+    /// out a time with no host clock behind it at all - samples that cannot be placed in
+    /// time are samples no session can be cut from, so that is a failed engine rather
+    /// than a guess. [LAW:no-silent-failure]
     init(_ when: AVAudioTime) throws {
         guard when.isHostTimeValid else { throw AudioHardwareError.bufferWithoutTime }
         self.init(uptime: .seconds(AVAudioTime.seconds(forHostTime: when.hostTime)))
     }
+
+    init(_ stamp: AudioTimeStamp) throws {
+        guard stamp.mFlags.contains(.hostTimeValid) else { throw AudioHardwareError.bufferWithoutTime }
+        self.init(uptime: .seconds(AVAudioTime.seconds(forHostTime: stamp.mHostTime)))
+    }
 }
 
 public struct SystemAudioHardware: AudioHardware {
-    /// How much audio the tap asks for at a time; AVAudioEngine may round it to what a
-    /// device supports, and the built-in microphone delivers exactly it (4410 frames at
-    /// 44.1 kHz). A session's audio grows in these steps, as does a simulated hold.
-    nonisolated public static let bufferDuration: TimeInterval = 0.1
-
     public init() {}
 
-    public func launch(
-        appending: @escaping @Sendable ([Float], HostTime) -> Void,
-        onFailure: @escaping @MainActor (any Error) -> Void,
-        onConfigurationChange: @escaping @MainActor () -> Void
-    ) throws -> Disposal {
-        let engine = AVAudioEngine()
-        let input = engine.inputNode
-        let source = input.outputFormat(forBus: 0)
-        // [LAW:no-shared-mutable-globals] exception: the converter is not Sendable on
-        // the macOS 15 SDK, but the tap block is its only caller and the audio service
-        // queue serializes the calls, so nothing is shared.
-        nonisolated(unsafe) let converter = try AudioClip.Converter(from: source)
-        // Explicitly @Sendable: a closure formed here would otherwise inherit main-actor
-        // isolation and trap when the tap fires on the audio service queue.
-        input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(source.sampleRate * Self.bufferDuration), format: source) { @Sendable buffer, when in
-            do {
-                let captured = try HostTime(when)
-                appending(try converter.convert(buffer), captured)
-            } catch {
-                Task { @MainActor in onFailure(error) }
-            }
-        }
-        let observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { _ in
-            MainActor.assumeIsolated { onConfigurationChange() }
-        }
-        let dispose: Disposal = {
-            NotificationCenter.default.removeObserver(observer)
-            input.removeTap(onBus: 0)
-            engine.stop()
-        }
-        do {
-            try engine.start()
-        } catch {
-            dispose()
-            throw error
-        }
-        return dispose
+    public func prepareInput() -> any PreparedInput {
+        do { return try HALInput() }
+        // Carried rather than raised: see `AudioHardware.prepareInput`.
+        catch { return UnreachableInput(fault: error) }
     }
 
     public func watchDefaultInput(_ onChange: @escaping @MainActor () -> Void) throws -> Disposal {
@@ -119,5 +135,22 @@ public struct SystemAudioHardware: AudioHardware {
             let status = AudioObjectRemovePropertyListenerBlock(system, &removing, .main, listener)
             precondition(status == noErr, "CoreAudio refused to remove the default input listener it added (status \(status))")
         }
+    }
+}
+
+/// A microphone that could not be readied, holding the reason until a press asks for it.
+///
+/// [LAW:types-are-the-program] The failure is a value the input carries rather than a
+/// state capture has to represent, so nothing above has to hold "prepared, or else" - and
+/// the press that needs a microphone is told exactly why there is none.
+private struct UnreachableInput: PreparedInput {
+    let fault: any Error
+
+    func open(
+        appending: @escaping @Sendable ([Float], HostTime) -> Void,
+        onFailure: @escaping @MainActor (any Error) -> Void,
+        onConfigurationChange: @escaping @MainActor () -> Void
+    ) throws -> Disposal {
+        throw fault
     }
 }

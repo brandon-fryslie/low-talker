@@ -25,11 +25,20 @@ public enum LatencyHarness {
         /// A microphone buffer at a time.
         case streamed
 
+        /// How much audio a streamed hold hands over at once.
+        ///
+        /// A fixed granularity this harness chooses rather than a reading off any device,
+        /// so runs stay comparable to one another and to every run already recorded. The
+        /// microphone's own buffer is the device's to size - around 10 ms on this Mac's
+        /// built-in input - and letting that decide would make a bench number a fact about
+        /// whichever microphone was plugged in. [LAW:one-source-of-truth]
+        public static let streamedChunk: TimeInterval = 0.1
+
         /// How much of `clip` arrives at once.
         public func chunk(of clip: AudioClip) -> TimeInterval {
             switch self {
             case .batch: clip.duration
-            case .streamed: SystemAudioHardware.bufferDuration
+            case .streamed: Self.streamedChunk
             }
         }
     }

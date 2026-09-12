@@ -10,14 +10,20 @@ import Synchronization
 /// still two positions on the ring.
 ///
 /// What that costs is the look-back. A session's pre-roll reaches back over audio the
-/// microphone was already capturing, and an engine opened at key-down has none behind
-/// it, so the pre-roll clamps to nothing and the utterance starts where the microphone
-/// did. A warm engine's first sample lands well inside the gap between deciding to press
+/// microphone was already capturing, and one opened at key-down has none behind it, so
+/// the pre-roll clamps to nothing and the utterance starts where the microphone did. A
+/// prepared microphone's first sample lands well inside the gap between deciding to press
 /// a key and beginning to say a word, so a press followed by speech loses nothing; a
 /// press made *during* a word loses the part of it that was said before the key went
-/// down, and no engine can be started in the past. What a warm launch costs, what a cold
-/// one costs, and why the cold one is not paid at launch are measured at
-/// `warmUpAllowance`, which is the one place any of those numbers live.
+/// down, and no microphone can be opened in the past.
+///
+/// That holds only because the microphone is readied before the press rather than at it.
+/// Reaching a microphone costs far more than opening one already reached, and a press
+/// that paid both was losing a third of a second off every utterance - so `start` readies
+/// one while the app is idle, which opens no device and lights nothing, and the press
+/// pays only the opening. What each of those costs is measured at `warmUpAllowance`,
+/// which is the one place any of those numbers live; how the microphone is reached at all
+/// is `HALInput`'s.
 ///
 /// `open` is the other side of that trade, and buying the look-back back is the whole of
 /// what it does here: the engine started at `start` is never given up between presses, so
@@ -100,6 +106,16 @@ public final class AudioCapture {
         /// which is `stop()` and a fresh `start()`.
         let atRest: MicrophoneAtRest
         var engine: Engine
+        /// The microphone this run of capture opens, readied but not open. Held across
+        /// presses because that is the whole of what makes `shut` affordable: what it
+        /// cost to ready is spent once, while nobody is dictating, and a press pays only
+        /// what it costs to open a microphone already reached.
+        ///
+        /// Replaced rather than re-pointed when the input device changes, because an
+        /// input is prepared against one device. [LAW:one-source-of-truth] This class is
+        /// the one place that learns the device changed, so it is the one place that
+        /// decides a prepared input has gone stale.
+        var prepared: any PreparedInput
         /// Whether a press is in flight. The engine's own state answered this while the
         /// microphone's lifetime was one session's; a resting mode that holds the engine
         /// across presses takes that reading away, so the fact is kept rather than
@@ -168,16 +184,27 @@ public final class AudioCapture {
     /// is treated as having missed speech rather than as having warmed up.
     ///
     /// This is the number the epic traded the look-back for, so it is written down rather
-    /// than tuned. Measured on this Mac's built-in input, an engine that has run the
-    /// device before captures its first sample 37 ms after `start()` is called, ±1 ms
-    /// over launches spaced 0 to 3 s apart. The allowance is 100 ms: near three times
-    /// that, and an order of magnitude under the two ways a microphone actually opens
-    /// late - the first launch in a process, which costs 240-280 ms because only an
-    /// engine that has run the device pays that down, and a key-down the tap delivered
-    /// late, which costs whatever the handler ahead of it was doing (the epic measured a
-    /// 43-character insert at about 1.2 s). Ordinary presses and missed speech are two
-    /// populations that far apart, so the allowance never has to be retuned to keep an
-    /// ordinary press whole. [LAW:no-silent-failure]
+    /// than tuned. What it is compared against is the whole stretch from the key going
+    /// down to the first sample anything captured, which is everything opening a
+    /// microphone costs and not only the last call of it - the distinction this number
+    /// was once measured on the wrong side of, when a figure taken from after the engine
+    /// was built was read as what a press pays.
+    ///
+    /// Measured on this Mac's built-in input, from the key down: a prepared microphone
+    /// delivers its first sample in 40 ms, ±2 ms over presses spaced 0.7 s apart, and the
+    /// readying it did not have to do costs 175 ms the first time in a process and 31 ms
+    /// after. The allowance is 100 ms: two and a half times the press, and well under the
+    /// two ways a microphone actually opens late - one that was never readied, which
+    /// costs 213 ms, and a key-down the tap delivered late, which costs whatever the
+    /// handler ahead of it was doing (the epic measured a 43-character insert at about
+    /// 1.2 s). Ordinary presses and missed speech are two populations that far apart, so
+    /// the allowance never has to be retuned to keep an ordinary press whole.
+    ///
+    /// It is also what says the microphone may not be reached through AVAudioEngine:
+    /// building an engine and starting it costs 315 ms from the key down, every press,
+    /// which is over this by three times and was refusing every press under `shut`.
+    /// `HALInput` is the answer and carries the rest of those numbers.
+    /// [LAW:no-silent-failure]
     nonisolated public static let warmUpAllowance: TimeInterval = 0.1
 
     /// `origin` is when the first sample is expected: nothing has been captured yet,
@@ -285,7 +312,7 @@ public final class AudioCapture {
         // Opened for this press.
         case .shut:
             do {
-                started.engine = .running(try launch())
+                started.engine = .running(try launch(on: started.prepared))
             } catch {
                 throw NoMicrophone.failed(error)
             }
@@ -296,7 +323,11 @@ public final class AudioCapture {
         // hold the microphone a config asked to keep closed.
         case .failed(_, let since):
             do {
-                started.engine = .running(try launch())
+                // A retry after a failure readies the microphone again: what failed may
+                // have been the device going away, and the input prepared against it
+                // cannot open the one that replaced it.
+                started.prepared = hardware.prepareInput()
+                started.engine = .running(try launch(on: started.prepared))
                 closeOutage(since: since)
             } catch {
                 // The gap runs from where it began, carrying the newest reason: a retry
@@ -385,7 +416,12 @@ public final class AudioCapture {
             watch: try hardware.watchDefaultInput { [weak self] in self?.recover() },
             grant: grant,
             atRest: atRest,
-            engine: .shut
+            engine: .shut,
+            // Readied here rather than at the first press, which is the point: this is
+            // the moment the app has time to spare, and a press is the moment it has
+            // none. No device is opened by it, so a Mac nobody has dictated to still
+            // shows no microphone.
+            prepared: hardware.prepareInput()
         ))
         rest()
     }
@@ -446,7 +482,7 @@ public final class AudioCapture {
             case .running, .failed:
                 break
             case .shut:
-                do { started.engine = .running(try launch()) }
+                do { started.engine = .running(try launch(on: started.prepared)) }
                 catch { started.engine = .failed(error, since: .now) }
             }
         }
@@ -472,7 +508,7 @@ public final class AudioCapture {
         return (started, live)
     }
 
-    private func launch() throws -> Live {
+    private func launch(on prepared: any PreparedInput) throws -> Live {
         let shared = shared
         generation += 1
         let generation = generation
@@ -489,7 +525,7 @@ public final class AudioCapture {
             return previous
         }
         do {
-            let dispose = try hardware.launch(
+            let dispose = try prepared.open(
                 appending: { samples, time in
                     shared.stream.withLock {
                         // Resolved by generation rather than trusted by arrival, as the
@@ -526,7 +562,9 @@ public final class AudioCapture {
         dispose(running.live)
         var started = running.started
         do {
-            started.engine = .running(try launch())
+            // The device this was prepared against is the one that just went away.
+            started.prepared = hardware.prepareInput()
+            started.engine = .running(try launch(on: started.prepared))
             deviceChanges += 1
         } catch {
             started.engine = .failed(error, since: .now)
@@ -545,7 +583,10 @@ public final class AudioCapture {
     private func recover() {
         guard case .started(var started) = phase, case .failed(_, let since) = started.engine else { return }
         do {
-            started.engine = .running(try launch())
+            // This runs because the default input device changed, so whatever was
+            // prepared was prepared against the device that is no longer it.
+            started.prepared = hardware.prepareInput()
+            started.engine = .running(try launch(on: started.prepared))
             closeOutage(since: since)
         } catch {
             started.engine = .failed(error, since: since)
