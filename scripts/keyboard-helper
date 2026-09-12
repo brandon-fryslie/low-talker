@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
-# The root keyboard helper, installed and removed on this Mac by an agent alone.
+# One installation's root keyboard helper, installed and removed on this Mac by an agent
+# alone.
 #
-#   keyboard-helper install    register .build/debug/lowtalker-keyboardd as a LaunchDaemon
-#   keyboard-helper uninstall  stop it and remove the job
-#   keyboard-helper state      what launchd says about the job
-#   keyboard-helper log        what the helper has said in the last ten minutes
+#   keyboard-helper install [flavor]    register .build/debug/lowtalker-keyboardd as a LaunchDaemon
+#   keyboard-helper uninstall [flavor]  stop it and remove the job
+#   keyboard-helper state [flavor]      what launchd says about the job
+#   keyboard-helper log [flavor]        what the helper has said in the last ten minutes
+#   keyboard-helper names [flavor]      the names it would act under, for the test below
+#
+# `flavor` is release or development and defaults to development, for the reason
+# `lowtalker --flavor` defaults to it: this tree is the development copy, and reaching
+# into the installed copy's job is a thing to ask for by name.
 #
 # Two registration paths exist and this is the one that needs nobody: a plist in
 # /Library/LaunchDaemons bootstrapped with launchctl runs as root with no approval
@@ -12,35 +18,51 @@
 # .requiresApproval until a person clicks it in Login Items - which is 3ti.7's problem and
 # cannot be an agent's. Same binary either way; only who registers it differs.
 #
-# The two jobs carry two labels and serve one Mach service. Background Task Management
-# files every job under its label, so a dev job under the app's label is the app's
-# record: measured here, an app launched while that record stood had its daemon bound to
-# the dev plist's path and never spawned (launchd: "Invalid path: Contents/MacOS/..."),
-# and the approval the app must ask for was inherited instead of asked. Distinct labels
-# make them two records. [LAW:one-source-of-truth] The Mach service name is the one thing
-# clients dial, so it is the same on both, which means only one job holds it at a time -
-# and launchd does not make the loser loud. Measured with a probe job: the second claimant
-# bootstraps with exit 0, runs, and simply never gets the endpoint, while launchd writes
-# one debug line ("already exists and is owned by") that nobody reads. So install reads
-# back whether its job got the name, and says so when it did not.
+# Within one installation the label and the Mach service carry one name, so this script
+# and that installation's app are two claimants on one record and the second is refused at
+# bootstrap - exit 5, "Bootstrap failed: Input/output error" - instead of running without
+# an endpoint. Across installations every name differs, which is what lets both copies run
+# at once. Sources/Flavors/Flavor.swift decides those names and records why; the copies
+# below are held to it by HelperPlistTests, because neither bash nor a plist can read a
+# Swift constant. [LAW:one-source-of-truth]
+#
+# What no label governs is a helper started by hand from a terminal: it holds the service
+# with no job for launchd to refuse. So install still reads back whether its job got the
+# name and says so when it did not. [LAW:no-silent-failure]
 #
 # Nothing here says who may call the helper. It admits whoever is signed by the
 # certificate that signed it, which `make helper` and `make cli` make the same one.
 set -euo pipefail
 
-SERVICE="com.lowtalker.keyboardd"
-LABEL="${SERVICE}.dev"
-PLIST="/Library/LaunchDaemons/${LABEL}.plist"
+# The copies of Flavor.swift this script needs, built the way Flavor builds them - one
+# release name and one suffix - so a rename there is one edit here.
+RELEASE_SERVICE="com.lowtalker.keyboardd"
+DEVELOPMENT_SUFFIX=".dev"
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HELPER="${ROOT}/.build/debug/lowtalker-keyboardd"
+
+die() { echo "keyboard-helper: $*" >&2; exit 1; }
+
+# [LAW:parse-dont-validate] The one place a flavor word becomes the names launchd files
+# this job under. A word that is neither stops here, before a sudo writes a plist under a
+# name nobody meant.
+resolve() {
+  case "$1" in
+    release)     SERVICE="$RELEASE_SERVICE" ;;
+    development) SERVICE="${RELEASE_SERVICE}${DEVELOPMENT_SUFFIX}" ;;
+    *) die "unknown flavor \"$1\" - expected release or development" ;;
+  esac
+  FLAVOR="$1"
+  LABEL="$SERVICE"
+  PLIST="/Library/LaunchDaemons/${LABEL}.plist"
+}
 
 # A path is any bytes and a plist is XML, so the four characters XML reserves are escaped
 # once, here, before the path is written into one. [LAW:parse-dont-validate]
 xml_escape() {
   printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g'
 }
-
-die() { echo "keyboard-helper: $*" >&2; exit 1; }
 
 install_helper() {
   [ -x "$HELPER" ] || die "no helper at $HELPER - run 'make helper' first"
@@ -69,7 +91,7 @@ install_helper() {
 <plist version="1.0">
 <dict>
     <key>Label</key><string>${LABEL}</string>
-    <key>ProgramArguments</key><array><string>${helper_xml}</string></array>
+    <key>ProgramArguments</key><array><string>${helper_xml}</string><string>--flavor</string><string>${FLAVOR}</string></array>
     <key>MachServices</key><dict><key>${SERVICE}</key><true/></dict>
     <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
     <key>StandardErrorPath</key><string>/Library/Logs/${LABEL}.crash.log</string>
@@ -93,7 +115,7 @@ PLIST_EOF
   grep -q "\"${SERVICE}\" = {" <<<"$record" || {
     sudo launchctl bootout "system/${LABEL}"
     sudo rm -f "$PLIST"
-    die "launchd left ${SERVICE} with another job, so this one was not installed. If LowTalker.app's helper is registered and approved, that is the owner; launchd names it with:
+    die "launchd left ${SERVICE} with another claimant, so this job was not installed. A helper started by hand from a terminal is the usual one - no label governs it. launchd names the owner with:
   log show --last 1m --predicate 'process == \"launchd\" AND eventMessage CONTAINS \"${SERVICE}\"'"
   }
   echo "keyboard-helper: installed. Read it with: $0 log"
@@ -115,10 +137,21 @@ log_helper() {
   log show --last 10m --style compact --predicate "subsystem == \"${SERVICE}\""
 }
 
-case "${1:-}" in
+# What this script resolved, in the tab-separated shape `lowtalker driver pins` uses, so
+# the test that holds these copies to Flavor reads what install actually acts under rather
+# than a second spelling of it.
+names_helper() {
+  printf 'flavor\t%s\nlabel\t%s\nservice\t%s\nplist\t%s\n' "$FLAVOR" "$LABEL" "$SERVICE" "$PLIST"
+}
+
+verb="${1:-}"
+resolve "${2:-development}"
+
+case "$verb" in
   install)   install_helper ;;
   uninstall) uninstall_helper ;;
   state)     state_helper ;;
   log)       log_helper ;;
-  *) die "usage: keyboard-helper install|uninstall|state|log" ;;
+  names)     names_helper ;;
+  *) die "usage: keyboard-helper install|uninstall|state|log|names [release|development]" ;;
 esac

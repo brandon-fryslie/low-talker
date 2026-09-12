@@ -67,5 +67,8 @@ jobs:
       - name: Build and test the package
         run: make test
 
-      - name: Build the app
-        run: make app
+      # Both installations, because they are two Xcode targets built from one template
+      # and only building one proves only that one's attributes resolve. A release target
+      # left naming the development plist would pass a job that built `make app` alone.
+      - name: Build both installations
+        run: make app release

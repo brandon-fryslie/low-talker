@@ -139,6 +139,16 @@ enum NotOnTheDevice: Error, CustomStringConvertible {
 /// on this side, where the real error still exists, and carried by a plain `NSError` - the
 /// one class the reply admits, and one every client has. A subclass of it would be
 /// archived under a name no client links, and would not decode. [LAW:no-silent-failure]
+/// The domain every refusal crosses under.
+///
+/// Not the serving flavor's Mach service name, for two reasons. An error's domain says
+/// what kind of thing refused, and both installations' helpers refuse for identical
+/// reasons under identical rules - the flavor is not part of that fact. And this file is
+/// linked into the test bundle, where reaching for the process-wide flavor would run its
+/// initializer against the test runner's own arguments, find no `--flavor`, and end the
+/// test process with the refusal it is written to make. [LAW:decomposition]
+let refusalDomain = "com.lowtalker.keyboardd.refusal"
+
 func refusal(_ error: any Error) -> NSError {
-    NSError(domain: Helper.machServiceName, code: 1, userInfo: [NSLocalizedDescriptionKey: "\(error)"])
+    NSError(domain: refusalDomain, code: 1, userInfo: [NSLocalizedDescriptionKey: "\(error)"])
 }

@@ -1,5 +1,6 @@
 import AppKit
 import ArgumentParser
+import Flavors
 import Foundation
 import LowTalkerCore
 
@@ -19,6 +20,7 @@ private func appExists(_ id: BundleID) -> Bool {
     NSWorkspace.shared.urlForApplication(withBundleIdentifier: id.rawValue) != nil
 }
 
+
 extension ConfigCommand {
     /// Reads the config file and prints what the app would run with. Nothing is
     /// started: this is the file answered back, so a chord or a route can be checked
@@ -35,14 +37,19 @@ extension ConfigCommand {
                 """
         )
 
+        @OptionGroup var installation: FlavorOption
+
+        /// Absent means this installation's own file. It cannot be defaulted to that
+        /// here, because which file that is depends on `--flavor`, which is not parsed
+        /// yet; `Config.load(_:for:)` brings the two together once both are known.
         @Option(
             help: "The file to read, for checking one before it is installed.",
             transform: URL.init(fileURLWithPath:)
         )
-        var path: URL = Config.fileURL
+        var path: URL?
 
         func run() throws {
-            let report = ConfigReport(try Config.load(from: path), appExists: appExists)
+            let report = ConfigReport(try Config.load(path, for: installation.flavor), appExists: appExists)
             print(report)
             // The code is a value computed the one way every time, rather than an exit
             // taken on some runs and not others. [LAW:dataflow-not-control-flow]
@@ -66,18 +73,21 @@ extension ConfigCommand {
                 """
         )
 
+        @OptionGroup var installation: FlavorOption
+
+        /// Absent means this installation's own file, resolved as in `check`.
         @Option(
             help: "The file to watch, for trying one out before it is installed.",
             transform: URL.init(fileURLWithPath:)
         )
-        var path: URL = Config.fileURL
+        var path: URL?
 
         func run() async throws {
             setvbuf(stdout, nil, _IOLBF, 0)
             // A config that cannot be read now has no previous config to keep, so it is
             // the same refusal `check` makes and exits the same way. Only what happens
             // after the first reading is a reload.
-            let loaded = try Config.load(from: path)
+            let loaded = try Config.load(path, for: installation.flavor)
             print(ConfigReport(loaded, appExists: appExists))
             for await reload in Config.reloads(after: loaded) {
                 print(Self.narration(of: reload, appExists: appExists))

@@ -1,4 +1,5 @@
 import ArgumentParser
+import Flavors
 import Foundation
 import KeyboardLayout
 import LowTalkerCore
@@ -49,6 +50,8 @@ struct DextTypeCommand: AsyncParsableCommand {
     @Option(name: .customLong("layout"), help: "The keyboard layout to type through, by input source id (com.apple.keylayout.Dvorak). Defaults to this process's own, which under sudo is root's US and not the console user's - so a machine on any other layout needs this said.")
     var layoutID: String?
 
+    @OptionGroup var installation: FlavorOption
+
     @MainActor
     func run() async throws {
         // Named rather than discovered when it has to be. This command runs as root, and
@@ -77,7 +80,7 @@ struct DextTypeCommand: AsyncParsableCommand {
         // Watched before a single report goes out, so there is no window where an
         // interrupt can end the process with a key already down.
         let interrupt = Interrupt.watched()
-        let opened = try through.open(clock)
+        let opened = try through.open(clock, flavor: installation.flavor)
         let keyboard = opened.keyboard
         // The typist releases every key on a run it stops. This release is for the run
         // before it: a device that will not come up is released through the connection
@@ -97,7 +100,7 @@ struct DextTypeCommand: AsyncParsableCommand {
         // refused as it is in the app: this command types into the same session the
         // app's tap may be listening to.
         let screen = TargetApp(bundleID: into, interrupt: interrupt)
-        let typist = Typist(keyboard: GuardedKeyboard(keyboard: keyboard, queue: DeviceQueue(), interrupt: interrupt, screen: screen), hotkeys: [Hotkey.defaultChord])
+        let typist = Typist(keyboard: GuardedKeyboard(keyboard: keyboard, queue: DeviceQueue(), interrupt: interrupt, screen: screen), hotkeys: [Hotkey.defaultChord(for: installation.flavor)])
         // The first character alone, so its latency is the driver's and not the queue's,
         // and the rest as one run. Both are lowered from `expected`, which is already the
         // text as the keys will type it, so splitting it by character changes nothing.

@@ -1,4 +1,5 @@
 import ArgumentParser
+import Flavors
 import Foundation
 import LowTalkerCore
 import Testing
@@ -13,6 +14,13 @@ import Testing
     /// machine that runs these.
     static func noApps(_: BundleID) -> Bool { false }
 
+    /// The release copy throughout, because `file` is the release copy's own path: a
+    /// reading that named one and was read as the other is the mismatch these types now
+    /// make unrepresentable, and a test should not be the one place it is spelled.
+    static let flavor = Flavor.release
+    /// Spelled out rather than taken from `Config.fileURL(for:)`, for the reason `noApps`
+    /// exists: a literal reads the same on every machine, where the real path carries
+    /// whoever's home directory ran the suite. It is the release copy's file name.
     static let file = URL(filePath: "/Users/someone/.config/low-talker/config.toml")
 
     static func running() throws -> Config.Loaded {
@@ -21,8 +29,9 @@ import Testing
                 [[modes]]
                 name = "dictation"
                 chord = { modifiers = ["rightOption"] }
-                """),
-            at: file
+                """, flavor: flavor),
+            at: file,
+            flavor: flavor
         )
     }
 
@@ -42,7 +51,7 @@ import Testing
     /// than printing the defaults as though somebody had written them.
     @Test func aDeletedFileReadsAsTheDefaultsAndSaysSo() {
         let narration = ConfigCommand.Watch.narration(
-            of: .adopted(.noFile(at: Self.file)), appExists: Self.noApps
+            of: .adopted(.noFile(at: Self.file, flavor: Self.flavor)), appExists: Self.noApps
         )
 
         #expect(narration.contains(Self.file.path))

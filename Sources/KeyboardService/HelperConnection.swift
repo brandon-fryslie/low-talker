@@ -1,3 +1,4 @@
+import Flavors
 import Foundation
 
 /// One connection to the helper, and the two devices reached over it.
@@ -34,8 +35,11 @@ public final class HelperConnection: @unchecked Sendable {
     ///
     /// `replyTimeout` bounds each call: a helper that neither answers nor drops the
     /// connection is unreachable at the deadline rather than a caller blocked for good.
-    public convenience init(replyTimeout: Duration = .seconds(5)) {
-        self.init(connection: NSXPCConnection(machServiceName: Helper.machServiceName, options: .privileged), replyTimeout: replyTimeout)
+    /// `flavor` says which installation's helper this reaches. It has no default: the two
+    /// installations run at once, and a connection that guessed would type through the
+    /// other copy's keyboard. [LAW:no-silent-failure]
+    public convenience init(flavor: Flavor, replyTimeout: Duration = .seconds(5)) {
+        self.init(connection: NSXPCConnection(machServiceName: flavor.machServiceName, options: .privileged), replyTimeout: replyTimeout)
     }
 
     /// Over a connection someone else made, which is how a test puts a service of its own

@@ -1,4 +1,5 @@
 import ArgumentParser
+import Flavors
 import Keystrokes
 import KeyboardService
 import VirtualKeyboard
@@ -38,7 +39,7 @@ enum Through: String, ExpressibleByArgument, CaseIterable {
     /// [LAW:no-silent-failure] Nothing is claimed here that this side has not observed.
     /// The helper is not said to be ready, because from here it is a service that either
     /// answers or does not, and the first keystroke is what asks.
-    func open(_ clock: ContinuousClock) throws -> Opened {
+    func open(_ clock: ContinuousClock, flavor: Flavor) throws -> Opened {
         switch self {
         case .device:
             let connecting = clock.now
@@ -49,8 +50,8 @@ enum Through: String, ExpressibleByArgument, CaseIterable {
                 return "connected in \(connected.milliseconds) ms, daemon answered in \(startup.answered.milliseconds) ms, keyboard ready after \(startup.ready.milliseconds) ms"
             }
         case .helper:
-            return Opened(keyboard: HelperConnection().keyboard) {
-                "keystrokes go to \(Helper.machServiceName); the first one asks whether it answers"
+            return Opened(keyboard: HelperConnection(flavor: flavor).keyboard) {
+                "keystrokes go to \(flavor.machServiceName); the first one asks whether it answers"
             }
         }
     }

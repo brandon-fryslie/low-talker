@@ -26,14 +26,24 @@ packages:
   low-talker:
     path: .
 
-targets:
-  LowTalker:
+# [LAW:one-type-per-behavior] The two installations are not two apps. They are one app
+# built twice, and what separates them is three strings: the identity macOS keys the TCC
+# grants and Login Items record to, the name a person reads in the menu bar, and which
+# launchd plist rides in the bundle. So there is one template and two sets of attributes
+# rather than two targets that must be kept in step by hand.
+#
+# The strings themselves belong to `Flavor` in Sources/Flavors; xcodegen cannot read
+# Swift, so they are written again here, and `ProjectFlavorTests` is what holds these
+# copies to that one. [LAW:one-source-of-truth]
+targetTemplates:
+  Installation:
     type: application
     platform: macOS
     sources:
       - App/LowTalker
       # The keyboard helper's launchd plist, where SMAppService.daemon reads it from.
-      - path: App/LaunchDaemons/com.lowtalker.keyboardd.plist
+      # One per installation, named for the job it registers.
+      - path: App/LaunchDaemons/${launchdLabel}.plist
         buildPhase:
           copyFiles:
             destination: wrapper
@@ -54,7 +64,9 @@ targets:
       - package: low-talker
         product: Dictation
       # The helper rides inside the bundle, where the plist above names it, signed on
-      # copy with the app's own identity.
+      # copy with the app's own identity. One tool target embedded in both bundles: the
+      # binary is the same program either way, and which installation it serves is the
+      # `--flavor` its plist passes, never a second build of it.
       - target: lowtalker-keyboardd
         embed: true
         copy:
@@ -62,11 +74,28 @@ targets:
           subpath: Contents/MacOS
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: ltd.deadgrass.low-talker
+        PRODUCT_NAME: ${displayName}
+        PRODUCT_BUNDLE_IDENTIFIER: ${bundleIdentifier}
         # No checked-in Info.plist: Xcode synthesises one from these keys.
         GENERATE_INFOPLIST_FILE: true
         INFOPLIST_KEY_LSUIElement: true
         INFOPLIST_KEY_NSMicrophoneUsageDescription: low-talker listens to your microphone while you hold the dictation key so it can turn what you say into text. Audio never leaves this Mac.
+
+targets:
+  LowTalker:
+    templates: [Installation]
+    templateAttributes:
+      displayName: LowTalker
+      bundleIdentifier: ltd.deadgrass.low-talker
+      launchdLabel: com.lowtalker.keyboardd
+
+  # The copy built from the working tree, installed and running beside the one above.
+  LowTalkerDev:
+    templates: [Installation]
+    templateAttributes:
+      displayName: LowTalker Dev
+      bundleIdentifier: ltd.deadgrass.low-talker.dev
+      launchdLabel: com.lowtalker.keyboardd.dev
 
   # The root keyboard helper, built here from the same sources Package.swift builds it
   # from, because an Xcode app can embed an Xcode tool and cannot embed a package's

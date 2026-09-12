@@ -1,4 +1,5 @@
 import ArgumentParser
+import Flavors
 import Onboarding
 
 /// Everything that must hold before low-talker can type, read off this Mac, with the
@@ -18,12 +19,14 @@ struct OnboardCommand: ParsableCommand {
         subcommands: [Readings.self]
     )
 
+    @OptionGroup var installation: FlavorOption
+
     func run() throws {
         // Nil, not false: `SMAppService` answers only the bundle that asks, so a CLI has
         // no registration of its own to put the question to. From here launchd's "no job"
         // covers both a helper never registered and one registered and waiting for its
         // click, and saying so beats answering no on the app's behalf.
-        let readiness = OnboardingProbe.readiness(approvalPending: nil)
+        let readiness = OnboardingProbe.readiness(flavor: installation.flavor, approvalPending: nil)
         print(readiness)
         // The code is a value computed the one way every time, rather than an exit taken
         // on some runs and not others. [LAW:dataflow-not-control-flow]

@@ -1,4 +1,5 @@
 import DriverExtension
+import Flavors
 import Testing
 @testable import Onboarding
 
@@ -7,8 +8,11 @@ import Testing
 /// is left without one, and that a fact nobody could read never reads as fine.
 /// [LAW:behavior-not-structure]
 @Suite struct RequirementTests {
-    static let service = "com.lowtalker.keyboardd"
-    static let devLabel = "com.lowtalker.keyboardd.dev"
+    /// The installation these steps are read against where one has to be picked. Derived,
+    /// never spelled: a literal here would agree with the release flavor until someone
+    /// renamed it, and then pin a name no installation carries. [LAW:one-source-of-truth]
+    static let flavor = Flavor.release
+    static let service = Flavor.release.machServiceName
 
     // MARK: - the driver extension
 
@@ -81,7 +85,7 @@ import Testing
     /// that is the whole failure this requirement exists to catch.
     @Test func onlyAHelperHoldingTheServiceIsReady() {
         for standing in HelperStanding.allCases {
-            let requirement = Requirement.keyboardHelper(standing, serviceName: Self.service, developmentLabel: Self.devLabel)
+            let requirement = Requirement.keyboardHelper(standing, flavor: Self.flavor)
             #expect(requirement.met == (standing == .holdingTheService), "\(standing)")
         }
     }
@@ -97,7 +101,7 @@ import Testing
     /// leaving README and the enum in perfect agreement about it.
     @Test func everyStandingReadsBackAsItsOwnLineAndNoTwoShareOne() {
         #expect(Self.readings(for: .keyboardHelper) == HelperStanding.allCases.map {
-            Requirement.keyboardHelper($0, serviceName: Self.service, developmentLabel: Self.devLabel).reads
+            Requirement.keyboardHelper($0, flavor: Self.flavor).reads
         })
         #expect(Set(Self.readings(for: .keyboardHelper)).count == HelperStanding.allCases.count)
     }
@@ -107,28 +111,45 @@ import Testing
         Requirement.readings.filter { $0.row == row }.map(\.reading)
     }
 
-    /// An app whose helper is enabled while another job holds the name reports enabled
-    /// and types nothing. The step has to name the other job, because nothing else on
-    /// the Mac will: launchd does not make the loser loud.
-    @Test func aServiceLostToTheDevelopmentJobNamesItAndTheRemoval() {
-        let step = Requirement.keyboardHelper(.theDevelopmentJobHoldsTheService, serviceName: Self.service, developmentLabel: Self.devLabel).step ?? ""
-        #expect(step.contains(Self.devLabel))
-        #expect(step.contains("keyboard-helper uninstall"))
-    }
-
-    /// A holder that was never identified is never reported as one that was. Naming the
-    /// development job here would send a reader to a command that removes a job this Mac
-    /// does not have, and leave the job that actually holds the name in place.
-    @Test func aServiceLostToAnUnidentifiedJobNamesNeitherThatJobNorItsRemoval() {
-        let step = Requirement.keyboardHelper(.anotherJobHoldsTheService, serviceName: Self.service, developmentLabel: Self.devLabel).step ?? ""
-        #expect(!step.contains(Self.devLabel))
+    /// An app whose helper is enabled while something else holds the name reports enabled
+    /// and types nothing. The step names the service that was lost and the one way left
+    /// to find the holder, because nothing else on the Mac will say: launchd does not
+    /// make the loser loud.
+    ///
+    /// It must not send the reader after a launchd job. No job can be the holder now - a
+    /// flavor's job and its service carry one label, and a second under it is refused at
+    /// bootstrap - so a step naming a plist to hunt for would be a search with no quarry.
+    @Test func aServiceLostToAnUnidentifiedHolderSendsTheReaderAfterAStrayProcess() {
+        let step = Requirement.keyboardHelper(.anotherJobHoldsTheService, flavor: Self.flavor).step ?? ""
+        #expect(step.contains(Self.service))
+        #expect(step.contains("pgrep"))
+        #expect(!step.contains("/Library/LaunchDaemons"))
         #expect(!step.contains("keyboard-helper uninstall"))
-        #expect(step.contains("/Library/LaunchDaemons"))
     }
 
     @Test func aHelperWaitingForItsApprovalIsSentToLoginItems() {
-        let step = Requirement.keyboardHelper(.awaitingApproval, serviceName: Self.service, developmentLabel: Self.devLabel).step ?? ""
+        let step = Requirement.keyboardHelper(.awaitingApproval, flavor: Self.flavor).step ?? ""
         #expect(step.contains("Login Items & Extensions"))
+    }
+
+    /// A step that names an app names the one it was asked about. Both standings below sit
+    /// in front of a switch in Login Items, and with two installations there are two
+    /// switches - so a step naming the wrong copy sends a person to turn on an app that is
+    /// already running and leaves the one that asked still waiting.
+    ///
+    /// Containment alone cannot say this, and that is why the steps are required to
+    /// differ: "LowTalker Dev" contains "LowTalker", so a step hardcoding the release name
+    /// satisfies `contains(displayName)` for *both* flavors. Two installations reading one
+    /// instruction is the failure itself, whatever words it is built from.
+    @Test func aStepNamingAnAppNamesTheInstallationItWasAskedAbout() {
+        for standing in [HelperStanding.awaitingApproval, .noJob] {
+            let steps = Flavor.allCases.map { flavor -> String in
+                let step = Requirement.keyboardHelper(standing, flavor: flavor).step ?? ""
+                #expect(step.contains(flavor.displayName), "\(standing) never names \(flavor.displayName)")
+                return step
+            }
+            #expect(Set(steps).count == Flavor.allCases.count, "\(standing) reads the same for every installation")
+        }
     }
 
     /// launchd holds no job whether the helper was never registered or is registered and
@@ -319,7 +340,7 @@ import Testing
     @Test func theListShowsEveryRequirementWhetherOrNotItNeedsAnything() {
         let readiness = Readiness([
             .driverExtension(.running),
-            .keyboardHelper(.holdingTheService, serviceName: Self.service, developmentLabel: Self.devLabel),
+            .keyboardHelper(.holdingTheService, flavor: Self.flavor),
         ])
         #expect(readiness.ready)
         #expect(readiness.description.contains("Driver extension: running"))
@@ -329,7 +350,7 @@ import Testing
     @Test func oneUnmetRequirementIsEnoughToStopTheList() {
         let readiness = Readiness([
             .driverExtension(.running),
-            .keyboardHelper(.anotherJobHoldsTheService, serviceName: Self.service, developmentLabel: Self.devLabel),
+            .keyboardHelper(.anotherJobHoldsTheService, flavor: Self.flavor),
         ])
         #expect(!readiness.ready)
     }

@@ -1,10 +1,13 @@
+import Flavors
 import Foundation
 import TOMLKit
 
 public extension Config {
-    /// The one file, at the one path.
-    static var fileURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appending(path: ".config/low-talker/config.toml")
+    /// The one file, at the one path, per installation. One directory with two files in
+    /// it: a reader editing one copy's settings finds the other's beside it rather than
+    /// somewhere else entirely. [LAW:one-source-of-truth]
+    static func fileURL(for flavor: Flavor) -> URL {
+        FileManager.default.homeDirectoryForCurrentUser.appending(path: ".config/low-talker/\(flavor.configFileName)")
     }
 
     /// [LAW:parse-dont-validate] The one place config text becomes a Config. What comes
@@ -13,7 +16,7 @@ public extension Config {
     ///
     /// [LAW:effects-at-boundaries] Pure. It opens nothing and reads no clock, so a test
     /// hands it a string rather than a filesystem.
-    init(toml: String) throws(ConfigError) {
+    init(toml: String, flavor: Flavor) throws(ConfigError) {
         var decoder = TOMLDecoder()
         // A key this schema has no place for is a typo the author wants told, not a
         // line quietly doing nothing. [LAW:no-silent-failure]
@@ -36,46 +39,64 @@ public extension Config {
         // Config.default, which is where the no-file behaviour is written; no default is
         // spelled a second time here to drift from it.
         try self.init(
-            model: file.model ?? Config.default.model,
-            microphone: file.microphone?.atRest ?? Config.default.microphone,
-            modes: file.modes?.map { $0.mode() } ?? Config.default.modes
+            model: file.model ?? Config.default(for: flavor).model,
+            microphone: file.microphone?.atRest ?? Config.default(for: flavor).microphone,
+            modes: file.modes?.map { $0.mode() } ?? Config.default(for: flavor).modes
         )
     }
 
     /// The config the app runs on and where it came from: what the file says, or the
-    /// defaults when there is no file.
+    /// defaults when there is no file. Absent a path, this installation's own file.
     ///
     /// [LAW:no-silent-failure] Only a file that is not there yields the defaults. One
     /// that exists and cannot be read, or cannot be understood, throws - so a config the
     /// user wrote is never quietly replaced by one they did not.
-    static func load(from url: URL = fileURL) throws(ConfigError) -> Loaded {
+    ///
+    /// [LAW:one-source-of-truth] The one place a path and a flavor are brought together,
+    /// which is why the path is optional here rather than resolved by each caller. Read a
+    /// file as the wrong installation and every key it leaves out falls back to the other
+    /// copy's defaults - for the hotkey, that is one copy coming up on the chord the other
+    /// listens for, the single failure this whole arrangement exists to prevent. Only
+    /// `lowtalker config check --path` passes a path at all, to read a file that is not
+    /// the installation's own.
+    static func load(_ named: URL? = nil, for flavor: Flavor) throws(ConfigError) -> Loaded {
+        let url = named ?? fileURL(for: flavor)
         let text: String
         do {
             text = try String(contentsOf: url, encoding: .utf8)
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
-            return .noFile(at: url)
+            return .noFile(at: url, flavor: flavor)
         } catch {
             throw ConfigError.unreadable(path: url.path, why: error.localizedDescription)
         }
-        return .file(try Config(toml: text), at: url)
+        return .file(try Config(toml: text, flavor: flavor), at: url, flavor: flavor)
     }
 
-    /// A config and where it came from.
+    /// One reading: what it found, the file it read, and the installation that read it.
     ///
     /// [LAW:types-are-the-program] A Config cannot tell a file that says exactly what
     /// the defaults say from no file at all, and `lowtalker config check` has to say
     /// which - printing the defaults as though someone had written them is a report
-    /// that lies about its own subject. The defaults live in the case that means them,
-    /// so a `noFile` carrying settings somebody chose is unrepresentable.
+    /// that lies about its own subject. So the two readings are two cases, and a
+    /// `noFile` carrying settings somebody chose is unrepresentable.
+    ///
+    /// [LAW:one-source-of-truth] The flavor is carried, rather than the defaults it
+    /// implies, because the defaults are derived from it and a stored copy of a derived
+    /// value is a copy that can disagree with what it came from. It earns its place the
+    /// same way the url does: every question asked of a reading afterwards - which
+    /// defaults apply, which file to read again, which installation a report describes -
+    /// is a question about the installation that read, and none of them is the caller's
+    /// to answer a second time and get wrong.
     enum Loaded: Hashable, Sendable, CustomStringConvertible {
-        case file(Config, at: URL)
-        case noFile(at: URL)
+        case file(Config, at: URL, flavor: Flavor)
+        /// No file, so what applies is whatever this installation defaults to.
+        case noFile(at: URL, flavor: Flavor)
 
         /// What the app runs on either way, which is the only thing most callers want.
         public var config: Config {
             switch self {
-            case .file(let config, _): config
-            case .noFile: .default
+            case .file(let config, _, _): config
+            case .noFile(_, let flavor): Config.default(for: flavor)
             }
         }
 
@@ -85,7 +106,16 @@ public extension Config {
         /// somewhere else. [LAW:one-source-of-truth]
         public var url: URL {
             switch self {
-            case .file(_, let url), .noFile(let url): url
+            case .file(_, let url, _), .noFile(let url, _): url
+            }
+        }
+
+        /// Which installation read it. Here for the url's reason and with the url's
+        /// consequence: a reload re-reads this file as this installation, and cannot be
+        /// pointed at another one's defaults by a caller passing the wrong word.
+        public var flavor: Flavor {
+            switch self {
+            case .file(_, _, let flavor), .noFile(_, let flavor): flavor
             }
         }
 
@@ -93,8 +123,8 @@ public extension Config {
         /// for.
         public var description: String {
             switch self {
-            case .file(_, let url): url.path
-            case .noFile(let url): "no file at \(url.path), so these are the defaults"
+            case .file(_, let url, _): url.path
+            case .noFile(let url, _): "no file at \(url.path), so these are the defaults"
             }
         }
     }
@@ -155,7 +185,7 @@ private struct ModeEntry: Decodable {
             // A mode that names no routes dictates, which is the only thing it could
             // have meant; one that names an empty list claims nothing, and `lowtalker
             // config check` is where that gap is reported.
-            router: routes.map { Router(routes: $0.map(\.route)) } ?? Mode.dictation.router
+            router: routes.map { Router(routes: $0.map(\.route)) } ?? .dictation
         )
     }
 }

@@ -1,4 +1,5 @@
 import DriverExtension
+import Flavors
 
 /// One thing that must hold before low-talker can type, as this Mac actually stands.
 ///
@@ -230,18 +231,16 @@ public extension Requirement {
 public enum HelperStanding: Sendable, Hashable, CaseIterable {
     /// The app's job holds the Mach service: registered, approved, and answering.
     case holdingTheService
-    /// A job under the app's label is loaded, and the development job holds the service.
+    /// A job under this flavor's label is loaded, and something else holds the service.
     ///
-    /// launchd does not make the loser loud: the second job to ask for a Mach service
-    /// name bootstraps with exit 0, runs, and simply never gets the endpoint. An app in
-    /// this state reports its helper enabled and types nothing, which is the whole
-    /// reason this is a requirement of its own and not folded into the approval.
+    /// launchd does not make the loser loud: a second claimant on a Mach service name
+    /// bootstraps with exit 0, runs, and simply never gets the endpoint. An app in this
+    /// state reports its helper enabled and types nothing, which is the whole reason
+    /// this is a requirement of its own and not folded into the approval.
     ///
-    /// Which claimant took the name is read rather than assumed, because the two want
-    /// different steps: this one names a command that removes it.
-    case theDevelopmentJobHoldsTheService
-    /// The same loss, and the holder is neither this app's job nor the development one,
-    /// so it can be found but not named.
+    /// No launchd job can be the holder any more - a flavor's job and its service share
+    /// one label, and a second job under that label is refused at bootstrap - so the
+    /// holder is a helper running outside launchd, which can be found but not named.
     case anotherJobHoldsTheService
     /// launchd has no job under the app's label at all.
     case noJob
@@ -268,14 +267,10 @@ public enum HelperStanding: Sendable, Hashable, CaseIterable {
     ///
     /// Deliberately not "is the app's helper answering". The helper files this keyboard's
     /// answer with Keyboard Setup Assistant in its first moments, before it reaches the
-    /// daemon and long before it can win or lose a Mach service name - so a helper that
-    /// took the name and one that lost it to the development job have both already had
-    /// their chance to file, and the assistant's row is asking about the chance and not
-    /// about the name. Reading it as `holdingTheService` alone sent a Mac running the
-    /// development helper to wait for a filing that had already happened and already
-    /// failed.
+    /// daemon and long before it can win or lose a Mach service name, so the assistant's
+    /// row is asking about that chance and not about the name.
     ///
-    /// A holder nobody could identify is not one of them: `anotherJobHoldsTheService`
+    /// A holder nobody could identify has had no such chance: `anotherJobHoldsTheService`
     /// means some job took the name and this Mac could not say whose, so there is no
     /// ground to claim a helper ran. [LAW:no-silent-failure] Written as an exhaustive
     /// switch with no `default`, so a standing added later has to answer this rather than
@@ -283,7 +278,7 @@ public enum HelperStanding: Sendable, Hashable, CaseIterable {
     /// [LAW:types-are-the-program]
     var aHelperHasRun: Bool {
         switch self {
-        case .holdingTheService, .theDevelopmentJobHoldsTheService: true
+        case .holdingTheService: true
         case .anotherJobHoldsTheService, .noJob, .awaitingApproval: false
         }
     }
@@ -291,51 +286,49 @@ public enum HelperStanding: Sendable, Hashable, CaseIterable {
 
 public extension Requirement {
     /// The root helper that owns the virtual keyboard.
-    static func keyboardHelper(_ standing: HelperStanding, serviceName: String, developmentLabel: String) -> Requirement {
-        Requirement(name: Row.keyboardHelper.rawValue, reads: reads(for: standing), step: step(for: standing, serviceName: serviceName, developmentLabel: developmentLabel))
+    /// [LAW:one-source-of-truth] The flavor itself, not names lifted off it. A step tells a
+    /// person which app to turn on and which service was lost, and with two installations
+    /// those are two readings of one installation - so they are derived here, together,
+    /// from the value that holds both. Passing a name instead lets a step address one copy
+    /// while naming the other's, which is the confusion the two flavors exist to prevent.
+    static func keyboardHelper(_ standing: HelperStanding, flavor: Flavor) -> Requirement {
+        Requirement(name: Row.keyboardHelper.rawValue, reads: reads(for: standing), step: step(for: standing, flavor: flavor))
     }
 
     private static func reads(for standing: HelperStanding) -> String {
         switch standing {
         case .holdingTheService: "answering"
-        case .theDevelopmentJobHoldsTheService: "registered, but the development job holds the service"
         case .anotherJobHoldsTheService: "registered, but another job holds the service"
         case .noJob: "not registered"
         case .awaitingApproval: "waiting for approval in Login Items & Extensions"
         }
     }
 
-    private static func step(for standing: HelperStanding, serviceName: String, developmentLabel: String) -> String? {
+    private static func step(for standing: HelperStanding, flavor: Flavor) -> String? {
         switch standing {
         case .holdingTheService:
             nil
         case .awaitingApproval:
             """
             Open \(loginItemsPane)
-            and turn on LowTalker. The helper is registered as a login item
+            and turn on \(flavor.displayName). The helper is registered as a login item
             and waits there until you do.
             """
         case .noJob:
             """
-            launchd holds no job for the helper. Launch LowTalker once - it
+            launchd holds no job for the helper. Launch \(flavor.displayName) once - it
             registers on every launch - and turn it on in
             \(loginItemsPane) if it asks.
             """
-        case .theDevelopmentJobHoldsTheService:
-            """
-            Another launchd job holds \(serviceName), so the app's
-            helper never got the name and answers nothing, however healthy it
-            looks. That job is \(developmentLabel), the
-            development one. Remove it, then launch LowTalker again:
-                scripts/keyboard-helper uninstall
-            """
         case .anotherJobHoldsTheService:
             """
-            Another launchd job holds \(serviceName), so the app's
+            Something else holds \(flavor.machServiceName), so this app's
             helper never got the name and answers nothing, however
-            healthy it looks. It is not the development job, and the
-            app cannot name it. Find its plist:
-                sudo grep -l \(serviceName) /Library/LaunchDaemons/*.plist
+            healthy it looks. It cannot be another launchd job - a
+            job and its service share one label here, and a second
+            under it is refused. A helper left running by hand is
+            what this usually is. Find it:
+                pgrep -fl lowtalker-keyboardd
             """
         }
     }
