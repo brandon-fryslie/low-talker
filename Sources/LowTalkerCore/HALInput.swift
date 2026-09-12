@@ -117,7 +117,6 @@ final class HALInput: PreparedInput {
     let device: AudioObjectID
     /// Listeners on the bound device, dropped with the input.
     private var watches: [Disposal] = []
-    private var isOpen = false
 
     /// Everything a press should not have to pay for: the component, the device binding,
     /// the format, the converter and the buffers, all the way to `AudioUnitInitialize`.
@@ -136,83 +135,103 @@ final class HALInput: PreparedInput {
         var instance: AudioUnit?
         try AudioHardwareError.check(AudioComponentInstanceNew(component, &instance), AudioHardwareError.componentUnavailable)
         guard let unit = instance else { throw AudioHardwareError.componentUnavailable(noErr) }
+
+        // Everything below configures `unit` through locals, and the stored properties are
+        // assigned only once the last throwing call has succeeded. Swift runs a class's
+        // `deinit` for a throwing initializer only when every stored property was already
+        // assigned, so deferring them keeps "init threw" and "deinit ran" mutually
+        // exclusive: the catch here is the one place a half-built unit is disposed, and it
+        // cannot double-free one `deinit` is also about to take. Assigning as we went
+        // leaked a component per attempt instead - `defaultInput()` below throws on any Mac
+        // with no microphone, which is the case `UnreachableInput` exists to carry, and
+        // every retry prepared another. [LAW:single-enforcer]
+        let device: AudioObjectID
+        let sink: Sink
+        do {
+            // Input on bus 1, output off: this unit captures and never plays.
+            var enable: UInt32 = 1
+            try AudioHardwareError.check(
+                AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, Self.inputBus, &enable, UInt32(MemoryLayout<UInt32>.size)),
+                AudioHardwareError.inputUnavailable
+            )
+            var disable: UInt32 = 0
+            try AudioHardwareError.check(
+                AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, 0, &disable, UInt32(MemoryLayout<UInt32>.size)),
+                AudioHardwareError.inputUnavailable
+            )
+
+            var binding = try Self.defaultInput()
+            try AudioHardwareError.check(
+                AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &binding, UInt32(MemoryLayout<AudioObjectID>.size)),
+                AudioHardwareError.inputUnavailable
+            )
+            device = binding
+
+            // What the device delivers, which decides what the converter converts from.
+            var source = AudioStreamBasicDescription()
+            var sourceSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+            try AudioHardwareError.check(
+                AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, Self.inputBus, &source, &sourceSize),
+                AudioHardwareError.inputUnavailable
+            )
+            // Float samples, one buffer per channel: the shape `AudioClip.Converter` reads and
+            // the shape a render can be pointed at channel by channel. The unit converts the
+            // device's own encoding into it, so nothing here has to know what that was.
+            var client = AudioStreamBasicDescription(
+                mSampleRate: source.mSampleRate,
+                mFormatID: kAudioFormatLinearPCM,
+                mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked | kAudioFormatFlagIsNonInterleaved,
+                mBytesPerPacket: UInt32(MemoryLayout<Float>.size),
+                mFramesPerPacket: 1,
+                mBytesPerFrame: UInt32(MemoryLayout<Float>.size),
+                mChannelsPerFrame: source.mChannelsPerFrame,
+                mBitsPerChannel: UInt32(MemoryLayout<Float>.size * 8),
+                mReserved: 0
+            )
+            try AudioHardwareError.check(
+                AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, Self.inputBus, &client, UInt32(MemoryLayout<AudioStreamBasicDescription>.size)),
+                AudioHardwareError.inputUnavailable
+            )
+            guard let format = AVAudioFormat(streamDescription: &client) else {
+                throw AudioClipError.unconvertibleFormat(sampleRate: client.mSampleRate, channels: client.mChannelsPerFrame)
+            }
+
+            // The largest slice this unit may ask for, which is what the render buffer has to
+            // be able to hold. Read rather than assumed: a render bigger than the buffer is a
+            // crash, and the number is the unit's to state.
+            var slice: UInt32 = 0
+            var sliceSize = UInt32(MemoryLayout<UInt32>.size)
+            try AudioHardwareError.check(
+                AudioUnitGetProperty(unit, kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global, 0, &slice, &sliceSize),
+                AudioHardwareError.inputUnavailable
+            )
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(slice)) else {
+                throw AudioClipError.bufferAllocationFailed
+            }
+
+            let built = Sink(converter: try AudioClip.Converter(from: format), buffer: buffer)
+            built.unit = unit
+
+            var callback = AURenderCallbackStruct(
+                inputProc: Sink.callback,
+                inputProcRefCon: Unmanaged.passUnretained(built).toOpaque()
+            )
+            try AudioHardwareError.check(
+                AudioUnitSetProperty(unit, kAudioOutputUnitProperty_SetInputCallback, kAudioUnitScope_Global, 0, &callback, UInt32(MemoryLayout<AURenderCallbackStruct>.size)),
+                AudioHardwareError.inputUnavailable
+            )
+
+            // The last of the per-process cost, and still no device open.
+            try AudioHardwareError.check(AudioUnitInitialize(unit), AudioHardwareError.inputUnavailable)
+            sink = built
+        } catch {
+            AudioComponentInstanceDispose(unit)
+            throw error
+        }
+
         self.unit = unit
-
-        // Input on bus 1, output off: this unit captures and never plays.
-        var enable: UInt32 = 1
-        try AudioHardwareError.check(
-            AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, Self.inputBus, &enable, UInt32(MemoryLayout<UInt32>.size)),
-            AudioHardwareError.inputUnavailable
-        )
-        var disable: UInt32 = 0
-        try AudioHardwareError.check(
-            AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, 0, &disable, UInt32(MemoryLayout<UInt32>.size)),
-            AudioHardwareError.inputUnavailable
-        )
-
-        var device = try Self.defaultInput()
         self.device = device
-        try AudioHardwareError.check(
-            AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &device, UInt32(MemoryLayout<AudioObjectID>.size)),
-            AudioHardwareError.inputUnavailable
-        )
-
-        // What the device delivers, which decides what the converter converts from.
-        var source = AudioStreamBasicDescription()
-        var sourceSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
-        try AudioHardwareError.check(
-            AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, Self.inputBus, &source, &sourceSize),
-            AudioHardwareError.inputUnavailable
-        )
-        // Float samples, one buffer per channel: the shape `AudioClip.Converter` reads and
-        // the shape a render can be pointed at channel by channel. The unit converts the
-        // device's own encoding into it, so nothing here has to know what that was.
-        var client = AudioStreamBasicDescription(
-            mSampleRate: source.mSampleRate,
-            mFormatID: kAudioFormatLinearPCM,
-            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked | kAudioFormatFlagIsNonInterleaved,
-            mBytesPerPacket: UInt32(MemoryLayout<Float>.size),
-            mFramesPerPacket: 1,
-            mBytesPerFrame: UInt32(MemoryLayout<Float>.size),
-            mChannelsPerFrame: source.mChannelsPerFrame,
-            mBitsPerChannel: UInt32(MemoryLayout<Float>.size * 8),
-            mReserved: 0
-        )
-        try AudioHardwareError.check(
-            AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, Self.inputBus, &client, UInt32(MemoryLayout<AudioStreamBasicDescription>.size)),
-            AudioHardwareError.inputUnavailable
-        )
-        guard let format = AVAudioFormat(streamDescription: &client) else {
-            throw AudioClipError.unconvertibleFormat(sampleRate: client.mSampleRate, channels: client.mChannelsPerFrame)
-        }
-
-        // The largest slice this unit may ask for, which is what the render buffer has to
-        // be able to hold. Read rather than assumed: a render bigger than the buffer is a
-        // crash, and the number is the unit's to state.
-        var slice: UInt32 = 0
-        var sliceSize = UInt32(MemoryLayout<UInt32>.size)
-        try AudioHardwareError.check(
-            AudioUnitGetProperty(unit, kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global, 0, &slice, &sliceSize),
-            AudioHardwareError.inputUnavailable
-        )
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(slice)) else {
-            throw AudioClipError.bufferAllocationFailed
-        }
-
-        sink = Sink(converter: try AudioClip.Converter(from: format), buffer: buffer)
-        sink.unit = unit
-
-        var callback = AURenderCallbackStruct(
-            inputProc: Sink.callback,
-            inputProcRefCon: Unmanaged.passUnretained(sink).toOpaque()
-        )
-        try AudioHardwareError.check(
-            AudioUnitSetProperty(unit, kAudioOutputUnitProperty_SetInputCallback, kAudioUnitScope_Global, 0, &callback, UInt32(MemoryLayout<AURenderCallbackStruct>.size)),
-            AudioHardwareError.inputUnavailable
-        )
-
-        // The last of the per-process cost, and still no device open.
-        try AudioHardwareError.check(AudioUnitInitialize(unit), AudioHardwareError.inputUnavailable)
+        self.sink = sink
     }
 
     /// Opens the device. What a press pays.
@@ -227,29 +246,38 @@ final class HALInput: PreparedInput {
             // rather than made. [LAW:no-ambient-temporal-coupling]
             onFailure: { error in Task { @MainActor in onFailure(error) } }
         ))
-        // The device going away or changing shape under a running unit is what
-        // AVAudioEngine reported as a configuration change, and it is the same event:
-        // this unit is bound to one device, so the capture above has to launch another.
-        watches = [
-            try watch(kAudioDevicePropertyDeviceIsAlive, onConfigurationChange),
-            try watch(kAudioDevicePropertyStreamFormat, onConfigurationChange),
-        ]
         do {
+            // A press is its own stream: the device was closed between this open and the
+            // last, so the resampler starts from nothing rather than carrying the previous
+            // press's tail into the head of this one. [LAW:one-source-of-truth]
+            sink.converter.reset()
+            // This unit is bound to one device, so a device that goes away or changes shape
+            // under it is the capture's cue to launch another. A switch of the system
+            // default input leaves both of these quiet and is `AudioCapture`'s to see.
+            //
+            // Appended one at a time, and inside this `do`, so a second registration that
+            // throws still leaves the first disposable.
+            watches.append(try watch(kAudioDevicePropertyDeviceIsAlive, onConfigurationChange))
+            watches.append(try watch(kAudioDevicePropertyStreamFormat, onConfigurationChange))
             try AudioHardwareError.check(AudioOutputUnitStart(unit), AudioHardwareError.inputUnavailable)
         } catch {
             close()
             throw error
         }
-        isOpen = true
         return { [weak self] in self?.close() }
     }
 
     /// Gives the device back and leaves the input prepared, so the next press opens it at
     /// the prepared price. [LAW:single-enforcer] Every way this input stops comes through
-    /// here, including the one `deinit` takes.
+    /// here, including the one `deinit` takes and the one an `open()` that failed partway
+    /// takes.
+    ///
+    /// Every step is idempotent - stopping a stopped unit, clearing a cleared target and
+    /// disposing an empty list all do nothing - so this needs no flag saying whether the
+    /// device is open. It had one, and because it was set only after a successful start,
+    /// it made this a no-op on exactly the path that had listeners to unwind.
+    /// [LAW:polishing-by-subtraction]
     private func close() {
-        guard isOpen else { return }
-        isOpen = false
         AudioOutputUnitStop(unit)
         // After the stop, so a render already in flight still has somewhere to put the
         // audio it holds rather than dropping it on the floor.

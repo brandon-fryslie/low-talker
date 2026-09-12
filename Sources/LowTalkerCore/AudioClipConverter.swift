@@ -3,10 +3,10 @@ import AVFoundation
 extension AudioClip {
     /// Converts a stream of buffers in one source format into pipeline samples.
     ///
-    /// One instance per stream: the resampler carries its state between calls so a
-    /// chunk boundary is inaudible, and `drain` releases the tail once the stream
-    /// ends. The microphone tap and the file loader are the two streams; nothing
-    /// else resamples.
+    /// One stream at a time: the resampler carries its state between calls so a
+    /// chunk boundary is inaudible, `drain` releases the tail once the stream ends,
+    /// and `reset` begins another. The microphone tap and the file loader are the
+    /// two streams; nothing else resamples.
     ///
     /// Calls are serialized by the caller. Not Sendable: it holds AVFoundation objects
     /// the macOS 15 SDK does not mark Sendable, so the tap captures it as
@@ -46,6 +46,13 @@ extension AudioClip {
         public func drain() throws -> [Float] {
             try pull(nil, then: .endOfStream)
         }
+
+        /// Begins a new stream on this instance. The resampler's state belongs to the
+        /// stream that filled it, so a caller that reuses one converter across streams
+        /// that are not continuous - the microphone, whose device is closed between
+        /// presses - says so here rather than bleeding one press's tail into the head of
+        /// the next.
+        public func reset() { converter.reset() }
 
         private func pull(_ input: AVAudioPCMBuffer?, then exhausted: AVAudioConverterInputStatus) throws -> [Float] {
             // The converter asks for a packet count per ask and holds any surplus it is
