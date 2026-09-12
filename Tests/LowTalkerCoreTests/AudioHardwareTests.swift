@@ -18,4 +18,23 @@ import Testing
         let placedOnlyAmongSamples = AVAudioTime(sampleTime: 4410, atRate: 44100)
         #expect(throws: AudioHardwareError.bufferWithoutTime) { try HostTime(placedOnlyAmongSamples) }
     }
+
+    /// The render callback is handed a raw stamp rather than an `AVAudioTime`, and it
+    /// reads the same ticks the same way.
+    @Test func aRenderStampInHostTicksBecomesTheSecondsItStandsFor() throws {
+        var stamp = AudioTimeStamp()
+        stamp.mHostTime = AVAudioTime.hostTime(forSeconds: 1.5)
+        stamp.mFlags = .hostTimeValid
+        #expect(try HostTime(stamp).uptime == .seconds(1.5))
+    }
+
+    /// A stamp carries its host time in a field that is populated whether or not a host
+    /// clock stood behind it; only the flag says which. Here the field holds a usable
+    /// 1.5 s and the stamp is still refused, which is what makes the flag the authority.
+    @Test func aRenderStampFlaggedWithoutAHostClockIsRefused() {
+        var stamp = AudioTimeStamp()
+        stamp.mHostTime = AVAudioTime.hostTime(forSeconds: 1.5)
+        stamp.mFlags = .sampleTimeValid
+        #expect(throws: AudioHardwareError.bufferWithoutTime) { try HostTime(stamp) }
+    }
 }
