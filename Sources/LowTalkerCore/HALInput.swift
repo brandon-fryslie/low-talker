@@ -135,6 +135,11 @@ final class HALInput: PreparedInput {
     /// as the binding they watch. They were a press's once, and the stretch that left
     /// unwatched is what low-privacy-o1z.aa1 was.
     private let watches: [Disposal]
+    /// That this input has stopped being one to open. Held as well as handed to the watches
+    /// because the device going away is not the only way that becomes true: a press whose
+    /// microphone would not go dark ends on an input nothing should open again either, and
+    /// `AudioCapture` answers both the same way - ready another. [LAW:single-enforcer]
+    private let onStale: @MainActor () -> Void
 
     /// Everything a press should not have to pay for: the component, the device binding,
     /// the format, the converter and the buffers, all the way to `AudioUnitInitialize`.
@@ -312,6 +317,7 @@ final class HALInput: PreparedInput {
         self.device = device
         self.sink = sink
         self.watches = registered
+        self.onStale = onStale
     }
 
     /// Opens the device. What a press pays.
@@ -332,38 +338,76 @@ final class HALInput: PreparedInput {
             sink.converter.reset()
             try AudioHardwareError.check(AudioOutputUnitStart(unit), AudioHardwareError.inputUnavailable)
         } catch {
+            // The reading is discarded here alone: a start that failed opened no device to
+            // give back, and the error on its way out says more about this press than
+            // "the microphone is still on" would.
             close()
             throw error
         }
-        return { [weak self] in self?.close() }
+        return { [weak self] in
+            guard let self, !self.close() else { return }
+            // The press ended and the microphone did not go dark. Nothing here can put it
+            // out - the unit that would not stop is the one this input is built on - so the
+            // input is given up instead: `AudioCapture` readies another, lets this one go,
+            // and the `deinit` that follows uninitializes and disposes the unit, which is
+            // what finally takes the device off this process. An indicator lit between
+            // presses is the whole of what `shut` exists to prevent, so it costs the input
+            // rather than being dropped. [LAW:no-silent-failure]
+            //
+            // Posted rather than called, and `onStale` rather than `self` is what the post
+            // holds so a report cannot keep the input it is about alive. This runs inside
+            // `AudioCapture.dispose`, which every transition reaches while holding its
+            // `Started` `inout`: a report landing in the middle of one would read a phase
+            // that has not been written back yet, and `replaceEngine` reaching this again
+            // through the engine it is replacing would have no bottom. Arriving after the
+            // transition is what the generation guard in `inputWentStale` is written for.
+            // [LAW:no-ambient-temporal-coupling]
+            let onStale = self.onStale
+            Task { @MainActor in onStale() }
+        }
     }
 
     /// Gives the device back and leaves the input prepared, so the next press opens it at
-    /// the prepared price. [LAW:single-enforcer] Every way this input stops comes through
-    /// here, including the one `deinit` takes and the one an `open()` that failed partway
-    /// takes.
+    /// the prepared price, and answers whether the microphone actually went dark - the fact
+    /// the epic promises, and the one only a caller holding a press can act on.
+    /// [LAW:single-enforcer] Every way this input stops comes through here, including the
+    /// one `deinit` takes and the one an `open()` that failed partway takes.
     ///
     /// Both steps are idempotent - stopping a stopped unit and clearing a cleared target do
     /// nothing - so this needs no flag saying whether the device is open. It had one, and
     /// because it was set only after a successful start, it made this a no-op on exactly the
-    /// path that had something to unwind. [LAW:polishing-by-subtraction]
+    /// path that had something to unwind. [LAW:polishing-by-subtraction] An input closed
+    /// twice therefore answers the same both times, which is what lets `deinit` stop a unit
+    /// a key-up already stopped and read nothing into it.
     ///
     /// What it does not do is drop the device watches. They belong to the input rather than
     /// to the press, and a key-up that took them down is what left an idle microphone
     /// unwatched.
-    private func close() {
-        // [LAW:no-silent-failure] exception: this is the one CoreAudio call here whose
-        // status is dropped, and it is dropped because nothing this function can reach
-        // could act on it - `deinit` and the unwind of a failed `open()` both arrive here
-        // with no caller to throw to. What it costs is written down in low-privacy-o1z.pr2:
-        // a stop that failed may leave the device running and the indicator lit. Both ways
-        // of surfacing it need a status vocabulary this Mac has not been made to produce -
-        // a precondition would crash on whatever an unplugged device returns, which is this
-        // call's likeliest failure and `replaceEngine`'s ordinary path.
-        AudioOutputUnitStop(unit)
+    @discardableResult
+    private func close() -> Bool {
+        let stopped = AudioOutputUnitStop(unit)
         // After the stop, so a render already in flight still has somewhere to put the
         // audio it holds rather than dropping it on the floor.
         sink.aim(at: nil)
+        // [LAW:parse-dont-validate] The border `init`'s guard stands on, walked the other
+        // way: that one proves reaching a microphone took no device, this one proves
+        // letting go gave it back.
+        //
+        // The device is read rather than the status trusted because the failure this is
+        // named for returns `noErr` - the `AVAudioEngine` this type replaced stopped
+        // without complaint and left the device running, which the class doc records as the
+        // reason `shut` could not be built on it. A status says whether CoreAudio accepted
+        // the call; only the device says whether the microphone is still on.
+        //
+        // Both halves were read off this Mac for low-privacy-o1z.pr2, where the vocabulary
+        // had been guessed rather than measured. Over ten presses the device read dark the
+        // instant `AudioOutputUnitStop` returned, for about 6 µs against that call's 5 ms,
+        // which is what makes the reading affordable here rather than owed to a later beat.
+        // A device destroyed under a running unit answers every teardown call `noErr` and
+        // this property `'who?'`: a microphone that has gone away cannot say it went dark,
+        // and that is this input's last press either way, so the unreadable arm is an
+        // answer to return rather than an error to raise. [LAW:no-silent-failure]
+        return stopped == noErr && (try? Self.isRunning(device)) == false
     }
 
     /// The scope is the caller's because it is the property's, not this function's:
@@ -391,8 +435,21 @@ final class HALInput: PreparedInput {
         return {
             var removing = address
             let status = AudioObjectRemovePropertyListenerBlock(device, &removing, .main, listener)
-            // A device that has been unplugged takes its listeners with it, which is the
-            // ordinary way this one ends and not a fault.
+            // The two statuses tolerated here were read off this Mac for
+            // low-privacy-o1z.pr2. A device destroyed under a live listener does not take
+            // the listener with it: removing one answers `noErr`, as does removing the same
+            // block twice and removing one that was never added. `kAudioHardwareBadObjectError`
+            // came from a single place - an id that never named an object - which this
+            // cannot reach, passing only the device `boundDevice` read back. It stays
+            // tolerated because that reading destroyed an aggregate device rather than
+            // pulling a plug, and a physical connector is the one arm of it still unread.
+            //
+            // A precondition where the stop in `close()` is a report, and the two are one
+            // judgment rather than two: what an unremoved listener leaves behind is already
+            // guarded, since `inputWentStale` discards by preparation number anything a
+            // stale watch says. So a status nobody has seen costs nothing here and is worth
+            // hearing about, while a stop that fails costs the user a lit microphone - dear
+            // enough to spend the input on, and far too dear to spend the session on.
             precondition(
                 status == noErr || status == kAudioHardwareBadObjectError,
                 "CoreAudio refused to remove a listener it added (status \(status))"
@@ -465,9 +522,19 @@ final class HALInput: PreparedInput {
     /// until then only `deinit` ever had.
     ///
     /// Every step is unconditional, because each is a no-op on a unit that never got that
-    /// far. [LAW:dataflow-not-control-flow] The statuses are dropped for the reason
-    /// `close()` drops its own: nothing that arrives here has a caller left to throw to.
-    /// [LAW:no-silent-failure] exception.
+    /// far - measured for low-privacy-o1z.pr2 rather than assumed: on a unit that never
+    /// reached `AudioUnitInitialize`, on one prepared and never opened, and on a second
+    /// pass over a unit already stopped and already uninitialized, all three calls answer
+    /// `noErr`. [LAW:dataflow-not-control-flow]
+    ///
+    /// [LAW:no-silent-failure] exception: these three statuses are dropped, and unlike the
+    /// stop in `close()` there is nothing better to read instead. Both paths here have no
+    /// caller to tell - `deinit`, and an `init` already throwing a truer error than a
+    /// teardown status - and no harm to report either, because what the epic cares about is
+    /// whether the device came back, and `AudioComponentInstanceDispose` takes it back by
+    /// existing: the unit that held it is gone. That is also what makes `close()`'s report
+    /// worth making and this one not. A prepared input that would not stop keeps the
+    /// device across presses; a disposed one cannot keep anything.
     private static func discard(_ unit: AudioUnit) {
         AudioOutputUnitStop(unit)
         AudioUnitUninitialize(unit)
