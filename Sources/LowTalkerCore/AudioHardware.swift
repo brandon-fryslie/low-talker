@@ -48,8 +48,12 @@ public protocol PreparedInput {
 public protocol AudioHardware {
     /// Readies a microphone without opening it, and watches the device it was readied
     /// against for the whole life of the input that comes back: `onStale` is called on the
-    /// main actor when that device goes away or changes shape, whether or not a press has it
-    /// open.
+    /// main actor when this input has stopped being one to open, whether or not a press has
+    /// it open. The device going away or changing shape is how that happens to a resting
+    /// microphone; a press whose microphone cannot be shown to have gone dark is how it
+    /// happens to a held one, and `HALInput` is where that reading is taken. What the
+    /// callers of this share is the answer - ready another - so the rule is what is promised
+    /// here rather than the list of ways it comes about. [LAW:one-source-of-truth]
     ///
     /// That lifetime is why the callback is asked for here rather than at `open`. A prepared
     /// input is bound to one device and fixes its format, its render buffer and its

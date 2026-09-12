@@ -140,6 +140,13 @@ final class HALInput: PreparedInput {
     /// microphone would not go dark ends on an input nothing should open again either, and
     /// `AudioCapture` answers both the same way - ready another. [LAW:single-enforcer]
     private let onStale: @MainActor () -> Void
+    /// How many presses have opened this input. What a report about a press carries, so a
+    /// report can tell whether it is still about the press that raised it.
+    /// [LAW:no-ambient-temporal-coupling] The window it closes is real and narrow: under
+    /// `shut` a key-up leaves this input prepared and `AudioCapture.preparations` unmoved,
+    /// so a report that outlived its own press and was keyed only by preparation would
+    /// match the *next* press on this same input and take a healthy engine down mid-word.
+    private var presses = 0
 
     /// Everything a press should not have to pay for: the component, the device binding,
     /// the format, the converter and the buffers, all the way to `AudioUnitInitialize`.
@@ -331,6 +338,8 @@ final class HALInput: PreparedInput {
             // rather than made. [LAW:no-ambient-temporal-coupling]
             onFailure: { error in Task { @MainActor in onFailure(error) } }
         ))
+        presses += 1
+        let press = presses
         do {
             // A press is its own stream: the device was closed between this open and the
             // last, so the resampler starts from nothing rather than carrying the previous
@@ -338,32 +347,45 @@ final class HALInput: PreparedInput {
             sink.converter.reset()
             try AudioHardwareError.check(AudioOutputUnitStart(unit), AudioHardwareError.inputUnavailable)
         } catch {
-            // The reading is discarded here alone: a start that failed opened no device to
-            // give back, and the error on its way out says more about this press than
-            // "the microphone is still on" would.
-            close()
+            endPress(press)
             throw error
         }
-        return { [weak self] in
-            guard let self, !self.close() else { return }
-            // The press ended and the microphone did not go dark. Nothing here can put it
-            // out - the unit that would not stop is the one this input is built on - so the
-            // input is given up instead: `AudioCapture` readies another, lets this one go,
-            // and the `deinit` that follows uninitializes and disposes the unit, which is
-            // what finally takes the device off this process. An indicator lit between
-            // presses is the whole of what `shut` exists to prevent, so it costs the input
-            // rather than being dropped. [LAW:no-silent-failure]
-            //
-            // Posted rather than called, and `onStale` rather than `self` is what the post
-            // holds so a report cannot keep the input it is about alive. This runs inside
-            // `AudioCapture.dispose`, which every transition reaches while holding its
-            // `Started` `inout`: a report landing in the middle of one would read a phase
-            // that has not been written back yet, and `replaceEngine` reaching this again
-            // through the engine it is replacing would have no bottom. Arriving after the
-            // transition is what the generation guard in `inputWentStale` is written for.
-            // [LAW:no-ambient-temporal-coupling]
-            let onStale = self.onStale
-            Task { @MainActor in onStale() }
+        return { [weak self] in self?.endPress(press) }
+    }
+
+    /// Ends a press, whether it ran or never started, and gives the input up when the
+    /// microphone cannot be shown to have gone dark.
+    ///
+    /// [LAW:dataflow-not-control-flow] Both ways a press ends run this same step, and the
+    /// reading decides what follows rather than which path got here. A start that threw
+    /// used to skip it on the grounds that it had opened no device - measured for the
+    /// review of PR #55, that is not true of a device swapped out from under a prepared
+    /// unit: `AudioOutputUnitStart` against one destroyed underneath returns `noErr` and
+    /// lights the real default input instead.
+    private func endPress(_ press: Int) {
+        guard !close() else { return }
+        // The press ended and the microphone cannot be shown to be off. Nothing here can
+        // put it out - the unit that would not stop is the one this input is built on - so
+        // the input is given up instead: `AudioCapture` readies another, lets this one go,
+        // and the `deinit` that follows uninitializes and disposes the unit, which is what
+        // finally takes the device off this process. An indicator lit between presses is
+        // the whole of what `shut` exists to prevent, so it costs the input rather than
+        // being dropped. [LAW:no-silent-failure]
+        //
+        // Posted rather than called: this runs inside `AudioCapture.dispose`, which every
+        // transition reaches while holding its `Started` `inout`, and a report landing in
+        // the middle of one would read a phase that has not been written back yet.
+        //
+        // What the post carries is the press, because arriving late is not the same as
+        // arriving harmless. `AudioCapture.preparations` does not move at a key-up that
+        // leaves this input prepared, so a report keyed only by preparation would still
+        // match after the *next* press opened on this very input - and `inputWentStale`
+        // would replace that healthy engine mid-word. A press that opened in between took
+        // the device deliberately and answers for itself at its own key-up, which runs this
+        // same reading, so dropping the older report loses nothing.
+        Task { @MainActor [weak self] in
+            guard let self, self.presses == press else { return }
+            self.onStale()
         }
     }
 
@@ -439,10 +461,10 @@ final class HALInput: PreparedInput {
             // low-privacy-o1z.pr2. A device destroyed under a live listener does not take
             // the listener with it: removing one answers `noErr`, as does removing the same
             // block twice and removing one that was never added. `kAudioHardwareBadObjectError`
-            // came from a single place - an id that never named an object - which this
-            // cannot reach, passing only the device `boundDevice` read back. It stays
-            // tolerated because that reading destroyed an aggregate device rather than
-            // pulling a plug, and a physical connector is the one arm of it still unread.
+            // never came back from a removal at all - it is what a destroyed device answers
+            // a property *read*, alongside `kAudioHardwareUnknownPropertyError`, which is
+            // reason enough to keep tolerating it here: the id this passes can be one
+            // CoreAudio has already torn down.
             //
             // A precondition where the stop in `close()` is a report, and the two are one
             // judgment rather than two: what an unremoved listener leaves behind is already
