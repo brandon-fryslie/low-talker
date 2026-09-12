@@ -164,8 +164,7 @@ private struct Authorized: MicrophoneAuthority {
     /// What readying early buys, and the one reading that would notice it being given back:
     /// a press opens the microphone the rest already readied rather than readying another,
     /// so it pays only what opening costs. A press that readied its own would pay both,
-    /// which measured 315 ms on this Mac against an allowance of 100 ms and came back
-    /// refused on every hold.
+    /// which is over the allowance and came back refused on every hold.
     @Test func aPressOpensTheMicrophoneTheRestReadiedRatherThanReadyingAnother() throws {
         let hardware = FakeHardware()
         let capture = AudioCapture(hardware: hardware, startingAt: origin)
@@ -621,6 +620,63 @@ private struct Authorized: MicrophoneAuthority {
         #expect(hardware.engines.count == 2)
         hardware.engines[1].appending([3, 4], after(2))
         #expect(capture.endSession(next) == .whole(AudioClip(samples: [3, 4])))
+    }
+
+    /// Two things going wrong at once, which is where a deferral's bookkeeping can swallow
+    /// someone else's. The default input changes mid-press, and then the device the press
+    /// is on dies before the key-up: the booking is still standing, and the engine is no
+    /// longer running but failed, with a gap open since it died. Answering the booking by
+    /// forcing that engine shut would throw the gap away - `open` would relaunch over the
+    /// top of it and the outage would never be booked, which is the accounting this file
+    /// treats as the failure itself. [LAW:no-silent-failure] So the key-up readies against
+    /// the new default and leaves the failure where it is, for the device watch to end.
+    @Test func aDeferredDeviceChangeLeavesAFailureThatArrivedFirstToBeBooked() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .open)
+        let session = try capture.beginSession(at: origin, preRoll: 0)
+
+        try hardware.changeDefaultInput()
+        hardware.engines[0].onFailure(NoDevice())
+        _ = capture.endSession(session)
+
+        // Readied against the new default, which is owed whatever the engine did...
+        #expect(hardware.prepared == 2)
+        // ...and nothing relaunched over a gap still open: the failure is still what the
+        // run says it is, and the outage is still uncounted because it has not ended.
+        #expect(failure(of: capture, as: NoDevice.self) == NoDevice())
+        #expect(hardware.engines.count == 1)
+        #expect(capture.outages.count == 0)
+
+        try hardware.changeDefaultInput()
+        #expect(isListening(capture))
+        #expect(hardware.engines.count == 2)
+        #expect(hardware.engines[1].readying == 3)
+        #expect(capture.outages.count == 1)
+        #expect(capture.outages.total > .zero)
+    }
+
+    /// The same pair under `shut`, where the key-up clears the failure by closing a
+    /// microphone that is meant to be closed - so the half that has to survive is the other
+    /// one. A key-up that skipped the readying because the engine was failed rather than
+    /// running would leave the next press opening the device that stopped being the
+    /// default, which is the whole of what the deferral exists to prevent.
+    @Test func aDeferredDeviceChangeIsStillReadiedWhenThePressesEngineDied() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .shut)
+        let session = try capture.beginSession(at: origin, preRoll: 0)
+
+        try hardware.changeDefaultInput()
+        hardware.engines[0].onFailure(NoDevice())
+        _ = capture.endSession(session)
+        #expect(isListening(capture))
+        #expect(hardware.prepared == 2)
+
+        let next = try capture.beginSession(at: after(1), preRoll: 0)
+        #expect(hardware.engines.count == 2)
+        #expect(hardware.engines[1].readying == 2)
+        _ = capture.endSession(next)
     }
 
     /// Quitting gives the device back, however the run was holding it.

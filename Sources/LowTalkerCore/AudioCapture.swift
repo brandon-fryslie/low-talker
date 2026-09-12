@@ -129,7 +129,9 @@ public final class AudioCapture {
         /// until the default changes a second time, so a press that swallowed the one
         /// notification would leave every later press on the device that stopped being the
         /// default. Deferring the work is not dropping it, and this is where the deferral
-        /// is written down until `rest()` can do it.
+        /// stands until it is paid - at the key-up, or sooner by anything that readies a
+        /// microphone against the current default first. [LAW:single-enforcer] `ready` is
+        /// the one place either happens.
         var readyAgainAtRest = false
     }
 
@@ -180,10 +182,13 @@ public final class AudioCapture {
     private let shared: Shared
     private var phase: Phase = .stopped
     private var generation = 0
-    /// Input device changes capture stayed running across since `start()`, session or no
-    /// session: the engine was replaced without ever failing. Not a claim that no audio
-    /// was lost to them - the audio on either side of each one is spliced, which is what
-    /// a session's `CapturedAudio` says and this count does not.
+    /// Running engines replaced under a press since `start()`: the device changed, capture
+    /// stayed running, and nothing failed. `replaceEngine` is the only thing that counts
+    /// here, which is what makes the number readable - a change answered while the
+    /// microphone is at rest is not a replacement and is not counted, whether that is a
+    /// resting microphone readying another or a mid-press change spent at the key-up. Not
+    /// a claim that no audio was lost to them either - the audio on either side of each one
+    /// is spliced, which is what a session's `CapturedAudio` says and this count does not.
     public private(set) var deviceChanges = 0
     public private(set) var outages = Outages()
 
@@ -199,20 +204,16 @@ public final class AudioCapture {
     /// was once measured on the wrong side of, when a figure taken from after the engine
     /// was built was read as what a press pays.
     ///
-    /// Measured on this Mac's built-in input, from the key down: a prepared microphone
-    /// delivers its first sample in 40 ms, ±2 ms over presses spaced 0.7 s apart, and the
-    /// readying it did not have to do costs 175 ms the first time in a process and 31 ms
-    /// after. The allowance is 100 ms: two and a half times the press, and well under the
-    /// two ways a microphone actually opens late - one that was never readied, which
-    /// costs 213 ms, and a key-down the tap delivered late, which costs whatever the
-    /// handler ahead of it was doing (the epic measured a 43-character insert at about
-    /// 1.2 s). Ordinary presses and missed speech are two populations that far apart, so
-    /// the allowance never has to be retuned to keep an ordinary press whole.
+    /// The allowance is 100 ms: two and a half times what a prepared press pays on this
+    /// Mac, and well under the two ways a microphone actually opens late - one that was
+    /// never readied, which costs 213 ms, and a key-down the tap delivered late, which
+    /// costs whatever the handler ahead of it was doing (the epic measured a 43-character
+    /// insert at about 1.2 s). Ordinary presses and missed speech are two populations that
+    /// far apart, so the allowance never has to be retuned to keep an ordinary press whole.
     ///
-    /// It is also what says the microphone may not be reached through AVAudioEngine:
-    /// building an engine and starting it costs 315 ms from the key down, every press,
-    /// which is over this by three times and was refusing every press under `shut`.
-    /// `HALInput` is the answer and carries the rest of those numbers.
+    /// It is also what says the microphone may not be reached through AVAudioEngine, which
+    /// cannot open one inside this. What a press pays, what the readying it skipped costs
+    /// and what AVAudioEngine cost instead are measured in `HALInput`.
     /// [LAW:no-silent-failure]
     nonisolated public static let warmUpAllowance: TimeInterval = 0.1
 
@@ -330,7 +331,7 @@ public final class AudioCapture {
                 // The engine stays shut: recording a failure here is what the case below
                 // exists not to do, because a failed engine left behind lets the next
                 // device change hold open a microphone `shut` asked to keep closed.
-                started.prepared = hardware.prepareInput()
+                ready(&started)
                 phase = .started(started)
                 throw NoMicrophone.failed(error)
             }
@@ -344,7 +345,7 @@ public final class AudioCapture {
                 // A retry after a failure readies the microphone again: what failed may
                 // have been the device going away, and the input prepared against it
                 // cannot open the one that replaced it.
-                started.prepared = hardware.prepareInput()
+                ready(&started)
                 started.engine = .running(try launch(on: started.prepared))
                 closeOutage(since: since)
             } catch {
@@ -477,6 +478,20 @@ public final class AudioCapture {
         live.dispose()
     }
 
+    /// Readies a microphone against whatever the default input is now, and spends any
+    /// deferral that was waiting for one.
+    ///
+    /// [LAW:single-enforcer] Every way a prepared input is *replaced* comes through here,
+    /// which is what keeps `readyAgainAtRest` from outliving the staleness it stands for.
+    /// A press books the deferral and the bound device then dies before the key-up:
+    /// `replaceEngine` readies another against the new default, so the booking is already
+    /// paid, and a `rest()` that still saw it standing would tear down a microphone
+    /// pointing at the right device to ready an identical one.
+    private func ready(_ started: inout Started) {
+        started.prepared = hardware.prepareInput()
+        started.readyAgainAtRest = false
+    }
+
     /// Lets the press go and brings the microphone to what it does while no session is
     /// open.
     ///
@@ -493,11 +508,19 @@ public final class AudioCapture {
         // is read, so what the mode does next it does with the new device: `shut` holds a
         // microphone readied against it, and `open` launches on it rather than relaunching
         // on the one the press was holding.
+        //
+        // Only a running engine is given up. The press's engine can have died between the
+        // booking and here, and that engine's outage is still open: taking it to `.shut`
+        // would drop the reason and the moment it began, and `open` would relaunch over the
+        // top of a gap nothing had booked. Readying is the half that is owed either way -
+        // skip it for a failed engine and the next press opens the device that stopped
+        // being the default, which is the whole of what this defers. [LAW:no-silent-failure]
         if started.readyAgainAtRest {
-            started.readyAgainAtRest = false
-            if case .running(let live) = started.engine { dispose(live) }
-            started.engine = .shut
-            started.prepared = hardware.prepareInput()
+            if case .running(let live) = started.engine {
+                dispose(live)
+                started.engine = .shut
+            }
+            ready(&started)
         }
         switch started.atRest {
         case .shut:
@@ -593,7 +616,7 @@ public final class AudioCapture {
         do {
             // The device this was prepared against is not the one to open any more: it went
             // away, or it stopped being the default while nothing was recording it.
-            started.prepared = hardware.prepareInput()
+            ready(&started)
             started.engine = .running(try launch(on: started.prepared))
             deviceChanges += 1
         } catch {
@@ -637,10 +660,10 @@ public final class AudioCapture {
             replaceEngine(from: live.generation)
             return
         case .shut:
-            started.prepared = hardware.prepareInput()
+            ready(&started)
         case .failed(_, let since):
             do {
-                started.prepared = hardware.prepareInput()
+                ready(&started)
                 started.engine = .running(try launch(on: started.prepared))
                 closeOutage(since: since)
             } catch {

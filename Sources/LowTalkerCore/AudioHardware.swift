@@ -62,6 +62,10 @@ public protocol AudioHardware {
 
 public enum AudioHardwareError: Error, Equatable, CustomStringConvertible {
     case defaultInputWatchFailed(OSStatus)
+    /// A listener on one bound device - its liveness or its stream format - rather than on
+    /// which device is the default. Two different subsystems, and a person reading the
+    /// failure of a press is the one who has to tell them apart.
+    case deviceWatchFailed(OSStatus)
     /// A buffer arrived with no host clock behind its time.
     case bufferWithoutTime
     case noInputComponent
@@ -75,6 +79,7 @@ public enum AudioHardwareError: Error, Equatable, CustomStringConvertible {
     public var description: String {
         switch self {
         case .defaultInputWatchFailed(let status): "CoreAudio refused a listener on the default input device (status \(status))"
+        case .deviceWatchFailed(let status): "CoreAudio refused a listener on the input device this microphone is bound to (status \(status))"
         case .bufferWithoutTime: "the input device delivered a buffer with no host time; nothing can say when its samples were captured"
         case .noInputComponent: "this Mac has no HAL audio unit to capture through"
         case .componentUnavailable(let status): "the HAL audio unit could not be instantiated (status \(status))"
@@ -128,8 +133,10 @@ public struct SystemAudioHardware: AudioHardware {
         // Delivered on the main queue, which is the main actor.
         let listener: AudioObjectPropertyListenerBlock = { _, _ in MainActor.assumeIsolated { onChange() } }
         var adding = address
-        let status = AudioObjectAddPropertyListenerBlock(system, &adding, .main, listener)
-        guard status == noErr else { throw AudioHardwareError.defaultInputWatchFailed(status) }
+        try AudioHardwareError.check(
+            AudioObjectAddPropertyListenerBlock(system, &adding, .main, listener),
+            AudioHardwareError.defaultInputWatchFailed
+        )
         return {
             var removing = address
             let status = AudioObjectRemovePropertyListenerBlock(system, &removing, .main, listener)

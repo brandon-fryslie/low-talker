@@ -104,7 +104,13 @@ final class HALInput: PreparedInput {
                 return status
             }
             do {
-                target.appending(try converter.convert(buffer), try HostTime(timeStamp.pointee))
+                // Parsed before the buffer is converted, not alongside it: arguments
+                // evaluate left to right, so converting first would feed this buffer into
+                // the resampler and then throw the output away when the stamp turns out to
+                // be unplaceable - leaving the filter primed by audio nobody has, and a
+                // seam in the middle of the press. [LAW:parse-dont-validate]
+                let captured = try HostTime(timeStamp.pointee)
+                target.appending(try converter.convert(buffer), captured)
             } catch {
                 target.onFailure(error)
             }
@@ -290,6 +296,14 @@ final class HALInput: PreparedInput {
     /// it made this a no-op on exactly the path that had listeners to unwind.
     /// [LAW:polishing-by-subtraction]
     private func close() {
+        // [LAW:no-silent-failure] exception: this is the one CoreAudio call here whose
+        // status is dropped, and it is dropped because nothing this function can reach
+        // could act on it - `deinit` and the unwind of a failed `open()` both arrive here
+        // with no caller to throw to. What it costs is written down in low-privacy-o1z.pr2:
+        // a stop that failed may leave the device running and the indicator lit. Both ways
+        // of surfacing it need a status vocabulary this Mac has not been made to produce -
+        // a precondition would crash on whatever an unplugged device returns, which is this
+        // call's likeliest failure and `replaceEngine`'s ordinary path.
         AudioOutputUnitStop(unit)
         // After the stop, so a render already in flight still has somewhere to put the
         // audio it holds rather than dropping it on the floor.
@@ -313,7 +327,7 @@ final class HALInput: PreparedInput {
         let device = device
         try AudioHardwareError.check(
             AudioObjectAddPropertyListenerBlock(device, &address, .main, listener),
-            AudioHardwareError.defaultInputWatchFailed
+            AudioHardwareError.deviceWatchFailed
         )
         return {
             var removing = address
