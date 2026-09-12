@@ -542,7 +542,7 @@ prints everything that must hold before low-talker can type, read off this Mac n
 
     Driver extension: running
     Keyboard helper: not registered
-      launchd holds no job for the helper. Launch LowTalker once - it
+      launchd holds no job for the helper. Launch LowTalker Dev once - it
       registers on every launch - and turn it on in
       System Settings > General > Login Items & Extensions if it asks.
     Keyboard Setup Assistant: answered for this keyboard
