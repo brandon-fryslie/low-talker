@@ -156,8 +156,8 @@ final class HALInput: PreparedInput {
         // assigned only once the last throwing call has succeeded. Swift runs a class's
         // `deinit` for a throwing initializer only when every stored property was already
         // assigned, so deferring them keeps "init threw" and "deinit ran" mutually
-        // exclusive: the catch here is the one place a half-built unit is disposed, and it
-        // cannot double-free one `deinit` is also about to take. Assigning as we went
+        // exclusive: the catch here is the one place a preparation gives its unit back, and
+        // it cannot double-free one `deinit` is also about to take. Assigning as we went
         // leaked a component per attempt instead - `defaultInput()` below throws on any Mac
         // with no microphone, which is the case `UnreachableInput` exists to carry, and
         // every retry prepared another. [LAW:single-enforcer]
@@ -193,7 +193,6 @@ final class HALInput: PreparedInput {
                 AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &binding, UInt32(MemoryLayout<AudioObjectID>.size)),
                 AudioHardwareError.inputUnavailable
             )
-            device = binding
 
             // Input on bus 1: this unit captures and never plays.
             var enable: UInt32 = 1
@@ -259,6 +258,13 @@ final class HALInput: PreparedInput {
             // The last of the per-process cost, and still no device open.
             try AudioHardwareError.check(AudioUnitInitialize(unit), AudioHardwareError.inputUnavailable)
 
+            // Which device the unit came out of initialization bound to, which is
+            // CoreAudio's answer and not the one we asked for. It has answered differently
+            // once already - the aggregate above - and a unit swapped onto one would leave
+            // the guard below questioning a device the unit no longer uses and `open()`
+            // watching that same wrong device for changes. [FRAMING:representation]
+            device = try Self.boundDevice(unit)
+
             // [LAW:parse-dont-validate] The border between a microphone reached and a
             // microphone taken. Everything above claims to cross it without opening a
             // device, and the epic's whole promise rests on that claim, so this is where a
@@ -268,21 +274,14 @@ final class HALInput: PreparedInput {
             // Read rather than believed because the claim is about CoreAudio, which is free
             // to change its mind between releases, between devices and - as the aggregate
             // above proved - between an app and a command line running the same lines. A
-            // preparation that opened the device throws here, the catch below disposes the
-            // unit, and the device goes back; what the user is left with is a press that
-            // says there is no microphone, rather than an indicator lit all day over an app
-            // reporting a shut one. [LAW:no-silent-failure]
+            // preparation that opened the device throws here and the unwind below gives the
+            // device back; what the user is left with is a press that says there is no
+            // microphone, rather than an indicator lit all day over an app reporting a shut
+            // one. [LAW:no-silent-failure]
             guard try !Self.isRunning(device) else { throw AudioHardwareError.preparingOpenedTheDevice(device) }
             sink = built
         } catch {
-            // What `preparingOpenedTheDevice` promises - that the microphone was given back
-            // - rests on this, rather than on disposal stopping IO of its own accord.
-            // [LAW:dataflow-not-control-flow] Unconditional, because stopping a unit that
-            // never ran is a no-op: one unwind, not one per way a preparation can fail.
-            // [LAW:no-silent-failure] exception: the status is dropped for the reason
-            // `close()` drops it, which is that an unwind has no caller to throw it to.
-            AudioOutputUnitStop(unit)
-            AudioComponentInstanceDispose(unit)
+            Self.discard(unit)
             throw error
         }
 
@@ -433,6 +432,35 @@ final class HALInput: PreparedInput {
         return running != 0
     }
 
+    /// Which device `unit` is bound to, asked of the unit rather than remembered from what
+    /// it was told.
+    private static func boundDevice(_ unit: AudioUnit) throws -> AudioObjectID {
+        var device = AudioObjectID(0)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        try AudioHardwareError.check(
+            AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &device, &size),
+            AudioHardwareError.inputUnavailable
+        )
+        return device
+    }
+
+    /// Gives back everything a unit holds, in the order CoreAudio pairs them.
+    /// [LAW:single-enforcer] Both ways a unit ends come through here - a `HALInput` being
+    /// let go, and a preparation giving up partway - so the two cannot drift apart on how
+    /// much of a unit there is to give back. The guard after `AudioUnitInitialize` is why
+    /// that matters: it lets a preparation throw holding a fully initialized unit, which
+    /// until then only `deinit` ever had.
+    ///
+    /// Every step is unconditional, because each is a no-op on a unit that never got that
+    /// far. [LAW:dataflow-not-control-flow] The statuses are dropped for the reason
+    /// `close()` drops its own: nothing that arrives here has a caller left to throw to.
+    /// [LAW:no-silent-failure] exception.
+    private static func discard(_ unit: AudioUnit) {
+        AudioOutputUnitStop(unit)
+        AudioUnitUninitialize(unit)
+        AudioComponentInstanceDispose(unit)
+    }
+
     private static let inputBus: UInt32 = 1
 
     deinit {
@@ -441,8 +469,7 @@ final class HALInput: PreparedInput {
         // already ran leaves nothing for this to do.
         MainActor.assumeIsolated {
             close()
-            AudioUnitUninitialize(unit)
-            AudioComponentInstanceDispose(unit)
+            Self.discard(unit)
         }
     }
 }
