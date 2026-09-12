@@ -1,21 +1,61 @@
-# `make app` is the one command that turns project.yml into a launchable LowTalker.app.
+# `make app` is the one command that turns project.yml into a launchable app bundle.
 SHELL := /bin/bash
 DERIVED_DATA := DerivedData
 CONFIGURATION := Debug
-APP := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/LowTalker.app
+PRODUCTS := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)
 
-.PHONY: app run test check-docs cli helper clean signing-identity
+# The two installations, as the scheme that builds each and the bundle it leaves behind.
+# [LAW:one-source-of-truth] project.yml names these; they are written once here and every
+# target below reads them, so a renamed product breaks in one place.
+#
+# `Flavor.development` is what `make app` and `make run` build, and it is the default for
+# the same reason `--flavor` defaults to it: this tree is the development copy. The
+# installed copy is the one that runs all day, and rebuilding it is a thing done on
+# purpose, by name.
+DEV_SCHEME := LowTalkerDev
+DEV_APP := $(PRODUCTS)/LowTalker Dev.app
+RELEASE_SCHEME := LowTalker
+RELEASE_APP := $(PRODUCTS)/LowTalker.app
+INSTALLED := /Applications/LowTalker.app
+
+.PHONY: app release install run test check-docs cli helper clean signing-identity
 
 # Regeneration is unconditional: xcodegen is idempotent and sub-second, and a
 # timestamp rule cannot see removed sources or in-place rewrites of the project.
-app:
+#
+# One recipe for both installations, taking the scheme: they are one app built twice, and
+# a second copy of these two commands is a second thing to keep in step.
+# [LAW:one-type-per-behavior]
+define build_app
 	xcodegen generate
-	xcodebuild -project LowTalker.xcodeproj -scheme LowTalker -configuration $(CONFIGURATION) \
+	xcodebuild -project LowTalker.xcodeproj -scheme $(1) -configuration $(CONFIGURATION) \
 		-derivedDataPath $(DERIVED_DATA) build
-	@echo "$(APP)"
+endef
+
+app:
+	$(call build_app,$(DEV_SCHEME))
+	@echo "$(DEV_APP)"
+
+release:
+	$(call build_app,$(RELEASE_SCHEME))
+	@echo "$(RELEASE_APP)"
+
+# The release copy into /Applications, which is where it is launched from at login and so
+# the path its Login Items approval and its TCC grants are recorded against. Deleted
+# first rather than copied over: ditto merges into a bundle that is already there, and a
+# file from a previous build that nothing in the new one overwrites is a copy of the app
+# that is neither build. [LAW:no-silent-failure]
+#
+# The development copy is deliberately not installed. It runs from $(PRODUCTS) where
+# `make app` leaves it, which is a stable path across rebuilds, and it is not a login
+# item - "beside the installed one" is what it is for, not "installed twice".
+install: release
+	rm -rf "$(INSTALLED)"
+	ditto "$(RELEASE_APP)" "$(INSTALLED)"
+	@echo "$(INSTALLED)"
 
 run: app
-	open "$(APP)"
+	open "$(DEV_APP)"
 
 # The build comes first because everything after it needs the CLI: `check-docs` reads
 # the driver constants out of it, and scripts/virtual-hid-driver now takes every reading

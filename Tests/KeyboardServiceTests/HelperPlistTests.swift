@@ -54,6 +54,56 @@ private let repository = URL(fileURLWithPath: #filePath)
         #expect(try Self.plist(for: flavor)["KeepAlive"] as? [String: Bool] == ["SuccessfulExit": false])
     }
 
+    /// The other registration path names the same things. `scripts/keyboard-helper` writes
+    /// its own plist into /Library/LaunchDaemons, so it keeps a second copy of every name
+    /// here - and a script that bootstrapped one label while the client dialled another
+    /// would leave a root daemon nobody can reach, which is what 3ti.13 was.
+    ///
+    /// Read back by running the script rather than by grepping its assignments, because
+    /// the development names are built from the release ones and a grep hands back the
+    /// template instead of the value. `names` resolves them exactly as `install` does, so
+    /// what is compared is what the script acts under. [LAW:one-source-of-truth]
+    @Test(arguments: Flavor.allCases)
+    func theScriptRegistersTheServiceTheClientConnectsTo(flavor: Flavor) throws {
+        let names = try Self.names(of: flavor)
+        #expect(names["flavor"] == flavor.description)
+        #expect(names["label"] == flavor.launchdLabel)
+        #expect(names["service"] == flavor.machServiceName)
+        #expect(names["plist"] == "/Library/LaunchDaemons/\(flavor.launchdLabel).plist")
+    }
+
+    /// A word that is neither flavor must not resolve to names at all: the next thing the
+    /// script would do with them is `sudo tee` a plist. [LAW:no-silent-failure]
+    @Test func theScriptRefusesAFlavorItDoesNotKnow() throws {
+        let (status, _) = try Self.run(["names", "neither"])
+        #expect(status != 0, "keyboard-helper accepted a flavor that is not one")
+    }
+
+    private static func run(_ arguments: [String]) throws -> (status: Int32, printed: String) {
+        let script = Process()
+        script.executableURL = repository.appending(path: "scripts/keyboard-helper")
+        script.arguments = arguments
+        let output = Pipe()
+        script.standardOutput = output
+        script.standardError = Pipe()
+        try script.run()
+        let printed = output.fileHandleForReading.readDataToEndOfFile()
+        script.waitUntilExit()
+        return (script.terminationStatus, String(decoding: printed, as: UTF8.self))
+    }
+
+    private static func names(of flavor: Flavor) throws -> [String: String] {
+        let (status, printed) = try run(["names", flavor.description])
+        try #require(status == 0, "keyboard-helper names \(flavor) exited \(status)")
+        var names: [String: String] = [:]
+        for line in printed.split(separator: "\n") {
+            let field = line.split(separator: "\t", maxSplits: 1)
+            try #require(field.count == 2, "not a name and a value: \(line)")
+            names[String(field[0])] = String(field[1])
+        }
+        return names
+    }
+
     /// The two installations must not be one job wearing two names: a shared label or a
     /// shared service is the collision the whole design removes.
     @Test func theFlavoursPlistsShareNoName() throws {

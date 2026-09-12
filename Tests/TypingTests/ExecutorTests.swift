@@ -1,4 +1,5 @@
 import CoreGraphics
+import Flavors
 import Foundation
 import KeyboardLayout
 import Keystrokes
@@ -12,7 +13,11 @@ import Typing
     static let us = try! KeyboardLayout.named("com.apple.keylayout.US")
     static let textEdit = BundleID(rawValue: "com.apple.TextEdit")
     static let slack = BundleID(rawValue: "com.tinyspeck.slackmacgap")
-    static let context = Context(chord: Hotkey.defaultChord, press: .hold, frontmostApp: textEdit, focusedElementRole: nil)
+    /// Which installation's chord is beside the point here - these are about what the
+    /// executor types, not about who held what - so one of them is named once and both
+    /// the context and the guard read it from here. [LAW:one-source-of-truth]
+    static let held = Hotkey.defaultChord(for: .release)
+    static let context = Context(chord: held, press: .hold, frontmostApp: textEdit, focusedElementRole: nil)
 
     /// One keyboard per app, made on first ask and kept, so the log of every action into
     /// an app is one log.
@@ -49,7 +54,7 @@ import Typing
     }
 
     private func executor(_ keyboards: Keyboards, _ pointers: Pointers = Pointers()) -> Executor {
-        Executor(keyboard: keyboards.keyboard(for:), mouse: pointers.pointer(for:), hotkeys: [Hotkey.defaultChord])
+        Executor(keyboard: keyboards.keyboard(for:), mouse: pointers.pointer(for:), hotkeys: [Self.held])
     }
 
     @Test func textAtTheFocusGoesIntoTheAppThatWasInFront() async throws {

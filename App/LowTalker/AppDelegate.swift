@@ -1,5 +1,6 @@
 import AppKit
 import Dictation
+import Flavors
 import KeyboardService
 import LowTalkerCore
 import Onboarding
@@ -20,7 +21,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // every later reader would have to unwrap.
     private lazy var statusItem: NSStatusItem = {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "low-talker")
+        // Named from the flavor, because with both copies installed there are two of
+        // these icons in the menu bar and this label is what tells them apart - to a
+        // reader with VoiceOver, and to an agent reading the bar over Accessibility.
+        item.button?.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: Self.flavor.displayName)
         item.menu = menu
         return item
     }()
@@ -50,10 +54,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// One line per press: what was heard, how long after key-up, and what was typed.
     private let sessions = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "dictation")
 
+    /// [LAW:parse-dont-validate] The one place this process learns which of the two
+    /// installations it is. macOS launched it under one bundle identifier or the other,
+    /// and everything keyed to the installation - the helper's job, the config file, the
+    /// chord, the name in the menu - is read from this and never decided again.
+    ///
+    /// [LAW:no-silent-failure] A bundle identifier that is neither flavor's is a
+    /// misconfigured build, and guessing is the one wrong answer: reading a development
+    /// bundle as `.release` would point this copy's helper, config and hotkey at the
+    /// installed copy's, which is the whole failure the two flavors exist to prevent.
+    /// There is nothing to fall back to, so it stops here, at launch, where the reason is
+    /// legible - rather than at the first keypress, in the other app.
+    static let flavor: Flavor = {
+        let identifier = Bundle.main.bundleIdentifier
+        guard let identifier, let flavor = Flavor(bundleIdentifier: identifier) else {
+            let known = Flavor.allCases.map(\.bundleIdentifier).joined(separator: " or ")
+            fatalError("launched under bundle identifier \(identifier ?? "none"), which is neither installation: expected \(known)")
+        }
+        return flavor
+    }()
+
     /// The helper's registration, from the bundle's own launchd plist. One instance,
     /// because registering and asking where the registration stands are two questions
-    /// about one record. [LAW:one-source-of-truth]
-    private let helperService = SMAppService.daemon(plistName: "\(Helper.launchdLabel).plist")
+    /// about one record. [LAW:one-source-of-truth] The plist is named from the flavor, so
+    /// each installation registers its own job and neither can adopt the other's record.
+    private let helperService = SMAppService.daemon(plistName: "\(AppDelegate.flavor.launchdLabel).plist")
 
     /// [LAW:one-source-of-truth] Every engine status passes through here, so the
     /// menu and the log never tell different stories.
@@ -93,13 +118,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// The chords the tap listens for and the typist refuses to press, named once.
     /// [LAW:one-source-of-truth] Two spellings would be a hotkey the typist could type.
-    private static let chords: Set<KeyChord> = [Hotkey.defaultChord]
+    private static let chords: Set<KeyChord> = [Hotkey.defaultChord(for: flavor)]
 
     private let hotkey = Hotkey(chords: chords)
     private let capture = AudioCapture()
     /// Kept for the app's life so the XPC connection to the helper stays open: launchd
     /// starts the job on the first call, and that is a cost to pay once, not per press.
-    private let helper = HelperConnection()
+    private let helper = HelperConnection(flavor: AppDelegate.flavor)
     /// Raised on the way out, so a session still typing stops short of its remaining
     /// keys rather than being waited out in full.
     private let interrupt = Interrupt()
@@ -171,10 +196,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// [LAW:no-silent-failure]
     private func listen() async {
         do {
-            let config = try Config.load().config
+            let config = try Config.load(for: Self.flavor).config
             try capture.start(try await MicrophonePermission().request().grant(), atRest: config.microphone)
             try hotkey.start { [unowned self] in dictation.press($0) } onLapse: { [unowned self] in report($0) }
-            showHotkeyStatus("hold \(Hotkey.defaultChord.spelled) to dictate")
+            showHotkeyStatus("hold \(Hotkey.defaultChord(for: Self.flavor).spelled) to dictate")
         } catch {
             // Whatever got as far as starting is put back: a tap that failed after
             // capture began would otherwise leave capture holding the grant and watching
@@ -274,7 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let registration = helperService.status
         log.notice("helper registration: SMAppService.Status \(registration.rawValue, privacy: .public)")
 
-        let readiness = OnboardingProbe.readiness(approvalPending: registration == .requiresApproval)
+        let readiness = OnboardingProbe.readiness(flavor: Self.flavor, approvalPending: registration == .requiresApproval)
         log.notice("onboarding: \(readiness.ready ? "ready" : "not ready", privacy: .public)")
         for requirement in readiness.requirements {
             log.notice("onboarding: \(requirement.name, privacy: .public): \(requirement.reads, privacy: .public)")
@@ -303,7 +328,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         // Where every step that asks for a click sends a reader, one click closer.
         menu.addItem(withTitle: "Open Login Items & Extensions…", action: #selector(openLoginItems), keyEquivalent: "")
-        menu.addItem(withTitle: "Quit low-talker", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: "Quit \(Self.flavor.displayName)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     }
 
     /// A line the menu says and nothing a reader can press. An item with no action is

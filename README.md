@@ -2,12 +2,22 @@
 
 Native macOS push-to-talk dictation, as a menu-bar app. What it is and why it exists is in [PROJECT.md](PROJECT.md); this file covers building it.
 
+## Two installations
+
+LowTalker installs twice and both copies run at the same time. The release copy is the one that runs all day, launched at login, held on Right Option. The development copy is built from the working tree and runs beside it, on Right Option **and Right Command together** — hold Right Command first, because Right Option alone completes the release chord and that press then owns the hold.
+
+They are one program, not two. What separates them is four names macOS keys an installation by — the bundle identifier, the Mach service, the launchd label, and the config file — and every one of them is decided in `Sources/Flavors/Flavor.swift`. Nothing else differs; the model store is deliberately shared, the weights being gigabytes and identical.
+
+The cost of the second copy is paid in grants: it needs its own Microphone, Accessibility and Input Monitoring approvals, its own Login Items approval, and one cold Neural Engine model load, that cache being keyed by signing identifier.
+
 ## Building
 
 You need Xcode 16 or later plus `xcodegen` and `jq`, both from Homebrew.
 
-- `make app` generates the Xcode project from `project.yml` with XcodeGen and builds `LowTalker.app` into `DerivedData/`, printing the path.
+- `make app` generates the Xcode project from `project.yml` with XcodeGen and builds the **development** copy, `LowTalker Dev.app`, into `DerivedData/`, printing the path.
 - `make run` builds and launches it.
+- `make release` builds the release copy, `LowTalker.app`, into the same place.
+- `make install` builds the release copy and puts it in `/Applications`, which is where it is launched from at login and so the path its approvals are recorded against. The development copy is deliberately not installed: it runs from `DerivedData/`, and it is not a login item.
 - `make cli` builds the command-line tool into `.build/debug/lowtalker` and signs it; "Trying the engine" below uses it.
 - `make helper` builds the root keyboard helper into `.build/debug/lowtalker-keyboardd` and signs it; "The keyboard helper" below says what it is.
 - `make test` runs `swift build`, then `make check-docs`, `scripts/virtual-hid-driver-test`, `swift test`, and finally `make cli helper`. The build comes first because everything after it needs the CLI; the signing comes last because every link ad-hoc signs the product and drops the dev identity the helper admits callers by.
@@ -148,10 +158,12 @@ The first four attempts refused, correctly, and each refusal was true. coreaudio
 
 ## Hotkey
 
-    swift run lowtalker hotkey                      # print each press of Right Option until interrupted
+    swift run lowtalker hotkey                      # print each press of the hotkey until interrupted
     swift run lowtalker hotkey --tap-threshold 400  # a press under 400 ms is a tap
 
-Each press prints `began` as the key goes down. A release after the threshold (250 ms by default) prints a line beginning `ended (hold)`; a release before it is a tap, which leaves listening on until the next press of the key prints one beginning `ended (tap)`. Each `ended` line carries `lapses`, how often macOS has switched the tap off and it was switched back on; a press during a lapse reaches the frontmost app and is not reported, and a lapse ends any press in progress. While the tap is on, a Right Option pressed on its own never reaches the frontmost app: its down and up are swallowed. Pressed with another modifier already held it is a different chord and passes through, and Left Option is untouched.
+Each press prints `began` as the key goes down. A release after the threshold (250 ms by default) prints a line beginning `ended (hold)`; a release before it is a tap, which leaves listening on until the next press of the key prints one beginning `ended (tap)`. Each `ended` line carries `lapses`, how often macOS has switched the tap off and it was switched back on; a press during a lapse reaches the frontmost app and is not reported, and a lapse ends any press in progress. While the tap is on, a press of the chord never reaches the frontmost app: its down and up are swallowed. Pressed with another modifier already held it is a different chord and passes through, and Left Option is untouched.
+
+Which chord that is depends on the installation, and the CLI defaults to the development one: `lowtalker hotkey` watches Right Option and Right Command together unless `--flavor release` is passed, in which case it watches Right Option alone. Every command that reaches a helper or reads a config takes the same `--flavor`, and defaults the same way, because this tree is the development copy.
 
 The tap needs Input Monitoring and Accessibility. macOS charges a terminal command's tap to the terminal, so the command fails with `the session refused an event tap` until the terminal has both under System Settings > Privacy & Security; the app asks on its own behalf.
 
@@ -160,7 +172,7 @@ The tap needs Input Monitoring and Accessibility. macOS charges a terminal comma
     make cli
     .build/debug/lowtalker config check
 
-reads `~/.config/low-talker/config.toml` and prints what the app would run with. It starts nothing. `--path` reads some other file instead, which is how a file is checked before it is installed. No file at all is not an error: the app runs on the defaults, dictation on Right Option with the default model. A file that exists but cannot be read, or cannot be understood, is an error and is never quietly replaced by the defaults, since a config the user wrote and the app silently ignored is worse than one it refuses.
+reads `~/.config/low-talker/config.toml` and prints what the app would run with. It starts nothing. `--path` reads some other file instead, which is how a file is checked before it is installed. No file at all is not an error: the app runs on the defaults, dictation on this installation's own chord with the default model. A file that exists but cannot be read, or cannot be understood, is an error and is never quietly replaced by the defaults, since a config the user wrote and the app silently ignored is worse than one it refuses.
 
 The file names a `model`, a model folder name such as `base.en`, an optional `[microphone]` table saying what the device does between presses, and an array of `[[modes]]` tables. Each mode takes a `name`, a `chord`, an optional `vocabulary` of terms, and an optional `routes`.
 
@@ -253,17 +265,17 @@ Each performed action prints one line:
 
 The count is the characters typed and the app is the one they went into; a `sendKeys` line reads `pressed` and the chord instead. A click's line names the button, how many times, and the point, and its move reports are how many motion reports the cursor took to get there, which is the acceleration loop's cost ("The virtual mouse", below); a `scroll` line reads `scrolled` with its vertical and horizontal counts. The time runs from the moment the actions were handed over, which stands in for the hotkey's key-up, to the helper's acknowledgement of the last report. It is the number the app has to keep under its latency target, not a claim that the text is on screen: the daemon acknowledges reports the driver can still drop, and reading the screen back is `dext type`'s measurement, below.
 
-A list that cannot be performed whole is refused before any key goes down, so nothing is typed. `activateApp`, `openURL`, `runShortcut`, and `pipe` are refused by name, because neither the keyboard nor the mouse can perform them, and a `click` of zero or more than three times, or a `scroll` beyond 1000 counts on an axis, is refused when the list is decoded. A chord that would press the hotkey, Right Option by default, is refused, because the keyboard is hardware to macOS and the app's own tap would take the press. Text the layout cannot type is refused whole, not typed up to the first character no key can reach. An action that stops part way, because focus moved or the helper went quiet, is reported with how much of it landed and with the actions performed before it, since none of that can be taken back. A click that stops part way releases every button on the way out and, if that release fails too, says a button may be left held. Ctrl-C stops the run and releases every key before the command exits; a release that fails is reported, so a key that may be left held is named.
+A list that cannot be performed whole is refused before any key goes down, so nothing is typed. `activateApp`, `openURL`, `runShortcut`, and `pipe` are refused by name, because neither the keyboard nor the mouse can perform them, and a `click` of zero or more than three times, or a `scroll` beyond 1000 counts on an axis, is refused when the list is decoded. A chord that would press the hotkey is refused, because the keyboard is hardware to macOS and the app's own tap would take the press. Text the layout cannot type is refused whole, not typed up to the first character no key can reach. An action that stops part way, because focus moved or the helper went quiet, is reported with how much of it landed and with the actions performed before it, since none of that can be taken back. A click that stops part way releases every button on the way out and, if that release fails too, says a button may be left held. Ctrl-C stops the run and releases every key before the command exits; a release that fails is reported, so a key that may be left held is named.
 
 It needs the helper installed (`scripts/keyboard-helper install`, under "The keyboard helper" below) and, like `dext type --through helper`, no sudo. Typing needs no Accessibility: which app is in front is read from the workspace, and the cursor's position, which the mouse reads back after every move, is readable without permission. `clickElement` is the one action that needs it, because it searches the app's Accessibility tree.
 
 ## Dictation
 
-The milestone 1 loop is closed: hold Right Option, speak, release, and what was said is typed into the app in front. The app runs it, and so does the CLI:
+The milestone 1 loop is closed: hold the hotkey, speak, release, and what was said is typed into the app in front. The app runs it, and so does the CLI:
 
     make cli
     scripts/keyboard-helper install
-    .build/debug/lowtalker dictate    # hold Right Option, speak, release, until interrupted
+    .build/debug/lowtalker dictate    # hold the hotkey, speak, release, until interrupted
 
 The model is loaded before the tap goes up, so `ready: hold rightOption to dictate` on stdout means the next press will type. Key-down marks where the utterance begins on the audio ring and reads which app is in front, and does nothing else, because it runs inside the tap's callback where a slow handler is what makes macOS switch the tap off; key-up ends the mark, and the clip is heard, routed, and typed off that thread. Each press prints one line for the session, which is how many words were heard, how long after key-up, how many actions went into which app, and then the text itself, followed by the executor's line for every action performed, the `typed 21 characters into com.apple.TextEdit, key-up to acknowledged 312 ms` shape from `act` above. Sessions are heard and typed on one serial queue, so two presses in quick succession type in the order they were spoken however long the engine takes on either. Like `act`, this needs the helper installed and no sudo, and macOS charges a terminal command's tap and microphone to the terminal, so it runs under the terminal's own Input Monitoring, Accessibility and microphone grants: the loop can be proven on a Mac before the app has grants of its own.
 
@@ -399,16 +411,20 @@ The shipped app bundles the helper and a plist at `Contents/Library/LaunchDaemon
 
 `scripts/keyboard-helper` is the dev and agent path, which needs no approval from anyone:
 
-    scripts/keyboard-helper install    # register .build/debug/lowtalker-keyboardd as a LaunchDaemon
-    scripts/keyboard-helper uninstall  # stop it and remove the job
-    scripts/keyboard-helper state      # what launchd says about the job
-    scripts/keyboard-helper log        # what the helper has said in the last ten minutes
+    scripts/keyboard-helper install [flavor]    # register .build/debug/lowtalker-keyboardd as a LaunchDaemon
+    scripts/keyboard-helper uninstall [flavor]  # stop it and remove the job
+    scripts/keyboard-helper state [flavor]      # what launchd says about the job
+    scripts/keyboard-helper log [flavor]        # what the helper has said in the last ten minutes
 
-`install` needs `make helper` to have run, refuses an ad hoc-signed helper, writes `/Library/LaunchDaemons/com.lowtalker.keyboardd.dev.plist` with KeepAlive, and bootstraps it with sudo. `uninstall` boots it out and removes the plist; the helper releases any keys and stops the daemon it started. `log` reads the unified log for subsystem `com.lowtalker.keyboardd`.
+`flavor` is `release` or `development`, and defaults to `development` — this tree is the development copy, and reaching into the installed copy's job is a thing to ask for by name.
 
-The two jobs carry two labels, `com.lowtalker.keyboardd` for the app's and `com.lowtalker.keyboardd.dev` for the dev one, and serve one Mach service name. The labels are two because Background Task Management files jobs by label: when the dev job was installed under the app's label and the app was then launched, BTM treated the app's registration as an update of the dev record, the app's daemon was bound to the dev plist's path, launchd logged "Invalid path: Contents/MacOS/lowtalker-keyboardd" and it never spawned, and the approval was inherited instead of asked. BTM drops a record whose plist has been deleted about a minute later, on its own.
+`install` needs `make helper` to have run, refuses an ad hoc-signed helper, writes `/Library/LaunchDaemons/<label>.plist` with KeepAlive, and bootstraps it with sudo. It passes `--flavor` in `ProgramArguments`, because the binary is the same program in both installations and has no other way to know which one it serves; a helper given no flavor refuses to start and says so. `uninstall` boots it out and removes the plist; the helper releases any keys and stops the daemon it started. `log` reads the unified log for that installation's subsystem.
 
-Only one job holds the Mach service at a time, and launchd does not make the loser loud. Measured with a probe job: the second claimant bootstraps with exit 0, runs, and never gets the endpoint, and launchd writes one debug line ("already exists and is owned by"). So `install` reads back whether its job got the name and, if another job holds it, tears its own job down and exits 1 saying so. When the app's helper is registered and approved, `scripts/keyboard-helper install` therefore refuses. The app now reads the same thing in the other direction: it asks launchd who holds the Mach service, sharpened by `SMAppService`'s status, the one answer only it can get. So an app whose helper is enabled while the dev job holds the name no longer reports the helper as enabled while typing nothing; it reads "Keyboard helper: registered, but the development job holds the service", names `com.lowtalker.keyboardd.dev` as the job that has it, and gives `scripts/keyboard-helper uninstall` as the step. "What is left to set up" below is that reading in full. A helper started by hand is a third claimant on the name and looks like neither job: a `.build/debug/lowtalker-keyboardd` left running from a terminal beside the launchd-owned one is what an `NSCocoaErrorDomain 4099` on the app's first keystroke turned out to be, and killing the hand-launched copy is the whole of the fix, nothing having been wrong with the typing path.
+Within one installation the launchd label and the Mach service carry one name — `com.lowtalker.keyboardd` for the release copy, `com.lowtalker.keyboardd.dev` for the development one — and the two installations share neither. Nothing is shared, which is what lets both run at once; and one name per installation is what makes a collision inside one of them loud. Two jobs under one label are refused at bootstrap: exit 5, "Bootstrap failed: Input/output error", and no job is added. So `scripts/keyboard-helper install release` on a Mac whose LowTalker.app has already registered its helper fails where it should, rather than adding a second daemon.
+
+Both halves of that were measured. Background Task Management files jobs by label: when a dev job was installed under the app's label and the app was then launched, BTM treated the app's registration as an update of the dev record, the app's daemon was bound to the dev plist's path, launchd logged "Invalid path: Contents/MacOS/lowtalker-keyboardd" and it never spawned, and the approval was inherited instead of asked. BTM drops a record whose plist has been deleted about a minute later, on its own. The other half is two *different* labels naming one Mach service, which is what this repo used to do: measured with a probe job, the second claimant bootstraps with exit 0, runs, and simply never gets the endpoint, while launchd writes one debug line ("already exists and is owned by") that nobody reads. A helper sitting unreachable while logging that it was listening is what that cost, and it is why the label and the service are now one name per installation.
+
+What no label governs is a helper started by hand from a terminal: it holds the service with no job for launchd to refuse. So `install` still reads back whether its job got the name and, if it did not, tears its own job down and exits 1 saying so. The app reads the same thing in the other direction, asking launchd who holds the Mach service and sharpening that with `SMAppService`'s status, the one answer only it can get. A `.build/debug/lowtalker-keyboardd` left running from a terminal beside the launchd-owned one is what an `NSCocoaErrorDomain 4099` on the app's first keystroke turned out to be, and killing the hand-launched copy is the whole of the fix, nothing having been wrong with the typing path.
 
 ### Typing through the helper by hand
 
@@ -525,12 +541,10 @@ On inferno.local (Mac16,6, macOS 26.5.1, System Integrity Protection enabled): `
 prints everything that must hold before low-talker can type, read off this Mac now, with the step for whatever is missing indented under it. On this Mac today:
 
     Driver extension: running
-    Keyboard helper: registered, but the development job holds the service
-      Another launchd job holds com.lowtalker.keyboardd, so the app's
-      helper never got the name and answers nothing, however healthy it
-      looks. That job is com.lowtalker.keyboardd.dev, the
-      development one. Remove it, then launch LowTalker again:
-          scripts/keyboard-helper uninstall
+    Keyboard helper: not registered
+      launchd holds no job for the helper. Launch LowTalker once - it
+      registers on every launch - and turn it on in
+      System Settings > General > Login Items & Extensions if it asks.
     Keyboard Setup Assistant: answered for this keyboard
 
 and, on a Mac whose helper has not started yet, that last row instead reads:
@@ -578,17 +592,18 @@ Which is the point of reading the helper first. The answer is filed *by* the hel
 
 A helper whose standing could not be read counts as not answering. That is not the failure going quiet: it is in the helper's own row, which reads `could not be read` and carries the reason, and it is the only honest answer to "has the helper already had its chance" when nobody could look.
 
-The helper's row is read from two sources, because neither alone is enough. `launchctl print system/com.lowtalker.keyboardd` says which job actually holds the Mach service, and it takes no sudo, which is what makes the check possible from the app at all: a job that holds the service names it in an `endpoints` block, and a job that asked and lost simply has no such block, launchd not making the loser loud. `SMAppService.status` says whether this app's own registration is approved, and only the app can ask it — a CLI has no registration of its own, so `lowtalker onboard` passes nothing and gets launchd's answer unsharpened. The second source is needed for one thing: telling apart two states launchd renders identically, a helper that was never registered and a helper that is registered and waiting for its approval click. launchd holds no job in either case, and the two want opposite steps. launchd gets asked twice when the first answer is that the app's job lost the name, because that answer says nothing about who took it. The second reading is of the development job's own label, and it is what earns the right to name `com.lowtalker.keyboardd.dev` as the holder. A development record that cannot be read fails the whole reading rather than answering it.
+The helper's row is read from two sources, because neither alone is enough. `launchctl print system/<label>`, under this installation's own label, says which job actually holds the Mach service, and it takes no sudo, which is what makes the check possible from the app at all: a job that holds the service names it in an `endpoints` block, and a job that asked and lost simply has no such block, launchd not making the loser loud. `SMAppService.status` says whether this app's own registration is approved, and only the app can ask it — a CLI has no registration of its own, so `lowtalker onboard` passes nothing and gets launchd's answer unsharpened. The second source is needed for one thing: telling apart two states launchd renders identically, a helper that was never registered and a helper that is registered and waiting for its approval click. launchd holds no job in either case, and the two want opposite steps.
 
-So the helper's row reads one of five things:
+launchd used to be asked a second time, under the development job's label, so that a lost name could be reported as the development copy having taken it. That reading is gone with the arrangement that made it possible: the two installations no longer share a service, so the other copy can no longer be the holder.
+
+So the helper's row reads one of four things:
 
 - `answering` means the app's job holds the service, and there is nothing to do.
-- `registered, but the development job holds the service` names `com.lowtalker.keyboardd.dev` as the job that has it and says to run `scripts/keyboard-helper uninstall`, then launch LowTalker again.
-- `registered, but another job holds the service` is the same lost name, but the holder is neither the app's own job nor the development one, so the app cannot name it. Its step says to find that job's plist by searching /Library/LaunchDaemons for the service name, and gives no removal command.
+- `registered, but another job holds the service` is a lost name whose holder the app cannot identify. With one label per installation, launchd refuses a second job under that label at bootstrap, so the holder is something no label governs — in practice a helper left running from a terminal. Its step says to find that job's plist by searching /Library/LaunchDaemons for the service name, and gives no removal command.
 - `not registered` says to launch LowTalker once, since it registers on every launch.
 - `waiting for approval in Login Items & Extensions` says to turn LowTalker on in System Settings > General > Login Items & Extensions.
 
-The second of those is the case the app could not see before, and it is what this Mac is in right now: `SMAppService.status` returns `.enabled`, raw value 1, while the dev job `com.lowtalker.keyboardd.dev` holds the Mach service. `lowtalker onboard` and the menu both read `Keyboard helper: registered, but the development job holds the service`, name the dev job, and give the command that removes it, which is the output above.
+The third of those is what this Mac is in right now for the development copy: launchd holds no job under `com.lowtalker.keyboardd.dev`, so `lowtalker onboard` and the menu both read `Keyboard helper: not registered` and say to launch the app once, which is the output above.
 
 The app logs every reading it takes, so an agent can read back what the menu is showing without a screen:
 

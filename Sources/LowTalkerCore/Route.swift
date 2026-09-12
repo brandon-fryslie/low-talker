@@ -86,6 +86,12 @@ public struct Route: Hashable, Sendable, CustomStringConvertible {
 public struct Router: Hashable, Sendable {
     public let routes: [Route]
 
+    /// Speak, and the words are typed wherever the focus is - the whole of what a mode
+    /// that names no routes does. Named here, beside the route it is made of, so the
+    /// default mode and a config file with no `routes` key mean it by one name instead
+    /// of each assembling it. [LAW:one-source-of-truth]
+    public static let dictation = Router(routes: [.dictation])
+
     public init(routes: [Route]) {
         self.routes = routes
     }

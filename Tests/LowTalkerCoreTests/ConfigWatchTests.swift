@@ -1,3 +1,4 @@
+import Flavors
 import Foundation
 import LowTalkerCore
 import Testing
@@ -25,8 +26,29 @@ import Testing
 
     static let somewhere = URL(filePath: "/tmp/low-talker-test/config.toml")
 
+    /// What a save does to the running config is the same on either installation, so
+    /// these all read as the release copy and say so once here. A reading is assembled
+    /// through `reading(_:at:)` and `nothing(at:)` rather than case by case, so no test
+    /// can pair a file with the other copy's flavor and pin an arrangement that cannot
+    /// arise. [LAW:one-source-of-truth]
+    static let flavor = Flavor.release
+
+    static func config(_ toml: String) throws(ConfigError) -> Config {
+        try Config(toml: toml, flavor: flavor)
+    }
+
+    /// A reading that found a file.
+    static func reading(_ toml: String, at url: URL) throws -> Config.Loaded {
+        .file(try config(toml), at: url, flavor: flavor)
+    }
+
+    /// A reading that found none, so the defaults apply.
+    static func nothing(at url: URL) -> Config.Loaded {
+        .noFile(at: url, flavor: flavor)
+    }
+
     static func running(_ toml: String) throws -> Config.Reload {
-        .adopted(.file(try Config(toml: toml), at: somewhere))
+        .adopted(try reading(toml, at: somewhere))
     }
 
     @Test func aReadingThatSaysWhatTheLastOneSaidIsNotReported() throws {
@@ -36,7 +58,7 @@ import Testing
 
     @Test func aDifferentConfigIsAdopted() throws {
         let last = try Self.running(Self.onRightCommand)
-        let saved = Config.Loaded.file(try Config(toml: Self.onLeftControl), at: Self.somewhere)
+        let saved = try Self.reading(Self.onLeftControl, at: Self.somewhere)
         #expect(last.next(reading: .success(saved)) == .adopted(saved))
     }
 
@@ -70,9 +92,9 @@ import Testing
     /// means the defaults rather than as a config that happens to equal them.
     @Test func theFileDisappearingIsAdoptedAsTheDefaults() throws {
         let last = try Self.running(Self.onRightCommand)
-        let gone = Config.Loaded.noFile(at: Self.somewhere)
+        let gone = Self.nothing(at: Self.somewhere)
         #expect(last.next(reading: .success(gone)) == .adopted(gone))
-        #expect(last.next(reading: .success(gone))?.running.config == .default)
+        #expect(last.next(reading: .success(gone))?.running.config == Config.default(for: Self.flavor))
     }
 
     // MARK: - Against a real file
@@ -108,10 +130,10 @@ import Testing
     static func watching(_ file: URL, settlingOn settling: String) async throws
         -> (running: Config.Loaded, reloads: AsyncStream<Config.Reload>.AsyncIterator)
     {
-        var reloads = Config.reloads(after: try Config.load(from: file)).makeAsyncIterator()
+        var reloads = Config.reloads(after: try Config.load(file, for: Self.flavor)).makeAsyncIterator()
         try settling.write(to: file, atomically: true, encoding: .utf8)
         let settled = try #require(await reloads.next())
-        #expect(settled == .adopted(.file(try Config(toml: settling), at: file)))
+        #expect(settled == .adopted(try Self.reading(settling, at: file)))
         return (settled.running, reloads)
     }
 
@@ -124,7 +146,7 @@ import Testing
         try Self.onLeftControl.write(to: file, atomically: true, encoding: .utf8)
 
         let reload = try #require(await reloads.next())
-        #expect(reload == .adopted(.file(try Config(toml: Self.onLeftControl), at: file)))
+        #expect(reload == .adopted(try Self.reading(Self.onLeftControl, at: file)))
         #expect(reload.running.config.chords == [KeyChord(modifiers: .leftControl)])
     }
 
@@ -162,7 +184,7 @@ import Testing
         try "not a config".write(to: directory.appending(path: "notes.txt"), atomically: true, encoding: .utf8)
         try Self.onLeftControl.write(to: file, atomically: true, encoding: .utf8)
 
-        #expect(await reloads.next() == .adopted(.file(try Config(toml: Self.onLeftControl), at: file)))
+        #expect(await reloads.next() == .adopted(try Self.reading(Self.onLeftControl, at: file)))
     }
 
     /// The config directory does not exist when the watch starts, which is where a watch
@@ -172,18 +194,18 @@ import Testing
     func aConfigDirectoryThatDoesNotExistYetIsStillWatched() async throws {
         let (directory, file) = try Self.scratch(existing: false)
         defer { try? FileManager.default.removeItem(at: directory.deletingLastPathComponent()) }
-        let started = try Config.load(from: file)
-        #expect(started == .noFile(at: file))
+        let started = try Config.load(file, for: Self.flavor)
+        #expect(started == Self.nothing(at: file))
 
         var reloads = Config.reloads(after: started).makeAsyncIterator()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Self.onRightCommand.write(to: file, atomically: true, encoding: .utf8)
-        #expect(await reloads.next() == .adopted(.file(try Config(toml: Self.onRightCommand), at: file)))
+        #expect(await reloads.next() == .adopted(try Self.reading(Self.onRightCommand, at: file)))
 
         // The edit that carries the claim: the watch went up on a directory that was not
         // there, and is still hearing saves in the one that replaced it.
         try Self.onLeftControl.write(to: file, atomically: true, encoding: .utf8)
-        #expect(await reloads.next() == .adopted(.file(try Config(toml: Self.onLeftControl), at: file)))
+        #expect(await reloads.next() == .adopted(try Self.reading(Self.onLeftControl, at: file)))
     }
 
     /// The config directory is taken away under a running watch and made again - what a
@@ -209,7 +231,7 @@ import Testing
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Self.onLeftControl.write(to: file, atomically: true, encoding: .utf8)
 
-        let adopted = Config.Reload.adopted(.file(try Config(toml: Self.onLeftControl), at: file))
+        let adopted = Config.Reload.adopted(try Self.reading(Self.onLeftControl, at: file))
         var reload: Config.Reload
         repeat {
             reload = try #require(await reloads.next())
@@ -228,7 +250,7 @@ import Testing
         try FileManager.default.removeItem(at: file)
 
         let reload = try #require(await reloads.next())
-        #expect(reload == .adopted(.noFile(at: file)))
-        #expect(reload.running.config == .default)
+        #expect(reload == .adopted(Self.nothing(at: file)))
+        #expect(reload.running.config == Config.default(for: Self.flavor))
     }
 }

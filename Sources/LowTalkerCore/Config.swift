@@ -34,8 +34,10 @@ public struct Config: Hashable, Sendable {
         self.modes = modes
     }
 
-    /// What the app runs on when no file says otherwise: dictation, on the default
-    /// chord, with the default model, and the microphone shut between presses.
+    /// What the app runs on when no file says otherwise: dictation, on this
+    /// installation's default chord, with the default model, and the microphone shut
+    /// between presses. Per installation, because the hotkey is - the two copies must
+    /// not listen for one chord.
     ///
     /// [LAW:one-source-of-truth] The model and the modes are the values their own owners
     /// already name, so the no-file behaviour cannot drift from the behaviour those owners
@@ -43,8 +45,6 @@ public struct Config: Hashable, Sendable {
     /// is what it means: with no file to ask for anything, the microphone is closed. The
     /// force-try says the author vouches for this one: a default that does not hold
     /// together is a bug in this file, and it traps where it is written.
-    /// What the app runs on when no file says otherwise. Per installation, because the
-    /// hotkey is: the two copies must not listen for one chord. [LAW:one-source-of-truth]
     public static func `default`(for flavor: Flavor) -> Config {
         try! Config(model: .default, microphone: .shut, modes: [.dictation(for: flavor)])
     }

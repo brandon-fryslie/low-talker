@@ -1,4 +1,5 @@
 import Dictation
+import Flavors
 import Foundation
 import KeyboardLayout
 import LowTalkerCore
@@ -18,7 +19,7 @@ private struct BadBuffer: Error {}
 final class Rig {
     static let us = try! KeyboardLayout.named("com.apple.keylayout.US")
     static let textEdit = BundleID(rawValue: "com.apple.TextEdit")
-    static let rightOption = Hotkey.defaultChord
+    static let rightOption = Hotkey.defaultChord(for: .release)
     /// The executor needs a pointer; a dictation session must never post to one, so the
     /// screen behind it answers nothing a report could be aimed at.
     @MainActor static let unusedPointer = Pointer(

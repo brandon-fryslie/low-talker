@@ -39,11 +39,12 @@ struct DictateCommand: AsyncParsableCommand {
         // Watched before the tap goes up, so no key can be down when an interrupt lands.
         let interrupt = Interrupt.watched()
         let helper = HelperConnection(flavor: installation.flavor)
-        let chords: Set<KeyChord> = [Hotkey.defaultChord]
+        let chord = Hotkey.defaultChord(for: installation.flavor)
+        let chords: Set<KeyChord> = [chord]
         let dictation = Dictation(
             capture: capture,
             transcriber: { transcriber },
-            router: Router(routes: [.dictation]),
+            router: .dictation,
             executor: Executor.guarding(keyboard: helper.keyboard, mouse: helper.mouse, interrupt: interrupt, hotkeys: chords),
             report: { outcome in
                 switch outcome {
@@ -57,7 +58,7 @@ struct DictateCommand: AsyncParsableCommand {
         )
         let hotkey = Hotkey(chords: chords)
         try hotkey.start(dictation.press) { print("\($0)") }
-        print("ready: hold \(Hotkey.defaultChord.spelled) to dictate")
+        print("ready: hold \(chord.spelled) to dictate")
         // The tap runs on the main run loop; this keeps the command on it until the
         // operator's interrupt, which is read rather than let end the process, so a
         // session it lands in still releases its keys.
