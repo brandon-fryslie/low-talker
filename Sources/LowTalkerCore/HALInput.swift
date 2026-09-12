@@ -341,7 +341,11 @@ final class HALInput: PreparedInput {
         }
     }
 
-    static func defaultInput() throws -> AudioObjectID {
+    /// Which device a press would open. Nonisolated because reading it touches nothing this
+    /// class owns, and `MicrophoneIndicator` asks the same question off the main actor: what
+    /// the indicator shows is a fact about that device, so the two must not be free to
+    /// disagree about which one it is. [LAW:one-source-of-truth]
+    nonisolated static func defaultInput() throws -> AudioObjectID {
         var device = AudioObjectID(0)
         var size = UInt32(MemoryLayout<AudioObjectID>.size)
         var address = AudioObjectPropertyAddress(

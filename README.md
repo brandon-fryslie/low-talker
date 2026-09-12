@@ -121,6 +121,31 @@ To see the first-launch prompt again, forget the app's decision and relaunch:
 
     tccutil reset Microphone ltd.deadgrass.low-talker
 
+## The microphone indicator
+
+    swift run lowtalker mic indicator              # dark at rest, lit during the hold, dark after
+    swift run lowtalker mic indicator --hold 5000  # hold the press for five seconds instead of one
+
+checks the three things the microphone work promises about the menu bar, which are facts about a device and no test in the repo can reach: every `AudioCapture` test runs against fake hardware, and CI has no microphone. It asks for microphone authorization, prompting on a Mac that has never been asked; reads the indicator; starts capture with the resting mode pinned to `shut` whatever the config file says; reads the indicator again, with a microphone readied and no press open, which is the reading called "at rest"; opens a session, which is a press; waits out `--hold`, in milliseconds, 1000 by default and required positive; reads the indicator during the hold; ends the session; and reads it after. The promise is dark at rest, lit during the hold, dark after, and when it held the whole output is one line:
+
+    at rest: dark, during the hold: lit, after the hold: dark
+
+The exit status is the verdict: 0 when all three readings are what was promised, 1 when any of them is not. A broken reading adds a line naming the moment, what was promised there, and what that particular fault means, because the three break for three different reasons.
+
+What it reads is `kAudioDevicePropertyDeviceIsRunningSomewhere` on the default input device, the device a press opens. It is true while any process on this Mac has that device running, and it is the property the menu-bar microphone indicator and the privacy report follow. It is not the app's own bookkeeping, which is exactly why it can answer the question — `AudioCapture.state` says only what capture believes.
+
+For the same reason a default input device already running before anything has been readied is a refusal rather than a reading. The property says only that the device is running somewhere, so nothing can tell this process's hold from whatever had it first; the command takes no readings at all and names the command that identifies the holder:
+
+    /usr/bin/log show --last 5m --predicate 'eventMessage CONTAINS "PublishRecordingClientInfo: Report client"'
+
+spelled `/usr/bin/log` because `log` is a zsh builtin and zsh is this Mac's shell. On a Mac with no input device the reading throws — "this Mac has no default input device" — rather than reporting a dark indicator; that arm has not been run on a Mac without an input device.
+
+It is not part of `make test` and must not become part of it: CI has no microphone, and a unit test that faked the property would be a second fake wearing a hardware check's name. The unit tests cover the report alone, the table of what is promised at each moment and the lines it prints, and nothing in them fakes the property. The command says what the device did, not what was heard; `lowtalker record` is the command that says whether the audio came back whole. Before it existed these promises were checked with binaries written for one run and then deleted, and what survived was a sentence in a commit message; one such message claimed presses came back whole while its own last line admitted none had run on a Mac.
+
+Measured on an M2 Max with the built-in "MacBook Pro Microphone" as the default input: dark at rest, lit during the hold, dark after, exit 0, on five runs — four at the default 1000 ms hold and one at 5000 ms. Three of those ran back to back and each one's refusal check passed at the start, so the device was read as dark within milliseconds of the previous run's exit: it goes dark as the hold ends, with no settling delay for the reading to wait out. A screenshot of the menu bar taken three seconds into a five-second hold shows the orange microphone dot, and one taken after that hold shows it gone, so the property was cross-checked by eye rather than only through itself. The at-rest reading is the first measurement of a claim the code had only asserted, that readying a microphone — finding the component, binding the device, `AudioUnitInitialize` — opens no device and lights nothing.
+
+The first four attempts refused, correctly, and each refusal was true. coreaudiod named the holders in turn: first LowTalker.app itself, a build from Sep 8 predating the change that taught the microphone to close, holding the microphone while idle, which is the original complaint this whole body of work exists to fix, caught live by the instrument's first run; then a separate voice tool running on the machine; then macOS's own Sound settings pane, whose input-level meter holds the microphone for as long as System Settings is open on it.
+
 ## Hotkey
 
     swift run lowtalker hotkey                      # print each press of Right Option until interrupted
