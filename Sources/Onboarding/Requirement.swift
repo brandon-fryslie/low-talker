@@ -267,14 +267,10 @@ public enum HelperStanding: Sendable, Hashable, CaseIterable {
     ///
     /// Deliberately not "is the app's helper answering". The helper files this keyboard's
     /// answer with Keyboard Setup Assistant in its first moments, before it reaches the
-    /// daemon and long before it can win or lose a Mach service name - so a helper that
-    /// took the name and one that lost it to the development job have both already had
-    /// their chance to file, and the assistant's row is asking about the chance and not
-    /// about the name. Reading it as `holdingTheService` alone sent a Mac running the
-    /// development helper to wait for a filing that had already happened and already
-    /// failed.
+    /// daemon and long before it can win or lose a Mach service name, so the assistant's
+    /// row is asking about that chance and not about the name.
     ///
-    /// A holder nobody could identify is not one of them: `anotherJobHoldsTheService`
+    /// A holder nobody could identify has had no such chance: `anotherJobHoldsTheService`
     /// means some job took the name and this Mac could not say whose, so there is no
     /// ground to claim a helper ran. [LAW:no-silent-failure] Written as an exhaustive
     /// switch with no `default`, so a standing added later has to answer this rather than

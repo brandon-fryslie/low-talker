@@ -161,7 +161,7 @@ The first four attempts refused, correctly, and each refusal was true. coreaudio
     swift run lowtalker hotkey                      # print each press of the hotkey until interrupted
     swift run lowtalker hotkey --tap-threshold 400  # a press under 400 ms is a tap
 
-Each press prints `began` as the key goes down. A release after the threshold (250 ms by default) prints a line beginning `ended (hold)`; a release before it is a tap, which leaves listening on until the next press of the key prints one beginning `ended (tap)`. Each `ended` line carries `lapses`, how often macOS has switched the tap off and it was switched back on; a press during a lapse reaches the frontmost app and is not reported, and a lapse ends any press in progress. While the tap is on, a press of the chord never reaches the frontmost app: its down and up are swallowed. Pressed with another modifier already held it is a different chord and passes through, and Left Option is untouched.
+Each press prints `began` as the key goes down. A release after the threshold (250 ms by default) prints a line beginning `ended (hold)`; a release before it is a tap, which leaves listening on until the next press of the key prints one beginning `ended (tap)`. Each `ended` line carries `lapses`, how often macOS has switched the tap off and it was switched back on; a press during a lapse reaches the frontmost app and is not reported, and a lapse ends any press in progress. While the tap is on, the key that completes the chord never reaches the frontmost app: its down and up are swallowed. Any modifier held to make the chord — Right Command, for the development installation — is not, since it completed nothing on its way down. Pressed with another modifier already held it is a different chord and passes through, and Left Option is untouched.
 
 Which chord that is depends on the installation, and the CLI defaults to the development one: `lowtalker hotkey` watches Right Option and Right Command together unless `--flavor release` is passed, in which case it watches Right Option alone. Every command that reaches a helper or reads a config takes the same `--flavor`, and defaults the same way, because this tree is the development copy.
 
@@ -172,7 +172,7 @@ The tap needs Input Monitoring and Accessibility. macOS charges a terminal comma
     make cli
     .build/debug/lowtalker config check
 
-reads `~/.config/low-talker/config.toml` and prints what the app would run with. It starts nothing. `--path` reads some other file instead, which is how a file is checked before it is installed. No file at all is not an error: the app runs on the defaults, dictation on this installation's own chord with the default model. A file that exists but cannot be read, or cannot be understood, is an error and is never quietly replaced by the defaults, since a config the user wrote and the app silently ignored is worse than one it refuses.
+reads this installation's file in `~/.config/low-talker` — `config.dev.toml` for the copy built from this tree, which is what the command defaults to, and `config.toml` for the installed one under `--flavor release` — and prints what the app would run with. It starts nothing. `--path` reads some other file instead, which is how a file is checked before it is installed. No file at all is not an error: the app runs on the defaults, dictation on this installation's own chord with the default model. A file that exists but cannot be read, or cannot be understood, is an error and is never quietly replaced by the defaults, since a config the user wrote and the app silently ignored is worse than one it refuses.
 
 The file names a `model`, a model folder name such as `base.en`, an optional `[microphone]` table saying what the device does between presses, and an array of `[[modes]]` tables. Each mode takes a `name`, a `chord`, an optional `vocabulary` of terms, and an optional `routes`.
 
@@ -199,7 +199,7 @@ A file can also parse and still say something nobody meant, and those gaps are r
 
 Every heading is printed every time, so a mode with no vocabulary shows an empty `vocabulary:` rather than leaving the reader to wonder whether the key was read and ignored. On the file above, with a mode inserting into an app this Mac does not have and a mode with no routes added after it:
 
-    /Users/you/.config/low-talker/config.toml
+    /Users/you/.config/low-talker/config.dev.toml
 
     model: base.en
     microphone: open only while you dictate
@@ -244,7 +244,7 @@ prints the same report and then stays up, printing it again each time the file i
 A save that cannot be understood does not disturb what is running. It is named the way `check` names it, followed by the file still in force:
 
     refused: line 2 is not TOML: Error while parsing table header: expected ']', saw '\n'
-    still running: /Users/you/.config/low-talker/config.toml
+    still running: /Users/you/.config/low-talker/config.dev.toml
 
 Which is the whole point of reloading this way rather than re-reading the file and taking whatever comes back. A config half way through being typed is refused a hundred times over the course of an edit, and if a refusal cost the author their settings the feature would be worse than not having it. The defaults are reached by deleting the file, never by mistyping it.
 
@@ -277,7 +277,7 @@ The milestone 1 loop is closed: hold the hotkey, speak, release, and what was sa
     scripts/keyboard-helper install
     .build/debug/lowtalker dictate    # hold the hotkey, speak, release, until interrupted
 
-The model is loaded before the tap goes up, so `ready: hold rightOption to dictate` on stdout means the next press will type. Key-down marks where the utterance begins on the audio ring and reads which app is in front, and does nothing else, because it runs inside the tap's callback where a slow handler is what makes macOS switch the tap off; key-up ends the mark, and the clip is heard, routed, and typed off that thread. Each press prints one line for the session, which is how many words were heard, how long after key-up, how many actions went into which app, and then the text itself, followed by the executor's line for every action performed, the `typed 21 characters into com.apple.TextEdit, key-up to acknowledged 312 ms` shape from `act` above. Sessions are heard and typed on one serial queue, so two presses in quick succession type in the order they were spoken however long the engine takes on either. Like `act`, this needs the helper installed and no sudo, and macOS charges a terminal command's tap and microphone to the terminal, so it runs under the terminal's own Input Monitoring, Accessibility and microphone grants: the loop can be proven on a Mac before the app has grants of its own.
+The model is loaded before the tap goes up, so `ready: hold rightOption+rightCommand to dictate` on stdout — this installation's own chord, the development one by default — means the next press will type. Key-down marks where the utterance begins on the audio ring and reads which app is in front, and does nothing else, because it runs inside the tap's callback where a slow handler is what makes macOS switch the tap off; key-up ends the mark, and the clip is heard, routed, and typed off that thread. Each press prints one line for the session, which is how many words were heard, how long after key-up, how many actions went into which app, and then the text itself, followed by the executor's line for every action performed, the `typed 21 characters into com.apple.TextEdit, key-up to acknowledged 312 ms` shape from `act` above. Sessions are heard and typed on one serial queue, so two presses in quick succession type in the order they were spoken however long the engine takes on either. Like `act`, this needs the helper installed and no sudo, and macOS charges a terminal command's tap and microphone to the terminal, so it runs under the terminal's own Input Monitoring, Accessibility and microphone grants: the loop can be proven on a Mac before the app has grants of its own.
 
 The app wires the same loop to the real microphone, the WhisperKit engine and the root keyboard helper, and writes each session to the unified log under the `dictation` category rather than to stdout. On this Mac it launched, loaded `large-v3-v20240930_turbo_632MB` and armed the hotkey, the model ready about 2.7 seconds after launch; two utterances spoken at the microphone were transcribed and typed into TextEdit, 26 characters and 24 characters, 649 ms and 668 ms after key-up. A separate run played a recorded fixture through the speakers for the microphone to hear and typed "Hello world, this is Low Talker." into TextEdit. Both times fall in the range the batch column of the table under "The latency harness" shows for the default model, and both are more than twice the 300 ms the loop is aiming at; getting under that is the encoder's problem, not this loop's.
 
@@ -599,9 +599,9 @@ launchd used to be asked a second time, under the development job's label, so th
 So the helper's row reads one of four things:
 
 - `answering` means the app's job holds the service, and there is nothing to do.
-- `registered, but another job holds the service` is a lost name whose holder the app cannot identify. With one label per installation, launchd refuses a second job under that label at bootstrap, so the holder is something no label governs — in practice a helper left running from a terminal. Its step says to find that job's plist by searching /Library/LaunchDaemons for the service name, and gives no removal command.
-- `not registered` says to launch LowTalker once, since it registers on every launch.
-- `waiting for approval in Login Items & Extensions` says to turn LowTalker on in System Settings > General > Login Items & Extensions.
+- `registered, but another job holds the service` is a lost name whose holder the app cannot identify. With one label per installation, launchd refuses a second job under that label at bootstrap, so the holder is something no label governs — in practice a helper left running from a terminal. Its step says so, and names `pgrep -fl lowtalker-keyboardd` as the way to find it; it sends nobody after a plist, because no launchd job can be the holder.
+- `not registered` says to launch this installation's app once, since it registers on every launch.
+- `waiting for approval in Login Items & Extensions` says to turn this installation on in System Settings > General > Login Items & Extensions.
 
 The third of those is what this Mac is in right now for the development copy: launchd holds no job under `com.lowtalker.keyboardd.dev`, so `lowtalker onboard` and the menu both read `Keyboard helper: not registered` and say to launch the app once, which is the output above.
 
