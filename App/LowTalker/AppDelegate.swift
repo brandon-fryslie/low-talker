@@ -159,20 +159,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// system prompt for the microphone here; macOS remembers the answer, so later
     /// launches ask nothing.
     ///
-    /// Nothing is listening when this returns. `capture.start` takes the grant and
-    /// watches the input device; the microphone itself opens on a press and shuts on the
-    /// release, which is what keeps the menu-bar indicator a record of use rather than of
-    /// how long the app has been running.
+    /// What the microphone is doing when this returns is the resting mode's to say, which
+    /// is the one thing the config decides here; `AudioCapture.start` is where that is
+    /// written down. [LAW:one-source-of-truth]
+    ///
+    /// A config that cannot be read stops the app listening rather than being answered
+    /// with the defaults, which is `ConfigError`'s own rule: "there is no config" and
+    /// "there is a config I could not read" are different facts, and running the second
+    /// one as the first would hold or release the microphone on settings its owner never
+    /// chose. The menu says what is wrong with it.
+    /// [LAW:no-silent-failure]
     private func listen() async {
         do {
-            try capture.start(try await MicrophonePermission().request().grant())
+            let config = try Config.load().config
+            try capture.start(try await MicrophonePermission().request().grant(), atRest: config.microphone)
             try hotkey.start { [unowned self] in dictation.press($0) } onLapse: { [unowned self] in report($0) }
             showHotkeyStatus("hold \(Hotkey.defaultChord.spelled) to dictate")
         } catch {
             // Whatever got as far as starting is put back: a tap that failed after
             // capture began would otherwise leave capture holding the grant and watching
             // the device with nothing able to press, under a menu saying dictation is off.
-            // Stopping is idempotent, so both failures leave by this one path.
+            // Stopping is idempotent, so every failure leaves by this one path.
             // [LAW:dataflow-not-control-flow]
             capture.stop()
             // [LAW:no-silent-failure] An app that cannot listen must say so on the
@@ -273,8 +280,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             log.notice("onboarding: \(requirement.name, privacy: .public): \(requirement.reads, privacy: .public)")
         }
 
+        // What the user's microphone is doing, on the surface the epic exists for: the
+        // menu-bar indicator says the device is open and only this says why, so a lit
+        // microphone on an idle Mac is either explained here or is a bug - and a dark one
+        // the config asked to hold open says so here too. [LAW:no-silent-failure]
+        let microphone = capture.doing
+        log.notice("microphone at rest: \(microphone, privacy: .public)")
+
         menu.removeAllItems()
         menu.addItem(readout("Whisper model: \(engineStatus)"))
+        menu.addItem(readout("Microphone: \(microphone)"))
         menu.addItem(readout("Hotkey: \(hotkeyStatus)"))
         // Every requirement, met or not, and its step under it as the lines it was
         // written in - one item per line, so nothing here wraps text the requirement

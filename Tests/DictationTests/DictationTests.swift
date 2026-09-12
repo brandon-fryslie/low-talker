@@ -48,10 +48,13 @@ final class Rig {
         transcriber: @escaping @Sendable @MainActor () async throws -> any Transcriber,
         router: Router = Router(routes: [.dictation]),
         retaining: TimeInterval = AudioCapture.defaultRetention,
+        atRest: MicrophoneAtRest = .shut,
         frontmost: @escaping @Sendable @MainActor () throws -> BundleID = { textEdit }
     ) throws {
         capture = AudioCapture(retaining: retaining, hardware: hardware, startingAt: Self.origin)
-        try capture.start(try MicrophonePermission(authority: Authorized()).current.grant())
+        // Shut between presses unless a test says otherwise, which is the loop the app
+        // runs when no config file asks for the microphone to be held.
+        try capture.start(try MicrophonePermission(authority: Authorized()).current.grant(), atRest: atRest)
         let (stream, feed) = AsyncStream.makeStream(of: Result<Dictation.Session, any Error>.self)
         reports = stream
         let keyboard = keyboard
@@ -70,8 +73,12 @@ final class Rig {
         )
     }
 
-    convenience init(hearing transcriber: FakeTranscriber, retaining: TimeInterval = AudioCapture.defaultRetention) throws {
-        try self.init(transcriber: { transcriber }, retaining: retaining)
+    convenience init(
+        hearing transcriber: FakeTranscriber,
+        retaining: TimeInterval = AudioCapture.defaultRetention,
+        atRest: MicrophoneAtRest = .shut
+    ) throws {
+        try self.init(transcriber: { transcriber }, retaining: retaining, atRest: atRest)
     }
 
     /// Audio captured from `now` on, stamped as the microphone would stamp it, into
@@ -81,10 +88,9 @@ final class Rig {
         now = now + .seconds(AudioClip.duration(for: samples.count))
     }
 
-    /// Time passing with the microphone shut. Nothing is appended, because between two
-    /// presses there is no engine to append to - the speaker may be talking, and that is
-    /// exactly what nothing is capturing. This is how a test says a key-down reached the
-    /// loop late: the stamp is taken before the wait and the press is made after it.
+    /// Time passing with nothing appended: the speaker may be talking, and that is exactly
+    /// what nothing is capturing. This is how a test says a key-down reached the loop late:
+    /// the stamp is taken before the wait and the press is made after it.
     func wait(_ duration: TimeInterval) {
         now = now + .seconds(duration)
     }
@@ -175,6 +181,19 @@ extension Result {
         rig.hold(speaking: [7, 8])
         _ = try await rig.session()
         #expect(engine.clips.map(\.samples) == [[1, 2], [7, 8]])
+    }
+
+    /// The other side of that trade, driven through the same loop: a microphone the resting
+    /// mode has held open since `start()` has audio behind the key, so a press made a word
+    /// into a sentence carries the word it was pressed a moment too late for. The test above
+    /// pins what `shut` gives the indicator up for; this one pins what `open` buys back.
+    @Test func aPressMadeWhileTheMicrophoneIsHeldOpenHearsTheWordsBeforeIt() async throws {
+        let engine = FakeTranscriber { _ in Transcript(typed: "") }
+        let rig = try Rig(hearing: engine, atRest: .open)
+        rig.speak([1, 2])
+        rig.hold(speaking: [7, 8])
+        _ = try await rig.session()
+        #expect(engine.clips.map(\.samples) == [[1, 2, 7, 8]])
     }
 
     /// The mark still comes from the key event's own stamp rather than from the moment

@@ -137,7 +137,7 @@ The tap needs Input Monitoring and Accessibility. macOS charges a terminal comma
 
 reads `~/.config/low-talker/config.toml` and prints what the app would run with. It starts nothing. `--path` reads some other file instead, which is how a file is checked before it is installed. No file at all is not an error: the app runs on the defaults, dictation on Right Option with the default model. A file that exists but cannot be read, or cannot be understood, is an error and is never quietly replaced by the defaults, since a config the user wrote and the app silently ignored is worse than one it refuses.
 
-The file names a `model`, a model folder name such as `base.en`, and an array of `[[modes]]` tables. Each mode takes a `name`, a `chord`, an optional `vocabulary` of terms, and an optional `routes`.
+The file names a `model`, a model folder name such as `base.en`, an optional `[microphone]` table saying what the device does between presses, and an array of `[[modes]]` tables. Each mode takes a `name`, a `chord`, an optional `vocabulary` of terms, and an optional `routes`.
 
     model = "base.en"
 
@@ -154,6 +154,8 @@ The file names a `model`, a model folder name such as `base.en`, and an array of
 
 A chord is its modifiers and, where one is wanted, a key code; it needs at least one key either way. A route's `insert` is either the word `"focus"`, whatever has focus when the route fires, or a table naming an app by bundle id. A key the schema has no place for is refused rather than ignored, so a typo is told rather than silently doing nothing.
 
+The `[microphone]` table is optional, and the file above leaves it out: with no table at all the microphone is `shut`, opened when the hotkey goes down and closed when it comes up, so the indicator in the menu bar is a record of what you dictated rather than of how long the app has been running. `at_rest = "open"` takes the trade the other way and holds the microphone from launch to quit. What that buys is the look-back, the 0.3 s of already-captured audio a press reaches back over, so a key pressed a syllable into a word still catches that word; what it costs is a lit indicator and a privacy report saying low-talker is listening on a Mac nobody has spoken to. There is no wake word yet, so `at_rest` is the only thing that holds the microphone open while nobody is dictating: it is in the file or it does not happen. The key is required once the heading is there. A `[microphone]` with nothing under it is refused as `microphone.at_rest is missing`, since a heading somebody wrote on purpose cannot be read as the default they were already getting, and any other word is refused with that word quoted back, as `microphone.at_rest: "sometimes" is not something the microphone does at rest`.
+
 Where a fault is reported depends on how far reading got. A file that is not TOML at all names the line reading stopped on. Anything that is TOML but wrong is named by its path in the document instead, as `modes[1].routes[0].when: "sometyme" is not something a route can match on` or `modes[1].chord is missing`, and carries no line number: decoding reports the path it was at, and the TOML library exposes source positions only for a parse error, not for a document that parsed. The path counts `[[modes]]` entries from zero, the way the file writes them, so the entry it names is one the reader can count to.
 
 A file can also parse and still say something nobody meant, and those gaps are reported too. A mode whose `routes` is an empty list claims nothing: it listens, and nothing it hears becomes anything. A mode with no `routes` key at all dictates instead. The two look almost alike in a file and mean different things, which is why the report tells them apart. A bundle id no app on this Mac answers to is reported as well; that one is checked against the machine rather than against the file, which is why it is the check command's own work and not something reading the file could ever have found.
@@ -163,6 +165,7 @@ Every heading is printed every time, so a mode with no vocabulary shows an empty
     /Users/you/.config/low-talker/config.toml
 
     model: base.en
+    microphone: open only while you dictate
 
     mode "dictation"
       chord: rightOption
@@ -199,7 +202,7 @@ The exit status is 0 when the file is understood and has no gaps, 1 when it cann
 
     .build/debug/lowtalker config watch
 
-prints the same report and then stays up, printing it again each time the file is saved into something different. Teaching the app itself to read the file this way is low-app-3sp.3's work; for now this is where a chord can be changed and seen to take effect.
+prints the same report and then stays up, printing it again each time the file is saved into something different. The app reads the file once, at launch, and a save after that does not reach it; teaching it to keep up with the file as it is edited is low-app-3sp.5's work, and for now this is where a chord can be changed and seen to take effect.
 
 A save that cannot be understood does not disturb what is running. It is named the way `check` names it, followed by the file still in force:
 

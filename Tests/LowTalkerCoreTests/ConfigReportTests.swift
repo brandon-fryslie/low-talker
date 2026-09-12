@@ -90,8 +90,8 @@ import Testing
     // MARK: - The report
 
     /// The whole of what the command prints for a file that is understood and has no
-    /// gaps: where it came from, the model, and every mode with its chord, its
-    /// vocabulary and its routes.
+    /// gaps: where it came from, the model, what the microphone does between presses, and
+    /// every mode with its chord, its vocabulary and its routes.
     @Test func theReportReadsTheFileBack() throws {
         let url = URL(filePath: "/tmp/low-talker-example.toml")
         let config = try Config(toml: """
@@ -104,6 +104,7 @@ import Testing
             /tmp/low-talker-example.toml
 
             model: \(ModelName.default)
+            microphone: \(MicrophoneAtRest.shut)
 
             mode "dictation"
               chord: rightOption

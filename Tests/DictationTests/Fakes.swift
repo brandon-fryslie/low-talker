@@ -30,11 +30,12 @@ final class FakeHardware: AudioHardware {
     /// empty exactly when the microphone is shut.
     private var open: Engine?
 
-    /// The engine capture is listening to now. There is one only while a press is open -
-    /// the microphone is shut between them, and a replaced one never delivers again - so
-    /// speaking outside a press is a test describing a Mac that does not exist.
+    /// The engine capture is listening to now, and a replaced one never delivers again.
+    /// Under `shut` there is one only while a press is open, so speaking between presses
+    /// is a test describing a Mac that does not exist; under `open` the microphone is held
+    /// across them, and speaking before a press is the look-back that mode is held for.
     var live: Engine {
-        guard let engine = open else { preconditionFailure("nothing is capturing; the microphone is open only during a press") }
+        guard let engine = open else { preconditionFailure("nothing is capturing; the microphone opens for a press unless the resting mode holds it") }
         return engine
     }
 
