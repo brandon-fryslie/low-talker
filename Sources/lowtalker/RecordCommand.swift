@@ -7,11 +7,14 @@ import LowTalkerCore
 /// hotkey exists. The microphone is open for the recording and no longer.
 ///
 /// The warm-up is not visible in the wav's length - the run is timed from after the
-/// engine is up, so a one-second run writes a full second whenever it wrote anything.
-/// It shows in the line instead: every run of this command is the first launch in its
-/// process, which costs what `AudioCapture.warmUpAllowance` says a cold one costs, so
-/// the clip says it is cut where the microphone was not open. That is the reading, not
-/// a fault in the run.
+/// microphone is open, so a one-second run writes a full second whenever it wrote
+/// anything. It is no longer visible in the line either. It used to be: every run of this
+/// command is the first press in its process, and while a press built its own engine that
+/// cost far more than `AudioCapture.warmUpAllowance` allows, so the clip always came back
+/// cut where the microphone was not open and that was the reading rather than a fault.
+/// Now `start` readies the microphone and the press opens one already reached, which is
+/// inside the allowance - so a run comes back whole, and one that says it is cut is a
+/// fault to chase.
 struct RecordCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "record",
@@ -43,6 +46,14 @@ struct RecordCommand: AsyncParsableCommand {
         let session = try capture.beginSession(at: .now)
         try await Task.sleep(for: .seconds(seconds))
 
+        // What the microphone was doing, read while it is still readable: a device that died
+        // mid-run leaves capture failed, and `endSession` gives the microphone back to a
+        // shut resting state, which reads the same as a healthy one. Read afterwards, an
+        // engine that stopped and said why would print as a clip that is merely cut, and
+        // the operator would be left to guess which of the two had happened.
+        // [LAW:no-silent-failure]
+        let doing = capture.doing
+
         // A run longer than the ring retains, one a device switch was tried during, or one
         // whose microphone died partway is exactly what this command is for: the wav is
         // written either way and the line says what is missing from it.
@@ -60,6 +71,6 @@ struct RecordCommand: AsyncParsableCommand {
         try clip.write(to: output)
         // Pinned like TranscribeCommand's numbers, so the line reads the same on every machine.
         let without = capture.outages.total.formatted(.units(allowed: [.seconds], fractionalPart: .show(length: 1)).locale(Locale(identifier: "en_US_POSIX")))
-        print("\(output.path): \(clip.duration) s, peak \(clip.peak), \(wholeness), device changes \(capture.deviceChanges), outages \(capture.outages.count) (\(without) without audio)")
+        print("\(output.path): \(clip.duration) s, peak \(clip.peak), \(wholeness), microphone \(doing), device changes \(capture.deviceChanges), outages \(capture.outages.count) (\(without) without audio)")
     }
 }

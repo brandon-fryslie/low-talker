@@ -39,7 +39,6 @@ final class HALInput: PreparedInput {
         nonisolated(unsafe) let converter: AudioClip.Converter
         nonisolated(unsafe) let buffer: AVAudioPCMBuffer
         nonisolated(unsafe) var unit: AudioUnit?
-        let bytesPerFrame: Int
 
         struct Target {
             let appending: @Sendable ([Float], HostTime) -> Void
@@ -47,13 +46,29 @@ final class HALInput: PreparedInput {
             let onFailure: @Sendable (any Error) -> Void
         }
 
-        init(converter: AudioClip.Converter, buffer: AVAudioPCMBuffer, bytesPerFrame: Int) {
+        init(converter: AudioClip.Converter, buffer: AVAudioPCMBuffer) {
             self.converter = converter
             self.buffer = buffer
-            self.bytesPerFrame = bytesPerFrame
         }
 
         func aim(at new: Target?) { target.withLock { $0 = new } }
+
+        /// What CoreAudio calls on its own IO thread, as the C function pointer the unit
+        /// takes. Reaches the sink it was handed the address of, and nothing else.
+        ///
+        /// It lives on the sink rather than inside `HALInput.init` because a closure takes
+        /// the isolation of the context it was formed in: one written in a `@MainActor`
+        /// member is inferred main-actor-isolated, and converting that to a C function
+        /// pointer leaves a runtime isolation check in the thunk which traps the first time
+        /// CoreAudio calls it - on the audio thread, which is the only thread that ever
+        /// calls it. A press died on its first buffer and the crash named this closure.
+        /// Nothing about a render is the main actor's, and this is where the type says so
+        /// rather than leaving it to where the lines happen to sit.
+        /// [LAW:no-ambient-temporal-coupling]
+        static let callback: AURenderCallback = { refCon, flags, timeStamp, bus, frames, _ in
+            Unmanaged<Sink>.fromOpaque(refCon).takeUnretainedValue()
+                .render(flags: flags, timeStamp: timeStamp, bus: bus, frames: frames)
+        }
 
         /// One device buffer: rendered into our own memory, converted to pipeline
         /// samples, and handed over stamped with the capture time of its first sample.
@@ -71,18 +86,19 @@ final class HALInput: PreparedInput {
                 target.onFailure(AudioHardwareError.overlongSlice(frames: Int(frames), capacity: Int(buffer.frameCapacity)))
                 return kAudio_ParamError
             }
-            let list = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
-            // Each channel is its own buffer in a non-interleaved format, and each one
-            // must say how much of it this render may fill rather than how much it holds.
-            for channel in 0..<list.count {
-                list[channel].mDataByteSize = frames * UInt32(bytesPerFrame)
-            }
+            // How much of the buffer this render may fill, said before the call rather than
+            // after it - which is the whole of it. Every `mDataByteSize` in the buffer list
+            // is derived from `frameLength` at each access, so writing those byte sizes
+            // directly wrote over values the next access recomputed: the list handed to the
+            // render said zero bytes were available and the unit refused it with -50, on
+            // the first buffer of every press. [LAW:one-source-of-truth] The length is the
+            // fact and the byte sizes are its derivation, so the length is what gets set.
+            buffer.frameLength = frames
             let status = AudioUnitRender(unit, flags, timeStamp, bus, frames, buffer.mutableAudioBufferList)
             guard status == noErr else {
                 target.onFailure(AudioHardwareError.renderFailed(status))
                 return status
             }
-            buffer.frameLength = frames
             do {
                 target.appending(try converter.convert(buffer), try HostTime(timeStamp.pointee))
             } catch {
@@ -183,18 +199,11 @@ final class HALInput: PreparedInput {
             throw AudioClipError.bufferAllocationFailed
         }
 
-        sink = Sink(
-            converter: try AudioClip.Converter(from: format),
-            buffer: buffer,
-            bytesPerFrame: MemoryLayout<Float>.size
-        )
+        sink = Sink(converter: try AudioClip.Converter(from: format), buffer: buffer)
         sink.unit = unit
 
         var callback = AURenderCallbackStruct(
-            inputProc: { refCon, flags, timeStamp, bus, frames, _ in
-                Unmanaged<Sink>.fromOpaque(refCon).takeUnretainedValue()
-                    .render(flags: flags, timeStamp: timeStamp, bus: bus, frames: frames)
-            },
+            inputProc: Sink.callback,
             inputProcRefCon: Unmanaged.passUnretained(sink).toOpaque()
         )
         try AudioHardwareError.check(

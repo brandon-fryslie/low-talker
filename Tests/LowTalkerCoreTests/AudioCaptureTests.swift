@@ -136,13 +136,40 @@ private struct Authorized: MicrophoneAuthority {
     /// started capture holds the grant and watches the input device, and opens no
     /// microphone at all. macOS shows a microphone for an engine that is running, so an app
     /// that starts one at launch is an app the menu bar says is listening all day.
-    @Test func startOpensNoMicrophoneAndWatchesTheDefaultInput() throws {
+    ///
+    /// It readies one, and that is the other half of the sentence: readying takes no device
+    /// and lights nothing, so doing it here - while nobody is dictating - is what leaves a
+    /// press paying only what opening costs.
+    @Test func startReadiesAMicrophoneOpensNoneAndWatchesTheDefaultInput() throws {
         let hardware = FakeHardware()
         let capture = AudioCapture(hardware: hardware)
         try capture.start(grant, atRest: .shut)
         #expect(isListening(capture))
+        #expect(hardware.prepared == 1)
         #expect(hardware.engines.isEmpty)
         #expect(hardware.isWatching)
+    }
+
+    /// What readying early buys, and the one reading that would notice it being given back:
+    /// a press opens the microphone the rest already readied rather than readying another,
+    /// so it pays only what opening costs. A press that readied its own would pay both,
+    /// which measured 315 ms on this Mac against an allowance of 100 ms and came back
+    /// refused on every hold.
+    @Test func aPressOpensTheMicrophoneTheRestReadiedRatherThanReadyingAnother() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        let first = try opened(capture)
+        #expect(hardware.prepared == 1)
+        #expect(hardware.engines.count == 1)
+        hardware.engines[0].appending([1, 2], origin)
+        _ = capture.endSession(first)
+
+        // The key-up gives the device back and keeps the preparation, so the press after it
+        // opens at the prepared price too.
+        let second = try capture.beginSession(at: after(2), preRoll: 0)
+        #expect(hardware.prepared == 1)
+        #expect(hardware.engines.count == 2)
+        _ = capture.endSession(second)
     }
 
     @Test func beginningASessionOpensTheMicrophoneAndEndingItShutsIt() throws {
