@@ -1172,4 +1172,33 @@ private struct Authorized: MicrophoneAuthority {
         #expect(hardware.isWatching)
         #expect(isListening(capture))
     }
+
+    /// A microphone the previous run readied, reporting stale after a restart let it go. The
+    /// watch behind a readied input lives as long as the input does, so a notification posted
+    /// while the previous run still held it can arrive against the run that replaced it, and it
+    /// speaks about an input no press could open any more. This is why the preparation count is
+    /// the one thing `start()` does not reset: it resets what it counts two lines above, and a
+    /// counter back at zero would let this straggler match the microphone the restart readied.
+    @Test func aReadiedMicrophoneLetGoByARestartIsStaleWhenItReportsAfterIt() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .shut)
+        let letGoByTheRestart = hardware.inputs[0]
+
+        try capture.start(grant, atRest: .shut)
+        #expect(hardware.prepared == 2)
+
+        letGoByTheRestart.onStale()
+        #expect(hardware.prepared == 2)
+        #expect(hardware.engines.isEmpty)
+        #expect(isListening(capture))
+
+        // And the press that follows opens the microphone the restart readied, rather than one
+        // readied to answer a device change that had already been answered by the restart.
+        let session = try capture.beginSession(at: origin, preRoll: 0)
+        #expect(hardware.engines.count == 1)
+        #expect(hardware.engines[0].readying == 2)
+        hardware.engines[0].appending([1, 2], origin)
+        #expect(capture.endSession(session) == .whole(AudioClip(samples: [1, 2])))
+    }
 }
