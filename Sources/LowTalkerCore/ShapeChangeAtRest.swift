@@ -54,11 +54,9 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
             switch self {
             case .unheard:
                 """
-                the readied microphone is not watching the device it is bound to: the watch is registered where a \
-                press begins rather than where the binding is made, so the stretch between presses is unwatched and \
-                the next press opens a converter, a client format and a render buffer against a shape the device has \
-                left behind. Raise --wait before believing this on a Mac that may be slow to publish the change \
-                rather than deaf to it
+                the device changed shape and the microphone readied against it was not told, so a press would open a \
+                converter, a client format and a render buffer against a shape the device has left behind. Raise \
+                --wait before believing it on a Mac that may be slow to publish the change rather than deaf to it
                 """
             case .leftReshaped:
                 """
@@ -136,22 +134,9 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
         let readiedAt = try nominalRate(of: device)
         let movedTo = try otherRate(of: device, than: readiedAt)
 
-        try move(device, to: movedTo)
-        // The whole reading is this wait. CoreAudio publishes the change asynchronously, so
-        // the bound is a fact about the hardware rather than a sleep hiding a race: a report
-        // that has not arrived by the deadline is what an unwatched device looks like, and
-        // `--wait` is where an operator says how long this Mac gets.
-        // [LAW:no-ambient-temporal-coupling]
-        try await Task.sleep(for: wait)
-        // Taken before the device is moved back, because moving it back is another change of
-        // shape that the same watch reports. The reading is about the first one.
-        let report = arrival.report
-
-        // [LAW:no-silent-failure] exception: the status of the ask is dropped because the
-        // read-back below answers the same question better, and because a throw here would
-        // take the reading with it - leaving an operator holding a moved Mac and no report.
-        // The move that would not go back is reported as a fault instead.
-        try? move(device, to: readiedAt)
+        let report = try await report(to: arrival, ofMoving: device, from: readiedAt, to: movedTo, waiting: wait)
+        // The device was asked to go back before that returned; this is the time it is given to
+        // take the shape it started in, and the rate below is what it actually did.
         try await Task.sleep(for: wait)
 
         // The input is what holds the watch, and a reading that let it go before the report
@@ -167,6 +152,39 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
         )
     }
 
+    /// What the readied microphone was told while `device` stood in a shape it was not readied
+    /// against, and the only place this Mac is moved or put back.
+    ///
+    /// [LAW:no-ambient-temporal-coupling] A device moved and a device put back are one
+    /// lifetime, so they are one scope with one owner rather than two calls a happy path
+    /// happens to reach in order. Every way out of here goes through the `defer` - the wait
+    /// returning, the wait cancelled by an interrupt, a throw from anywhere between - and none
+    /// of them leaves a Mac at a rate its owner did not choose.
+    ///
+    /// [LAW:no-silent-failure] exception: the status of the ask is dropped because `measure`
+    /// reads the rate back off the device afterwards, which answers the same question better
+    /// than a status does, and because throwing from a `defer` is not a thing that can be done
+    /// anyway. A move that would not go back comes back as `leftReshaped`.
+    @MainActor
+    private static func report(
+        to arrival: Arrival,
+        ofMoving device: AudioObjectID,
+        from readiedAt: Double,
+        to movedTo: Double,
+        waiting wait: Duration
+    ) async throws -> Report {
+        try move(device, to: movedTo)
+        defer { try? move(device, to: readiedAt) }
+        // The whole reading is this wait. CoreAudio publishes the change asynchronously, so the
+        // bound is a fact about the hardware rather than a sleep hiding a race: a report that
+        // has not arrived by the deadline is what an unwatched device looks like, and `--wait`
+        // is where an operator says how long this Mac gets.
+        try await Task.sleep(for: wait)
+        // Read before the `defer` moves the device back, because that is another change of
+        // shape the same watch reports, and this reading is about the first one.
+        return arrival.report
+    }
+
     /// Where the report lands. A class because the listener and the wait below it have to
     /// reach the same one, and `@MainActor` because that is where `HALInput` calls back.
     @MainActor
@@ -180,8 +198,14 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
     ///
     /// The change has to be one the device will take: a rate it does not advertise is refused,
     /// and a refused change is a question never put rather than an answer about watching.
+    ///
+    /// A range names a span rather than a point on a device whose rates are continuous, so each
+    /// one offers both its ends and a device naming one span is not mistaken for a device naming
+    /// one rate. A discrete range offers the same value twice, which costs nothing.
+    /// [LAW:dataflow-not-control-flow] Ends are values the search runs over, not a second case
+    /// the search has to know it is in.
     private static func otherRate(of device: AudioObjectID, than rate: Double) throws -> Double {
-        guard let other = try rates(of: device).map(\.mMinimum).first(where: { $0 != rate }) else {
+        guard let other = try rates(of: device).flatMap({ [$0.mMinimum, $0.mMaximum] }).first(where: { $0 != rate }) else {
             throw DeviceKeepsOneShape(device: device, rate: rate)
         }
         return other
