@@ -1,4 +1,5 @@
 import ArgumentParser
+import Flavors
 import Foundation
 import LowTalkerCore
 import Testing
@@ -47,7 +48,7 @@ import Testing
     /// defaults are what would run.
     @Test func noFileAtAllExitsZero() throws {
         let missing = URL(filePath: NSTemporaryDirectory()).appending(path: "low-talker-\(UUID().uuidString)/config.toml")
-        let check = try ConfigCommand.Check.parse(["--path", missing.path])
+        let check = try ConfigCommand.Check.parse(["--flavor", "release", "--path", missing.path])
         #expect(throws: ExitCode(0)) { try check.run() }
     }
 
@@ -57,6 +58,38 @@ import Testing
         let url = URL(filePath: NSTemporaryDirectory()).appending(path: "low-talker-\(UUID().uuidString).toml")
         try toml.write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
-        try body(try ConfigCommand.Check.parse(["--path", url.path]))
+        try body(try ConfigCommand.Check.parse(["--flavor", "release", "--path", url.path]))
+    }
+}
+
+/// Which installation a file is read as, when the file is named rather than inferred.
+///
+/// [LAW:types-are-the-program] `--path` and `--flavor` are one decision - `ConfigSource` -
+/// and these pin the half of it that used to be answered by a default nobody typed.
+@Suite struct ConfigSourceTests {
+    /// The report is about an installation, and with `--path` given there is nothing left
+    /// to infer one from. Defaulting filled every absent key from the development copy's
+    /// defaults and printed the development chord as the one the *release* app would come
+    /// up on - in the one command whose entire job is saying what will run.
+    /// [LAW:no-silent-failure]
+    @Test func aNamedFileWithNoFlavourIsRefusedRatherThanRead() {
+        #expect(throws: ValidationError.self) {
+            try ConfigSource(path: URL(filePath: "/tmp/config.toml"), stated: nil)
+        }
+    }
+
+    @Test(arguments: Flavor.allCases)
+    func aNamedFileIsReadAsTheFlavourThatWasStated(flavor: Flavor) throws {
+        let source = try ConfigSource(path: URL(filePath: "/tmp/config.toml"), stated: flavor)
+        #expect(source.flavor == flavor)
+        #expect(source.path?.path == "/tmp/config.toml")
+    }
+
+    /// No path is the ordinary case and keeps the documented default: this binary is the
+    /// development copy's, so an unqualified command acts on that copy.
+    @Test func noPathMeansThisInstallationsOwnFile() throws {
+        #expect(try ConfigSource(path: nil, stated: nil).flavor == .development)
+        #expect(try ConfigSource(path: nil, stated: nil).path == nil)
+        #expect(try ConfigSource(path: nil, stated: .release).flavor == .release)
     }
 }
