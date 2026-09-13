@@ -238,10 +238,22 @@ public enum HelperStanding: Sendable, Hashable, CaseIterable {
     /// state reports its helper enabled and types nothing, which is the whole reason
     /// this is a requirement of its own and not folded into the approval.
     ///
-    /// No launchd job can be the holder any more - a flavor's job and its service share
-    /// one label, and a second job under that label is refused at bootstrap - so the
-    /// holder is a helper running outside launchd, which can be found but not named.
+    /// The holder is not a launchd job under this flavor's label - that one is read
+    /// separately, as `aBootstrappedJobHoldsTheLabel` - so it is a helper running outside
+    /// launchd, or a job filed under some *other* label that names this service. Findable
+    /// either way, nameable by neither.
     case anotherJobHoldsTheService
+    /// A job bootstrapped from a plist in /Library/LaunchDaemons holds this flavor's
+    /// label, so the app's own `SMAppService` registration never became the running job.
+    ///
+    /// [LAW:types-are-the-program] This is the state the label collapse made reachable and
+    /// left unrepresentable. `launchctl bootstrap` refuses a second job under a held label,
+    /// which is what the one-label design rests on - but `SMAppService.register()` is not
+    /// `bootstrap` and gets no such refusal. So `scripts/keyboard-helper install` followed
+    /// by launching the app is a real, ordinary sequence that ends here, and folding it in
+    /// with "a holder that cannot be named" threw away the one fact that makes it fixable:
+    /// this holder has a plist, at a path that can be printed and removed.
+    case aBootstrappedJobHoldsTheLabel
     /// launchd has no job under the app's label at all.
     case noJob
     /// Registered, and waiting for the one approval only a person can give.
@@ -276,9 +288,16 @@ public enum HelperStanding: Sendable, Hashable, CaseIterable {
     /// switch with no `default`, so a standing added later has to answer this rather than
     /// inheriting whichever answer happened to be the fallback.
     /// [LAW:types-are-the-program]
+    ///
+    /// `aBootstrappedJobHoldsTheLabel` is the opposite: that holder is named, it is this
+    /// same helper binary, and launchd started it - so it reached Keyboard Setup Assistant
+    /// in its first moments exactly as the app's own would have. Answering `false` there
+    /// is what the deleted `theDevelopmentJobHoldsTheService` case used to prevent, and its
+    /// note recorded the cost: it sent a Mac running a bootstrapped helper to wait for a
+    /// filing that had already happened, and already failed.
     var aHelperHasRun: Bool {
         switch self {
-        case .holdingTheService: true
+        case .holdingTheService, .aBootstrappedJobHoldsTheLabel: true
         case .anotherJobHoldsTheService, .noJob, .awaitingApproval: false
         }
     }
@@ -299,6 +318,7 @@ public extension Requirement {
         switch standing {
         case .holdingTheService: "answering"
         case .anotherJobHoldsTheService: "registered, but another job holds the service"
+        case .aBootstrappedJobHoldsTheLabel: "a bootstrapped job holds the label, so this app's registration never ran"
         case .noJob: "not registered"
         case .awaitingApproval: "waiting for approval in Login Items & Extensions"
         }
@@ -324,11 +344,22 @@ public extension Requirement {
             """
             Something else holds \(flavor.machServiceName), so this app's
             helper never got the name and answers nothing, however
-            healthy it looks. It cannot be another launchd job - a
-            job and its service share one label here, and a second
-            under it is refused. A helper left running by hand is
-            what this usually is. Find it:
+            healthy it looks. Two things it can be, and the second is
+            the one a reader misses: a helper left running by hand,
+            or a launchd job filed under some other label that names
+            this service - which is what every installation of this
+            app before the labels were joined looks like. Find both:
                 pgrep -fl lowtalker-keyboardd
+                sudo grep -l \(flavor.machServiceName) /Library/LaunchDaemons/*.plist
+            """
+        case .aBootstrappedJobHoldsTheLabel:
+            """
+            A job bootstrapped from /Library/LaunchDaemons holds
+            \(flavor.launchdLabel), so \(flavor.displayName) registered its
+            helper and launchd kept the job already under that label -
+            this app's copy never spawned. scripts/keyboard-helper
+            installs that job; remove it and launch the app again:
+                scripts/keyboard-helper uninstall \(flavor)
             """
         }
     }

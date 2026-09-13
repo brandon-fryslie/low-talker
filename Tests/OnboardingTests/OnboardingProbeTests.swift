@@ -79,13 +79,16 @@ import Testing
         #expect(!step.contains("clears itself"), "the reader is told to wait for a filing that already happened")
     }
 
-    /// Which standings mean a helper has already had its chance to file the answer. Only
-    /// a helper that holds the name was read as running; a holder nobody could identify
-    /// has not earned the claim, because nothing was read that says a helper is what
-    /// took the name.
+    /// Which standings mean a helper has already had its chance to file the answer. A
+    /// holder nobody could identify has not earned the claim, because nothing was read
+    /// that says a helper is what took the name - but a job bootstrapped from a plist is
+    /// named, is this same helper binary, and was started by launchd, so it reached the
+    /// assistant in its first moments exactly as the app's own would have. Saying `false`
+    /// there is what sends a Mac running a bootstrapped helper to wait for a filing that
+    /// already happened and already failed.
     /// [LAW:no-silent-failure] Exhaustive, so a standing added later has to answer this.
     @Test func onlyAStandingThatNamesARunningHelperSaysOneHasRun() {
-        let ran: Set<HelperStanding> = [.holdingTheService]
+        let ran: Set<HelperStanding> = [.holdingTheService, .aBootstrappedJobHoldsTheLabel]
         for standing in HelperStanding.allCases {
             #expect(standing.aHelperHasRun == ran.contains(standing), "\(standing)")
         }
