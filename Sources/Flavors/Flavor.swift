@@ -87,6 +87,20 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
     /// label governs; that is still 3ti.13's to answer at startup.
     public var launchdLabel: String { machServiceName }
 
+    /// The log subsystem the helper speaks under before it knows which flavor it is.
+    ///
+    /// Every other name here belongs to an installation. This one cannot: it exists for
+    /// the single moment a helper has been started by a plist that passed no `--flavor`,
+    /// where the flavor - and so the service name the rest of its logging is filed under -
+    /// is exactly what is not known. A refusal filed under a flavor's name would be filed
+    /// under a guess. [LAW:no-silent-failure]
+    ///
+    /// Static rather than per-flavor for that reason, and named here rather than spelled
+    /// at the one call site because `scripts/keyboard-helper log` has to read it back:
+    /// the copy in that script is held to this by `HelperPlistTests`.
+    /// [LAW:one-source-of-truth]
+    public static let startupSubsystem = "lowtalker-keyboardd"
+
     /// The name shown in the menu bar and in Login Items, where the whole point is that a
     /// person can tell the two apart at a glance.
     public var displayName: String {

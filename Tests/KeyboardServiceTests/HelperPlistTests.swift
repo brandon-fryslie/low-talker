@@ -109,5 +109,24 @@ private let repository = URL(fileURLWithPath: #filePath)
     @Test func theFlavoursPlistsShareNoName() throws {
         let labels = try Flavor.allCases.map { try #require(Self.plist(for: $0)["Label"] as? String) }
         #expect(Set(labels).count == Flavor.allCases.count, "two plists share a Label: \(labels)")
+        // The doc above says "a shared label *or* a shared service", and only the label
+        // was ever collected - so the collision this test exists to catch, and the one the
+        // design calls the silent one (bootstrap exits 0, the loser is handed no endpoint
+        // and logs that it is listening), passed here untouched. [LAW:behavior-not-structure]
+        // The contract is that no name is shared; asserting half of it tests the half that
+        // fails loudly anyway.
+        let services = try Flavor.allCases.flatMap { flavor in
+            try #require(Self.plist(for: flavor)["MachServices"] as? [String: Bool]).keys
+        }
+        #expect(Set(services).count == Flavor.allCases.count, "two plists share a MachService: \(services)")
+    }
+
+    /// The one name in the script that is not a flavor's, held to Flavor the same way the
+    /// rest are: read back by running the script, not by grepping it. A helper that cannot
+    /// find its flavor logs under this and nothing else, so a drift here is the refusal
+    /// going unread. [LAW:one-source-of-truth]
+    @Test func theScriptReadsTheSubsystemAFlavourlessHelperSpeaksUnder() throws {
+        let names = try Self.names(of: .development)
+        #expect(names["startup_subsystem"] == Flavor.startupSubsystem)
     }
 }

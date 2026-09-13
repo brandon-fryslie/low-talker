@@ -16,11 +16,13 @@ import os
 /// it again, which is right here: starting again will not add the argument.
 /// [LAW:no-silent-failure]
 ///
-/// The refusal is logged under the program's own name, not a service's: which service
-/// this would have been is exactly what is not known.
+/// The refusal is logged under `Flavor.startupSubsystem`, not a service's: which service
+/// this would have been is exactly what is not known. `scripts/keyboard-helper log` reads
+/// that subsystem alongside the flavor's own, so this is findable by the one command a
+/// reader already has. [LAW:no-silent-failure]
 let flavor: Flavor = {
     guard let flavor = flavorArgument(CommandLine.arguments) else {
-        Logger(subsystem: "lowtalker-keyboardd", category: "helper").fault(
+        Logger(subsystem: Flavor.startupSubsystem, category: "helper").fault(
             "will not start: no --flavor \(Flavor.allCases.map(\.description).joined(separator: " or "), privacy: .public) in \(CommandLine.arguments, privacy: .public)")
         exit(0)
     }
