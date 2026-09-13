@@ -59,6 +59,67 @@ public final class Hotkey {
         }
     }
 
+    /// Every installation's chord, which is the set a typist must refuse to press.
+    ///
+    /// [LAW:one-source-of-truth] A typist that refused only its own installation's chord
+    /// still refused *a* hotkey, which is what made the omission read as complete at each
+    /// of the five call sites that spelled it. But the release chord is a strict subset of
+    /// the development one, and the helper's keystrokes are hardware to macOS: a
+    /// development typist pressing a bare Right Option is the release app's hotkey
+    /// exactly, so the transcript starts a dictation in the other copy. The fact is "every
+    /// chord an installation listens for", it is one fact, and it is derived here from
+    /// `Flavor.allCases` so a third flavor is covered by existing. [LAW:dataflow-not-control-flow]
+    ///
+    /// Every flavor's, not every *installed* flavor's: whether the other copy is on this
+    /// Mac is a question with a different answer every minute, and a typist that refused
+    /// on the strength of it would type the chord in the window where the answer was
+    /// stale. The cost of refusing a chord nobody listens for is a keystroke the helper
+    /// declines; the cost of the other mistake is two apps dictating at once.
+    nonisolated public static let everyInstallationsChord: Set<KeyChord> =
+        Set(Flavor.allCases.map(defaultChord(for:)))
+
+    /// This chord's modifiers in the order a person must press them.
+    ///
+    /// [LAW:one-source-of-truth] The order was a fact recorded only in prose - "Right
+    /// Command goes down first" in the comment above - while the string a person actually
+    /// reads came from `KeyChord.spelled`, which orders by `Modifier.allCases` and so
+    /// printed `rightOption+rightCommand`: the one order that does not work. Two maps of
+    /// one territory, and the one the user was handed was the wrong one.
+    ///
+    /// A chord completes on whichever modifier comes down last, so pressing them in an
+    /// order whose prefix is another installation's whole chord starts a press *there*
+    /// first. The order is therefore not arbitrary and not remembered: a modifier no other
+    /// chord contains can never complete one, so those go down first, and the shared ones
+    /// go down last. `theOrderPrintedIsAnOrderThatWorks` holds that to every flavor.
+    /// [LAW:verifiable-goals]
+    nonisolated public static func pressOrder(of chord: KeyChord) -> [Modifier] {
+        let rivals = everyInstallationsChord.subtracting([chord]).map(\.modifiers)
+        // How many other installations' chords this modifier appears in. Zero means it
+        // cannot complete one of theirs, so it is safe to hold early.
+        func shared(_ modifier: Modifier) -> Int { rivals.filter { $0.contains(modifier) }.count }
+        // `Modifier.allCases` breaks ties, so one chord always spells one order: `sorted`
+        // is not stable, and an order that varied between two readings of the same chord
+        // would be two instructions for one hotkey. [LAW:one-source-of-truth]
+        return Modifier.allCases
+            .filter(chord.modifiers.contains)
+            .enumerated()
+            .sorted { ($0.element == $1.element) ? false : (shared($0.element), $0.offset) < (shared($1.element), $1.offset) }
+            .map(\.element)
+    }
+
+    /// The chord as an instruction to a person: what to hold, in the order to hold it.
+    ///
+    /// [LAW:decomposition] Separate from `KeyChord.spelled`, which names a chord inside a
+    /// refusal, because those are two jobs that only look like one. A refusal has to say
+    /// *which* chord and nothing more, so any stable order will do; an instruction is read
+    /// by somebody with their hand on the keyboard, and for them the order is the entire
+    /// content. One function serving both is how the menu came to print the order that
+    /// starts the other installation dictating.
+    nonisolated public static func held(_ chord: KeyChord) -> String {
+        let struck = chord.key.map { ["key 0x" + String($0.rawValue, radix: 16)] } ?? []
+        return (pressOrder(of: chord).map(\.rawValue) + struck).joined(separator: "+")
+    }
+
     private let tap: any KeyboardTap
     private var detector: HotkeyDetector
     private var installed: Disposal?

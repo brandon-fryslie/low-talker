@@ -1,3 +1,4 @@
+import Flavors
 import LowTalkerCore
 import Testing
 
@@ -132,5 +133,56 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
             try hotkey.start({ _ in }, onLapse: { _ in })
         }
         #expect(tap.installations[0].disposed)
+    }
+}
+
+/// The two facts that stop one installation's keyboard from reaching the other's.
+///
+/// Driven from `Flavor.allCases` rather than from the two chords spelled out, so a third
+/// installation is covered by existing rather than by somebody remembering these.
+/// [LAW:behavior-not-structure]
+@Suite struct EveryInstallationsChordTests {
+    /// The set a typist refuses is every installation's, not the running one's. A
+    /// development typist that refused only `{rightOption, rightCommand}` would press a
+    /// bare Right Option happily, and the helper's keystrokes are hardware to macOS: the
+    /// release app's tap takes it and dictates.
+    @Test func everyFlavoursChordIsOneTheTypistRefuses() {
+        for flavor in Flavor.allCases {
+            #expect(Hotkey.everyInstallationsChord.contains(Hotkey.defaultChord(for: flavor)),
+                    "\(flavor)'s chord is not in the set a typist refuses")
+        }
+    }
+
+    /// **The order printed is an order that works.** A chord completes on whichever
+    /// modifier comes down last, so pressing them in an order whose *prefix* is another
+    /// installation's whole chord starts a press there instead. `rightOption+rightCommand`
+    /// - what `KeyChord.spelled` produced, and what the menu and the CLI both printed - is
+    /// exactly that: Right Option alone is the release chord, complete.
+    ///
+    /// This asserts the property rather than the string, so it stays true of chords nobody
+    /// has written yet. [LAW:verifiable-goals]
+    /// The development chord as a person reads it, spelled out, because this is the exact
+    /// string that shipped wrong: the menu bar and `dictate` both printed
+    /// `hold rightOption+rightCommand to dictate`, and a reader following it literally
+    /// completed the release chord first. `Modifier.allCases` puts rightOption at 5 and
+    /// rightCommand at 7, so the order came straight from the enum's declaration order -
+    /// a fact about how the cases were typed, being read as a fact about the keyboard.
+    @Test func theDevelopmentChordIsPrintedInTheOrderThatDoesNotStartTheOtherCopy() {
+        #expect(Hotkey.held(Hotkey.defaultChord(for: .development)) == "rightCommand+rightOption")
+        #expect(Hotkey.held(Hotkey.defaultChord(for: .release)) == "rightOption")
+    }
+
+    @Test func theOrderPrintedIsAnOrderThatWorks() {
+        let rivals = Set(Flavor.allCases.map(Hotkey.defaultChord(for:)))
+        for flavor in Flavor.allCases {
+            let chord = Hotkey.defaultChord(for: flavor)
+            let order = Hotkey.pressOrder(of: chord)
+            #expect(Set(order) == chord.modifiers, "\(flavor): the order is not the chord")
+            for held in 1..<order.count {
+                let prefix = Set(order.prefix(held))
+                #expect(!rivals.contains(where: { $0.modifiers == prefix }),
+                        "\(flavor): holding \(order.prefix(held).map(\.rawValue).joined(separator: "+")) completes another installation's chord first")
+            }
+        }
     }
 }

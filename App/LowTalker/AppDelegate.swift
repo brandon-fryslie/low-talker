@@ -199,7 +199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let config = try Config.load(for: Self.flavor).config
             try capture.start(try await MicrophonePermission().request().grant(), atRest: config.microphone)
             try hotkey.start { [unowned self] in dictation.press($0) } onLapse: { [unowned self] in report($0) }
-            showHotkeyStatus("hold \(Hotkey.defaultChord(for: Self.flavor).spelled) to dictate")
+            showHotkeyStatus("hold \(Hotkey.held(Hotkey.defaultChord(for: Self.flavor))) to dictate")
         } catch {
             // Whatever got as far as starting is put back: a tap that failed after
             // capture began would otherwise leave capture holding the grant and watching

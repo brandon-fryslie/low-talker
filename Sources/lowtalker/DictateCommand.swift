@@ -40,12 +40,17 @@ struct DictateCommand: AsyncParsableCommand {
         let interrupt = Interrupt.watched()
         let helper = HelperConnection(flavor: installation.flavor)
         let chord = Hotkey.defaultChord(for: installation.flavor)
-        let chords: Set<KeyChord> = [chord]
+        // [LAW:decomposition] What this installation listens for and what its typist must
+        // refuse to press are two sets that happened to be equal while there was one
+        // installation. Listening is this copy's own chord - hearing the other's would be
+        // dictating on somebody else's hotkey - while refusing has to cover every chord
+        // any copy listens for, because the keystrokes reach macOS as hardware.
+        let listening: Set<KeyChord> = [chord]
         let dictation = Dictation(
             capture: capture,
             transcriber: { transcriber },
             router: .dictation,
-            executor: Executor.guarding(keyboard: helper.keyboard, mouse: helper.mouse, interrupt: interrupt, hotkeys: chords),
+            executor: Executor.guarding(keyboard: helper.keyboard, mouse: helper.mouse, interrupt: interrupt, hotkeys: Hotkey.everyInstallationsChord),
             report: { outcome in
                 switch outcome {
                 case .success(let session):
@@ -56,9 +61,9 @@ struct DictateCommand: AsyncParsableCommand {
                 }
             }
         )
-        let hotkey = Hotkey(chords: chords)
+        let hotkey = Hotkey(chords: listening)
         try hotkey.start(dictation.press) { print("\($0)") }
-        print("ready: hold \(chord.spelled) to dictate")
+        print("ready: hold \(Hotkey.held(chord)) to dictate")
         // The tap runs on the main run loop; this keeps the command on it until the
         // operator's interrupt, which is read rather than let end the process, so a
         // session it lands in still releases its keys.
