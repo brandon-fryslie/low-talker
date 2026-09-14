@@ -54,10 +54,17 @@ public enum OnboardingProbe {
         // job would - and a reading that asked about the endpoint first would call it
         // "answering" and never reach here. Whatever it holds, it is not the app's
         // registration, and its plist is the thing that has to go.
+        //
+        // The value must *start* there, as the script's `/Library/LaunchDaemons/*` does: the
+        // app's own plist sits under `Contents/Library/LaunchDaemons/` in its bundle, and a
+        // match anywhere in the line would call the app's job a stray one. The line must be
+        // the job's own `path`, not a `stderr path` nested beneath it. [LAW:single-enforcer]
         let path = printed.stdout
             .split(separator: "\n")
-            .first { $0.contains("path = ") } ?? ""
-        guard !path.contains("/Library/LaunchDaemons/") else { return .aBootstrappedJobHoldsTheLabel }
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { $0.hasPrefix("path = ") }?
+            .dropFirst("path = ".count) ?? ""
+        guard !path.hasPrefix("/Library/LaunchDaemons/") else { return .aBootstrappedJobHoldsTheLabel }
         // The endpoint is handed out at load, so a job that holds the service names it
         // here. A job that asked and lost simply has no such line: launchd does not make
         // the loser loud, which is exactly why this is read rather than assumed.

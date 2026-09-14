@@ -76,9 +76,13 @@ resolve() {
 # A sudo that was refused, or a launchctl that failed some other way, has read nothing,
 # and reading nothing as "free" is what would write a plist over the app's job.
 claimant() {
-  local record
+  local record path
   if record=$(sudo launchctl print "system/${LABEL}" 2>&1); then
-    awk '/^[[:space:]]*path = / { sub(/^[[:space:]]*path = /, ""); print; exit }' <<<"$record"
+    path=$(awk '/^[[:space:]]*path = / { sub(/^[[:space:]]*path = /, ""); print; exit }' <<<"$record")
+    # A record with no path read nothing about who holds the label, and nothing is not an
+    # answer to act on. [LAW:no-silent-failure]
+    [ -n "$path" ] || die "launchd reports a job under ${LABEL} with no path, so who holds it is unknown: ${record}"
+    printf '%s' "$path"
   elif grep -q "Could not find service" <<<"$record"; then
     printf none
   else

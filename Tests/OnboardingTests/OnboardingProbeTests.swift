@@ -82,6 +82,26 @@ import Testing
         #expect(try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service) == .aBootstrappedJobHoldsTheLabel)
     }
 
+    /// The app's own job, reported by its bundle path, whose plist also sits under a
+    /// `Library/LaunchDaemons` - inside the bundle - and whose crash log is written beside
+    /// the system's. Neither makes it a stray plist job: only a `path` that starts at
+    /// /Library/LaunchDaemons does.
+    @Test func theAppsJobReportedByItsBundlePathIsNotAStrayPlistJob() throws {
+        let printed = Command.Output(status: 0, stdout: """
+        system/com.lowtalker.keyboardd = {
+        \tpath = /Applications/LowTalker.app/Contents/Library/LaunchDaemons/com.lowtalker.keyboardd.plist
+        \tstate = running
+        \tstderr path = /Library/LaunchDaemons/not-a-job.log
+        \tendpoints = {
+        \t\t"com.lowtalker.keyboardd" = {
+        \t\t\tport = 0x1847f7
+        \t\t}
+        \t}
+        }
+        """, stderr: "")
+        #expect(try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service) == .holdingTheService)
+    }
+
     /// The whole way from what launchd printed to what the reader is told, on the Mac
     /// where reading it as "is the app's own helper answering" got it wrong: a helper is
     /// up and holding the name, so it has already been through its filing - and a reader
