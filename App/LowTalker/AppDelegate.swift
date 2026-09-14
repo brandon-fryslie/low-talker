@@ -226,7 +226,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // replaced would be the worse failure of the two. [LAW:no-silent-failure]
             do { try await previous.dictation.finish() } catch { report(.failure(error)) }
         }
-        wordsOnClipboard = false
+        // `wordsOnClipboard` is left as it stands: a session the wait let finish may just
+        // have copied, and words on the clipboard stay there whichever method comes next.
         let hotkey = Hotkey(for: Self.flavor, heardBy: method)
         let dictation = Dictation(
             capture: capture,
@@ -344,10 +345,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // up now would hear presses no capture could open for, over the status that says
         // why. `switching` is set only by a choice taken down to a loop, which `listen`
         // makes first. [LAW:no-ambient-temporal-coupling]
-        guard switching != nil else {
-            chosenMethod = chosen
-            return
-        }
+        //
+        // The method already chosen is not chosen again: rebuilding the loop would end a
+        // latched press as lapsed and throw its recording away.
+        let already = chosenMethod == chosen
+        chosenMethod = chosen
+        guard switching != nil, !already else { return }
         Task {
             await choose(chosen)
             showWhatIsMissing(for: chosen)
