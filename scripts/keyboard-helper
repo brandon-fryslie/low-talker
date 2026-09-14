@@ -38,11 +38,6 @@ set -euo pipefail
 # release name and one suffix - so a rename there is one edit here.
 RELEASE_SERVICE="com.lowtalker.keyboardd"
 DEVELOPMENT_SUFFIX=".dev"
-# The one subsystem that is not a flavor's, because it is what the helper logs under
-# before it knows which flavor it is: a plist that passes no --flavor gets a fault here
-# and exits. Flavor.startupSubsystem is where it is decided; HelperPlistTests holds this
-# copy to it. [LAW:one-source-of-truth]
-STARTUP_SUBSYSTEM="lowtalker-keyboardd"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HELPER="${ROOT}/.build/debug/lowtalker-keyboardd"
@@ -64,36 +59,43 @@ resolve() {
 }
 
 # [LAW:parse-dont-validate] Who holds this flavor's label right now, read before anything
-# is written under it: `none`, `ours`, or the path launchd reports for somebody else's
-# job. `launchctl print` is a debug dump rather than an interface, so the reading is
-# pinned to the one field that separates the two registration paths - measured on this
-# Mac, 2026-09-12, with the release app running:
+# is written under it: `none`, or the path launchd reports for the job. `launchctl print`
+# is a debug dump rather than an interface, so the reading is pinned to the one field that
+# separates the two registration paths - measured on this Mac, 2026-09-12, with the
+# release app running:
 #
 #   the app, through SMAppService:  path = (submitted by smd.919)
-#   a plist this script bootstrapped:  path = /Library/LaunchDaemons/<label>.plist
+#   a plist bootstrapped by hand:   path = /Library/LaunchDaemons/<label>.plist
 #
-# The path is handed back rather than a guess about it, so what the reader is told is
-# what launchd said. [LAW:dataflow-not-control-flow]
+# Any plist under /Library/LaunchDaemons is the second kind, whatever its file is called:
+# launchd files a job by the Label inside the plist, and OnboardingProbe.standing draws
+# the line in the same place, so the step the app prints and this script agree on which
+# holder it names. [LAW:single-enforcer]
+#
+# [LAW:no-silent-failure] Only launchd's own "no such job" means nobody holds the label.
+# A sudo that was refused, or a launchctl that failed some other way, has read nothing,
+# and reading nothing as "free" is what would write a plist over the app's job.
 claimant() {
-  local record path
-  record=$(sudo launchctl print "system/${LABEL}" 2>/dev/null) || { printf none; return; }
-  path=$(sed -n 's/^[[:space:]]*path = //p' <<<"$record" | head -1)
-  if [ "$path" = "$PLIST" ]; then printf ours; else printf '%s' "$path"; fi
+  local record
+  if record=$(sudo launchctl print "system/${LABEL}" 2>&1); then
+    awk '/^[[:space:]]*path = / { sub(/^[[:space:]]*path = /, ""); print; exit }' <<<"$record"
+  elif grep -q "Could not find service" <<<"$record"; then
+    printf none
+  else
+    die "could not read who holds ${LABEL}: ${record}"
+  fi
 }
 
-# What a holder that is not ours means, read off the path launchd reported: the app's own
-# registration says `(submitted by smd.N)` and has a Background Task Management record
-# that booting out would take with it; anything else is a plist somebody bootstrapped
-# under this label, which this script did not write and will not remove for them.
-held_by_someone_else() {
+# A holder that is not a plist job is the installation's own app, registered through
+# SMAppService, and booting it out would take its Background Task Management record with
+# it. So it is named rather than touched.
+held_by_the_app() {
   cat <<MSG
-${LABEL} is held by a job this script did not install. launchd reports it at:
+${LABEL} is held by ${FLAVOR}'s own app, registered through SMAppService - launchd
+reports it at:
   path = $1
-'(submitted by smd.N)' is ${FLAVOR}'s own app, registering the same label through
-SMAppService: quit it and turn it off in Login Items & Extensions rather than booting it
-out, which would take its Background Task Management record with it. A plist path is a
-job bootstrapped by hand under this label: boot it out and remove that plist yourself.
-Read the whole record with:
+Booting it out would take its Background Task Management record with it, so it is left
+alone. Quit the app and turn it off in Login Items & Extensions instead. Read the record:
   sudo launchctl print system/${LABEL}
 MSG
 }
@@ -123,13 +125,13 @@ install_helper() {
   # bound to this plist's path, logged "Invalid path: Contents/MacOS/lowtalker-keyboardd",
   # and never spawned - low-keyboard-3ti.66o, measured before the labels were collapsed.
   #
-  # So the holder is read and answered, never cleared blind. [LAW:dataflow-not-control-flow]
-  # One reading, three answers, and no operation that sometimes runs.
+  # So the holder is read once and answered, never cleared blind.
+  # [LAW:dataflow-not-control-flow]
   local holder
   holder=$(claimant)
   case "$holder" in
-    none|ours) ;;
-    *) die "$(held_by_someone_else "$holder")" ;;
+    none|/Library/LaunchDaemons/*) ;;
+    *) die "$(held_by_the_app "$holder")" ;;
   esac
   # KeepAlive after an unsuccessful exit, not RunAtLoad alone: this owns a device whose
   # readiness costs a second, and a helper that stayed dead after a crash would answer
@@ -158,11 +160,16 @@ PLIST_EOF
   sudo chown root:wheel "$PLIST"
   sudo chmod 644 "$PLIST"
 
-  # Our own previous job, torn down here rather than at the reading above: everything
-  # that can refuse this install has now refused, so this is the last moment before the
-  # plist is replaced and not a state left behind by a later failure.
-  # [LAW:no-ambient-temporal-coupling]
-  if [ "$(claimant)" = ours ]; then sudo launchctl bootout "system/${LABEL}"; fi
+  # A previous plist job under this label, torn down here rather than at the reading
+  # above: everything that can refuse this install has now refused, so this is the last
+  # moment before the new job is loaded and not a state left behind by a later failure.
+  # A plist under another file name goes too, or it would load first at the next boot and
+  # hold the label against this one. [LAW:no-ambient-temporal-coupling]
+  case "$holder" in
+    none) ;;
+    "$PLIST") sudo launchctl bootout "system/${LABEL}" ;;
+    *) sudo launchctl bootout "system/${LABEL}"; sudo rm -f "$holder" ;;
+  esac
   sudo launchctl bootstrap system "$PLIST"
 
   # The endpoint is handed out at load, so the answer is there before the helper runs.
@@ -181,20 +188,25 @@ launchd names the owner with:
   echo "keyboard-helper: installed. Read it with: $0 log"
 }
 
-# Removes what this script installed, and only that. The same reading as install, for the
-# same reason: `bootout` under a shared label would take the app's registration and its
-# approval record along with it. [LAW:no-silent-failure] A holder that is not ours is
-# named rather than passed over in silence, because "removed" over a job still running is
-# the answer that sends the next reader looking in the wrong place.
+# Removes every plist job under this flavor's label, and never the app's. The same
+# reading as install, for the same reason: `bootout` of the app's registration would take
+# its approval record along with it.
+#
+# This flavor's plist goes whoever holds the label. With no job loaded from it, it is inert
+# until the next boot - where it loads before the app registers and holds the label against
+# it, which is the one thing the reader running this wanted gone.
+# [LAW:no-silent-failure] A holder left running is named rather than passed over, because
+# "removed" over a job still running sends the next reader looking in the wrong place.
 uninstall_helper() {
   local holder
   holder=$(claimant)
-  case "$holder" in
-    ours) sudo launchctl bootout "system/${LABEL}" ;;
-    none) ;;
-    *)    die "$(held_by_someone_else "$holder")" ;;
-  esac
   sudo rm -f "$PLIST"
+  case "$holder" in
+    none) ;;
+    /Library/LaunchDaemons/*) sudo launchctl bootout "system/${LABEL}"; sudo rm -f "$holder" ;;
+    *) die "${PLIST} is removed, and the job holding the label is not.
+$(held_by_the_app "$holder")" ;;
+  esac
   echo "keyboard-helper: removed"
 }
 
@@ -202,22 +214,17 @@ state_helper() {
   sudo launchctl print "system/${LABEL}" | awk '/state|pid|program|path|last exit/ { print }'
 }
 
-# Both subsystems, because the helper has two voices and the quieter one carries the
-# worst news. Everything it says once it knows its flavor goes under that flavor's service
-# name; the one thing it says when it does not - "will not start: no --flavor" - cannot,
-# since which service this would have been is exactly what is unknown. Reading only the
-# service name showed nothing at all for that refusal, which looks identical to a helper
-# that was never asked to start. [LAW:no-silent-failure]
+# The flavor's service name is the one subsystem to read: a helper that cannot tell which
+# flavor it is files its refusal under every flavor's, so it is found here too.
 log_helper() {
-  log show --last 10m --style compact --predicate "subsystem == \"${SERVICE}\" OR subsystem == \"${STARTUP_SUBSYSTEM}\""
+  log show --last 10m --style compact --predicate "subsystem == \"${SERVICE}\""
 }
 
 # What this script resolved, in the tab-separated shape `lowtalker driver pins` uses, so
 # the test that holds these copies to Flavor reads what install actually acts under rather
 # than a second spelling of it.
 names_helper() {
-  printf 'flavor\t%s\nlabel\t%s\nservice\t%s\nplist\t%s\nstartup_subsystem\t%s\n' \
-    "$FLAVOR" "$LABEL" "$SERVICE" "$PLIST" "$STARTUP_SUBSYSTEM"
+  printf 'flavor\t%s\nlabel\t%s\nservice\t%s\nplist\t%s\n' "$FLAVOR" "$LABEL" "$SERVICE" "$PLIST"
 }
 
 verb="${1:-}"

@@ -166,7 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         capture: capture,
         transcriber: { [unowned self] in try await engine.value },
         router: Router(routes: [.dictation]),
-        executor: .guarding(keyboard: helper.keyboard, mouse: helper.mouse, interrupt: interrupt, hotkeys: Hotkey.everyInstallationsChord),
+        executor: .guarding(keyboard: helper.keyboard, mouse: helper.mouse, interrupt: interrupt),
         report: { [unowned self] in report($0) }
     )
 

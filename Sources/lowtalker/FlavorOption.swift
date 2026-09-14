@@ -30,12 +30,16 @@ struct FlavorOption: ParsableArguments {
     /// ask. [LAW:one-source-of-truth]
     @Option(
         name: .customLong("flavor"),
-        help: "Which installation to act on: release (the copy that runs at login) or development (the copy built from this tree). Defaults to development.")
+        help: "Which installation to act on: release (the copy that runs at login) or development (the copy built from this tree). Defaults to \(FlavorOption.defaultFlavor).")
     var stated: Flavor?
 
-    /// The installation this command acts on, which is the development copy unless said
-    /// otherwise, for the reason above.
-    var flavor: Flavor { stated ?? .development }
+    /// The installation a command acts on when none is stated, for the reason above. Named
+    /// once, because the help text, this option and `ConfigSource` all say it.
+    /// [LAW:one-source-of-truth]
+    static let defaultFlavor: Flavor = .development
+
+    /// The installation this command acts on.
+    var flavor: Flavor { stated ?? Self.defaultFlavor }
 
     init() {}
 }
@@ -53,41 +57,24 @@ struct FlavorOption: ParsableArguments {
 /// will run.
 ///
 /// The two are one decision, so they are one value. A path with no flavor stated is not a
-/// thing this type can hold, which is what stops it being answered with a guess.
-enum ConfigSource {
-    /// This installation's own file, whose path the flavor decides.
-    case installation(Flavor)
-    /// This file, read as this installation - both said out loud.
-    case file(URL, as: Flavor)
+/// thing this type can hold, because the only way to build one is the parse below.
+struct ConfigSource {
+    /// The file to read, or nil for this installation's own.
+    let path: URL?
+    /// The installation the file is read as.
+    let flavor: Flavor
 
     /// [LAW:parse-dont-validate] The one place two optional flags become the decision they
     /// describe. [LAW:no-silent-failure] A `--path` with no `--flavor` stops here, because
     /// the alternative is a report that is confidently about the wrong installation.
     init(path: URL?, stated: Flavor?) throws {
-        switch (path, stated) {
-        case (nil, let stated):
-            self = .installation(stated ?? .development)
-        case (let path?, let stated?):
-            self = .file(path, as: stated)
-        case (.some, nil):
+        guard path == nil || stated != nil else {
             throw ValidationError(
                 "--path needs --flavor: which installation a file is read as decides every "
                 + "default it does not set, and the hotkey is one of them. Say which copy "
                 + "this file belongs to - --flavor release or --flavor development.")
         }
-    }
-
-    var path: URL? {
-        switch self {
-        case .installation: nil
-        case .file(let path, _): path
-        }
-    }
-
-    var flavor: Flavor {
-        switch self {
-        case .installation(let flavor): flavor
-        case .file(_, let flavor): flavor
-        }
+        self.path = path
+        self.flavor = stated ?? FlavorOption.defaultFlavor
     }
 }

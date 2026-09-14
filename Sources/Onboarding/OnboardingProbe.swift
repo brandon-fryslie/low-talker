@@ -56,8 +56,7 @@ public enum OnboardingProbe {
         // registration, and its plist is the thing that has to go.
         let path = printed.stdout
             .split(separator: "\n")
-            .first { $0.contains("path = ") }?
-            .trimmingCharacters(in: .whitespaces) ?? ""
+            .first { $0.contains("path = ") } ?? ""
         guard !path.contains("/Library/LaunchDaemons/") else { return .aBootstrappedJobHoldsTheLabel }
         // The endpoint is handed out at load, so a job that holds the service names it
         // here. A job that asked and lost simply has no such line: launchd does not make

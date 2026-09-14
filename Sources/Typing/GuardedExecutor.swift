@@ -11,8 +11,11 @@ extension Executor {
     /// answer "may this key still be pressed" and they must answer it the same way;
     /// three spellings of the guard would be three answers, drifting apart the first
     /// time one of them learns something. What legitimately differs between them -
-    /// which devices, whose interrupt, which chords the tap owns - crosses this one
-    /// boundary as values. [LAW:dataflow-not-control-flow]
+    /// which devices, whose interrupt - crosses this one boundary as values.
+    /// [LAW:dataflow-not-control-flow]
+    ///
+    /// The chords refused are not among them: every surface refuses every installation's,
+    /// and taking them as a parameter was only a way to pass the running one's alone.
     ///
     /// Named for the guard rather than for the helper so that the sudo path can build
     /// it over the driver directly: `Typing` still knows nothing about XPC.
@@ -20,8 +23,7 @@ extension Executor {
     public static func guarding(
         keyboard: any KeyPress,
         mouse: any Pointing,
-        interrupt: Interrupt,
-        hotkeys: Set<KeyChord>
+        interrupt: Interrupt
     ) -> Executor {
         let queue = DeviceQueue()
         return Executor(
@@ -36,7 +38,7 @@ extension Executor {
                     locate: target.frame(ofRole:titled:)
                 )
             },
-            hotkeys: hotkeys
+            hotkeys: Hotkey.everyInstallationsChord
         )
     }
 }

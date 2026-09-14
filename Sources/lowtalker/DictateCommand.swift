@@ -50,7 +50,7 @@ struct DictateCommand: AsyncParsableCommand {
             capture: capture,
             transcriber: { transcriber },
             router: .dictation,
-            executor: Executor.guarding(keyboard: helper.keyboard, mouse: helper.mouse, interrupt: interrupt, hotkeys: Hotkey.everyInstallationsChord),
+            executor: Executor.guarding(keyboard: helper.keyboard, mouse: helper.mouse, interrupt: interrupt),
             report: { outcome in
                 switch outcome {
                 case .success(let session):

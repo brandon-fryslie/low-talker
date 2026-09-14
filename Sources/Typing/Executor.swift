@@ -59,7 +59,7 @@ public struct Executor {
         public var description: String {
             let act = switch what {
             case .typed(let characters): "typed \(characters) characters"
-            case .pressed(let chord): "pressed \(chord.spelled)"
+            case .pressed(let chord): "pressed \(Hotkey.held(chord))"
             case .clicked(let at, let button, let times, let reports): "clicked \(button.rawValue) \(times.spelled) at \(at) after \(reports) move reports"
             case .scrolled(let at, let vertical, let horizontal): "scrolled vertical \(vertical.rawValue) horizontal \(horizontal.rawValue) at \(at)"
             }

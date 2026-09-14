@@ -153,14 +153,6 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         }
     }
 
-    /// **The order printed is an order that works.** A chord completes on whichever
-    /// modifier comes down last, so pressing them in an order whose *prefix* is another
-    /// installation's whole chord starts a press there instead. `rightOption+rightCommand`
-    /// - what `KeyChord.spelled` produced, and what the menu and the CLI both printed - is
-    /// exactly that: Right Option alone is the release chord, complete.
-    ///
-    /// This asserts the property rather than the string, so it stays true of chords nobody
-    /// has written yet. [LAW:verifiable-goals]
     /// The development chord as a person reads it, spelled out, because this is the exact
     /// string that shipped wrong: the menu bar and `dictate` both printed
     /// `hold rightOption+rightCommand to dictate`, and a reader following it literally
@@ -172,6 +164,14 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         #expect(Hotkey.held(Hotkey.defaultChord(for: .release)) == "rightOption")
     }
 
+    /// **The order printed is an order that works.** A chord completes on whichever
+    /// modifier comes down last, so pressing them in an order whose *prefix* is another
+    /// installation's whole chord starts a press there instead. `rightOption+rightCommand`
+    /// - what the menu and the CLI both printed - is exactly that: Right Option alone is
+    /// the release chord, complete.
+    ///
+    /// This asserts the property rather than the string, so it stays true of chords nobody
+    /// has written yet. [LAW:verifiable-goals]
     @Test func theOrderPrintedIsAnOrderThatWorks() {
         let rivals = Set(Flavor.allCases.map(Hotkey.defaultChord(for:)))
         for flavor in Flavor.allCases {

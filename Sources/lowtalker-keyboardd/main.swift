@@ -16,14 +16,17 @@ import os
 /// it again, which is right here: starting again will not add the argument.
 /// [LAW:no-silent-failure]
 ///
-/// The refusal is logged under `Flavor.startupSubsystem`, not a service's: which service
-/// this would have been is exactly what is not known. `scripts/keyboard-helper log` reads
-/// that subsystem alongside the flavor's own, so this is findable by the one command a
-/// reader already has. [LAW:no-silent-failure]
+/// The refusal is filed under every flavor's service name, because which one this would
+/// have been is exactly what is not known - and every reader already asks under a service
+/// name: `scripts/keyboard-helper log` and the onboarding step both do. A name of its own
+/// would be one more subsystem for each of them to learn, for the one message that most
+/// needs finding. The arguments it prints say which plist it was. [LAW:no-silent-failure]
 let flavor: Flavor = {
     guard let flavor = flavorArgument(CommandLine.arguments) else {
-        Logger(subsystem: Flavor.startupSubsystem, category: "helper").fault(
-            "will not start: no --flavor \(Flavor.allCases.map(\.description).joined(separator: " or "), privacy: .public) in \(CommandLine.arguments, privacy: .public)")
+        for candidate in Flavor.allCases {
+            Logger(subsystem: candidate.machServiceName, category: "helper").fault(
+                "will not start: no --flavor \(Flavor.allCases.map(\.description).joined(separator: " or "), privacy: .public) in \(CommandLine.arguments, privacy: .public)")
+        }
         exit(0)
     }
     return flavor

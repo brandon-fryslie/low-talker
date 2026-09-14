@@ -120,13 +120,4 @@ private let repository = URL(fileURLWithPath: #filePath)
         }
         #expect(Set(services).count == Flavor.allCases.count, "two plists share a MachService: \(services)")
     }
-
-    /// The one name in the script that is not a flavor's, held to Flavor the same way the
-    /// rest are: read back by running the script, not by grepping it. A helper that cannot
-    /// find its flavor logs under this and nothing else, so a drift here is the refusal
-    /// going unread. [LAW:one-source-of-truth]
-    @Test func theScriptReadsTheSubsystemAFlavourlessHelperSpeaksUnder() throws {
-        let names = try Self.names(of: .development)
-        #expect(names["startup_subsystem"] == Flavor.startupSubsystem)
-    }
 }

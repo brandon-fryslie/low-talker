@@ -63,7 +63,7 @@ public final class Hotkey {
     ///
     /// [LAW:one-source-of-truth] A typist that refused only its own installation's chord
     /// still refused *a* hotkey, which is what made the omission read as complete at each
-    /// of the five call sites that spelled it. But the release chord is a strict subset of
+    /// call site that spelled it. But the release chord is a strict subset of
     /// the development one, and the helper's keystrokes are hardware to macOS: a
     /// development typist pressing a bare Right Option is the release app's hotkey
     /// exactly, so the transcript starts a dictation in the other copy. The fact is "every
@@ -82,8 +82,8 @@ public final class Hotkey {
     ///
     /// [LAW:one-source-of-truth] The order was a fact recorded only in prose - "Right
     /// Command goes down first" in the comment above - while the string a person actually
-    /// reads came from `KeyChord.spelled`, which orders by `Modifier.allCases` and so
-    /// printed `rightOption+rightCommand`: the one order that does not work. Two maps of
+    /// reads was ordered by `Modifier.allCases`, and so printed
+    /// `rightOption+rightCommand`: the one order that does not work. Two maps of
     /// one territory, and the one the user was handed was the wrong one.
     ///
     /// A chord completes on whichever modifier comes down last, so pressing them in an
@@ -103,20 +103,19 @@ public final class Hotkey {
         return Modifier.allCases
             .filter(chord.modifiers.contains)
             .enumerated()
-            .sorted { ($0.element == $1.element) ? false : (shared($0.element), $0.offset) < (shared($1.element), $1.offset) }
+            .sorted { (shared($0.element), $0.offset) < (shared($1.element), $1.offset) }
             .map(\.element)
     }
 
-    /// The chord as an instruction to a person: what to hold, in the order to hold it.
+    /// The chord in words: what to hold, in the order to hold it, then the key to strike.
     ///
-    /// [LAW:decomposition] Separate from `KeyChord.spelled`, which names a chord inside a
-    /// refusal, because those are two jobs that only look like one. A refusal has to say
-    /// *which* chord and nothing more, so any stable order will do; an instruction is read
-    /// by somebody with their hand on the keyboard, and for them the order is the entire
-    /// content. One function serving both is how the menu came to print the order that
-    /// starts the other installation dictating.
+    /// [LAW:one-source-of-truth] The one spelling of a chord for every place one is named,
+    /// an instruction or a refusal. An instruction needs the order that works; a refusal
+    /// needs only a stable one, and the order that works is stable. Two spellings are how
+    /// the menu came to print the order that starts the other installation dictating.
     nonisolated public static func held(_ chord: KeyChord) -> String {
-        (pressOrder(of: chord).map(\.rawValue) + chord.struck).joined(separator: "+")
+        let struck = chord.key.map { ["key 0x" + String($0.rawValue, radix: 16)] } ?? []
+        return (pressOrder(of: chord).map(\.rawValue) + struck).joined(separator: "+")
     }
 
     private let tap: any KeyboardTap
