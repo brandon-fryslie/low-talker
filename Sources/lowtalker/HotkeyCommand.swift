@@ -1,3 +1,4 @@
+import AppKit
 import ArgumentParser
 import Flavors
 import Foundation
@@ -16,6 +17,9 @@ struct HotkeyCommand: AsyncParsableCommand {
 
     @OptionGroup var installation: FlavorOption
 
+    @Option(help: "How the hotkey is heard: virtualKeyboard, an event tap needing Input Monitoring and Accessibility, or clipboard, a registered hot key needing neither.")
+    var heardBy: InputMethod = .virtualKeyboard
+
     // Whole milliseconds, for the same reason as `mic watch --interval`.
     @Option(help: "Milliseconds a press must stay under to be a tap.")
     var tapThreshold: Int = Int(Hotkey.defaultTapThreshold / .milliseconds(1))
@@ -27,18 +31,26 @@ struct HotkeyCommand: AsyncParsableCommand {
     @MainActor
     func run() async throws {
         setvbuf(stdout, nil, _IOLBF, 0)
-        let chord = Hotkey.defaultChord(for: installation.flavor)
-        let hotkey = Hotkey(chords: [chord], tapThreshold: .milliseconds(tapThreshold))
-        let (transitions, continuation) = AsyncStream.makeStream(of: HotkeyDetector.Transition.self)
-        try hotkey.start { continuation.yield($0) } onLapse: { print("\($0)") }
+        let chord = Hotkey.defaultChord(for: installation.flavor, heardBy: heardBy)
+        let hotkey = Hotkey(for: installation.flavor, heardBy: heardBy, tapThreshold: .milliseconds(tapThreshold))
+        try hotkey.start { transition in
+            // The press's own stamp beside the moment it was handled, so a tap whose
+            // clock is not the uptime clock shows as a gap nobody could press through.
+            switch transition {
+            case .began(_, let moment): print("began, delivered \(Int((HostTime.now - moment) / .microseconds(1))) us after its stamp")
+            case .ended(_, let ending): print("ended (\(ending))")
+            }
+        } onLapse: { print("\($0)") }
         // Named from the chord rather than spelled here, because the two installations
         // do not watch the same keys. [LAW:one-source-of-truth]
         print("watching \(Hotkey.held(chord))")
-        for await transition in transitions {
-            switch transition {
-            case .began: print("began")
-            case .ended(_, let ending): print("ended (\(ending))")
-            }
-        }
+        // A registered hot key reaches its owner through the application's event loop, and
+        // a command with no loop registers it and hears nothing. The tap needs no loop but
+        // runs under this one the same, so both are watched one way. The app has no Dock
+        // icon and no menu: it exists to be delivered to.
+        NSApplication.shared.setActivationPolicy(.prohibited)
+        withExtendedLifetime(hotkey) { NSApplication.shared.run() }
     }
 }
+
+extension InputMethod: ExpressibleByArgument {}

@@ -178,6 +178,7 @@ struct DextWatchCommand: AsyncParsableCommand {
         setvbuf(stdout, nil, _IOLBF, 0)
         let (events, continuation) = AsyncStream.makeStream(of: (KeyEvent, HostTime).self)
         _ = try SystemKeyboardTap().install(
+            listeningFor: [],
             handling: { event in
                 continuation.yield((event, .now))
                 return .pass

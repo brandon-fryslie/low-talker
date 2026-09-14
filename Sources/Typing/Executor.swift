@@ -24,18 +24,31 @@ public struct Executor {
     /// The pointer for one target app, refusing every report the same way.
     public typealias Pointers = @MainActor (BundleID) -> Pointer
 
-    private let keyboard: Keyboards
-    private let mouse: Pointers
-    private let hotkeys: Set<KeyChord>
+    /// Where the actions go. [LAW:types-are-the-program] One value, so an executor that
+    /// copies holds no keyboard it could reach for, and one that types holds no clipboard.
+    private enum Output {
+        /// `hotkeys` are the chords the tap listens for, which no action may press.
+        case devices(keyboard: Keyboards, mouse: Pointers, hotkeys: Set<KeyChord>)
+        case clipboard(Clipboard)
+    }
+
+    private let output: Output
     private let log: Logger
 
     /// `hotkeys` are the chords the tap listens for, which no action may press.
-    public init(keyboard: @escaping Keyboards, mouse: @escaping Pointers, hotkeys: Set<KeyChord>, log: Logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "lowtalker", category: "typist")) {
-        self.keyboard = keyboard
-        self.mouse = mouse
-        self.hotkeys = hotkeys
+    public init(keyboard: @escaping Keyboards, mouse: @escaping Pointers, hotkeys: Set<KeyChord>, log: Logger = Executor.log) {
+        output = .devices(keyboard: keyboard, mouse: mouse, hotkeys: hotkeys)
         self.log = log
     }
+
+    /// Text at the focus left on the clipboard for the user to paste; nothing typed or
+    /// clicked. Nothing here can press a key, so there is no hotkey to refuse.
+    public init(copyingTo clipboard: Clipboard, log: Logger = Executor.log) {
+        output = .clipboard(clipboard)
+        self.log = log
+    }
+
+    nonisolated public static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "lowtalker", category: "typist")
 
     /// One action, done. The time is from the hotkey's key-up to the helper's
     /// acknowledgement of the last report, which is the number the app has to keep
@@ -50,6 +63,9 @@ public struct Executor {
             /// is the acceleration loop's cost and the number worth reading off a run.
             case clicked(at: ScreenPoint, button: MouseButton, times: Clicks, reports: Int)
             case scrolled(at: ScreenPoint, vertical: WheelCounts, horizontal: WheelCounts)
+            /// Left on the clipboard, where the user pastes it: `into` is the app that was
+            /// in front, not an app the text reached.
+            case copied(characters: Int)
         }
 
         public let what: What
@@ -58,12 +74,13 @@ public struct Executor {
 
         public var description: String {
             let act = switch what {
-            case .typed(let characters): "typed \(characters) characters"
-            case .pressed(let chord): "pressed \(Hotkey.held(chord))"
-            case .clicked(let at, let button, let times, let reports): "clicked \(button.rawValue) \(times.spelled) at \(at) after \(reports) move reports"
-            case .scrolled(let at, let vertical, let horizontal): "scrolled vertical \(vertical.rawValue) horizontal \(horizontal.rawValue) at \(at)"
+            case .typed(let characters): "typed \(characters) characters into \(into.rawValue)"
+            case .pressed(let chord): "pressed \(Hotkey.held(chord)) into \(into.rawValue)"
+            case .clicked(let at, let button, let times, let reports): "clicked \(button.rawValue) \(times.spelled) at \(at) after \(reports) move reports into \(into.rawValue)"
+            case .scrolled(let at, let vertical, let horizontal): "scrolled vertical \(vertical.rawValue) horizontal \(horizontal.rawValue) at \(at) into \(into.rawValue)"
+            case .copied(let characters): "copied \(characters) characters to the clipboard with \(into.rawValue) in front"
             }
-            return "\(act) into \(into.rawValue), key-up to acknowledged \(Int(acknowledged / .milliseconds(1))) ms"
+            return "\(act), key-up to acknowledged \(Int(acknowledged / .milliseconds(1))) ms"
         }
     }
 
@@ -94,6 +111,31 @@ public struct Executor {
     }
 
     private func lower(_ action: Action, in context: Context, on layout: KeyboardLayout) throws -> Step {
+        switch output {
+        case .devices(let keyboard, let mouse, let hotkeys):
+            try lower(action, in: context, on: layout, keyboard: keyboard, mouse: mouse, hotkeys: hotkeys)
+        case .clipboard(let clipboard):
+            try copy(action, in: context, to: clipboard)
+        }
+    }
+
+    private func copy(_ action: Action, in context: Context, to clipboard: Clipboard) throws -> Step {
+        switch action {
+        case .insertText(let text, .focus):
+            return Step(into: context.frontmostApp) {
+                try clipboard.write(text)
+                return .copied(characters: text.count)
+            }
+        // Text for a named app included: the clipboard reaches whatever the user pastes
+        // into, so an action that names its app is one this output would only pretend to.
+        case .insertText(_, .app), .sendKeys, .click, .scroll, .clickElement:
+            throw NeedsTheVirtualKeyboard(action: action)
+        case .activateApp, .openURL, .runShortcut, .pipe:
+            throw NotAnInput(action: action)
+        }
+    }
+
+    private func lower(_ action: Action, in context: Context, on layout: KeyboardLayout, keyboard: Keyboards, mouse: Pointers, hotkeys: Set<KeyChord>) throws -> Step {
         switch action {
         case .insertText(let text, let target):
             // The focus is whatever app was in front when the hotkey went down, which
@@ -174,4 +216,13 @@ public struct NotAnInput: Error, CustomStringConvertible {
     public let action: Action
 
     public var description: String { "neither the keyboard nor the mouse can perform \(action); nothing was done" }
+}
+
+/// An action only the virtual keyboard or mouse can perform, reaching an executor that
+/// puts words on the clipboard. [LAW:no-silent-failure] Refused by name, so a route that
+/// needs the devices says so instead of leaving part of itself on the clipboard.
+public struct NeedsTheVirtualKeyboard: Error, CustomStringConvertible {
+    public let action: Action
+
+    public var description: String { "\(action) needs the virtual keyboard, and this installation puts dictation on the clipboard; nothing was done" }
 }

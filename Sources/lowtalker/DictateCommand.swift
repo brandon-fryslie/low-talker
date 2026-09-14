@@ -39,7 +39,7 @@ struct DictateCommand: AsyncParsableCommand {
         // Watched before the tap goes up, so no key can be down when an interrupt lands.
         let interrupt = Interrupt.watched()
         let helper = HelperConnection(flavor: installation.flavor)
-        let chord = Hotkey.defaultChord(for: installation.flavor)
+        let chord = Hotkey.defaultChord(for: installation.flavor, heardBy: .virtualKeyboard)
         // [LAW:decomposition] What this installation listens for and what its typist must
         // refuse to press are two sets that happened to be equal while there was one
         // installation. Listening is this copy's own chord - hearing the other's would be

@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Flavors
 import Foundation
@@ -16,7 +17,7 @@ import Typing
     /// Which installation's chord is beside the point here - these are about what the
     /// executor types, not about who held what - so one of them is named once and both
     /// the context and the guard read it from here. [LAW:one-source-of-truth]
-    static let held = Hotkey.defaultChord(for: .release)
+    static let held = Hotkey.defaultChord(for: .release, heardBy: .virtualKeyboard)
     static let context = Context(chord: held, press: .hold, frontmostApp: textEdit, focusedElementRole: nil)
 
     /// One keyboard per app, made on first ask and kept, so the log of every action into
@@ -55,6 +56,52 @@ import Typing
 
     private func executor(_ keyboards: Keyboards, _ pointers: Pointers = Pointers()) -> Executor {
         Executor(keyboard: keyboards.keyboard(for:), mouse: pointers.pointer(for:), hotkeys: [Self.held])
+    }
+
+    /// A pasteboard of the test's own, so a run never touches the clipboard of the person
+    /// at this Mac, released when the test ends.
+    private func withPasteboard(_ body: (NSPasteboard) async throws -> Void) async rethrows {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("lowtalker.tests.\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        try await body(pasteboard)
+    }
+
+    /// Text at the focus is left on the clipboard, the whole of it, replacing what was there.
+    @Test func textAtTheFocusIsCopiedToTheClipboard() async throws {
+        try await withPasteboard { pasteboard in
+            pasteboard.clearContents()
+            pasteboard.setString("what was there", forType: .string)
+            let performed = try await Executor(copyingTo: Clipboard(pasteboard)).perform(
+                [.insertText(text: "héllo there", target: .focus)], in: Self.context, on: Self.us, since: .now)
+            #expect(pasteboard.string(forType: .string) == "héllo there")
+            #expect(performed.count == 1)
+            guard case .copied(let characters) = performed[0].what else { Issue.record("not copied"); return }
+            #expect(characters == 11)
+            #expect("\(performed[0])".hasPrefix("copied 11 characters to the clipboard with com.apple.TextEdit in front, key-up to acknowledged "))
+        }
+    }
+
+    /// Everything only the virtual devices can do is refused by name before anything is
+    /// done, so a list with one of them in it copies nothing either.
+    @Test func whatOnlyTheDevicesCanDoIsRefusedAndNothingIsCopied() async throws {
+        let refused: [Action] = [
+            .sendKeys(chord: KeyChord(key: Key(rawValue: 0x24))),
+            .click(at: ScreenPoint(x: 1, y: 1), button: .left, times: .single),
+            .scroll(at: ScreenPoint(x: 1, y: 1), vertical: WheelCounts(rawValue: 3)!, horizontal: .none),
+            .clickElement(role: AccessibilityRole(rawValue: "AXButton"), title: "Cancel"),
+            .insertText(text: "a", target: .app(bundleID: Self.slack)),
+        ]
+        for action in refused {
+            try await withPasteboard { pasteboard in
+                pasteboard.clearContents()
+                pasteboard.setString("untouched", forType: .string)
+                await #expect(throws: NeedsTheVirtualKeyboard.self) {
+                    try await Executor(copyingTo: Clipboard(pasteboard)).perform(
+                        [.insertText(text: "first", target: .focus), action], in: Self.context, on: Self.us, since: .now)
+                }
+                #expect(pasteboard.string(forType: .string) == "untouched", "\(action) let the text before it through")
+            }
+        }
     }
 
     @Test func textAtTheFocusGoesIntoTheAppThatWasInFront() async throws {
