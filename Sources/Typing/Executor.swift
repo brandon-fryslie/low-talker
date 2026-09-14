@@ -89,9 +89,19 @@ public struct Executor {
     /// cannot perform, cannot be typed on the layout, or would press the hotkey; throws
     /// `RouteStopped` from the action that stopped, carrying the earlier ones, which are
     /// done.
+    ///
+    /// `layout` is read only by an executor that types: copying needs no layout, so a
+    /// layout that cannot be read costs the clipboard nothing.
     @discardableResult
-    public func perform(_ actions: [Action], in context: Context, on layout: KeyboardLayout, since keyUp: ContinuousClock.Instant) async throws -> [Performed] {
-        let lowered = try actions.map { try lower($0, in: context, on: layout) }
+    public func perform(_ actions: [Action], in context: Context, on layout: @autoclosure () throws -> KeyboardLayout, since keyUp: ContinuousClock.Instant) async throws -> [Performed] {
+        let lowered: [Step]
+        switch output {
+        case .devices(let keyboard, let mouse, let hotkeys):
+            let layout = try layout()
+            lowered = try actions.map { try lower($0, in: context, on: layout, keyboard: keyboard, mouse: mouse, hotkeys: hotkeys) }
+        case .clipboard(let clipboard):
+            lowered = try actions.map { try copy($0, in: context, to: clipboard) }
+        }
         let clock = ContinuousClock()
         var performed: [Performed] = []
         for step in lowered {
@@ -108,15 +118,6 @@ public struct Executor {
     private struct Step {
         let into: BundleID
         let perform: @MainActor () async throws -> Performed.What
-    }
-
-    private func lower(_ action: Action, in context: Context, on layout: KeyboardLayout) throws -> Step {
-        switch output {
-        case .devices(let keyboard, let mouse, let hotkeys):
-            try lower(action, in: context, on: layout, keyboard: keyboard, mouse: mouse, hotkeys: hotkeys)
-        case .clipboard(let clipboard):
-            try copy(action, in: context, to: clipboard)
-        }
     }
 
     private func copy(_ action: Action, in context: Context, to clipboard: Clipboard) throws -> Step {

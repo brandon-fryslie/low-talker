@@ -81,6 +81,22 @@ import Typing
         }
     }
 
+    private struct UnreadableLayout: Error {}
+    private static func unreadableLayout() throws -> KeyboardLayout { throw UnreadableLayout() }
+
+    /// Copying reads no layout, so a layout that cannot be read still leaves the words on
+    /// the clipboard; typing reads it, and is refused by that error.
+    @Test func onlyTypingReadsTheLayout() async throws {
+        try await withPasteboard { pasteboard in
+            try await Executor(copyingTo: Clipboard(pasteboard)).perform(
+                [.insertText(text: "hi", target: .focus)], in: Self.context, on: try Self.unreadableLayout(), since: .now)
+            #expect(pasteboard.string(forType: .string) == "hi")
+        }
+        await #expect(throws: UnreadableLayout.self) {
+            try await executor(Keyboards()).perform([.insertText(text: "hi", target: .focus)], in: Self.context, on: try Self.unreadableLayout(), since: .now)
+        }
+    }
+
     /// Everything only the virtual devices can do is refused by name before anything is
     /// done, so a list with one of them in it copies nothing either.
     @Test func whatOnlyTheDevicesCanDoIsRefusedAndNothingIsCopied() async throws {

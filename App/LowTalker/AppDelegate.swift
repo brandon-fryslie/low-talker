@@ -339,6 +339,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let method = item.representedObject as? String, let chosen = InputMethod(rawValue: method) else {
             preconditionFailure("an input method item carries its method's raw value")
         }
+        // Before `listen` has the microphone - its prompt still open, or refused - the choice
+        // is only kept: `listen` takes it up once the microphone is held, and a hotkey put
+        // up now would hear presses no capture could open for, over the status that says
+        // why. `switching` is set only by a choice taken down to a loop, which `listen`
+        // makes first. [LAW:no-ambient-temporal-coupling]
+        guard switching != nil else {
+            chosenMethod = chosen
+            return
+        }
         Task {
             await choose(chosen)
             showWhatIsMissing(for: chosen)
@@ -491,7 +500,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// to re-read. `menuNeedsUpdate` rather than `menuWillOpen`: AppKit calls this one
     /// before the menu is laid out, so the items are in place when it is measured.
     func menuNeedsUpdate(_ menu: NSMenu) {
-        let method = listening?.method
+        // The kept choice while nothing listens yet, so a choice made then is shown as made.
+        let method = listening?.method ?? chosenMethod
         // The virtual keyboard's requirements are read only while it is the method: on the
         // clipboard nothing is missing, and a list of driver steps would be a list of
         // things to install for an output nobody is using.

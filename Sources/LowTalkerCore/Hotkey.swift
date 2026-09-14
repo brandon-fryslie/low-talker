@@ -56,16 +56,17 @@ public final class Hotkey {
     /// [LAW:one-source-of-truth]
     ///
     /// **A registered hot key cannot be a modifier alone**, so the clipboard method, which
-    /// hears its hotkey that way, gets a key: Control+Option+D, and Command added for the
+    /// hears its hotkey that way, gets a key: Control+Shift+D, and Command added for the
     /// development copy. Carbon matches modifiers exactly, so neither completes the other.
-    /// Not Control+Option+Space, which macOS binds to switching input sources.
+    /// Not Control+Option, which is VoiceOver's modifier: VoiceOver takes Control+Option+D
+    /// as a move to the Dock.
     nonisolated public static func defaultChord(for flavor: Flavor, heardBy method: InputMethod) -> KeyChord {
         let d = Key(rawValue: UInt16(kVK_ANSI_D))
         return switch (method, flavor) {
         case (.virtualKeyboard, .release): KeyChord(modifiers: .rightOption)
         case (.virtualKeyboard, .development): KeyChord(modifiers: .rightOption, .rightCommand)
-        case (.clipboard, .release): KeyChord(key: d, modifiers: [.leftControl, .leftOption])
-        case (.clipboard, .development): KeyChord(key: d, modifiers: [.leftControl, .leftOption, .leftCommand])
+        case (.clipboard, .release): KeyChord(key: d, modifiers: [.leftControl, .leftShift])
+        case (.clipboard, .development): KeyChord(key: d, modifiers: [.leftControl, .leftShift, .leftCommand])
         }
     }
 

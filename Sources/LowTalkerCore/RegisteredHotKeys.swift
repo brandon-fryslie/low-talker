@@ -20,14 +20,26 @@ public struct RegisteredHotKeys: KeyboardTap {
     /// it is the chord's index, which is how an event is traced back to its chord.
     private static let signature: OSType = 0x6C77_746B // 'lwtk'
 
-    /// What the C callback reaches through its context pointer.
+    /// What the C callback reaches through its context pointer, and what disposal takes
+    /// down: the handler and every hot key registered under it.
+    @MainActor
     private final class Installed {
         let registrations: [Registration]
         let handle: @MainActor (KeyEvent) -> HotkeyDetector.Delivery
+        var handler: EventHandlerRef?
+        var hotKeys: [EventHotKeyRef] = []
 
         init(registrations: [Registration], handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery) {
             self.registrations = registrations
             self.handle = handle
+        }
+
+        /// Unregisters, removes the handler, and gives back the retain the callback's
+        /// context pointer held.
+        func dispose() {
+            hotKeys.forEach { UnregisterEventHotKey($0) }
+            if let handler { RemoveEventHandler(handler) }
+            Unmanaged.passUnretained(self).release()
         }
 
         @MainActor
@@ -68,27 +80,21 @@ public struct RegisteredHotKeys: KeyboardTap {
             }
         }
 
-        let installed = Unmanaged.passRetained(Installed(registrations: registrations, handle: handle))
+        let installed = Installed(registrations: registrations, handle: handle)
+        let context = Unmanaged.passRetained(installed).toOpaque()
         let target = GetApplicationEventTarget()
         let kinds = [kEventHotKeyPressed, kEventHotKeyReleased].map { EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32($0)) }
-        var handler: EventHandlerRef?
         // The application target dispatches on the main thread's event loop, so the
         // callback runs on the main actor.
         let installedHandler = InstallEventHandler(target, { _, event, context in
             let installed = Unmanaged<Installed>.fromOpaque(context!).takeUnretainedValue()
             return MainActor.assumeIsolated { installed.deliver(event!) }
-        }, kinds.count, kinds, installed.toOpaque(), &handler)
-        guard installedHandler == noErr, let handler else {
-            installed.release()
+        }, kinds.count, kinds, context, &installed.handler)
+        guard installedHandler == noErr, installed.handler != nil else {
+            installed.dispose()
             throw RegisteredHotKeyError.handlerRefused(installedHandler)
         }
 
-        var registered: [EventHotKeyRef] = []
-        func release() {
-            registered.forEach { UnregisterEventHotKey($0) }
-            RemoveEventHandler(handler)
-            installed.release()
-        }
         for (index, registration) in registrations.enumerated() {
             var reference: EventHotKeyRef?
             let status = RegisterEventHotKey(
@@ -97,12 +103,12 @@ public struct RegisteredHotKeys: KeyboardTap {
             guard status == noErr, let reference else {
                 // [LAW:no-silent-failure] What did register is taken back, so a refusal
                 // leaves no half-heard hotkey behind it.
-                release()
+                installed.dispose()
                 throw RegisteredHotKeyError.refused(registration.chord, status)
             }
-            registered.append(reference)
+            installed.hotKeys.append(reference)
         }
-        return release
+        return { installed.dispose() }
     }
 }
 
