@@ -61,6 +61,9 @@ targetTemplates:
         product: Signals
       - package: low-talker
         product: Typing
+      # The layout names the clipboard hotkey's key as the user's keyboard prints it.
+      - package: low-talker
+        product: KeyboardLayout
       - package: low-talker
         product: Dictation
       # The helper rides inside the bundle, where the plist above names it, signed on

@@ -15,7 +15,11 @@ public protocol KeyboardTap {
     /// the main actor, that the system had switched the tap off and it has been
     /// switched back on; the events in between are lost.
     /// Throws when the session refuses a tap, which is a permission matter.
+    ///
+    /// `chords` are what the detector above will look for. A tap that sees every key may
+    /// ignore them; one that can only hear what it asked for registers exactly these.
     func install(
+        listeningFor chords: Set<KeyChord>,
         handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery,
         onLapse: @escaping @MainActor () -> Void
     ) throws -> Disposal
@@ -123,7 +127,9 @@ public struct SystemKeyboardTap: KeyboardTap {
 
     public init() {}
 
+    /// Sees every key, so the chords are the detector's to find and not this tap's.
     public func install(
+        listeningFor chords: Set<KeyChord>,
         handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery,
         onLapse: @escaping @MainActor () -> Void
     ) throws -> Disposal {

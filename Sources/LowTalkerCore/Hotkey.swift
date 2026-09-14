@@ -1,4 +1,6 @@
+import Carbon.HIToolbox
 import Flavors
+
 /// The system switching the keyboard tap off for being slow to answer, and it being
 /// switched back on. The events in between were lost.
 ///
@@ -52,10 +54,19 @@ public final class Hotkey {
     /// Named once per installation: the tap listens for it and the typist refuses to
     /// press it, and two spellings of one chord would be a hotkey the typist could type.
     /// [LAW:one-source-of-truth]
-    nonisolated public static func defaultChord(for flavor: Flavor) -> KeyChord {
-        switch flavor {
-        case .release: KeyChord(modifiers: .rightOption)
-        case .development: KeyChord(modifiers: .rightOption, .rightCommand)
+    ///
+    /// **A registered hot key cannot be a modifier alone**, so the clipboard method, which
+    /// hears its hotkey that way, gets a key: Control+Shift+D, and Command added for the
+    /// development copy. Carbon matches modifiers exactly, so neither completes the other.
+    /// Not Control+Option, which is VoiceOver's modifier: VoiceOver takes Control+Option+D
+    /// as a move to the Dock.
+    nonisolated public static func defaultChord(for flavor: Flavor, heardBy method: InputMethod) -> KeyChord {
+        let d = Key(rawValue: UInt16(kVK_ANSI_D))
+        return switch (method, flavor) {
+        case (.virtualKeyboard, .release): KeyChord(modifiers: .rightOption)
+        case (.virtualKeyboard, .development): KeyChord(modifiers: .rightOption, .rightCommand)
+        case (.clipboard, .release): KeyChord(key: d, modifiers: [.leftControl, .leftShift])
+        case (.clipboard, .development): KeyChord(key: d, modifiers: [.leftControl, .leftShift, .leftCommand])
         }
     }
 
@@ -75,8 +86,11 @@ public final class Hotkey {
     /// on the strength of it would type the chord in the window where the answer was
     /// stale. The cost of refusing a chord nobody listens for is a keystroke the helper
     /// declines; the cost of the other mistake is two apps dictating at once.
+    ///
+    /// Every method's too, for the same reason: which method the other copy is on is a
+    /// choice its user can change from its menu at any moment.
     nonisolated public static let everyInstallationsChord: Set<KeyChord> =
-        Set(Flavor.allCases.map(defaultChord(for:)))
+        Set(Flavor.allCases.flatMap { flavor in InputMethod.allCases.map { defaultChord(for: flavor, heardBy: $0) } })
 
     /// This chord's modifiers in the order a person must press them.
     ///
@@ -93,7 +107,9 @@ public final class Hotkey {
     /// go down last. `theOrderPrintedIsAnOrderThatWorks` holds that to every flavor.
     /// [LAW:verifiable-goals]
     nonisolated public static func pressOrder(of chord: KeyChord) -> [Modifier] {
-        let rivals = everyInstallationsChord.subtracting([chord]).map(\.modifiers)
+        // Only a chord of modifiers alone completes while modifiers go down; one with a key
+        // waits for its key, so no order of holding modifiers can start it.
+        let rivals = everyInstallationsChord.subtracting([chord]).filter { $0.key == nil }.map(\.modifiers)
         // How many other installations' chords this modifier appears in. Zero means it
         // cannot complete one of theirs, so it is safe to hold early.
         func shared(_ modifier: Modifier) -> Int { rivals.filter { $0.contains(modifier) }.count }
@@ -120,7 +136,9 @@ public final class Hotkey {
 
     private let tap: any KeyboardTap
     private var detector: HotkeyDetector
-    private var installed: Disposal?
+    /// The tap that is up, and the handler its presses go to - kept together because a
+    /// press still open when the tap comes down is ended at that same handler.
+    private var installed: (dispose: Disposal, onTransition: @MainActor (HotkeyDetector.Transition) -> Void)?
     /// Lapses since `start()`, which each one is reported with. Private because a
     /// second way to ask is a second answer: this one moves between the lapse and any
     /// later reading of it. [LAW:one-source-of-truth]
@@ -129,6 +147,17 @@ public final class Hotkey {
     public init(chords: Set<KeyChord>, tapThreshold: Duration = defaultTapThreshold, tap: any KeyboardTap = SystemKeyboardTap()) {
         self.tap = tap
         detector = HotkeyDetector(chords: chords, tapThreshold: tapThreshold)
+    }
+
+    /// An installation's hotkey as its input method hears it: that method's chord, through
+    /// that method's tap. [LAW:one-source-of-truth] The one place a method becomes the pair,
+    /// so a chord can never be handed to a tap that cannot hear it.
+    public convenience init(for flavor: Flavor, heardBy method: InputMethod, tapThreshold: Duration = defaultTapThreshold) {
+        let tap: any KeyboardTap = switch method {
+        case .virtualKeyboard: SystemKeyboardTap()
+        case .clipboard: RegisteredHotKeys()
+        }
+        self.init(chords: [Self.defaultChord(for: flavor, heardBy: method)], tapThreshold: tapThreshold, tap: tap)
     }
 
     public var phase: HotkeyDetector.Phase { detector.phase }
@@ -148,21 +177,31 @@ public final class Hotkey {
     ) throws {
         stop()
         lapses = 0
-        installed = try tap.install(
+        let dispose = try tap.install(
+            listeningFor: detector.chords,
             handling: { [weak self] event in self?.handle(event, onTransition) ?? .pass },
             onLapse: { [weak self] in self?.lapse(onTransition, onLapse) }
         )
+        installed = (dispose, onTransition)
     }
 
+    /// Stops watching. A press still open is ended here as `.lapsed`, at the handler it
+    /// began at: once the tap is down its release can never arrive, and a press left open
+    /// is a microphone left open with nothing to close it.
+    /// [LAW:no-ambient-temporal-coupling]
     public func stop() {
-        installed?()
+        let unfinished = detector.lapse()
+        let was = installed
         installed = nil
+        was?.dispose()
         detector = HotkeyDetector(chords: detector.chords, tapThreshold: detector.tapThreshold)
+        unfinished.map { was?.onTransition($0) }
     }
 
     // A non-Sendable @MainActor class is only ever held by main-actor code, so its
     // last release is on the main actor; assumeIsolated traps if that stops holding.
-    deinit { MainActor.assumeIsolated { stop() } }
+    // Only the tap comes down: nothing is left to hear an ending told from here.
+    deinit { MainActor.assumeIsolated { installed?.dispose() } }
 
     private func handle(_ event: KeyEvent, _ onTransition: @MainActor (HotkeyDetector.Transition) -> Void) -> HotkeyDetector.Delivery {
         let verdict = detector.handle(event)

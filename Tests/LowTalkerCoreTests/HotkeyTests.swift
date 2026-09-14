@@ -9,11 +9,13 @@ private struct Refused: Error, Equatable {}
 @MainActor
 private final class FakeTap: KeyboardTap {
     final class Installation {
+        let chords: Set<KeyChord>
         let handle: @MainActor (KeyEvent) -> HotkeyDetector.Delivery
         let onLapse: @MainActor () -> Void
         var disposed = false
 
-        init(handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery, onLapse: @escaping @MainActor () -> Void) {
+        init(chords: Set<KeyChord>, handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery, onLapse: @escaping @MainActor () -> Void) {
+            self.chords = chords
             self.handle = handle
             self.onLapse = onLapse
         }
@@ -26,9 +28,9 @@ private final class FakeTap: KeyboardTap {
         self.refusal = refusal
     }
 
-    func install(handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery, onLapse: @escaping @MainActor () -> Void) throws -> Disposal {
+    func install(listeningFor chords: Set<KeyChord>, handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery, onLapse: @escaping @MainActor () -> Void) throws -> Disposal {
         if let refusal { throw refusal }
-        let installation = Installation(handle: handle, onLapse: onLapse)
+        let installation = Installation(chords: chords, handle: handle, onLapse: onLapse)
         installations.append(installation)
         return { installation.disposed = true }
     }
@@ -55,6 +57,39 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         #expect(hotkey.phase == .held(rightOption, since: at(0)))
         #expect(installation.handle(rightOption(.up, at: 400)) == .swallow)
         #expect(transitions == [.began(rightOption, at: at(0)), .ended(rightOption, .released(.hold))])
+    }
+
+    /// A tap that can hear only what it asks for is told what the detector looks for.
+    @Test func theTapIsToldTheChordsTheDetectorListensFor() throws {
+        let tap = FakeTap()
+        let chord = Hotkey.defaultChord(for: .release, heardBy: .clipboard)
+        try Hotkey(chords: [chord], tap: tap).start({ _ in }, onLapse: { _ in })
+        #expect(tap.installations.first?.chords == [chord])
+    }
+
+    /// A registered hot key reports the chord going down and coming up as its key moving
+    /// under its modifiers, and the detector tells a hold from a tap from those two alone.
+    @Test func aChordWithAKeyIsHeldAndTappedFromItsKeyAlone() throws {
+        let chord = Hotkey.defaultChord(for: .release, heardBy: .clipboard)
+        let key = try #require(chord.key)
+        func moved(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEvent {
+            KeyEvent(key: .key(key), direction: direction, modifiers: chord.modifiers, time: at(ms))
+        }
+        let tap = FakeTap()
+        let hotkey = Hotkey(chords: [chord], tap: tap)
+        var transitions: [HotkeyDetector.Transition] = []
+        try hotkey.start({ transitions.append($0) }, onLapse: { _ in })
+        let installation = try #require(tap.installations.first)
+        _ = installation.handle(moved(.down, at: 0))
+        _ = installation.handle(moved(.up, at: 400))
+        _ = installation.handle(moved(.down, at: 1000))
+        _ = installation.handle(moved(.up, at: 1050))
+        #expect(hotkey.phase == .latched(chord))
+        _ = installation.handle(moved(.down, at: 3000))
+        #expect(transitions == [
+            .began(chord, at: at(0)), .ended(chord, .released(.hold)),
+            .began(chord, at: at(1000)), .ended(chord, .released(.tap)),
+        ])
     }
 
     /// Every lapse is told, as it happens, carrying how many there have been. A lapse
@@ -109,15 +144,20 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         #expect(transitions.last == .began(rightOption, at: at(1000)))
     }
 
-    /// Stopping mid-press forgets the press: a later start begins from rest.
-    @Test func stopDisposesTheTapAndReturnsToIdle() throws {
+    /// Stopping mid-press ends the press as lapsed at its handler, since its release can
+    /// no longer arrive, and a later start begins from rest.
+    @Test func stopEndsAnOpenPressAndDisposesTheTap() throws {
         let tap = FakeTap()
         let hotkey = Hotkey(chords: [rightOption], tap: tap)
-        try hotkey.start({ _ in }, onLapse: { _ in })
+        var transitions: [HotkeyDetector.Transition] = []
+        try hotkey.start({ transitions.append($0) }, onLapse: { _ in })
         _ = tap.installations[0].handle(rightOption(.down, at: 0))
         hotkey.stop()
         #expect(tap.installations[0].disposed)
         #expect(hotkey.phase == .idle)
+        #expect(transitions == [.began(rightOption, at: at(0)), .ended(rightOption, .lapsed)])
+        hotkey.stop()
+        #expect(transitions.count == 2)
     }
 
     @Test func aRefusedTapThrowsFromStart() {
@@ -148,8 +188,21 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
     /// release app's tap takes it and dictates.
     @Test func everyFlavoursChordIsOneTheTypistRefuses() {
         for flavor in Flavor.allCases {
-            #expect(Hotkey.everyInstallationsChord.contains(Hotkey.defaultChord(for: flavor)),
-                    "\(flavor)'s chord is not in the set a typist refuses")
+            for method in InputMethod.allCases {
+                #expect(Hotkey.everyInstallationsChord.contains(Hotkey.defaultChord(for: flavor, heardBy: method)),
+                        "\(flavor)'s \(method) chord is not in the set a typist refuses")
+            }
+        }
+    }
+
+    /// The clipboard method's chords are ones the window server can register, and no two
+    /// installations' are one hot key to it.
+    @Test func everyClipboardChordIsARegistrableHotKeyOfItsOwn() throws {
+        let chords = Set(Flavor.allCases.map { Hotkey.defaultChord(for: $0, heardBy: .clipboard) })
+        #expect(chords.count == Flavor.allCases.count)
+        for chord in chords {
+            #expect(chord.key != nil, "\(chord) has no key")
+            #expect(!chord.modifiers.contains(.function), "\(chord) holds function")
         }
     }
 
@@ -160,8 +213,8 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
     /// rightCommand at 7, so the order came straight from the enum's declaration order -
     /// a fact about how the cases were typed, being read as a fact about the keyboard.
     @Test func theDevelopmentChordIsPrintedInTheOrderThatDoesNotStartTheOtherCopy() {
-        #expect(Hotkey.held(Hotkey.defaultChord(for: .development)) == "rightCommand+rightOption")
-        #expect(Hotkey.held(Hotkey.defaultChord(for: .release)) == "rightOption")
+        #expect(Hotkey.held(Hotkey.defaultChord(for: .development, heardBy: .virtualKeyboard)) == "rightCommand+rightOption")
+        #expect(Hotkey.held(Hotkey.defaultChord(for: .release, heardBy: .virtualKeyboard)) == "rightOption")
     }
 
     /// **The order printed is an order that works.** A chord completes on whichever
@@ -173,15 +226,16 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
     /// This asserts the property rather than the string, so it stays true of chords nobody
     /// has written yet. [LAW:verifiable-goals]
     @Test func theOrderPrintedIsAnOrderThatWorks() {
-        let rivals = Set(Flavor.allCases.map(Hotkey.defaultChord(for:)))
-        for flavor in Flavor.allCases {
-            let chord = Hotkey.defaultChord(for: flavor)
+        // Only a chord of modifiers alone completes as its modifiers go down; a chord with a
+        // key waits for the key, so a prefix of modifiers can complete only these.
+        let rivals = Hotkey.everyInstallationsChord.filter { $0.key == nil }
+        for chord in Hotkey.everyInstallationsChord {
             let order = Hotkey.pressOrder(of: chord)
-            #expect(Set(order) == chord.modifiers, "\(flavor): the order is not the chord")
-            for held in 1..<order.count {
+            #expect(Set(order) == chord.modifiers, "\(chord): the order is not the chord")
+            for held in 1..<max(order.count, 1) {
                 let prefix = Set(order.prefix(held))
                 #expect(!rivals.contains(where: { $0.modifiers == prefix }),
-                        "\(flavor): holding \(order.prefix(held).map(\.rawValue).joined(separator: "+")) completes another installation's chord first")
+                        "\(chord): holding \(order.prefix(held).map(\.rawValue).joined(separator: "+")) completes another installation's chord first")
             }
         }
     }

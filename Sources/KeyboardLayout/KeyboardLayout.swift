@@ -112,6 +112,16 @@ public struct KeyboardLayout: Sendable {
         try typing(text).flatMap(\.keystrokes)
     }
 
+    /// The character one keystroke types on its own, or nil for a keystroke that types
+    /// none - an arrow, a function key, or a key reached only through a dead key.
+    ///
+    /// Read off the same map `typing` is, so the name a key is given and the character it
+    /// types cannot disagree. [LAW:one-source-of-truth] One keystroke types at most one
+    /// character, so at most one entry matches.
+    public func character(typedBy keystroke: Keystroke) -> Character? {
+        byCharacter.first { $0.value == [keystroke] }?.key
+    }
+
     /// Whether this layout can type every character of `text`, without building anything.
     ///
     /// The same question `typing` answers by throwing, so it reads the text the same way.
