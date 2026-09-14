@@ -116,8 +116,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         SMAppService.openSystemSettingsLoginItems()
     }
 
-    /// The chords the tap listens for and the typist refuses to press, named once.
-    /// [LAW:one-source-of-truth] Two spellings would be a hotkey the typist could type.
+    /// The chord the tap listens for: this installation's own. What the typist refuses is
+    /// a different set - every installation's - and is named where it is derived,
+    /// `Hotkey.everyInstallationsChord`. [LAW:one-source-of-truth]
     private static let chords: Set<KeyChord> = [Hotkey.defaultChord(for: flavor)]
 
     private let hotkey = Hotkey(chords: chords)
@@ -165,7 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         capture: capture,
         transcriber: { [unowned self] in try await engine.value },
         router: Router(routes: [.dictation]),
-        executor: .guarding(keyboard: helper.keyboard, mouse: helper.mouse, interrupt: interrupt, hotkeys: Self.chords),
+        executor: .guarding(keyboard: helper.keyboard, mouse: helper.mouse, interrupt: interrupt),
         report: { [unowned self] in report($0) }
     )
 
@@ -199,7 +200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let config = try Config.load(for: Self.flavor).config
             try capture.start(try await MicrophonePermission().request().grant(), atRest: config.microphone)
             try hotkey.start { [unowned self] in dictation.press($0) } onLapse: { [unowned self] in report($0) }
-            showHotkeyStatus("hold \(Hotkey.defaultChord(for: Self.flavor).spelled) to dictate")
+            showHotkeyStatus("hold \(Hotkey.held(Hotkey.defaultChord(for: Self.flavor))) to dictate")
         } catch {
             // Whatever got as far as starting is put back: a tap that failed after
             // capture began would otherwise leave capture holding the grant and watching

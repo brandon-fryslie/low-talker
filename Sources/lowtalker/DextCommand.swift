@@ -100,7 +100,7 @@ struct DextTypeCommand: AsyncParsableCommand {
         // refused as it is in the app: this command types into the same session the
         // app's tap may be listening to.
         let screen = TargetApp(bundleID: into, interrupt: interrupt)
-        let typist = Typist(keyboard: GuardedKeyboard(keyboard: keyboard, queue: DeviceQueue(), interrupt: interrupt, screen: screen), hotkeys: [Hotkey.defaultChord(for: installation.flavor)])
+        let typist = Typist(keyboard: GuardedKeyboard(keyboard: keyboard, queue: DeviceQueue(), interrupt: interrupt, screen: screen), hotkeys: Hotkey.everyInstallationsChord)
         // The first character alone, so its latency is the driver's and not the queue's,
         // and the rest as one run. Both are lowered from `expected`, which is already the
         // text as the keys will type it, so splitting it by character changes nothing.

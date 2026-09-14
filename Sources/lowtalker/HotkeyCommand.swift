@@ -33,7 +33,7 @@ struct HotkeyCommand: AsyncParsableCommand {
         try hotkey.start { continuation.yield($0) } onLapse: { print("\($0)") }
         // Named from the chord rather than spelled here, because the two installations
         // do not watch the same keys. [LAW:one-source-of-truth]
-        print("watching \(chord.spelled)")
+        print("watching \(Hotkey.held(chord))")
         for await transition in transitions {
             switch transition {
             case .began: print("began")

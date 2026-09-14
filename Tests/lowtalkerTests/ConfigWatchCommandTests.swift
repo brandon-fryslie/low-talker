@@ -86,7 +86,7 @@ import Testing
         try #"modle = "base.en""#.write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let watch = try ConfigCommand.Watch.parse(["--path", url.path])
+        let watch = try ConfigCommand.Watch.parse(["--flavor", "release", "--path", url.path])
         await #expect(throws: ConfigError.unknownKeys(["modle"])) { try await watch.run() }
     }
 }

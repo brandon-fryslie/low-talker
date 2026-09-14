@@ -11,22 +11,18 @@ import KeyboardService
 /// mapping that turns them into a `Requirement`, so the steps can be asserted as values
 /// on a Mac that is in none of the states worth checking.
 public enum OnboardingProbe {
-    /// Where the helper stands, as launchd sees it.
-    ///
-    /// Read without root on purpose: the menu-bar app is not root and this is its
-    /// question. `launchctl print` is a debug dump rather than an interface, and its
-    /// shape is already what `scripts/keyboard-helper install` reads back to find out
-    /// whether its own job got the name; both now ask through here.
-    /// [LAW:one-source-of-truth]
     /// Where this flavor's helper stands, asked of the one label that can hold it.
     ///
+    /// Read without root on purpose: the menu-bar app is not root and this is its question.
+    ///
     /// One question and no second reading, because there is no second label to ask about.
-    /// A flavor's launchd job and its Mach service carry one name, so a rival job cannot
-    /// exist: `launchctl bootstrap` refuses a duplicate label outright (exit 5, measured),
-    /// where it used to accept a second label naming the same service and hand it no
-    /// endpoint. What remains unaccounted for is a helper running outside launchd
-    /// entirely, and that one is reported as what it is - a holder that can be found but
-    /// not named. [LAW:no-silent-failure]
+    /// A flavor's launchd job and its Mach service carry one name, so a second *bootstrap*
+    /// under that label is refused outright (exit 5, measured). What that refusal does not
+    /// cover is the app's own path in: `SMAppService.register()` is not `bootstrap`, so a
+    /// plist job already holding the label simply stays, and the app's registration never
+    /// becomes the running job. That is a reading of its own, and this tells it apart from
+    /// a holder outside launchd by the field launchd answers with.
+    /// [LAW:no-silent-failure]
     public static func helperStanding(label: String, service: String) throws -> HelperStanding {
         try standing(
             from: Command("/bin/launchctl", "print", "system/\(label)").run(),
@@ -46,6 +42,29 @@ public enum OnboardingProbe {
             }
             return .noJob
         }
+        // [LAW:parse-dont-validate] Whose job this is, read off the one field that separates
+        // the two ways a job reaches this label. Measured on this Mac, 2026-09-12, against
+        // the running release app and its plist-installed counterpart:
+        //
+        //   SMAppService:              path = (submitted by smd.919)
+        //   launchctl bootstrap:       path = /Library/LaunchDaemons/<label>.plist
+        //
+        // Read before the endpoint, not after: a plist job under this label carries the
+        // service in its own MachServices, so it names the endpoint exactly as the app's
+        // job would - and a reading that asked about the endpoint first would call it
+        // "answering" and never reach here. Whatever it holds, it is not the app's
+        // registration, and its plist is the thing that has to go.
+        //
+        // The value must *start* there, as the script's `/Library/LaunchDaemons/*` does: the
+        // app's own plist sits under `Contents/Library/LaunchDaemons/` in its bundle, and a
+        // match anywhere in the line would call the app's job a stray one. The line must be
+        // the job's own `path`, not a `stderr path` nested beneath it. [LAW:single-enforcer]
+        let path = printed.stdout
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { $0.hasPrefix("path = ") }?
+            .dropFirst("path = ".count) ?? ""
+        guard !path.hasPrefix("/Library/LaunchDaemons/") else { return .aBootstrappedJobHoldsTheLabel }
         // The endpoint is handed out at load, so a job that holds the service names it
         // here. A job that asked and lost simply has no such line: launchd does not make
         // the loser loud, which is exactly why this is read rather than assumed.

@@ -116,15 +116,28 @@ import Testing
     /// to find the holder, because nothing else on the Mac will say: launchd does not
     /// make the loser loud.
     ///
-    /// It must not send the reader after a launchd job. No job can be the holder now - a
-    /// flavor's job and its service carry one label, and a second under it is refused at
-    /// bootstrap - so a step naming a plist to hunt for would be a search with no quarry.
-    @Test func aServiceLostToAnUnidentifiedHolderSendsTheReaderAfterAStrayProcess() {
+    /// It names both holders no label governs, because there are two and the plist is the
+    /// one a reader misses. The refusal at bootstrap covers a second job under *this*
+    /// flavor's label; it says nothing about a job filed under another label that names
+    /// this service, which is the shape every installation predating the joined labels
+    /// has. A step offering only `pgrep` sends that reader hunting a process that is
+    /// behaving exactly as it should.
+    @Test func aServiceLostToAnUnidentifiedHolderNamesBothHoldersNoLabelGoverns() {
         let step = Requirement.keyboardHelper(.anotherJobHoldsTheService, flavor: Self.flavor).step ?? ""
         #expect(step.contains(Self.service))
         #expect(step.contains("pgrep"))
-        #expect(!step.contains("/Library/LaunchDaemons"))
+        #expect(step.contains("/Library/LaunchDaemons"))
+        // Still not this one: removing a plist is the *other* standing's step, and the
+        // holder here is by definition not a job this script installed.
         #expect(!step.contains("keyboard-helper uninstall"))
+    }
+
+    /// The holder the app can name gets the step that names it. Its whole difference from
+    /// the row above is that there is something to remove and a command that removes it.
+    @Test func aBootstrappedJobHoldingTheLabelIsSentToRemoveItsPlist() {
+        let step = Requirement.keyboardHelper(.aBootstrappedJobHoldsTheLabel, flavor: Self.flavor).step ?? ""
+        #expect(step.contains("/Library/LaunchDaemons"))
+        #expect(step.contains("keyboard-helper uninstall \(Self.flavor)"))
     }
 
     @Test func aHelperWaitingForItsApprovalIsSentToLoginItems() {

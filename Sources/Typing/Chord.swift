@@ -39,14 +39,5 @@ public struct UnpressableChord: Error, CustomStringConvertible, Equatable {
         self.because = because
     }
 
-    public var description: String { "the chord \(chord.spelled) cannot be pressed: \(because)" }
-}
-
-extension KeyChord {
-    /// The chord in words, for a refusal that has to name it.
-    public var spelled: String {
-        let held = Modifier.allCases.filter(modifiers.contains).map(\.rawValue)
-        let struck = key.map { ["key 0x" + String($0.rawValue, radix: 16)] } ?? []
-        return (held + struck).joined(separator: "+")
-    }
+    public var description: String { "the chord \(Hotkey.held(chord)) cannot be pressed: \(because)" }
 }

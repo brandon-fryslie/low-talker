@@ -58,6 +58,52 @@ resolve() {
   PLIST="/Library/LaunchDaemons/${LABEL}.plist"
 }
 
+# [LAW:parse-dont-validate] Who holds this flavor's label right now, read before anything
+# is written under it: `none`, or the path launchd reports for the job. `launchctl print`
+# is a debug dump rather than an interface, so the reading is pinned to the one field that
+# separates the two registration paths - measured on this Mac, 2026-09-12, with the
+# release app running:
+#
+#   the app, through SMAppService:  path = (submitted by smd.919)
+#   a plist bootstrapped by hand:   path = /Library/LaunchDaemons/<label>.plist
+#
+# Any plist under /Library/LaunchDaemons is the second kind, whatever its file is called:
+# launchd files a job by the Label inside the plist, and OnboardingProbe.standing draws
+# the line in the same place, so the step the app prints and this script agree on which
+# holder it names. [LAW:single-enforcer]
+#
+# [LAW:no-silent-failure] Only launchd's own "no such job" means nobody holds the label.
+# A sudo that was refused, or a launchctl that failed some other way, has read nothing,
+# and reading nothing as "free" is what would write a plist over the app's job.
+claimant() {
+  local record path
+  if record=$(sudo launchctl print "system/${LABEL}" 2>&1); then
+    path=$(awk '/^[[:space:]]*path = / { sub(/^[[:space:]]*path = /, ""); print; exit }' <<<"$record")
+    # A record with no path read nothing about who holds the label, and nothing is not an
+    # answer to act on. [LAW:no-silent-failure]
+    [ -n "$path" ] || die "launchd reports a job under ${LABEL} with no path, so who holds it is unknown: ${record}"
+    printf '%s' "$path"
+  elif grep -q "Could not find service" <<<"$record"; then
+    printf none
+  else
+    die "could not read who holds ${LABEL}: ${record}"
+  fi
+}
+
+# A holder that is not a plist job is the installation's own app, registered through
+# SMAppService, and booting it out would take its Background Task Management record with
+# it. So it is named rather than touched.
+held_by_the_app() {
+  cat <<MSG
+${LABEL} is held by ${FLAVOR}'s own app, registered through SMAppService - launchd
+reports it at:
+  path = $1
+Booting it out would take its Background Task Management record with it, so it is left
+alone. Quit the app and turn it off in Login Items & Extensions instead. Read the record:
+  sudo launchctl print system/${LABEL}
+MSG
+}
+
 # A path is any bytes and a plist is XML, so the four characters XML reserves are escaped
 # once, here, before the path is written into one. [LAW:parse-dont-validate]
 xml_escape() {
@@ -74,6 +120,23 @@ install_helper() {
   grep -q '^Authority=' <<<"$signature" \
     || die "$HELPER is signed ad hoc and would admit no caller - run 'make helper', which signs it with the dev identity"
 
+  # [LAW:single-enforcer] launchd enforces one job per label - the second bootstrap under
+  # a held label exits 5 - and that refusal is the whole reason Flavor.swift gives the
+  # label and the service one name. This script used to defeat it three lines above the
+  # bootstrap, clearing whatever was loaded first, so the enforcer could never fire. With
+  # one name per flavor the holder it cleared was normally the installation's own app:
+  # BTM files one approval record per label, and the app that came back found its daemon
+  # bound to this plist's path, logged "Invalid path: Contents/MacOS/lowtalker-keyboardd",
+  # and never spawned - low-keyboard-3ti.66o, measured before the labels were collapsed.
+  #
+  # So the holder is read once and answered, never cleared blind.
+  # [LAW:dataflow-not-control-flow]
+  local holder
+  holder=$(claimant)
+  case "$holder" in
+    none|/Library/LaunchDaemons/*) ;;
+    *) die "$(held_by_the_app "$holder")" ;;
+  esac
   # KeepAlive after an unsuccessful exit, not RunAtLoad alone: this owns a device whose
   # readiness costs a second, and a helper that stayed dead after a crash would answer
   # nothing until someone noticed. Restarting is the behaviour that fails loudly instead
@@ -101,11 +164,16 @@ PLIST_EOF
   sudo chown root:wheel "$PLIST"
   sudo chmod 644 "$PLIST"
 
-  # A job already loaded is replaced. bootout refuses a job that is not there, and that
-  # is the ordinary case for a first install, so its answer is read rather than obeyed.
-  if sudo launchctl print "system/${LABEL}" >/dev/null 2>&1; then
-    sudo launchctl bootout "system/${LABEL}"
-  fi
+  # A previous plist job under this label, torn down here rather than at the reading
+  # above: everything that can refuse this install has now refused, so this is the last
+  # moment before the new job is loaded and not a state left behind by a later failure.
+  # A plist under another file name goes too, or it would load first at the next boot and
+  # hold the label against this one. [LAW:no-ambient-temporal-coupling]
+  case "$holder" in
+    none) ;;
+    "$PLIST") sudo launchctl bootout "system/${LABEL}" ;;
+    *) sudo launchctl bootout "system/${LABEL}"; sudo rm -f "$holder" ;;
+  esac
   sudo launchctl bootstrap system "$PLIST"
 
   # The endpoint is handed out at load, so the answer is there before the helper runs.
@@ -115,17 +183,34 @@ PLIST_EOF
   grep -q "\"${SERVICE}\" = {" <<<"$record" || {
     sudo launchctl bootout "system/${LABEL}"
     sudo rm -f "$PLIST"
-    die "launchd left ${SERVICE} with another claimant, so this job was not installed. A helper started by hand from a terminal is the usual one - no label governs it. launchd names the owner with:
+    die "launchd left ${SERVICE} with another claimant, so this job was not installed. No label this script governs holds it: a helper started by hand from a terminal, or a job under some other label that names this service - which is what every installation predating the joined labels looks like. Find both:
+  pgrep -fl lowtalker-keyboardd
+  sudo grep -l '>${SERVICE}<' /Library/LaunchDaemons/*.plist
+launchd names the owner with:
   log show --last 1m --predicate 'process == \"launchd\" AND eventMessage CONTAINS \"${SERVICE}\"'"
   }
   echo "keyboard-helper: installed. Read it with: $0 log"
 }
 
+# Removes every plist job under this flavor's label, and never the app's. The same
+# reading as install, for the same reason: `bootout` of the app's registration would take
+# its approval record along with it.
+#
+# This flavor's plist goes whoever holds the label. With no job loaded from it, it is inert
+# until the next boot - where it loads before the app registers and holds the label against
+# it, which is the one thing the reader running this wanted gone.
+# [LAW:no-silent-failure] A holder left running is named rather than passed over, because
+# "removed" over a job still running sends the next reader looking in the wrong place.
 uninstall_helper() {
-  if sudo launchctl print "system/${LABEL}" >/dev/null 2>&1; then
-    sudo launchctl bootout "system/${LABEL}"
-  fi
+  local holder
+  holder=$(claimant)
   sudo rm -f "$PLIST"
+  case "$holder" in
+    none) ;;
+    /Library/LaunchDaemons/*) sudo launchctl bootout "system/${LABEL}"; sudo rm -f "$holder" ;;
+    *) die "${PLIST} is removed, and the job holding the label is not.
+$(held_by_the_app "$holder")" ;;
+  esac
   echo "keyboard-helper: removed"
 }
 
@@ -133,6 +218,8 @@ state_helper() {
   sudo launchctl print "system/${LABEL}" | awk '/state|pid|program|path|last exit/ { print }'
 }
 
+# The flavor's service name is the one subsystem to read: a helper that cannot tell which
+# flavor it is files its refusal under every flavor's, so it is found here too.
 log_helper() {
   log show --last 10m --style compact --predicate "subsystem == \"${SERVICE}\""
 }

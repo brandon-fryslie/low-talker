@@ -156,7 +156,7 @@ public struct WouldPressTheHotkey: Error, CustomStringConvertible {
     public let keystroke: Keystroke
 
     public var description: String {
-        "a keystroke holding \(keystroke.modifiers.usages.count) modifiers over usage 0x\(String(keystroke.usage.rawValue, radix: 16)) would press the hotkey \(hotkey.spelled); nothing was typed"
+        "a keystroke holding \(keystroke.modifiers.usages.count) modifiers over usage 0x\(String(keystroke.usage.rawValue, radix: 16)) would press the hotkey \(LowTalkerCore.Hotkey.held(hotkey)); nothing was typed"
     }
 }
 
