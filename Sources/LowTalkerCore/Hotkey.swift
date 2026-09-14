@@ -116,8 +116,7 @@ public final class Hotkey {
     /// content. One function serving both is how the menu came to print the order that
     /// starts the other installation dictating.
     nonisolated public static func held(_ chord: KeyChord) -> String {
-        let struck = chord.key.map { ["key 0x" + String($0.rawValue, radix: 16)] } ?? []
-        return (pressOrder(of: chord).map(\.rawValue) + struck).joined(separator: "+")
+        (pressOrder(of: chord).map(\.rawValue) + chord.struck).joined(separator: "+")
     }
 
     private let tap: any KeyboardTap

@@ -42,6 +42,23 @@ public enum OnboardingProbe {
             }
             return .noJob
         }
+        // [LAW:parse-dont-validate] Whose job this is, read off the one field that separates
+        // the two ways a job reaches this label. Measured on this Mac, 2026-09-12, against
+        // the running release app and its plist-installed counterpart:
+        //
+        //   SMAppService:              path = (submitted by smd.919)
+        //   launchctl bootstrap:       path = /Library/LaunchDaemons/<label>.plist
+        //
+        // Read before the endpoint, not after: a plist job under this label carries the
+        // service in its own MachServices, so it names the endpoint exactly as the app's
+        // job would - and a reading that asked about the endpoint first would call it
+        // "answering" and never reach here. Whatever it holds, it is not the app's
+        // registration, and its plist is the thing that has to go.
+        let path = printed.stdout
+            .split(separator: "\n")
+            .first { $0.contains("path = ") }?
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        guard !path.contains("/Library/LaunchDaemons/") else { return .aBootstrappedJobHoldsTheLabel }
         // The endpoint is handed out at load, so a job that holds the service names it
         // here. A job that asked and lost simply has no such line: launchd does not make
         // the loser loud, which is exactly why this is read rather than assumed.
@@ -54,21 +71,7 @@ public enum OnboardingProbe {
         // between its own start and `listener.resume()` - it files this keyboard's answer
         // in that window, then waits on the daemon - already reads as holding the service,
         // which is what the assistant's row needs it to say.
-        guard !printed.stdout.contains("\"\(service)\" = {") else { return .holdingTheService }
-        // [LAW:parse-dont-validate] Which kind of holder, read off the one field that
-        // separates the two ways a job reaches this label. Measured on this Mac,
-        // 2026-09-12, against the running release app and its plist-installed counterpart:
-        //
-        //   SMAppService:              path = (submitted by smd.919)
-        //   launchctl bootstrap:       path = /Library/LaunchDaemons/<label>.plist
-        //
-        // so a job whose path is a plist under /Library/LaunchDaemons is one this app did
-        // not register, and its plist is the thing that has to go.
-        let path = printed.stdout
-            .split(separator: "\n")
-            .first { $0.contains("path = ") }?
-            .trimmingCharacters(in: .whitespaces) ?? ""
-        return path.contains("/Library/LaunchDaemons/") ? .aBootstrappedJobHoldsTheLabel : .anotherJobHoldsTheService
+        return printed.stdout.contains("\"\(service)\" = {") ? .holdingTheService : .anotherJobHoldsTheService
     }
 
     /// Whether Keyboard Setup Assistant already holds a verdict for this keyboard.

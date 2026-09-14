@@ -30,7 +30,7 @@ struct FlavorOption: ParsableArguments {
     /// ask. [LAW:one-source-of-truth]
     @Option(
         name: .customLong("flavor"),
-        help: "Which installation to act on: release (the copy that runs at login) or development (the copy built from this tree).")
+        help: "Which installation to act on: release (the copy that runs at login) or development (the copy built from this tree). Defaults to development.")
     var stated: Flavor?
 
     /// The installation this command acts on, which is the development copy unless said

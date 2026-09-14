@@ -116,8 +116,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         SMAppService.openSystemSettingsLoginItems()
     }
 
-    /// The chords the tap listens for and the typist refuses to press, named once.
-    /// [LAW:one-source-of-truth] Two spellings would be a hotkey the typist could type.
+    /// The chord the tap listens for: this installation's own. What the typist refuses is
+    /// a different set - every installation's - and is named where it is derived,
+    /// `Hotkey.everyInstallationsChord`. [LAW:one-source-of-truth]
     private static let chords: Set<KeyChord> = [Hotkey.defaultChord(for: flavor)]
 
     private let hotkey = Hotkey(chords: chords)
@@ -165,7 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         capture: capture,
         transcriber: { [unowned self] in try await engine.value },
         router: Router(routes: [.dictation]),
-        executor: .guarding(keyboard: helper.keyboard, mouse: helper.mouse, interrupt: interrupt, hotkeys: Self.chords),
+        executor: .guarding(keyboard: helper.keyboard, mouse: helper.mouse, interrupt: interrupt, hotkeys: Hotkey.everyInstallationsChord),
         report: { [unowned self] in report($0) }
     )
 

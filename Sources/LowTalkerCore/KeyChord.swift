@@ -41,6 +41,14 @@ public struct KeyChord: Hashable, Codable, Sendable, CustomStringConvertible {
         (modifiers.map(\.description).sorted() + (key.map { ["key \($0.rawValue)"] } ?? []))
             .joined(separator: "+")
     }
+
+    /// The struck key as a refusal or an instruction names it, in hex as `kVK_*` is
+    /// tabulated: zero or one word, so it appends to a list of modifiers.
+    /// [LAW:one-source-of-truth] `KeyChord.spelled` and `Hotkey.held` differ only in how
+    /// they order the modifiers, and this is the part they share.
+    public var struck: [String] {
+        key.map { ["key 0x" + String($0.rawValue, radix: 16)] } ?? []
+    }
 }
 
 /// Side-specific, because the hotkey distinguishes Right Option from Left Option.

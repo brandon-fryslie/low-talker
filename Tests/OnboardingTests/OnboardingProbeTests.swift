@@ -45,6 +45,25 @@ import Testing
     }
     """
 
+    /// A job this script bootstrapped from a plist, holding the label with the service
+    /// named in its endpoints exactly as the app's own would. The endpoint is what makes
+    /// this fixture worth having: read endpoint-first it is "answering", and the app's
+    /// registration having never become the running job is never said.
+    static let bootstrappedFromAPlist = """
+    system/com.lowtalker.keyboardd = {
+    \tactive count = 1
+    \tpath = /Library/LaunchDaemons/com.lowtalker.keyboardd.plist
+    \tstate = running
+    \tprogram = /Users/bmf/code/low-talker/.build/debug/lowtalker-keyboardd
+    \tendpoints = {
+    \t\t"com.lowtalker.keyboardd" = {
+    \t\t\tport = 0x1847f7
+    \t\t\tactive = 1
+    \t\t}
+    \t}
+    }
+    """
+
     @Test func aJobNamingTheEndpointIsHoldingTheService() throws {
         let printed = Command.Output(status: 0, stdout: Self.holdingTheService, stderr: "")
         #expect(try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service) == .holdingTheService)
@@ -55,6 +74,12 @@ import Testing
     @Test func aRunningJobWithNoEndpointHasLostTheService() throws {
         let printed = Command.Output(status: 0, stdout: Self.holdingNothing, stderr: "")
         #expect(try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service) == .anotherJobHoldsTheService)
+    }
+
+    /// A plist job is not the app's registration whatever it holds, and its path says so.
+    @Test func aJobBootstrappedFromAPlistIsNamedByItsPath() throws {
+        let printed = Command.Output(status: 0, stdout: Self.bootstrappedFromAPlist, stderr: "")
+        #expect(try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service) == .aBootstrappedJobHoldsTheLabel)
     }
 
     /// The whole way from what launchd printed to what the reader is told, on the Mac
@@ -79,16 +104,15 @@ import Testing
         #expect(!step.contains("clears itself"), "the reader is told to wait for a filing that already happened")
     }
 
-    /// Which standings mean a helper has already had its chance to file the answer. A
-    /// holder nobody could identify has not earned the claim, because nothing was read
-    /// that says a helper is what took the name - but a job bootstrapped from a plist is
-    /// named, is this same helper binary, and was started by launchd, so it reached the
-    /// assistant in its first moments exactly as the app's own would have. Saying `false`
-    /// there is what sends a Mac running a bootstrapped helper to wait for a filing that
-    /// already happened and already failed.
+    /// Which standings mean a helper has already had its chance to file the answer. Only
+    /// a helper that holds the name was read as running. A holder nobody could identify
+    /// has not earned the claim, and neither has a plist job under the label: that a
+    /// plist is loaded was read, that the helper it names ever started was not - it may
+    /// have refused to, or never spawned. Its own step removes the plist, after which the
+    /// app's helper files afresh.
     /// [LAW:no-silent-failure] Exhaustive, so a standing added later has to answer this.
     @Test func onlyAStandingThatNamesARunningHelperSaysOneHasRun() {
-        let ran: Set<HelperStanding> = [.holdingTheService, .aBootstrappedJobHoldsTheLabel]
+        let ran: Set<HelperStanding> = [.holdingTheService]
         for standing in HelperStanding.allCases {
             #expect(standing.aHelperHasRun == ran.contains(standing), "\(standing)")
         }

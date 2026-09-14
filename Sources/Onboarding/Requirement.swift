@@ -289,16 +289,18 @@ public enum HelperStanding: Sendable, Hashable, CaseIterable {
     /// inheriting whichever answer happened to be the fallback.
     /// [LAW:types-are-the-program]
     ///
-    /// `aBootstrappedJobHoldsTheLabel` is the opposite: that holder is named, it is this
-    /// same helper binary, and launchd started it - so it reached Keyboard Setup Assistant
-    /// in its first moments exactly as the app's own would have. Answering `false` there
-    /// is what the deleted `theDevelopmentJobHoldsTheService` case used to prevent, and its
-    /// note recorded the cost: it sent a Mac running a bootstrapped helper to wait for a
-    /// filing that had already happened, and already failed.
+    /// `aBootstrappedJobHoldsTheLabel` answers `false` although its holder is named and
+    /// is this same binary: what was read is that a plist holds the label, not that the
+    /// helper it names ever ran. It may have refused to start - a plist passing no
+    /// `--flavor` exits before it knows which service it would have been - or never
+    /// spawned at all, which is what a BTM record rebound to the plist's path did. Its row
+    /// carries a step that removes the plist, after which the app's own helper starts and
+    /// files afresh; sending the reader to a log first is sending them to read a filing
+    /// that may not exist.
     var aHelperHasRun: Bool {
         switch self {
-        case .holdingTheService, .aBootstrappedJobHoldsTheLabel: true
-        case .anotherJobHoldsTheService, .noJob, .awaitingApproval: false
+        case .holdingTheService: true
+        case .anotherJobHoldsTheService, .aBootstrappedJobHoldsTheLabel, .noJob, .awaitingApproval: false
         }
     }
 }
@@ -350,7 +352,7 @@ public extension Requirement {
             this service - which is what every installation of this
             app before the labels were joined looks like. Find both:
                 pgrep -fl lowtalker-keyboardd
-                sudo grep -l \(flavor.machServiceName) /Library/LaunchDaemons/*.plist
+                sudo grep -l '>\(flavor.machServiceName)<' /Library/LaunchDaemons/*.plist
             """
         case .aBootstrappedJobHoldsTheLabel:
             """

@@ -172,7 +172,7 @@ The tap needs Input Monitoring and Accessibility. macOS charges a terminal comma
     make cli
     .build/debug/lowtalker config check
 
-reads this installation's file in `~/.config/low-talker` — `config.dev.toml` for the copy built from this tree, which is what the command defaults to, and `config.toml` for the installed one under `--flavor release` — and prints what the app would run with. It starts nothing. `--path` reads some other file instead, which is how a file is checked before it is installed. No file at all is not an error: the app runs on the defaults, dictation on this installation's own chord with the default model. A file that exists but cannot be read, or cannot be understood, is an error and is never quietly replaced by the defaults, since a config the user wrote and the app silently ignored is worse than one it refuses.
+reads this installation's file in `~/.config/low-talker` — `config.dev.toml` for the copy built from this tree, which is what the command defaults to, and `config.toml` for the installed one under `--flavor release` — and prints what the app would run with. It starts nothing. `--path` reads some other file instead, which is how a file is checked before it is installed, and it needs `--flavor` said out loud: which installation a file is read as decides every default it does not set, and the command refuses to guess. No file at all is not an error: the app runs on the defaults, dictation on this installation's own chord with the default model. A file that exists but cannot be read, or cannot be understood, is an error and is never quietly replaced by the defaults, since a config the user wrote and the app silently ignored is worse than one it refuses.
 
 The file names a `model`, a model folder name such as `base.en`, an optional `[microphone]` table saying what the device does between presses, and an array of `[[modes]]` tables. Each mode takes a `name`, a `chord`, an optional `vocabulary` of terms, and an optional `routes`.
 
@@ -596,7 +596,7 @@ The helper's row is read from two sources, because neither alone is enough. `lau
 
 launchd used to be asked a second time, under the development job's label, so that a lost name could be reported as the development copy having taken it. That reading is gone with the arrangement that made it possible: the two installations no longer share a service, so the other copy can no longer be the holder.
 
-So the helper's row reads one of four things:
+So the helper's row reads one of five things:
 
 - `answering` means the app's job holds the service, and there is nothing to do.
 - `registered, but another job holds the service` is a lost name whose holder the app cannot identify. launchd refuses a second job under this installation's label at bootstrap, so the holder is one of two things no label governs: a helper left running from a terminal, or a job filed under some *other* label that names this service — which is what every installation predating the joined labels looks like, and the one a reader misses. Its step names both, `pgrep -fl lowtalker-keyboardd` and `sudo grep -l <service> /Library/LaunchDaemons/*.plist`.
