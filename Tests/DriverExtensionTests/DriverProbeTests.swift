@@ -129,4 +129,30 @@ import Testing
         let said = Command.Output(status: 0, stdout: "package-id: x\n", stderr: "")
         #expect(throws: DriverUnreadable.self) { try DriverProbe.receiptVersion(of: "x", from: said) }
     }
+
+    // MARK: - Karabiner-Elements' receipt
+
+    @Test func karabinerElementsHeldOrNotReadsAsThatAnswer() {
+        let held = Command.Output(status: 0, stdout: "package-id: x\nversion: 15.5.0\n", stderr: "")
+        let none = Command.Output(status: 1, stdout: "", stderr: "No receipt for 'org.pqrs.Karabiner-Elements' found at '/'.")
+        #expect(DriverProbe.elementsReceipt { held } == .installed(version: "15.5.0"))
+        #expect(DriverProbe.elementsReceipt { none } == .absent)
+    }
+
+    /// A reading that feeds no verdict must not cost one. Every way the read fails - an
+    /// answer pkgutil gave that this build cannot read, and a pkgutil that never ran -
+    /// comes back as `.unreadable`, a value the table shows, rather than a throw.
+    @Test func anUnreadableKarabinerElementsReceiptIsAValueNotAThrow() {
+        struct NeverRan: Error {}
+        let failed = Command.Output(status: 70, stdout: "", stderr: "unable to open receipt database")
+        let unrecognised = Command.Output(status: 0, stdout: "package-id: x\n", stderr: "")
+        for reading in [DriverProbe.elementsReceipt { failed },
+                        DriverProbe.elementsReceipt { unrecognised },
+                        DriverProbe.elementsReceipt { throw NeverRan() }] {
+            guard case .unreadable = reading else {
+                Issue.record("expected unreadable, got \(reading)")
+                continue
+            }
+        }
+    }
 }

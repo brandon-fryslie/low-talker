@@ -62,14 +62,13 @@ public struct DriverFacts: Sendable, Hashable {
     /// loading, not enabling: the extension can be enabled and still absent here until
     /// some client opens it.
     public let ioNode: Bool
-    /// Karabiner-Elements' receipt version, or nil when this Mac holds none. It moves no
-    /// verdict: the driver stands where it stands whoever else ships it. It is read
-    /// beside the others because Karabiner-Elements owns the same payload trees, and a
-    /// reader deciding whether to run `install` or `remove` should see that before
-    /// either verb says it.
-    public let elementsReceipt: String?
+    /// Karabiner-Elements' receipt. It moves no verdict: the driver stands where it stands
+    /// whoever else ships it. It is read beside the others because Karabiner-Elements
+    /// owns the same payload trees, and a reader deciding whether to run `install` or
+    /// `remove` should see that before either verb says it.
+    public let elementsReceipt: ElementsReceipt
 
-    public init(payload: Payload, receipt: String?, registration: Registration, ioNode: Bool, elementsReceipt: String?) {
+    public init(payload: Payload, receipt: String?, registration: Registration, ioNode: Bool, elementsReceipt: ElementsReceipt) {
         self.payload = payload
         self.receipt = receipt
         self.registration = registration
@@ -88,8 +87,29 @@ extension DriverFacts: CustomStringConvertible {
         installer receipt  \(receipt ?? "none")
         extension state    \(registration.rawValue)
         IORegistry node    \(ioNode ? "yes" : "no")
-        Karabiner-Elements \(elementsReceipt ?? "none")
+        Karabiner-Elements \(elementsReceipt)
         """
+    }
+}
+
+/// Karabiner-Elements' installer receipt, as a reading whose failure is a value.
+///
+/// Every other reading throws when it cannot be taken, because the verdict needs it. This
+/// one moves no verdict, so a pkgutil that could not answer about it must not take the
+/// verdict down with it. The failure is kept as a case and shown in the table instead,
+/// and `install` and `remove` each read the receipt again for themselves.
+/// [LAW:no-silent-failure]
+public enum ElementsReceipt: Sendable, Hashable, CustomStringConvertible {
+    case absent
+    case installed(version: String)
+    case unreadable(reason: String)
+
+    public var description: String {
+        switch self {
+        case .absent: "none"
+        case .installed(let version): version
+        case .unreadable(let reason): "unreadable (\(reason))"
+        }
     }
 }
 
