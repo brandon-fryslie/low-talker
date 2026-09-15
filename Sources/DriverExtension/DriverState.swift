@@ -108,7 +108,10 @@ public enum ElementsReceipt: Sendable, Hashable, CustomStringConvertible {
         switch self {
         case .absent: "none"
         case .installed(let version): version
-        case .unreadable(let reason): "unreadable (\(reason))"
+        // The reason quotes pkgutil, which can answer on several lines, and this is one
+        // row of a table read a row per reading. Folded here, so no unlabeled line under
+        // the table passes for a reading of its own.
+        case .unreadable(let reason): "unreadable (\(reason.split(whereSeparator: \.isNewline).joined(separator: "; ")))"
         }
     }
 }

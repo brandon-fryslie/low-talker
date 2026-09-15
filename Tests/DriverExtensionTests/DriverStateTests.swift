@@ -73,6 +73,15 @@ import Testing
         #expect(lines[2].contains("Karabiner-Elements unreadable (pkgutil exited 70)"))
     }
 
+    /// pkgutil can fail on several lines, stdout and stderr both, and the table is one row
+    /// per reading, so a many-line reason stays on its own row.
+    @Test func aManyLineReasonStaysOnItsOwnRow() {
+        let facts = DriverFacts(payload: .both, receipt: "8.4.0", registration: .enabled, ioNode: true,
+                                elementsReceipt: .unreadable(reason: "exited 70: first\nsecond"))
+        #expect(facts.description.split(separator: "\n").count == 5)
+        #expect(facts.description.contains("Karabiner-Elements unreadable (exited 70: first; second)"))
+    }
+
     /// Removal's early exit reads `absent` and `pending-reboot` as "nothing left to do",
     /// so a machine still holding a payload or a receipt must never reach either word.
     @Test func aMachineStillHoldingSomethingIsNeverReportedAsFinished() {
