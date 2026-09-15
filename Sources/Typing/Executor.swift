@@ -200,7 +200,7 @@ private extension Clicks {
 /// A list that stopped part way: the action that stopped is the cause, and the actions
 /// before it are done and cannot be taken back, so they travel with it. Text is in the
 /// document either way; what this adds is which of it, so a retry does not type it twice.
-public struct RouteStopped: Error, CustomStringConvertible {
+public struct RouteStopped: StoppedPartWay, CustomStringConvertible {
     public let performed: [Executor.Performed]
     public let cause: any Error
 

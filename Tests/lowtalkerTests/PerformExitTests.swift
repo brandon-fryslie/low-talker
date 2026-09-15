@@ -41,6 +41,13 @@ import Testing
         #expect(failure.said.contains("Driver extension: awaiting-approval"))
     }
 
+    /// A click reaches the helper as a keystroke does, so it stops on the same wire.
+    @Test func aClickStoppedOnTheWireReadsTheMachineAsTypingDoes() {
+        let clicked = RouteStopped(performed: [], cause: PointingStopped(cause: Self.unreachable))
+        let failure = PerformExit.classify(clicked, flavor: .development) { MachineReading(driver: .awaitingApproval, helper: .noJob) }
+        #expect(failure.exit == .driverNotActivated)
+    }
+
     @Test func anUnreachableHelperThatIsNotAnsweringIsFour() {
         for standing in HelperStanding.allCases where standing != .holdingTheService {
             let failure = PerformExit.classify(Self.stoppedOnTheWire, flavor: .release) { MachineReading(driver: .enabled, helper: standing) }

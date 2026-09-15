@@ -2,9 +2,9 @@
 ///
 /// Each layer that stops a run wraps what stopped it with what only that layer knows - how
 /// many characters landed, which actions were done - so the failure a caller has to act on
-/// sits several causes down. [LAW:types-are-the-program] A conformance rather than a list
-/// of the wrappers kept at the one place that reads through them, so a wrapper added later
-/// is read through by existing rather than skipped by a list nobody updated.
+/// sits several causes down. [LAW:locality-or-seam] Each wrapper declares this beside its
+/// `cause`, in place of `Error`, so a new wrapper is marked where it is written; one left
+/// unmarked hides everything under it from `causes`, as `PointingStopped` once did.
 public protocol StoppedPartWay: Error {
     var cause: any Error { get }
 }
@@ -15,7 +15,3 @@ public extension Error {
         Array(sequence(first: self as any Error) { ($0 as? any StoppedPartWay)?.cause })
     }
 }
-
-extension TypingStopped: StoppedPartWay {}
-extension ChordStopped: StoppedPartWay {}
-extension RouteStopped: StoppedPartWay {}
