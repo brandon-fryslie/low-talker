@@ -1,0 +1,70 @@
+#!/bin/bash
+# Types into TextEdit and Terminal with `lowtalker type` and `lowtalker keys` - the executor
+# dictation inserts through, driven from a shell - and checks what landed, that text the
+# layout cannot type exits 3 with nothing typed, and that the pasteboard was never touched.
+# Reads back through scripts/live-probe, as scripts/live-paste-check does, and for the same
+# reason uses no AppleScript. Needs an unlocked screen, the development helper answering
+# (`lowtalker onboard`), and a terminal with Accessibility. Leaves the pasteboard and the
+# frontmost app as found.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+# Signed, not a bare swift build: the helper admits only callers carrying its certificate.
+make cli >/dev/null
+CLI=.build/debug/lowtalker
+swift build --package-path scripts/live-probe --scratch-path .build/live-probe >/dev/null
+PROBE=.build/live-probe/debug/probe
+
+[ "$($PROBE locked)" = unlocked ] || { echo "screen is locked; nothing can receive keystrokes" >&2; exit 1; }
+front=$($PROBE front)
+scratch=$(mktemp -d)
+doc="$scratch/live-type.txt"
+reader="$scratch/reader.command"
+terminal_was_running=$(pgrep -x Terminal >/dev/null && echo yes || echo no)
+# Every path out closes what the check opened, whichever step it stopped at, and then
+# puts the desk back as found. errexit stays off inside: each step reports its own
+# failure and the rest still run.
+cleanup() {
+    set +e
+    $PROBE close com.apple.TextEdit "${doc##*/}" 5
+    $PROBE close com.apple.Terminal "${reader##*/}" 5
+    [ "$terminal_was_running" = yes ] || $PROBE quit com.apple.Terminal
+    rm -rf "$scratch"
+    open -b "$front"
+}
+trap cleanup EXIT
+before=$($PROBE pasteboard)
+echo "frontmost before: $front"
+
+# TextEdit: a file-backed .txt document, which TextEdit writes when its window closes, so
+# the file is the verdict. A line, a Return pressed as a chord, a second line, and between
+# them a refusal - which, if it typed anything at all, leaves the file different. Each
+# line opens with a number because typing, unlike a paste, goes through TextEdit's own
+# text completion, and it capitalizes a letter that starts a line.
+: > "$doc"
+open -a TextEdit "$doc"; $PROBE ready com.apple.TextEdit 10
+$CLI type --into com.apple.TextEdit "42 typed by low-talker into TextEdit"
+$CLI keys --into com.apple.TextEdit return
+code=0; $CLI type --into com.apple.TextEdit "no key for this: $(printf '\xf0\x9f\x98\x80')" || code=$?
+[ "$code" = 3 ] && echo "REFUSAL OK (exit 3)" || { echo "REFUSAL FAILED: exit $code, expected 3"; exit 1; }
+$CLI type --into com.apple.TextEdit "43 second line"
+$PROBE axwait "43 second line" 3 >/dev/null
+$PROBE close com.apple.TextEdit "${doc##*/}" 5
+expected=$'42 typed by low-talker into TextEdit\n43 second line'
+t0=$SECONDS
+until [ "$(cat "$doc")" = "$expected" ] || [ $((SECONDS - t0)) -ge 5 ]; do sleep 0.1; done
+[ "$(cat "$doc")" = "$expected" ] && echo "TEXTEDIT OK (saved file holds both lines and nothing else)" || { echo "TEXTEDIT FAILED: saved file holds [$(cat "$doc")]"; exit 1; }
+
+# Terminal: a script file opens a new window running the check's own reader, tr, so the
+# keystrokes touch nothing that was open before and no shell runs what lands. The check
+# waits for the reader's marker first: before the login shell is up, the pty echoes typed
+# text that the shell then drops. tr answers a line only once Return ends it, and only in
+# uppercase, so the uppercase line is the typed text and the chord both landing.
+printf '#!/bin/sh\necho lowtalker-reader-up; exec tr a-z A-Z\n' > "$reader"; chmod +x "$reader"
+open -a Terminal "$reader"; $PROBE ready com.apple.Terminal 10; $PROBE axwait lowtalker-reader-up 15
+$CLI type --into com.apple.Terminal "typed-into-terminal-ok"
+$CLI keys --into com.apple.Terminal return
+$PROBE axwait TYPED-INTO-TERMINAL-OK 3 && echo "TERMINAL OK (the reader answered the line the chord ended)" || { echo "TERMINAL FAILED"; exit 1; }
+
+after=$($PROBE pasteboard)
+[ "$before" = "$after" ] && echo "PASTEBOARD UNCHANGED" || { printf 'PASTEBOARD DIFFERS\nbefore:\n%s\nafter:\n%s\n' "$before" "$after"; exit 1; }

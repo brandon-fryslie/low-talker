@@ -174,7 +174,7 @@ let package = Package(
         // The CLI's table shape is its contract; this pins column names to fields.
         .testTarget(
             name: "lowtalkerTests",
-            dependencies: ["lowtalker", "LowTalkerCore", "VirtualKeyboard", "Keystrokes"]
+            dependencies: ["lowtalker", "LowTalkerCore", "VirtualKeyboard", "Keystrokes", "Typing", "KeyboardService", "Onboarding", "DriverExtension", "Flavors"]
         ),
     ]
 )

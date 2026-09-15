@@ -19,17 +19,23 @@ public struct KeyChord: Hashable, Codable, Sendable, CustomStringConvertible {
         self.key = nil
     }
 
-    /// [LAW:parse-dont-validate] The one place a chord arrives unproven; an empty one is
-    /// refused here so no consumer has to check.
+    /// [LAW:parse-dont-validate] The one place a chord made of parts arrives unproven, a
+    /// decoded one and a spelled one alike; an empty one is nil here so no consumer has to
+    /// check. [LAW:single-enforcer]
+    public init?(modifiers: Set<Modifier>, key: Key?) {
+        guard key != nil || !modifiers.isEmpty else { return nil }
+        self.modifiers = modifiers
+        self.key = key
+    }
+
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let modifiers = try container.decode(Set<Modifier>.self, forKey: .modifiers)
         let key = try container.decodeIfPresent(Key.self, forKey: .key)
-        guard key != nil || !modifiers.isEmpty else {
+        guard let chord = KeyChord(modifiers: modifiers, key: key) else {
             throw DecodingError.dataCorruptedError(forKey: .modifiers, in: container, debugDescription: "a chord needs at least one key")
         }
-        self.modifiers = modifiers
-        self.key = key
+        self = chord
     }
 
     /// The chord as `lowtalker config check` reads it back: `rightOption`, or

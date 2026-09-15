@@ -15,10 +15,9 @@ import Typing
     static let textEdit = BundleID(rawValue: "com.apple.TextEdit")
     static let slack = BundleID(rawValue: "com.tinyspeck.slackmacgap")
     /// Which installation's chord is beside the point here - these are about what the
-    /// executor types, not about who held what - so one of them is named once and both
-    /// the context and the guard read it from here. [LAW:one-source-of-truth]
+    /// executor types, not about who held what - so one of them is named once, for the
+    /// guard to refuse. TextEdit is the app in front throughout.
     static let held = Hotkey.defaultChord(for: .release, heardBy: .virtualKeyboard)
-    static let context = Context(chord: held, press: .hold, frontmostApp: textEdit, focusedElementRole: nil)
 
     /// One keyboard per app, made on first ask and kept, so the log of every action into
     /// an app is one log.
@@ -72,7 +71,7 @@ import Typing
             pasteboard.clearContents()
             pasteboard.setString("what was there", forType: .string)
             let performed = try await Executor(copyingTo: Clipboard(pasteboard)).perform(
-                [.insertText(text: "héllo there", target: .focus)], in: Self.context, on: Self.us, since: .now)
+                [.insertText(text: "héllo there", target: .focus)], in: Self.textEdit, on: Self.us, since: .now)
             #expect(pasteboard.string(forType: .string) == "héllo there")
             #expect(performed.count == 1)
             guard case .copied(let characters) = performed[0].what else { Issue.record("not copied"); return }
@@ -89,11 +88,11 @@ import Typing
     @Test func onlyTypingReadsTheLayout() async throws {
         try await withPasteboard { pasteboard in
             try await Executor(copyingTo: Clipboard(pasteboard)).perform(
-                [.insertText(text: "hi", target: .focus)], in: Self.context, on: try Self.unreadableLayout(), since: .now)
+                [.insertText(text: "hi", target: .focus)], in: Self.textEdit, on: try Self.unreadableLayout(), since: .now)
             #expect(pasteboard.string(forType: .string) == "hi")
         }
         await #expect(throws: UnreadableLayout.self) {
-            try await executor(Keyboards()).perform([.insertText(text: "hi", target: .focus)], in: Self.context, on: try Self.unreadableLayout(), since: .now)
+            try await executor(Keyboards()).perform([.insertText(text: "hi", target: .focus)], in: Self.textEdit, on: try Self.unreadableLayout(), since: .now)
         }
     }
 
@@ -113,7 +112,7 @@ import Typing
                 pasteboard.setString("untouched", forType: .string)
                 await #expect(throws: NeedsTheVirtualKeyboard.self) {
                     try await Executor(copyingTo: Clipboard(pasteboard)).perform(
-                        [.insertText(text: "first", target: .focus), action], in: Self.context, on: Self.us, since: .now)
+                        [.insertText(text: "first", target: .focus), action], in: Self.textEdit, on: Self.us, since: .now)
                 }
                 #expect(pasteboard.string(forType: .string) == "untouched", "\(action) let the text before it through")
             }
@@ -122,7 +121,7 @@ import Typing
 
     @Test func textAtTheFocusGoesIntoTheAppThatWasInFront() async throws {
         let keyboards = Keyboards()
-        let performed = try await executor(keyboards).perform([.insertText(text: "hi", target: .focus)], in: Self.context, on: Self.us, since: .now)
+        let performed = try await executor(keyboards).perform([.insertText(text: "hi", target: .focus)], in: Self.textEdit, on: Self.us, since: .now)
         #expect(Set(keyboards.byApp.keys) == [Self.textEdit])
         #expect(keyboards.log(Self.textEdit) == ["check", "down b", "up", "check", "down c", "up"])
         #expect(performed.count == 1)
@@ -135,14 +134,14 @@ import Typing
     /// A named target is typed into as named, whatever was in front.
     @Test func textForANamedAppGoesIntoThatApp() async throws {
         let keyboards = Keyboards()
-        try await executor(keyboards).perform([.insertText(text: "a", target: .app(bundleID: Self.slack))], in: Self.context, on: Self.us, since: .now)
+        try await executor(keyboards).perform([.insertText(text: "a", target: .app(bundleID: Self.slack))], in: Self.textEdit, on: Self.us, since: .now)
         #expect(Set(keyboards.byApp.keys) == [Self.slack])
         #expect(keyboards.log(Self.slack) == ["check", "down 4", "up"])
     }
 
     @Test func aChordIsPressedInTheAppThatWasInFront() async throws {
         let keyboards = Keyboards()
-        let performed = try await executor(keyboards).perform([.sendKeys(chord: KeyChord(key: Key(rawValue: 0x24)))], in: Self.context, on: Self.us, since: .now)
+        let performed = try await executor(keyboards).perform([.sendKeys(chord: KeyChord(key: Key(rawValue: 0x24)))], in: Self.textEdit, on: Self.us, since: .now)
         #expect(keyboards.log(Self.textEdit) == ["check", "down 28", "up"])
         #expect("\(performed[0])".hasPrefix("pressed key 0x24 into com.apple.TextEdit"))
     }
@@ -152,7 +151,7 @@ import Typing
     @Test func aClickIsMadeInTheAppThatWasInFront() async throws {
         let keyboards = Keyboards()
         let pointers = Pointers()
-        let performed = try await executor(keyboards, pointers).perform([.click(at: ScreenPoint(x: 0, y: 0), button: .right, times: .double)], in: Self.context, on: Self.us, since: .now)
+        let performed = try await executor(keyboards, pointers).perform([.click(at: ScreenPoint(x: 0, y: 0), button: .right, times: .double)], in: Self.textEdit, on: Self.us, since: .now)
         #expect(Set(pointers.byApp.keys) == [Self.textEdit])
         #expect(keyboards.byApp.isEmpty)
         #expect(pointers.log(Self.textEdit) == ["check", "check", "down 2", "up", "check", "down 2", "up"])
@@ -170,7 +169,7 @@ import Typing
         let performed = try await executor(keyboards, pointers).perform([
             .clickElement(role: AccessibilityRole(rawValue: "AXButton"), title: "Cancel"),
             .scroll(at: centre, vertical: WheelCounts(rawValue: 3)!, horizontal: .none),
-        ], in: Self.context, on: Self.us, since: .now)
+        ], in: Self.textEdit, on: Self.us, since: .now)
         #expect(pointers.log(Self.textEdit) == ["check", "check", "down 1", "up", "check", "check", "scroll 3 0"])
         #expect("\(performed[0])".hasPrefix("clicked left once at (697.5, 475) after 0 move reports into com.apple.TextEdit"))
         #expect("\(performed[1])".hasPrefix("scrolled vertical 3 horizontal 0 at (697.5, 475) into com.apple.TextEdit"))
@@ -182,7 +181,7 @@ import Typing
             .insertText(text: "a", target: .focus),
             .sendKeys(chord: KeyChord(key: Key(rawValue: 0x24))),
             .insertText(text: "b", target: .focus),
-        ], in: Self.context, on: Self.us, since: .now)
+        ], in: Self.textEdit, on: Self.us, since: .now)
         #expect(keyboards.log(Self.textEdit) == ["check", "down 4", "up", "check", "down 28", "up", "check", "down 5", "up"])
         #expect(performed.count == 3)
     }
@@ -195,7 +194,7 @@ import Typing
             try await executor(keyboards).perform([
                 .insertText(text: "a", target: .focus),
                 .openURL(url: URL(string: "https://example.com")!),
-            ], in: Self.context, on: Self.us, since: .now)
+            ], in: Self.textEdit, on: Self.us, since: .now)
         }
         #expect(refused.action == .openURL(url: URL(string: "https://example.com")!))
         #expect(keyboards.log(Self.textEdit).isEmpty)
@@ -207,7 +206,7 @@ import Typing
             try await executor(keyboards).perform([
                 .insertText(text: "a", target: .focus),
                 .insertText(text: "\u{1F600}", target: .focus),
-            ], in: Self.context, on: Self.us, since: .now)
+            ], in: Self.textEdit, on: Self.us, since: .now)
         }
         #expect(keyboards.log(Self.textEdit).isEmpty)
     }
@@ -218,7 +217,7 @@ import Typing
             try await executor(keyboards).perform([
                 .insertText(text: "a", target: .focus),
                 .sendKeys(chord: KeyChord(key: Key(rawValue: 0x0E), modifiers: [.rightOption])),
-            ], in: Self.context, on: Self.us, since: .now)
+            ], in: Self.textEdit, on: Self.us, since: .now)
         }
         #expect(keyboards.log(Self.textEdit).isEmpty)
     }
@@ -234,7 +233,7 @@ import Typing
                 .insertText(text: "a", target: .focus),
                 .insertText(text: "bc", target: .focus),
                 .insertText(text: "d", target: .focus),
-            ], in: Self.context, on: Self.us, since: .now)
+            ], in: Self.textEdit, on: Self.us, since: .now)
         }
         let cause = try #require(stopped.cause as? TypingStopped)
         #expect(cause.typed == 0)

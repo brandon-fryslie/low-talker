@@ -194,7 +194,7 @@ public final class Dictation {
         let transcript = try await engine.transcribe(clip, expecting: .empty)
         let keyUpToTranscript = ContinuousClock.now - keyUp
         let actions = router.actions(for: transcript, in: context)
-        let performed = try await executor.perform(actions, in: context, on: layout(), since: keyUp)
+        let performed = try await executor.perform(actions, in: context.frontmostApp, on: layout(), since: keyUp)
         return Session(context: context, transcript: transcript, keyUpToTranscript: keyUpToTranscript, performed: performed)
     }
 }
