@@ -273,6 +273,21 @@ A list that cannot be performed whole is refused before any key goes down, so no
 
 It needs the helper installed (`scripts/keyboard-helper install`, under "The keyboard helper" below) and, like `dext type --through helper`, no sudo. Typing needs no Accessibility: which app is in front is read from the workspace, and the cursor's position, which the mouse reads back after every move, is readable without permission. `clickElement` is the one action that needs it, because it searches the app's Accessibility tree.
 
+## Typing from a script
+
+    make cli
+    .build/debug/lowtalker type --into com.apple.TextEdit "hello from a script"
+    .build/debug/lowtalker keys --into com.apple.TextEdit leftCommand+s
+    .build/debug/lowtalker keys leftShift+leftCommand+left delete    # into whatever is in front
+
+`type` types text and `keys` presses chords, through the same executor `act` and dictation use: the app is raised first, every key is refused once it leaves the front, and each command prints the executor's line for what it did. `--into` names the app by bundle id; without it the target is the app in front when the command starts, which from a terminal is the terminal itself. `--flavor` picks the installation's helper, as for `act`. Text that starts with `-` would be read as an option, so it follows `--`: `lowtalker type -- "$text"` types any text.
+
+A chord is modifier names and one key joined by `+`. Modifiers are the config file's words (`leftCommand`, `rightOption`, ...). The key is a name (`return`, `escape`, `left`, `f5`, ...), the character your keyboard layout types with that key and nothing held (`s`, `/`), or `key 0x24`, the spelling the executor prints, so any chord a report names can be passed back. `keys` takes several chords and presses them in order, having proven every one pressable first; `lowtalker keys --help` lists every key name.
+
+The exit code says what went wrong, so a script can act on it without reading stderr, and `act` exits the same way: 3 when the text or a chord cannot be typed here and nothing was typed, 4 when the helper cannot be reached because this installation's helper is not the one answering, 5 when the helper cannot be reached because the driver extension is not activated. Anything else is 1, with the account on stderr, and a misspelled chord is a usage error, 64. The helper is tried before anything is read about it: only when it cannot be reached are the driver and the helper read, and the unmet row is printed with its step, the same row and step `lowtalker onboard` prints.
+
+`scripts/live-type-check` types into TextEdit and Terminal with these commands, presses Return with `keys`, checks that text the layout cannot type exits 3 and leaves the document unchanged, and compares the pasteboard before and after. It reads back through the probe `scripts/live-paste-check` uses, under the same conditions: an unlocked screen and a terminal with Accessibility.
+
 ## Input methods
 
 The app gives you what you dictate one of two ways, and asks which the first time an installation runs:

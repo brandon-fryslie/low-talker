@@ -222,7 +222,7 @@ public struct CursorUnreadable: Error, CustomStringConvertible {
 /// A pointing run that stopped: focus moved, the helper went quiet, the operator
 /// interrupted it, or the cursor would not go where it was sent. What stopped it is the
 /// cause; whether the buttons are known to be up is the part the operator has to act on.
-public struct PointingStopped: Error, CustomStringConvertible {
+public struct PointingStopped: StoppedPartWay, CustomStringConvertible {
     public let cause: any Error
     /// The failure of the release that followed the stop, when it failed too. Nil says
     /// every button is up; anything else says one may be held, and macOS will drag it.

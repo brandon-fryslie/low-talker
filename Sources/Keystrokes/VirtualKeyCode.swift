@@ -20,6 +20,14 @@ public extension Usage {
         self = usage
     }
 
+    /// The macOS key code for this usage: the table above read the other way, for a caller
+    /// that found a key by the character a layout types with it and has to name it the way a
+    /// chord does. [LAW:one-source-of-truth] Inverted rather than transcribed a second time;
+    /// no two key codes share a usage, which `theTableReadsTheSameBothWays` holds it to.
+    var virtualKeyCode: UInt16? {
+        Self.byVirtualKeyCode.first { $0.value == self }?.key
+    }
+
     private static let byVirtualKeyCode: [UInt16: Usage] = [
         // The letters, in ADB position order rather than alphabetical.
         0x00: Usage(rawValue: 0x04), // A

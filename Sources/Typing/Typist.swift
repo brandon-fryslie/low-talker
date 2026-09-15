@@ -164,7 +164,7 @@ public struct WouldPressTheHotkey: Error, CustomStringConvertible {
 /// quiet, the operator interrupted it. What stopped it is the cause; how much is in the
 /// document is the part only this knows, and the part the operator has to act on, since
 /// text already typed cannot be taken back.
-public struct TypingStopped: Error, CustomStringConvertible {
+public struct TypingStopped: StoppedPartWay, CustomStringConvertible {
     public let typed: Int
     public let of: Int
     /// The character whose first keystroke landed and whose last did not, when the run
@@ -207,7 +207,7 @@ public struct TypingStopped: Error, CustomStringConvertible {
 
 /// A chord whose press stopped part way. There is no count to carry - a chord is one
 /// keystroke - but there is the same question about the keys.
-public struct ChordStopped: Error, CustomStringConvertible {
+public struct ChordStopped: StoppedPartWay, CustomStringConvertible {
     public let cause: any Error
     public let unreleased: (any Error)?
 

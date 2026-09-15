@@ -90,17 +90,23 @@ public struct Executor {
     /// `RouteStopped` from the action that stopped, carrying the earlier ones, which are
     /// done.
     ///
+    /// `frontmost` is the app that was in front when the actions were decided: where text at
+    /// the focus goes, and where chords and clicks land. It is the one fact about that moment
+    /// an executor reads, so it is the one it is handed - a whole `Context` asked a caller
+    /// with no hotkey behind it, `lowtalker type`, to invent the chord that started it.
+    /// [LAW:types-are-the-program]
+    ///
     /// `layout` is read only by an executor that types: copying needs no layout, so a
     /// layout that cannot be read costs the clipboard nothing.
     @discardableResult
-    public func perform(_ actions: [Action], in context: Context, on layout: @autoclosure () throws -> KeyboardLayout, since keyUp: ContinuousClock.Instant) async throws -> [Performed] {
+    public func perform(_ actions: [Action], in frontmost: BundleID, on layout: @autoclosure () throws -> KeyboardLayout, since keyUp: ContinuousClock.Instant) async throws -> [Performed] {
         let lowered: [Step]
         switch output {
         case .devices(let keyboard, let mouse, let hotkeys):
             let layout = try layout()
-            lowered = try actions.map { try lower($0, in: context, on: layout, keyboard: keyboard, mouse: mouse, hotkeys: hotkeys) }
+            lowered = try actions.map { try lower($0, in: frontmost, on: layout, keyboard: keyboard, mouse: mouse, hotkeys: hotkeys) }
         case .clipboard(let clipboard):
-            lowered = try actions.map { try copy($0, in: context, to: clipboard) }
+            lowered = try actions.map { try copy($0, in: frontmost, to: clipboard) }
         }
         let clock = ContinuousClock()
         var performed: [Performed] = []
@@ -120,10 +126,10 @@ public struct Executor {
         let perform: @MainActor () async throws -> Performed.What
     }
 
-    private func copy(_ action: Action, in context: Context, to clipboard: Clipboard) throws -> Step {
+    private func copy(_ action: Action, in frontmost: BundleID, to clipboard: Clipboard) throws -> Step {
         switch action {
         case .insertText(let text, .focus):
-            return Step(into: context.frontmostApp) {
+            return Step(into: frontmost) {
                 try clipboard.write(text)
                 return .copied(characters: text.count)
             }
@@ -136,42 +142,42 @@ public struct Executor {
         }
     }
 
-    private func lower(_ action: Action, in context: Context, on layout: KeyboardLayout, keyboard: Keyboards, mouse: Pointers, hotkeys: Set<KeyChord>) throws -> Step {
+    private func lower(_ action: Action, in frontmost: BundleID, on layout: KeyboardLayout, keyboard: Keyboards, mouse: Pointers, hotkeys: Set<KeyChord>) throws -> Step {
         switch action {
         case .insertText(let text, let target):
-            // The focus is whatever app was in front when the hotkey went down, which
-            // the context already names; typing into it re-proves it in front before
-            // every key. A named app is typed into the same way, without being raised:
-            // bringing it forward is low-commands-tpt.4's work on top of this.
+            // The focus is whatever app was in front when the actions were decided;
+            // typing into it re-proves it in front before every key. A named app is
+            // typed into the same way, without being raised: bringing it forward is
+            // low-commands-tpt.4's work on top of this.
             let into = switch target {
-            case .focus: context.frontmostApp
+            case .focus: frontmost
             case .app(let bundleID): bundleID
             }
             let typist = Typist(keyboard: keyboard(into), hotkeys: hotkeys)
             let lowered = try typist.lower(text, on: layout)
             return Step(into: into) { .typed(characters: try await typist.type(lowered)) }
         case .sendKeys(let chord):
-            let typist = Typist(keyboard: keyboard(context.frontmostApp), hotkeys: hotkeys)
+            let typist = Typist(keyboard: keyboard(frontmost), hotkeys: hotkeys)
             let lowered = try typist.lower(chord)
-            return Step(into: context.frontmostApp) {
+            return Step(into: frontmost) {
                 try await typist.press(lowered)
                 return .pressed(chord)
             }
         case .click(let at, let button, let times):
-            let pointer = mouse(context.frontmostApp)
-            return Step(into: context.frontmostApp) {
+            let pointer = mouse(frontmost)
+            return Step(into: frontmost) {
                 let click = try await pointer.click(at: at, button: button, times: times)
                 return .clicked(at: click.at, button: button, times: times, reports: click.reports)
             }
         case .scroll(let at, let vertical, let horizontal):
-            let pointer = mouse(context.frontmostApp)
-            return Step(into: context.frontmostApp) {
+            let pointer = mouse(frontmost)
+            return Step(into: frontmost) {
                 try await pointer.scroll(at: at, vertical: vertical, horizontal: horizontal)
                 return .scrolled(at: at, vertical: vertical, horizontal: horizontal)
             }
         case .clickElement(let role, let title):
-            let pointer = mouse(context.frontmostApp)
-            return Step(into: context.frontmostApp) {
+            let pointer = mouse(frontmost)
+            return Step(into: frontmost) {
                 let click = try await pointer.click(element: role, title: title)
                 return .clicked(at: click.at, button: .left, times: .single, reports: click.reports)
             }
@@ -194,7 +200,7 @@ private extension Clicks {
 /// A list that stopped part way: the action that stopped is the cause, and the actions
 /// before it are done and cannot be taken back, so they travel with it. Text is in the
 /// document either way; what this adds is which of it, so a retry does not type it twice.
-public struct RouteStopped: Error, CustomStringConvertible {
+public struct RouteStopped: StoppedPartWay, CustomStringConvertible {
     public let performed: [Executor.Performed]
     public let cause: any Error
 
