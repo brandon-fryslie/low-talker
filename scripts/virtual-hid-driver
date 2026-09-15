@@ -171,8 +171,28 @@ cmd_expect() {
   echo "virtual-hid-driver: confirmed '$want'" >&2
 }
 
+# What `install` tells a reader about Karabiner-Elements before it touches anything. It
+# only ever speaks: install replaces the shared Manager app and support directory rather
+# than deleting them, so a Mac holding Karabiner-Elements can still run the driver, and
+# refusing would strand it. The reader is told what gets replaced and can stop there.
+#
+# Called in the main shell, and it always returns 0, whatever it read. A receipt nobody
+# could read is said out loud as that, not taken for a Mac without Karabiner-Elements.
+# [LAW:no-silent-failure]
+warn_shared_payload() {
+  local elements
+  elements=$(receipt_version "$ELEMENTS_RECEIPT")
+  case "$elements" in
+    none) ;;
+    probe-failed) echo "virtual-hid-driver: warning: could not tell whether $ELEMENTS_RECEIPT is installed; if it is, this replaces $MANAGER_APP and $SUPPORT_DIR, which it also owns. Continuing, because installing replaces those files and deletes nothing." >&2 ;;
+    *) echo "virtual-hid-driver: warning: Karabiner-Elements $elements is installed and also owns $MANAGER_APP and $SUPPORT_DIR; this replaces them with package $PKG_VERSION. Continuing, because installing replaces those files and deletes nothing." >&2 ;;
+  esac
+}
+
 cmd_install() {
   local pkg result signature scratch_owner
+
+  warn_shared_payload
 
   # The scratch path is fixed and its parent is shared, and `sudo installer` re-reads
   # the package after the checksum and signature have already passed. A local attacker

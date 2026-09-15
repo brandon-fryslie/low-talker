@@ -1,6 +1,6 @@
 import Foundation
 
-/// Reading this Mac for the four facts `DriverState` is derived from.
+/// Reading this Mac for the facts `DriverState` is derived from.
 ///
 /// [LAW:effects-at-boundaries] Every command this program runs against the machine's
 /// driver state runs here, and nothing here decides anything: the verdict is
@@ -50,7 +50,8 @@ public enum DriverProbe {
             payload: try payload(),
             receipt: try receiptVersion(of: bundleID),
             registration: try registration(),
-            ioNode: try ioNodePresent()
+            ioNode: try ioNodePresent(),
+            elementsReceipt: try receiptVersion(of: elementsReceiptID)
         )
     }
 
