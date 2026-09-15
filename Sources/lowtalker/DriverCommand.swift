@@ -26,7 +26,7 @@ extension DriverCommand {
     struct State: ParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "state",
-            abstract: "Print the four readings to stderr and one verdict word to stdout.",
+            abstract: "Print the readings to stderr and one verdict word to stdout.",
             discussion: """
                 The verdicts are absent, installed-inactive, awaiting-approval, disabled, \
                 enabled, running, pending-reboot, residue, and unknown. `enabled` means \

@@ -10,7 +10,8 @@
 #
 # Nothing here touches the machine's driver. `lowtalker` is replaced by a stub that
 # answers from environment variables, so no privileged or destructive command can run
-# even if a guard under test were wrong. `install` and `remove` are never invoked.
+# even if a guard under test were wrong. `install` and `remove` are never invoked; the
+# warning `install` prints is its own function and is called alone.
 #
 # [LAW:behavior-not-structure] The assertions are on the contract: the words the verbs
 # consume, the sentinel, and the exit codes. Nothing here pins an internal call shape.
@@ -172,6 +173,30 @@ check "receipts_present names the receipt" "$BUNDLE_ID" "$(receipts_present)"
 # strength of a reading nobody took.
 STUB_RECEIPT= STUB_RECEIPT_STATUS=1
 check "receipts_present forwards the sentinel" probe-failed "$(receipts_present)"
+STUB_RECEIPT= STUB_RECEIPT_STATUS=0
+
+# ---------------------------------------------------------------------------
+# warn_shared_payload - install speaks about Karabiner-Elements and never stops
+# ---------------------------------------------------------------------------
+
+STUB_RECEIPT= STUB_RECEIPT_STATUS=0
+check "warn_shared_payload says nothing on a Mac without Karabiner-Elements" "" \
+  "$(warn_shared_payload 2>&1)"
+STUB_RECEIPT=15.5.0 STUB_RECEIPT_STATUS=0
+check_contains "warn_shared_payload names the installed Karabiner-Elements" "Karabiner-Elements 15.5.0 is installed" \
+  "$(warn_shared_payload 2>&1)"
+check_contains "warn_shared_payload names the files it shares" "$SUPPORT_DIR" \
+  "$(warn_shared_payload 2>&1)"
+# Refusing would strand the driver on a Mac that can run it, so the warning lets the
+# install carry on.
+( warn_shared_payload ) >/dev/null 2>&1
+check "warn_shared_payload lets install continue past Karabiner-Elements" 0 "$?"
+# An unreadable receipt is not a Mac without Karabiner-Elements, and says so.
+STUB_RECEIPT= STUB_RECEIPT_STATUS=1
+check_contains "warn_shared_payload says when it could not tell" "could not tell whether $ELEMENTS_RECEIPT is installed" \
+  "$(warn_shared_payload 2>&1)"
+( warn_shared_payload ) >/dev/null 2>&1
+check "warn_shared_payload lets install continue past an unreadable receipt" 0 "$?"
 STUB_RECEIPT= STUB_RECEIPT_STATUS=0
 
 # ---------------------------------------------------------------------------

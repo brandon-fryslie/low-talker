@@ -1,5 +1,5 @@
 /// Where the Karabiner-DriverKit-VirtualHIDDevice driver extension stands on this Mac,
-/// as one word, and the four readings that word is derived from.
+/// as one word, and the readings that word is derived from.
 ///
 /// [LAW:one-source-of-truth] This is the whole vocabulary for the driver's state, and
 /// it exists once. `scripts/virtual-hid-driver` prints these words, the menu-bar app
@@ -48,8 +48,8 @@ public enum Registration: String, Sendable, Hashable, CaseIterable {
     }
 }
 
-/// The four readings of the machine, and nothing else. The verdict below is a function
-/// of exactly this and of no other input.
+/// The readings of the machine, and nothing else. The verdict below is a function of
+/// exactly this and of no other input.
 public struct DriverFacts: Sendable, Hashable {
     /// Which payload trees the package left on disk.
     public let payload: Payload
@@ -62,12 +62,18 @@ public struct DriverFacts: Sendable, Hashable {
     /// loading, not enabling: the extension can be enabled and still absent here until
     /// some client opens it.
     public let ioNode: Bool
+    /// Karabiner-Elements' receipt. It moves no verdict: the driver stands where it stands
+    /// whoever else ships it. It is read beside the others because Karabiner-Elements
+    /// owns the same payload trees, and a reader deciding whether to run `install` or
+    /// `remove` should see that before either verb says it.
+    public let elementsReceipt: ElementsReceipt
 
-    public init(payload: Payload, receipt: String?, registration: Registration, ioNode: Bool) {
+    public init(payload: Payload, receipt: String?, registration: Registration, ioNode: Bool, elementsReceipt: ElementsReceipt) {
         self.payload = payload
         self.receipt = receipt
         self.registration = registration
         self.ioNode = ioNode
+        self.elementsReceipt = elementsReceipt
     }
 }
 
@@ -81,7 +87,32 @@ extension DriverFacts: CustomStringConvertible {
         installer receipt  \(receipt ?? "none")
         extension state    \(registration.rawValue)
         IORegistry node    \(ioNode ? "yes" : "no")
+        Karabiner-Elements \(elementsReceipt)
         """
+    }
+}
+
+/// Karabiner-Elements' installer receipt, as a reading whose failure is a value.
+///
+/// Every other reading throws when it cannot be taken, because the verdict needs it. This
+/// one moves no verdict, so a pkgutil that could not answer about it must not take the
+/// verdict down with it. The failure is kept as a case and shown in the table instead,
+/// and `install` and `remove` each read the receipt again for themselves.
+/// [LAW:no-silent-failure]
+public enum ElementsReceipt: Sendable, Hashable, CustomStringConvertible {
+    case absent
+    case installed(version: String)
+    case unreadable(reason: String)
+
+    public var description: String {
+        switch self {
+        case .absent: "none"
+        case .installed(let version): version
+        // The reason quotes pkgutil, which can answer on several lines, and this is one
+        // row of a table read a row per reading. Folded here, so no unlabeled line under
+        // the table passes for a reading of its own.
+        case .unreadable(let reason): "unreadable (\(reason.split(whereSeparator: \.isNewline).joined(separator: "; ")))"
+        }
     }
 }
 
@@ -109,7 +140,7 @@ public enum DriverState: String, Sendable, Hashable, CaseIterable {
     /// `residue` because residue is a mess we understand and this is not.
     case unknown
 
-    /// The verdict, derived from the four facts and from nothing else.
+    /// The verdict, derived from the driver's own four facts and from nothing else.
     ///
     /// [LAW:dataflow-not-control-flow] Written as a table of whole keys rather than a
     /// chain of conditions, so it reads as something to check against a machine instead

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Reading this Mac for the four facts `DriverState` is derived from.
+/// Reading this Mac for the facts `DriverState` is derived from.
 ///
 /// [LAW:effects-at-boundaries] Every command this program runs against the machine's
 /// driver state runs here, and nothing here decides anything: the verdict is
@@ -50,8 +50,21 @@ public enum DriverProbe {
             payload: try payload(),
             receipt: try receiptVersion(of: bundleID),
             registration: try registration(),
-            ioNode: try ioNodePresent()
+            ioNode: try ioNodePresent(),
+            elementsReceipt: elementsReceipt { try Command("/usr/sbin/pkgutil", "--pkg-info", elementsReceiptID).run() }
         )
+    }
+
+    /// Karabiner-Elements' receipt, read the way every receipt is read, with a failure
+    /// caught into `.unreadable` rather than thrown past the verdict it does not feed.
+    /// Takes the pkgutil run as a closure so a test can fail it either way it fails in
+    /// life: the run itself, or an answer this build cannot read.
+    static func elementsReceipt(_ read: () throws -> Command.Output) -> ElementsReceipt {
+        do {
+            return try receiptVersion(of: elementsReceiptID, from: read()).map { .installed(version: $0) } ?? .absent
+        } catch {
+            return .unreadable(reason: "\(error)")
+        }
     }
 
     /// Which of the package's two payload trees are on disk.
