@@ -280,7 +280,7 @@ It needs the helper installed (`scripts/keyboard-helper install`, under "The key
     .build/debug/lowtalker keys --into com.apple.TextEdit leftCommand+s
     .build/debug/lowtalker keys leftShift+leftCommand+left delete    # into whatever is in front
 
-`type` types text and `keys` presses chords, through the same executor `act` and dictation use: the app is raised first, every key is refused once it leaves the front, and each command prints the executor's line for what it did. `--into` names the app by bundle id; without it the target is the app in front when the command starts, which from a terminal is the terminal itself. `--flavor` picks the installation's helper, as for `act`.
+`type` types text and `keys` presses chords, through the same executor `act` and dictation use: the app is raised first, every key is refused once it leaves the front, and each command prints the executor's line for what it did. `--into` names the app by bundle id; without it the target is the app in front when the command starts, which from a terminal is the terminal itself. `--flavor` picks the installation's helper, as for `act`. Text that starts with `-` would be read as an option, so it follows `--`: `lowtalker type -- "$text"` types any text.
 
 A chord is modifier names and one key joined by `+`. Modifiers are the config file's words (`leftCommand`, `rightOption`, ...). The key is a name (`return`, `escape`, `left`, `f5`, ...), the character your keyboard layout types with that key and nothing held (`s`, `/`), or `key 0x24`, the spelling the executor prints, so any chord a report names can be passed back. `keys` takes several chords and presses them in order, having proven every one pressable first; `lowtalker keys --help` lists every key name.
 

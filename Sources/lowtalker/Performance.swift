@@ -42,7 +42,7 @@ enum Performance {
             // [LAW:dataflow-not-control-flow] Every failure leaves the same way: said on
             // stderr, then the code its kind is owed. A failure this names nothing about
             // exits 1, as ArgumentParser's own would.
-            let failure = PerformExit.classify(error, flavor: flavor) { try MachineReading.read(flavor) }
+            let failure = PerformExit.classify(error, flavor: flavor, machine: .of(flavor))
             FileHandle.standardError.write(Data("Error: \(failure.said)\n".utf8))
             throw ExitCode(failure.exit?.rawValue ?? ExitCode.failure.rawValue)
         }
@@ -96,36 +96,40 @@ enum PerformExit: Int32, CaseIterable {
     /// is not met is printed with its step. [LAW:single-enforcer] Whether a row is met is the
     /// row's own answer, not a second rule kept here.
     ///
-    /// The driver is asked first: no helper can type without it, so a Mac missing both is a
-    /// Mac whose next step is the driver.
-    static func classify(_ error: any Error, flavor: Flavor, machine: () throws -> MachineReading) -> (exit: PerformExit?, said: String) {
+    /// The rows are read in the order their steps come: no helper can type without the
+    /// driver, so a Mac missing both is a Mac whose next step is the driver. Each is read
+    /// only once every row before it is met, so a reading that fails costs the code only
+    /// when it is the one that decides it.
+    static func classify(_ error: any Error, flavor: Flavor, machine: Machine) -> (exit: PerformExit?, said: String) {
         let causes = error.causes
         if causes.contains(where: { $0 is UntypeableCharacters || $0 is UnpressableChord || $0 is WouldPressTheHotkey }) {
             return (.untypeable, "\(error)")
         }
         guard causes.contains(where: { $0 is HelperConnection.Unreachable }) else { return (nil, "\(error)") }
-        let reading: MachineReading
-        do { reading = try machine() } catch let unread {
-            // [LAW:no-silent-failure] The code stays 1 rather than guessing a cause.
-            return (nil, "\(error)\nwhy the helper could not be reached was not read: \(unread)")
-        }
-        let rows: [(PerformExit, Requirement)] = [
-            (.driverNotActivated, .driverExtension(reading.driver)),
-            (.helperNotApproved, .keyboardHelper(reading.helper, flavor: flavor)),
+        let rows: [(PerformExit, () throws -> Requirement)] = [
+            (.driverNotActivated, { .driverExtension(try machine.driver()) }),
+            (.helperNotApproved, { .keyboardHelper(try machine.helper(), flavor: flavor) }),
         ]
-        let unmet = rows.first { !$0.1.met }
-        return (unmet?.0, (["\(error)"] + (unmet.map { ["\($0.1)"] } ?? [])).joined(separator: "\n"))
+        for (exit, row) in rows {
+            let requirement: Requirement
+            do { requirement = try row() } catch let unread {
+                // [LAW:no-silent-failure] The code stays 1 rather than guessing a cause.
+                return (nil, "\(error)\nwhy the helper could not be reached was not read: \(unread)")
+            }
+            if !requirement.met { return (exit, "\(error)\n\(requirement)") }
+        }
+        return (nil, "\(error)")
     }
 }
 
-/// The two readings that say why a helper cannot be reached.
-struct MachineReading {
-    let driver: DriverState
-    let helper: HelperStanding
+/// The two readings that say why a helper cannot be reached, each taken when asked for.
+struct Machine {
+    let driver: () throws -> DriverState
+    let helper: () throws -> HelperStanding
 
-    static func read(_ flavor: Flavor) throws -> MachineReading {
-        MachineReading(
-            driver: DriverState(try DriverProbe.facts()),
-            helper: try OnboardingProbe.helperStanding(label: flavor.launchdLabel, service: flavor.machServiceName))
+    static func of(_ flavor: Flavor) -> Machine {
+        Machine(
+            driver: { DriverState(try DriverProbe.facts()) },
+            helper: { try OnboardingProbe.helperStanding(label: flavor.launchdLabel, service: flavor.machServiceName) })
     }
 }

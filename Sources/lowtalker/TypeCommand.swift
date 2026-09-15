@@ -14,7 +14,7 @@ struct TypeCommand: AsyncParsableCommand {
         discussion: PerformExit.discussion
     )
 
-    @Argument(help: "The text to type: anything the console user's keyboard layout has keys for, dead-key sequences and line breaks included.")
+    @Argument(help: "The text to type: anything the console user's keyboard layout has keys for, dead-key sequences and line breaks included. Text that starts with - follows --, as in: lowtalker type -- \"-5 degrees\".")
     var text: String
 
     @OptionGroup var target: TargetOption
