@@ -469,6 +469,36 @@ private struct Authorized: MicrophoneAuthority {
         #expect(capture.outages.count == 0)
     }
 
+    /// A device report while the engine is down readies an input that has failed nothing, and
+    /// the press that retries opens that one rather than readying a third. Readying runs off
+    /// the main actor, so the one the report asked for can still be under way at the key, and
+    /// replacing it would make the press wait for it and for its replacement back to back.
+    @Test func aRetryOpensTheInputADeviceReportReadiedWhileTheEngineWasDown() throws {
+        let hardware = FakeHardware(launches: [NoDevice()])
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .open)
+        hardware.inputs[0].onStale()
+        #expect(hardware.prepared == 2)
+
+        _ = try capture.beginSession(at: origin, preRoll: 0)
+        #expect(hardware.prepared == 2)
+        #expect(hardware.engines[0].readying == 2)
+    }
+
+    /// The same input is not kept once the default has moved off the device it was readied
+    /// for: that is the retry the default-input watch exists to make.
+    @Test func aRetryOnANewDefaultReadiesForItEvenWhenAnInputWasReadiedSinceTheFailure() throws {
+        let hardware = FakeHardware(launches: [NoDevice()])
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .open)
+        hardware.inputs[0].onStale()
+        try hardware.changeDefaultInput()
+
+        #expect(hardware.prepared == 3)
+        #expect(hardware.engines[0].readying == 3)
+        #expect(capture.outages.count == 1)
+    }
+
     /// Device churn while nobody is dictating, which only a held microphone can meet: the
     /// engine runs for hours, so a docking station waking up replaces it with no press in
     /// flight. The press that follows hears the new device only, and the audio the old one

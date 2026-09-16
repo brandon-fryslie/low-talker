@@ -93,8 +93,9 @@ public final class AudioCapture {
         /// Nothing is running and macOS shows nothing.
         case shut
         case running(Live)
-        /// The engine has been gone since `since`.
-        case failed(any Error, since: ContinuousClock.Instant)
+        /// The engine has been gone since `since`, and the input it was on is the `on`th one
+        /// readied - which says whether the input held now is that one or one readied since.
+        case failed(any Error, since: ContinuousClock.Instant, on: Int)
     }
 
     /// [LAW:types-are-the-program] The grant, the default-input watch and the resting mode
@@ -230,7 +231,7 @@ public final class AudioCapture {
         case .stopped: .stopped
         case .started(let started):
             switch started.engine {
-            case .failed(let error, _): .failed(error)
+            case .failed(let error, _, _): .failed(error)
             // A running engine is a press's while one is in flight and the resting mode's
             // the rest of the time. `running` names the press, not the microphone: which
             // of the two is holding the device open is what `atRest` says.
@@ -264,7 +265,7 @@ public final class AudioCapture {
         guard case .started(let started) = phase else { return "not being captured" }
         switch started.engine {
         case .shut, .running: return "\(started.atRest)"
-        case .failed(let error, _): return "\(started.atRest), but it stopped: \(error)"
+        case .failed(let error, _, _): return "\(started.atRest), but it stopped: \(error)"
         }
     }
 
@@ -337,19 +338,10 @@ public final class AudioCapture {
         // `shut` above deliberately does not do: leaving a failed engine behind there
         // would let the next device change reach `recover()` with no session open and
         // hold the microphone a config asked to keep closed.
-        case .failed(_, let since):
+        case .failed(_, let since, let failedOn):
             do {
-                // A retry after a failure readies the microphone again: what failed may
-                // have been the device going away, and the input prepared against it
-                // cannot open the one that replaced it.
-                ready(&started)
-                started.engine = .running(try launch(on: started.prepared))
-                closeOutage(since: since)
+                try retry(&started, failedOn: failedOn, since: since)
             } catch {
-                // The gap runs from where it began, carrying the newest reason: a retry
-                // that failed again started no new gap, and the reason it is dead now is
-                // the one the status surface has to show. [LAW:no-silent-failure]
-                started.engine = .failed(error, since: since)
                 phase = .started(started)
                 throw NoMicrophone.failed(error)
             }
@@ -555,7 +547,7 @@ public final class AudioCapture {
                 break
             case .shut:
                 do { started.engine = .running(try launch(on: started.prepared)) }
-                catch { started.engine = .failed(error, since: .now) }
+                catch { started.engine = .failed(error, since: .now, on: preparations) }
             }
         }
         phase = .started(started)
@@ -631,7 +623,7 @@ public final class AudioCapture {
             started.engine = .running(try launch(on: started.prepared))
             deviceChanges += 1
         } catch {
-            started.engine = .failed(error, since: .now)
+            started.engine = .failed(error, since: .now, on: preparations)
         }
     }
 
@@ -659,7 +651,8 @@ public final class AudioCapture {
         switch started.engine {
         case .running(let live): replaceEngine(&started, live)
         // A failed engine is left failed: it is not this device's turn again until a press
-        // or the default-input watch says so, and both ready a microphone of their own.
+        // or the default-input watch says so, and the input readied here is the one either
+        // of them retries on - see `retry`.
         case .shut, .failed: ready(&started)
         }
         phase = .started(started)
@@ -705,16 +698,39 @@ public final class AudioCapture {
             replaceEngine(&started, live)
         case .shut:
             ready(&started)
-        case .failed(_, let since):
-            do {
-                ready(&started)
-                started.engine = .running(try launch(on: started.prepared))
-                closeOutage(since: since)
-            } catch {
-                started.engine = .failed(error, since: since)
-            }
+        // What a retry that failed again came to is the engine it leaves failed, which is
+        // what the status surface reads; there is no press here to throw it to.
+        case .failed(_, let since, let failedOn):
+            try? retry(&started, failedOn: failedOn, since: since)
         }
         phase = .started(started)
+    }
+
+    /// Tries a failed engine again, from a press or from the device watch. [LAW:single-enforcer]
+    /// Both are the same retry, so they cannot come to disagree about what it readies or how
+    /// the outage it ends is booked.
+    ///
+    /// The input a failure happened on is readied again first: what failed may have been the
+    /// device going away, and an input prepared against that one cannot open the one that
+    /// replaced it. An input readied since the failure has failed nothing - a device report
+    /// readies one while the engine is down - and replacing it too would make the retry wait
+    /// for two readyings back to back, the one already under way, which cannot be taken back,
+    /// and its replacement. It is kept unless it is for a device that is no longer the default.
+    ///
+    /// A retry that fails again leaves the gap running from where it began, carrying the
+    /// newest reason: it started no new gap, and the reason it is dead now is the one the
+    /// status surface has to show. [LAW:no-silent-failure]
+    private func retry(_ started: inout Started, failedOn preparation: Int, since: ContinuousClock.Instant) throws {
+        do {
+            if preparation == preparations || !started.prepared.isOnTheDefaultInput {
+                ready(&started)
+            }
+            started.engine = .running(try launch(on: started.prepared))
+            closeOutage(since: since)
+        } catch {
+            started.engine = .failed(error, since: since, on: preparations)
+            throw error
+        }
     }
 
     /// A failure from an engine a device change has since replaced is stale: the
@@ -728,7 +744,7 @@ public final class AudioCapture {
               case .running(let live) = started.engine,
               live.generation == generation else { return }
         dispose(live)
-        started.engine = .failed(error, since: .now)
+        started.engine = .failed(error, since: .now, on: preparations)
         phase = .started(started)
     }
 }
