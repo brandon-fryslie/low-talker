@@ -139,8 +139,9 @@ targetTemplates:
     # and takes none, so it is offered at a bare cursor. NSRequiredContext, even empty,
     # enables it without a trip to Keyboard Shortcuts. The shortcut is per installation, so
     # the two copies do not answer one key: serviceKey "@" is Command+Shift+2 on a US layout
-    # for the release copy, "!" Command+Shift+1 for the development one. NSTimeout is the caller's wait in milliseconds,
-    # above AppDelegate.serviceWait. xcodegen writes this plist, and Xcode merges it with
+    # for the release copy, "!" Command+Shift+1 for the development one. NSTimeout is how long the
+    # requesting app waits for a reply, in milliseconds; the handler reads the last dictation and returns
+    # at once, so it is only a ceiling and is never reached. xcodegen writes this plist, and Xcode merges it with
     # the keys GENERATE_INFOPLIST_FILE synthesises.
     info:
       path: App/Generated/${displayName}-Info.plist

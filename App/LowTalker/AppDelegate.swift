@@ -582,7 +582,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if case .preparing = engineReadiness { menu.addItem(readout("A press now is heard once the model is ready")) }
         menu.addItem(readout("Microphone: \(microphone)"))
         menu.addItem(readout("Hotkey: \(hotkeyStatus)"))
-        if wordsOnClipboard { menu.addItem(readout("Your last dictation is on the clipboard")) }
+        if wordsOnClipboard { menu.addItem(readout("Your last dictation was copied to the clipboard")) }
         // Every requirement, met or not, and its step under it as the lines it was
         // written in - one item per line, so nothing here wraps text the requirement
         // already broke. A list that showed only what was missing would leave a reader
