@@ -154,7 +154,7 @@ targets:
     templates: [Installation]
     templateAttributes:
       displayName: LowTalker
-      bundleIdentifier: ltd.deadgrass.low-talker
+      bundleIdentifier: ai.promptctl.low-talker
       launchdLabel: com.lowtalker.keyboardd
 
   # The copy built from the working tree, installed and running beside the one above.
@@ -162,7 +162,7 @@ targets:
     templates: [Installation]
     templateAttributes:
       displayName: LowTalker Dev
-      bundleIdentifier: ltd.deadgrass.low-talker.dev
+      bundleIdentifier: ai.promptctl.low-talker.dev
       launchdLabel: com.lowtalker.keyboardd.dev
 
   # The root keyboard helper, built here from the same sources Package.swift builds it

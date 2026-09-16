@@ -139,7 +139,7 @@ For `mic` and `mic request` the exit status is 0 when access is granted and 1 ot
 
 To see the first-launch prompt again, forget the app's decision and relaunch:
 
-    tccutil reset Microphone ltd.deadgrass.low-talker
+    tccutil reset Microphone ai.promptctl.low-talker
 
 ## The microphone indicator
 
@@ -305,7 +305,7 @@ The app gives you what you dictate one of two ways, and asks which the first tim
 - **Clipboard.** Press Control+Shift+D (Control+Shift+Command+D for the development copy) to start listening and again to stop, or hold it while you speak, then paste with ⌘V. The hotkey is a registered hot key and the words go on the clipboard, replacing what was there, so nothing is installed and nothing asks for an administrator. The menu-bar icon turns into a clipboard when words are waiting, and back into a microphone at the next press. A route that needs the keyboard or the mouse, anything beyond text at the focus, is refused by name.
 - **Virtual keyboard.** Hold Right Option (Right Command, then Right Option, for the development copy) while you speak, and the words are typed where you are. This is the driver extension and the root helper described under "The virtual keyboard driver", and the approvals under "What is left to set up".
 
-The status menu lists both under "Input method" with the current one checked, and choosing the other takes effect at once: a press still open is ended, sessions in flight finish, and the new method's hotkey comes up. Choosing the virtual keyboard registers the helper, and when the driver, the helper or Keyboard Setup Assistant still needs something, an alert lists the steps. On the clipboard the helper is never registered and the onboarding rows are not read. The choice is kept per installation in its defaults, under `inputMethod`; `defaults delete ltd.deadgrass.low-talker.dev inputMethod` makes the development copy ask again at its next launch. The app logs `input method: asked, answered clipboard` or `input method: remembered virtualKeyboard` at launch.
+The status menu lists both under "Input method" with the current one checked, and choosing the other takes effect at once: a press still open is ended, sessions in flight finish, and the new method's hotkey comes up. Choosing the virtual keyboard registers the helper, and when the driver, the helper or Keyboard Setup Assistant still needs something, an alert lists the steps. On the clipboard the helper is never registered and the onboarding rows are not read. The choice is kept per installation in its defaults, under `inputMethod`; `defaults delete ai.promptctl.low-talker.dev inputMethod` makes the development copy ask again at its next launch. The app logs `input method: asked, answered clipboard` or `input method: remembered virtualKeyboard` at launch.
 
 Verified on this Mac with the development copy: on the clipboard, a four-word utterance spoken during a held chord (then Control+Option+Command+D, since moved off VoiceOver's modifier) was on the pasteboard 698 ms after key-up, with no helper registration logged; `lowtalker hotkey --heard-by clipboard` heard a hold and a pair of taps of Control+Shift+Command+D; switched to the virtual keyboard from the menu, the next utterance was typed into TextEdit 693 ms after key-up; and with the stored choice deleted, the next launch asked, and logged the answer. The alert that lists missing steps was not seen, since this Mac is missing none.
 
@@ -653,7 +653,7 @@ The third of those is what this Mac is in right now for the development copy: la
 
 The app logs every reading it takes, so an agent can read back what the menu is showing without a screen:
 
-    /usr/bin/log show --predicate 'subsystem == "ltd.deadgrass.low-talker"' --last 5m --style compact
+    /usr/bin/log show --predicate 'subsystem == "ai.promptctl.low-talker"' --last 5m --style compact
 
 The category is `engine`. Each open writes `helper registration: SMAppService.Status <n>`, then `onboarding: ready` or `onboarding: not ready`, then one `onboarding: <Name>: <what was read>` per requirement. `log` is spelled with its absolute path because zsh has a builtin by that name.
 

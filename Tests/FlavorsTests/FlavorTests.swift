@@ -43,7 +43,7 @@ struct FlavorTests {
     /// An identifier belonging to neither is refused rather than guessed at: answering
     /// `.release` for it would point a misbuilt app at the installed copy's helper,
     /// config and hotkey.
-    @Test(arguments: ["", "ltd.deadgrass.low-talker.staging", "com.apple.Finder", "LowTalker"])
+    @Test(arguments: ["", "ai.promptctl.low-talker.staging", "com.apple.Finder", "LowTalker"])
     func anUnknownBundleIdentifierIsRefused(identifier: String) {
         #expect(Flavor(bundleIdentifier: identifier) == nil)
     }
