@@ -199,4 +199,13 @@ public struct HotkeyDetector: Sendable {
         phase = .idle
         return transition
     }
+
+    /// Something other than the keyboard asks a latched tap's listening to end, and it ends
+    /// as a second press of the chord would end it: released, a tap. A hold is left alone,
+    /// since its key is still down and coming up is what ends it; so is rest.
+    public mutating func release() -> Transition? {
+        guard case .latched(let chord) = phase else { return nil }
+        phase = .idle
+        return .ended(chord, .released(.tap))
+    }
 }

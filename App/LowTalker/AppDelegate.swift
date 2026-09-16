@@ -195,11 +195,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// before it, so there is only ever one loop being built.
     private var switching: Task<Void, Never>?
 
-    /// Words are on the clipboard from the last press, and no press has begun since. What
-    /// the status item's icon is drawn from, so the icon cannot say something this does not.
-    private var wordsOnClipboard = false {
+    /// The words the last press copied, while no press has begun since: what the Insert
+    /// Dictation service hands back, and what the status item's icon is drawn from, so the
+    /// icon cannot say something the service would not return. [LAW:one-source-of-truth]
+    private var lastDictation: String? {
         didSet { drawStatusIcon() }
     }
+
+    private var wordsOnClipboard: Bool { lastDictation != nil }
 
     private func drawStatusIcon() {
         // Named from the flavor, because with both copies installed there are two of
@@ -234,7 +237,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // replaced would be the worse failure of the two. [LAW:no-silent-failure]
             do { try await previous.dictation.finish() } catch { report(.failure(error)) }
         }
-        // `wordsOnClipboard` is left as it stands: a session the wait let finish may just
+        // `lastDictation` is left as it stands: a session the wait let finish may just
         // have copied, and words on the clipboard stay there whichever method comes next.
         let hotkey = Hotkey(for: Self.flavor, heardBy: method)
         let dictation = Dictation(
@@ -248,7 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let chord = chordName(heardBy: method)
         do {
             try hotkey.start({ [unowned self] transition in
-                if case .began = transition { wordsOnClipboard = false }
+                if case .began = transition { lastDictation = nil }
                 dictation.press(transition)
             }, onLapse: { [unowned self] in report($0) })
             let status = switch method {
@@ -370,6 +373,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         show(.preparing(nil, since: launched))
         statusItem.isVisible = true
+        // The Insert Dictation service, declared under NSServices in project.yml, is
+        // answered by this delegate. The update makes a freshly built copy's entry
+        // known without a logout.
+        NSApp.servicesProvider = self
+        NSUpdateDynamicServices()
         _ = engine
         showHotkeyStatus("starting…")
         Task { await listen() }
@@ -467,8 +475,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch outcome {
         case .success(let session):
             sessions.notice("\(session.description, privacy: .public): \(session.transcript.text, privacy: .private)")
-            // Only a copy leaves anything on the clipboard to say so about.
-            wordsOnClipboard = session.performed.contains { if case .copied = $0.what { true } else { false } }
+            // Only a copy leaves anything on the clipboard to say so about, or to insert.
+            lastDictation = session.performed.compactMap { if case .copied(let text) = $0.what { text } else { nil } }.last
         case .failure(let error):
             // The kind of failure is public and its account is not: a TypingStopped
             // names the character left half typed, which is a character the user
@@ -488,6 +496,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// fixed sentence, and no part of it is anything the user dictated.
     private func report(_ lapse: KeyboardTapLapse) {
         sessions.error("\(lapse.description, privacy: .public)")
+    }
+
+    // MARK: - the Insert Dictation service
+
+    /// How long a service call waits for the dictation it asks for. Under the caller's own
+    /// timeout, NSTimeout in project.yml, so the answer reaches an app still waiting for it.
+    private static let serviceWait: Duration = .seconds(25)
+
+    /// The Insert Dictation service: the words of the latest dictation, handed to the app
+    /// that asked, which puts them at its cursor. No key is posted and nothing is pressed in
+    /// that app, so it needs no grant; the app's own Services machinery does the inserting.
+    ///
+    /// A tap still listening is ended first, as a second tap of the chord would end it, so
+    /// the shortcut that asks for the words is also the one that stops listening for them.
+    /// Every session in flight is then waited out, so a press just released is heard
+    /// rather than the one before it.
+    ///
+    /// [LAW:no-ambient-temporal-coupling] A service call is synchronous and arrives on the
+    /// main thread, and the sessions it waits for run on the main actor. So the wait turns
+    /// the main run loop, rather than blocking it, until they finish or the wait runs out.
+    @objc func insertDictation(_ pasteboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
+        let ended = listening?.hotkey.release() ?? false
+        let dictation = listening?.dictation
+        let settled = turnMainRunLoop(upTo: Self.serviceWait) {
+            // A refused wait is reported, and whatever the sessions left is still answered.
+            do { try await dictation?.finish() } catch { self.report(.failure(error)) }
+        }
+        // [LAW:no-silent-failure] Each way there is nothing to insert says why, to the
+        // calling app and to the log, rather than inserting nothing or an older dictation.
+        let answer: Result<String, ServiceRefusal> = switch (settled, lastDictation) {
+        case (false, _): .failure(ServiceRefusal("the dictation is still being heard; its words will be on the clipboard"))
+        case (true, nil): .failure(ServiceRefusal(ended ? "nothing was heard in that dictation" : "there is no dictation to insert yet"))
+        case (true, let words?): .success(words)
+        }
+        switch answer {
+        case .success(let words):
+            pasteboard.clearContents()
+            pasteboard.setString(words, forType: .string)
+            log.notice("insert dictation: \(ended ? "ended the listening, " : "", privacy: .public)returned \(words.count, privacy: .public) characters")
+        case .failure(let refusal):
+            error.pointee = refusal.reason as NSString
+            log.notice("insert dictation: \(refusal.reason, privacy: .public)")
+        }
+    }
+
+    /// Runs `work` and turns the main run loop until it returns or `limit` passes, answering
+    /// whether it returned. Work left running past the limit finishes on its own.
+    private func turnMainRunLoop(upTo limit: Duration, until work: @escaping @MainActor () async -> Void) -> Bool {
+        @MainActor final class Finished { var yet = false }
+        let finished = Finished()
+        Task { @MainActor in
+            await work()
+            finished.yet = true
+        }
+        let deadline = ContinuousClock.now + limit
+        while !finished.yet, ContinuousClock.now < deadline {
+            RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.02))
+        }
+        return finished.yet
     }
 
     // MARK: - the menu
@@ -585,4 +652,11 @@ private extension InputMethod {
         case .virtualKeyboard: "Virtual Keyboard"
         }
     }
+}
+
+/// Why the Insert Dictation service had no words to hand back, in the words the calling app
+/// shows its user.
+private struct ServiceRefusal: Error {
+    let reason: String
+    init(_ reason: String) { self.reason = reason }
 }

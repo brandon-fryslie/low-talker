@@ -245,4 +245,19 @@ private let passed = HotkeyDetector.Verdict(transition: nil, delivery: .pass)
         _ = keyboard.press(.leftShift, at: 1000)
         #expect(keyboard.press(.rightOption, at: 1010) == ended(rightOption, .tap))
     }
+
+    /// Released without a key, a latched tap ends as a second press would end it, and the
+    /// chord pressed next begins a new press rather than ending one already gone. A held
+    /// press and rest are left as they are: nothing is latched to release.
+    @Test func aReleaseEndsOnlyALatchedTap() {
+        var keyboard = Keyboard()
+        #expect(keyboard.detector.release() == nil)
+        _ = keyboard.press(.rightOption, at: 0)
+        #expect(keyboard.detector.release() == nil)
+        #expect(keyboard.detector.phase == .held(rightOption, since: at(0)))
+        _ = keyboard.release(.rightOption, at: 100)
+        #expect(keyboard.detector.release() == .ended(rightOption, .released(.tap)))
+        #expect(keyboard.detector.phase == .idle)
+        #expect(keyboard.press(.rightOption, at: 1000) == began(rightOption, at: 1000))
+    }
 }
