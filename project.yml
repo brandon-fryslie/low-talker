@@ -19,7 +19,7 @@ settings:
     SWIFT_VERSION: "6.0"
     CODE_SIGN_STYLE: Manual
     CODE_SIGN_IDENTITY: LowTalker Dev
-    # Notarization refuses a binary without it, and every binary built here is one a
+    # Notarization refuses a binary without it, and every target in this file is one a
     # release carries: the app and the helper embedded in it.
     ENABLE_HARDENED_RUNTIME: YES
 
