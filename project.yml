@@ -111,23 +111,29 @@ targetTemplates:
       path: App/Generated/LowTalker.entitlements
       properties:
         com.apple.security.device.audio-input: true
-    # A release carries a store holding its model, so a first launch installs it with the
-    # network off. Copied in after every other phase, so the signature Xcode writes last
-    # seals it with the rest of the bundle. `make` passes BUNDLED_MODEL_STORE, which only
-    # scripts/sign-release sets; a build that names no store carries none.
+    # A release carries what a first run would otherwise fetch: a store holding its model,
+    # so a first launch installs it with the network off, and the pinned virtual keyboard
+    # driver package, so installing the driver needs no GitHub. Copied in after every other
+    # phase, so the signature Xcode writes last seals them with the rest of the bundle.
+    # `make` passes BUNDLED_MODEL_STORE and BUNDLED_DRIVER_PACKAGE, which only
+    # scripts/sign-release sets; a build that names neither carries neither.
     postBuildScripts:
-      - name: Carry the model store
+      - name: Carry what a first run would fetch
         basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
-          carried="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/${MODEL_STORE_RESOURCE}"
-          # Removed on every build, named store or not: Xcode leaves a file it did not make
-          # in the bundle, so a store an earlier build carried would ride along, and ditto
+          resources="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+          # Removed on every build, named or not: Xcode leaves a file it did not make in
+          # the bundle, so what an earlier build carried would ride along, and ditto
           # merges into a folder already there.
-          rm -rf "${carried}"
+          rm -rf "${resources}/${MODEL_STORE_RESOURCE}" "${resources}/${DRIVER_PACKAGE_RESOURCE}"
           # An empty setting reaches the script unset, not empty.
-          [ -n "${BUNDLED_MODEL_STORE:-}" ] || exit 0
-          ditto "${BUNDLED_MODEL_STORE}" "${carried}"
+          if [ -n "${BUNDLED_MODEL_STORE:-}" ]; then
+            ditto "${BUNDLED_MODEL_STORE}" "${resources}/${MODEL_STORE_RESOURCE}"
+          fi
+          if [ -n "${BUNDLED_DRIVER_PACKAGE:-}" ]; then
+            ditto "${BUNDLED_DRIVER_PACKAGE}" "${resources}/${DRIVER_PACKAGE_RESOURCE}"
+          fi
     settings:
       base:
         PRODUCT_NAME: ${displayName}
@@ -139,6 +145,9 @@ targetTemplates:
         # Where the bundle's resources hold the carried store, as ModelStore.carriedResourceName
         # names it; CarriedModelStoreTests holds the two equal. [LAW:one-source-of-truth]
         MODEL_STORE_RESOURCE: model-store
+        # Named without its version, so whatever installs it from the bundle need not change
+        # when the pin does; scripts/virtual-hid-driver checks the bytes against the pin.
+        DRIVER_PACKAGE_RESOURCE: Karabiner-DriverKit-VirtualHIDDevice.pkg
 
 targets:
   LowTalker:

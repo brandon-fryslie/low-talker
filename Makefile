@@ -3,9 +3,11 @@ SHELL := /bin/bash
 DERIVED_DATA := DerivedData
 CONFIGURATION := Debug
 PRODUCTS := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)
-# A store holding the model, for the bundle to carry; scripts/sign-release names one and
-# every other build leaves it empty, so it carries none.
+# A store holding the model and the pinned driver package, for the bundle to carry;
+# scripts/sign-release names both and every other build leaves them empty, so it carries
+# neither.
 BUNDLED_MODEL_STORE :=
+BUNDLED_DRIVER_PACKAGE :=
 
 # The two installations, as the scheme that builds each and the bundle it leaves behind.
 # [LAW:one-source-of-truth] project.yml names these; they are written once here and every
@@ -32,7 +34,8 @@ INSTALLED := /Applications/LowTalker.app
 define build_app
 	xcodegen generate
 	xcodebuild -project LowTalker.xcodeproj -scheme $(1) -configuration $(CONFIGURATION) \
-		-derivedDataPath $(DERIVED_DATA) BUNDLED_MODEL_STORE="$(BUNDLED_MODEL_STORE)" build
+		-derivedDataPath $(DERIVED_DATA) BUNDLED_MODEL_STORE="$(BUNDLED_MODEL_STORE)" \
+		BUNDLED_DRIVER_PACKAGE="$(BUNDLED_DRIVER_PACKAGE)" build
 endef
 
 app:
