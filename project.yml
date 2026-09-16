@@ -111,6 +111,21 @@ targetTemplates:
       path: App/Generated/LowTalker.entitlements
       properties:
         com.apple.security.device.audio-input: true
+    # A release carries a store holding its model, so a first launch installs it with the
+    # network off. Copied in after every other phase, so the signature Xcode writes last
+    # seals it with the rest of the bundle. `make` passes BUNDLED_MODEL_STORE, which only
+    # scripts/sign-release sets; a build that names no store carries none.
+    postBuildScripts:
+      - name: Carry the model store
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          # An empty setting reaches the script unset, not empty.
+          [ -n "${BUNDLED_MODEL_STORE:-}" ] || exit 0
+          carried="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/${MODEL_STORE_RESOURCE}"
+          # Removed first: ditto merges into a folder already there.
+          rm -rf "${carried}"
+          ditto "${BUNDLED_MODEL_STORE}" "${carried}"
     settings:
       base:
         PRODUCT_NAME: ${displayName}
@@ -119,6 +134,9 @@ targetTemplates:
         GENERATE_INFOPLIST_FILE: true
         INFOPLIST_KEY_LSUIElement: true
         INFOPLIST_KEY_NSMicrophoneUsageDescription: low-talker listens to your microphone while you hold the dictation key so it can turn what you say into text. Audio never leaves this Mac.
+        # Where the bundle's resources hold the carried store, as ModelStore.carriedResourceName
+        # names it; CarriedModelStoreTests holds the two equal. [LAW:one-source-of-truth]
+        MODEL_STORE_RESOURCE: model-store
 
 targets:
   LowTalker:

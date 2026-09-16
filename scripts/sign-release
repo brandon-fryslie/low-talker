@@ -2,7 +2,13 @@
 # Builds LowTalker.app to hand to someone else, and proves its signature is one the notary
 # service accepts, on the app and on the keyboard helper embedded in it.
 #
-#   scripts/sign-release <output directory>    # prints <output directory>/LowTalker.app
+#   scripts/sign-release <output directory> [model source]    # prints <output directory>/LowTalker.app
+#
+# The bundle carries the default model in Contents/Resources/model-store, so a first launch
+# installs it with the network off. The model source is what `lowtalker model download
+# --from` takes: a store holding the model, such as ~/Library/Application Support/low-talker/hub,
+# or a base URL serving the archive `lowtalker model pack` writes. With none, the model comes
+# from Hugging Face.
 #
 # The build is `make release` in the Release configuration, which project.yml signs with the
 # Developer ID identity, Hardened Runtime and a secure timestamp. It goes into a derived-data
@@ -14,16 +20,25 @@
 # project.yml's; this script only chooses the configuration and reads the result back.
 set -euo pipefail
 
-out=${1:?usage: scripts/sign-release <output directory>}
+out=${1:?usage: scripts/sign-release <output directory> [model source]}
+source=${2:-}
 # Made and resolved before the move to the repo root, which make and xcodegen need, so a
 # relative directory means the one the caller named.
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
+if [ -d "$source" ]; then source=$(cd "$source" && pwd); fi
 cd "$(dirname "$0")/.."
 
 derived=$(mktemp -d "${TMPDIR:-/tmp}/lowtalker-release.XXXXXX")
 trap 'rm -rf "$derived"' EXIT
-make release CONFIGURATION=Release DERIVED_DATA="$derived" >&2
+
+# The CLI decides which model is the default and installs it whole, manifests and all, so
+# this script names neither. [LAW:one-source-of-truth]
+cli=$(make cli | tee /dev/stderr | tail -n 1)
+carried="$derived/model-store"
+"$cli" model download --models-dir "$carried" ${source:+--from "$source"} >&2
+
+make release CONFIGURATION=Release DERIVED_DATA="$derived" BUNDLED_MODEL_STORE="$carried" >&2
 
 app="$out/LowTalker.app"
 # Removed first: ditto merges into a bundle already there. [LAW:no-silent-failure]
@@ -54,6 +69,9 @@ check() {
 }
 
 codesign --verify --deep --strict "$app" || fail "$app does not verify"
+resource=$(xcodegen dump --type json | jq -er '.targetTemplates.Installation.settings.base.MODEL_STORE_RESOURCE // error("project.yml names no MODEL_STORE_RESOURCE")')
+"$cli" model status --models-dir "$app/Contents/Resources/$resource" >&2 \
+  || fail "$app does not carry the default model whole"
 check "$app"
 check "$app/Contents/MacOS/lowtalker-keyboardd"
 echo "$app"
