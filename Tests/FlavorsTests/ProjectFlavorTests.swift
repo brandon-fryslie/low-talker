@@ -56,4 +56,14 @@ private let repository = URL(fileURLWithPath: #filePath)
         let installations = try Self.installations()
         #expect(installations.count == Flavor.allCases.count, "project.yml builds \(installations)")
     }
+
+    /// The helper signs under the name the release copy's helper serves: one namespace for
+    /// the whole program. project.yml's helper target is where both builds of it read the
+    /// identifier from, so it is the copy held to `Flavor` here.
+    @Test func theHelperSignsUnderTheNameItServes() throws {
+        let yaml = try String(contentsOf: repository.appending(path: "project.yml"), encoding: .utf8)
+        let helper = try #require(yaml.components(separatedBy: "\n  lowtalker-keyboardd:\n").dropFirst().first, "project.yml has no lowtalker-keyboardd target")
+        let identifiers = helper.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { $0.hasPrefix("PRODUCT_BUNDLE_IDENTIFIER:") }
+        #expect(identifiers == ["PRODUCT_BUNDLE_IDENTIFIER: \(Flavor.release.machServiceName)"])
+    }
 }

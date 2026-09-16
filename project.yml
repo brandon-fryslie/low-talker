@@ -155,7 +155,7 @@ targets:
     templateAttributes:
       displayName: LowTalker
       bundleIdentifier: ai.promptctl.low-talker
-      launchdLabel: com.lowtalker.keyboardd
+      launchdLabel: ai.promptctl.low-talker.keyboardd
 
   # The copy built from the working tree, installed and running beside the one above.
   LowTalkerDev:
@@ -163,7 +163,7 @@ targets:
     templateAttributes:
       displayName: LowTalker Dev
       bundleIdentifier: ai.promptctl.low-talker.dev
-      launchdLabel: com.lowtalker.keyboardd.dev
+      launchdLabel: ai.promptctl.low-talker.keyboardd.dev
 
   # The root keyboard helper, built here from the same sources Package.swift builds it
   # from, because an Xcode app can embed an Xcode tool and cannot embed a package's
@@ -184,4 +184,9 @@ targets:
         product: Signals
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.lowtalker.keyboardd
+        PRODUCT_BUNDLE_IDENTIFIER: ai.promptctl.low-talker.keyboardd
+        # Xcode signs a tool under its product name and ignores the identifier above, so it
+        # is passed to codesign by hand; the copy into each bundle keeps it. `make helper`
+        # reads the same setting, so both builds of the helper are one code identity. Inherited,
+        # so a Release build keeps the project's --timestamp, which notarization requires.
+        OTHER_CODE_SIGN_FLAGS: $(inherited) --identifier $(PRODUCT_BUNDLE_IDENTIFIER)

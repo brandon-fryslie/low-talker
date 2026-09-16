@@ -107,7 +107,7 @@ enum DirectoryChanges {
     /// before the hand leaves the keyboard.
     static let latency: CFTimeInterval = 0.1
 
-    private static let queue = DispatchQueue(label: "com.lowtalker.directory-changes")
+    private static let queue = DispatchQueue(label: "ai.promptctl.low-talker.directory-changes")
 }
 
 /// The one stable address a C callback can find Swift at.

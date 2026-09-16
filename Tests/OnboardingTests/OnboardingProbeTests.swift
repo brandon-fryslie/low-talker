@@ -8,17 +8,17 @@ import Testing
 /// The two readings onboarding takes for itself, against the text and the files the
 /// machine actually produces.
 @Suite struct OnboardingProbeTests {
-    static let service = "com.lowtalker.keyboardd"
-    static let label = "com.lowtalker.keyboardd"
+    static let service = "ai.promptctl.low-talker.keyboardd"
+    static let label = "ai.promptctl.low-talker.keyboardd"
 
     /// What `launchctl print` prints for a job that holds the Mach service. The endpoint
     /// is handed out at load, so a job that has it names it here.
     static let holdingTheService = """
-    system/com.lowtalker.keyboardd = {
+    system/ai.promptctl.low-talker.keyboardd = {
     \tactive count = 1
     \tstate = running
     \tendpoints = {
-    \t\t"com.lowtalker.keyboardd" = {
+    \t\t"ai.promptctl.low-talker.keyboardd" = {
     \t\t\tport = 0x1847f7
     \t\t\tactive = 1
     \t\t}
@@ -34,13 +34,13 @@ import Testing
     /// worth naming, because a running job that has never checked a service in still names
     /// its endpoint, at `active = 0`. There is no endpoints block here at all.
     static let holdingNothing = """
-    system/com.lowtalker.keyboardd = {
+    system/ai.promptctl.low-talker.keyboardd = {
     \tactive count = 1
     \tpath = (submitted by smd.338)
     \tstate = running
     \tparent bundle identifier = ai.promptctl.low-talker
     \tenvironment = {
-    \t\tXPC_SERVICE_NAME => com.lowtalker.keyboardd
+    \t\tXPC_SERVICE_NAME => ai.promptctl.low-talker.keyboardd
     \t}
     }
     """
@@ -50,13 +50,13 @@ import Testing
     /// this fixture worth having: read endpoint-first it is "answering", and the app's
     /// registration having never become the running job is never said.
     static let bootstrappedFromAPlist = """
-    system/com.lowtalker.keyboardd = {
+    system/ai.promptctl.low-talker.keyboardd = {
     \tactive count = 1
-    \tpath = /Library/LaunchDaemons/com.lowtalker.keyboardd.plist
+    \tpath = /Library/LaunchDaemons/ai.promptctl.low-talker.keyboardd.plist
     \tstate = running
     \tprogram = /Users/bmf/code/low-talker/.build/debug/lowtalker-keyboardd
     \tendpoints = {
-    \t\t"com.lowtalker.keyboardd" = {
+    \t\t"ai.promptctl.low-talker.keyboardd" = {
     \t\t\tport = 0x1847f7
     \t\t\tactive = 1
     \t\t}
@@ -88,12 +88,12 @@ import Testing
     /// /Library/LaunchDaemons does.
     @Test func theAppsJobReportedByItsBundlePathIsNotAStrayPlistJob() throws {
         let printed = Command.Output(status: 0, stdout: """
-        system/com.lowtalker.keyboardd = {
-        \tpath = /Applications/LowTalker.app/Contents/Library/LaunchDaemons/com.lowtalker.keyboardd.plist
+        system/ai.promptctl.low-talker.keyboardd = {
+        \tpath = /Applications/LowTalker.app/Contents/Library/LaunchDaemons/ai.promptctl.low-talker.keyboardd.plist
         \tstate = running
         \tstderr path = /Library/LaunchDaemons/not-a-job.log
         \tendpoints = {
-        \t\t"com.lowtalker.keyboardd" = {
+        \t\t"ai.promptctl.low-talker.keyboardd" = {
         \t\t\tport = 0x1847f7
         \t\t}
         \t}
@@ -151,7 +151,7 @@ import Testing
     /// A job launchd has never heard of is a normal answer, and the only non-zero exit
     /// that may become one.
     @Test func aJobLaunchdNeverHeardOfIsNoJob() throws {
-        let printed = Command.Output(status: 113, stdout: "", stderr: "Could not find service \"com.lowtalker.keyboardd\" in domain for system")
+        let printed = Command.Output(status: 113, stdout: "", stderr: "Could not find service \"ai.promptctl.low-talker.keyboardd\" in domain for system")
         #expect(try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service) == .noJob)
     }
 
