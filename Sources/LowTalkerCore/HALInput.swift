@@ -428,7 +428,7 @@ final class HALInput: PreparedInput {
     /// Where every microphone is reached, one at a time. Serial so that a run of readyings
     /// coalesces: one replaced before its turn is skipped - see `Elsewhere` - and a press
     /// that comes for the newest waits behind at most the one already under way.
-    private static let readying = DispatchQueue(label: "com.lowtalker.readying", qos: .userInitiated)
+    private static let readying = DispatchQueue(label: "ai.promptctl.low-talker.readying", qos: .userInitiated)
 
     /// The device readying was asked to bind, read on the main actor when this was made. A
     /// property read rather than a readying, so it costs the main actor nothing to take, and

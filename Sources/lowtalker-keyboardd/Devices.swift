@@ -147,7 +147,7 @@ enum NotOnTheDevice: Error, CustomStringConvertible {
 /// linked into the test bundle, where reaching for the process-wide flavor would run its
 /// initializer against the test runner's own arguments, find no `--flavor`, and end the
 /// test process with the refusal it is written to make. [LAW:decomposition]
-let refusalDomain = "com.lowtalker.keyboardd.refusal"
+let refusalDomain = "ai.promptctl.low-talker.keyboardd.refusal"
 
 func refusal(_ error: any Error) -> NSError {
     NSError(domain: refusalDomain, code: 1, userInfo: [NSLocalizedDescriptionKey: "\(error)"])

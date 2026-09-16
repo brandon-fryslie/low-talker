@@ -198,9 +198,9 @@ check-docs:
 # identifier is fixed because the Neural Engine keeps its compiled model per signing
 # identifier and `swift build` links a fresh one into every binary; a plain
 # `swift run` pays the minutes-long specialization after each rebuild. The helper's is
-# the identifier project.yml gives the app-embedded build, so the two builds of one
-# program are one code identity; who may call it is decided by the certificate, never
-# by the identifier.
+# read from the helper target in project.yml, which signs the app-embedded build with it,
+# so the two builds of one program are one code identity; who may call it is decided by
+# the certificate, never by the identifier.
 # [LAW:one-source-of-truth] scripts/signing-identity reads the identity name off
 # project.yml; the lookup runs in the recipe (not $(shell), which discards exit status)
 # so a failing tool aborts loudly.
@@ -213,7 +213,8 @@ cli:
 HELPER := .build/debug/lowtalker-keyboardd
 helper:
 	swift build --product lowtalker-keyboardd
-	codesign --force --sign "$$(scripts/signing-identity)" --identifier com.lowtalker.keyboardd "$(HELPER)"
+	codesign --force --sign "$$(scripts/signing-identity)" \
+		--identifier "$$(xcodegen dump --type json | jq -er '.targets["lowtalker-keyboardd"].settings.base.PRODUCT_BUNDLE_IDENTIFIER')" "$(HELPER)"
 	@echo "$(HELPER)"
 
 # Once per Mac. Until it has run, `make app`, `make cli`, `make helper` and `make test`

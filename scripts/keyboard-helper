@@ -36,7 +36,7 @@ set -euo pipefail
 
 # The copies of Flavor.swift this script needs, built the way Flavor builds them - one
 # release name and one suffix - so a rename there is one edit here.
-RELEASE_SERVICE="com.lowtalker.keyboardd"
+RELEASE_SERVICE="ai.promptctl.low-talker.keyboardd"
 DEVELOPMENT_SUFFIX=".dev"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

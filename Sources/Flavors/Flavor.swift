@@ -34,7 +34,9 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
     /// built from. Named once so a rename reaches all of them together.
     /// [LAW:one-source-of-truth]
     private static let releaseBundleIdentifier = "ai.promptctl.low-talker"
-    private static let releaseMachServiceName = "com.lowtalker.keyboardd"
+    /// The helper nested under the app it belongs to, the shape Apple's own embedded
+    /// helpers take, so the parentage Background Task Management records reads in the name.
+    private static let releaseMachServiceName = releaseBundleIdentifier + ".keyboardd"
 
     /// What the development build suffixes onto each of the release build's names. One
     /// suffix for all of them, so the two installations are told apart the same way
