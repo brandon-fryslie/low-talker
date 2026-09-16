@@ -10,6 +10,8 @@
 set -euo pipefail
 
 target=${1:?usage: NOTARY_PROFILE=<profile> scripts/notarize <path to .app or .dmg>}
+# A bundle is a directory, so completion leaves a slash that would hide its extension.
+target=${target%/}
 profile=${NOTARY_PROFILE:?NOTARY_PROFILE names the notarytool keychain profile; make one with xcrun notarytool store-credentials}
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/lowtalker-notarize.XXXXXX")

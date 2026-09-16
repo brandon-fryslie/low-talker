@@ -15,12 +15,16 @@
 set -euo pipefail
 
 out=${1:?usage: scripts/sign-release <output directory>}
+# Made and resolved before the move to the repo root, which make and xcodegen need, so a
+# relative directory means the one the caller named.
+mkdir -p "$out"
+out=$(cd "$out" && pwd)
+cd "$(dirname "$0")/.."
 
 derived=$(mktemp -d "${TMPDIR:-/tmp}/lowtalker-release.XXXXXX")
 trap 'rm -rf "$derived"' EXIT
 make release CONFIGURATION=Release DERIVED_DATA="$derived" >&2
 
-mkdir -p "$out"
 app="$out/LowTalker.app"
 # Removed first: ditto merges into a bundle already there. [LAW:no-silent-failure]
 rm -rf "$app"
