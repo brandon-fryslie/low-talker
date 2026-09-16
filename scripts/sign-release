@@ -5,7 +5,8 @@
 #   scripts/sign-release <output directory> [model source]    # prints <output directory>/LowTalker.app
 #
 # The bundle carries the default model in Contents/Resources/model-store, so a first launch
-# installs it with the network off. The model source is what `lowtalker model download
+# installs it with the network off, and the pinned virtual keyboard driver package beside it,
+# so installing the driver needs no GitHub. The model source is what `lowtalker model download
 # --from` takes: a store holding the model, such as ~/Library/Application Support/low-talker/hub,
 # or a base URL serving the archive `lowtalker model pack` writes. With none, the model comes
 # from Hugging Face.
@@ -43,7 +44,10 @@ carried="$derived/model-store"
 "$cli" model download --models-dir "$fetched" ${source:+--from "$source"} >&2
 "$cli" model download --models-dir "$carried" --from "$fetched" >&2
 
-make release CONFIGURATION=Release DERIVED_DATA="$derived" BUNDLED_MODEL_STORE="$carried" >&2
+# The driver script holds the pins and the checks, so it fetches the package it would install.
+package=$(scripts/virtual-hid-driver fetch "$derived")
+
+make release CONFIGURATION=Release DERIVED_DATA="$derived" BUNDLED_MODEL_STORE="$carried" BUNDLED_DRIVER_PACKAGE="$package" >&2
 
 app="$out/LowTalker.app"
 # Removed first: ditto merges into a bundle already there. [LAW:no-silent-failure]
@@ -74,9 +78,13 @@ check() {
 }
 
 codesign --verify --deep --strict "$app" || fail "$app does not verify"
-resource=$(xcodegen dump --type json | jq -er '.targetTemplates.Installation.settings.base.MODEL_STORE_RESOURCE // error("project.yml names no MODEL_STORE_RESOURCE")')
-"$cli" model status --models-dir "$app/Contents/Resources/$resource" >&2 \
+resources=$(xcodegen dump --type json | jq -er '.targetTemplates.Installation.settings.base')
+store=$(jq -er '.MODEL_STORE_RESOURCE // error("project.yml names no MODEL_STORE_RESOURCE")' <<<"$resources")
+"$cli" model status --models-dir "$app/Contents/Resources/$store" >&2 \
   || fail "$app does not carry the default model whole"
+driver=$(jq -er '.DRIVER_PACKAGE_RESOURCE // error("project.yml names no DRIVER_PACKAGE_RESOURCE")' <<<"$resources")
+scripts/virtual-hid-driver check "$app/Contents/Resources/$driver" \
+  || fail "$app does not carry the pinned driver package"
 check "$app"
 check "$app/Contents/MacOS/lowtalker-keyboardd"
 echo "$app"

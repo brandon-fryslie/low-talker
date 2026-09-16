@@ -340,12 +340,14 @@ Pressing another app's menu item needs Accessibility, charged to the terminal fo
 
 LowTalker types by driving a virtual keyboard macOS treats as real hardware: the driver extension `Karabiner-DriverKit-VirtualHIDDevice`, a public-domain pqrs-org package that ships its own installer. Karabiner-Elements is a separate, much larger application by the same author; this project uses only the driver package and never installs or requires it.
 
-`scripts/virtual-hid-driver` does the work, in four verbs:
+`scripts/virtual-hid-driver` does the work, in six verbs:
 
-    scripts/virtual-hid-driver state             # the machine's driver state
-    scripts/virtual-hid-driver expect <verdict>  # assert that state
-    scripts/virtual-hid-driver install           # download, verify, install, activate
-    scripts/virtual-hid-driver remove            # deactivate, delete, forget receipt
+    scripts/virtual-hid-driver state                 # the machine's driver state
+    scripts/virtual-hid-driver expect <verdict>      # assert that state
+    scripts/virtual-hid-driver install [package]     # download or take a carried copy, verify, install, activate
+    scripts/virtual-hid-driver fetch <directory>     # download and verify the package, for a release to carry
+    scripts/virtual-hid-driver check <package>       # verify a package file against the pins
+    scripts/virtual-hid-driver remove                # deactivate, delete, forget receipt
 
 `state` prints a fact table to stderr for a reader and one verdict word to stdout, so `$(scripts/virtual-hid-driver state)` is exactly the verdict. The verdicts are `absent`, `installed-inactive`, `awaiting-approval`, `disabled`, `enabled`, `running`, `pending-reboot`, `residue`, and `unknown`. `enabled` means macOS has the extension switched on; `running` means that and the driver has published its node in the IORegistry. `running` is the fully working state.
 
@@ -537,10 +539,13 @@ The mouse exists because macOS protects its consent and approval dialogs from sy
 ### Installing
 
     scripts/virtual-hid-driver install
+    scripts/virtual-hid-driver install /Applications/LowTalker.app/Contents/Resources/Karabiner-DriverKit-VirtualHIDDevice.pkg
 
-The download is checked twice before installing: against the pinned SHA-256, and against the signature, which must be `Developer ID Installer: Fumihiko Takayama (G43BCU2T37)`.
+With no argument the package is downloaded from GitHub. A release carries the same package in its bundle, so the second form installs with no network. Either way the package is checked before installing: against the pinned SHA-256, and against the signature, which must be `Developer ID Installer: Fumihiko Takayama (G43BCU2T37)` on a chain macOS trusts. A carried copy gets no trust for having shipped beside the app. It is copied into the script's own directory first and checked there, so whoever could write beside the app cannot swap the bytes between the check and `installer`.
 
-The package lands in one fixed directory under the machine's temp area and stays there. The script removes no directories: it deletes that single downloaded file before fetching again, so a download that dies partway cannot leave older bytes behind for the checksum to approve.
+The package lands in one fixed directory under the machine's temp area and stays there. The script removes no directories: it deletes that single file before fetching or copying again, so a download or copy that dies partway cannot leave older bytes behind for the checksum to approve.
+
+Measured on 2026-09-16 with the package a Developer ID release carries. With outbound TCP and UDP blocked for root and `_trustd` by a temporary pf anchor, `install` of the carried package completed and the driver read `running`; name lookups for this user failed during the run as well. Under a sandbox profile denying outbound network, `install` took the carried package and verified it before stopping at `sudo`, which the sandbox refuses to run. The package's preinstall and postinstall scripts stop the old client and restart the daemon, and neither reaches the network. A carried copy with one byte changed is refused, before anything is installed, with "does not match the checksum pinned for 8.4.0".
 
 On a Mac that has never approved this driver, activation stops and waits for you:
 
@@ -699,7 +704,7 @@ After a build that changes only how the helper is signed, rebuild the bundles fr
 
 The app and the disk image are each signed, notarized and stapled. Gatekeeper judges the image when it is mounted and the app again when it is first run. On a Mac with no network, a stapled ticket is the only way it can reach a verdict on either. So the app is stapled before it goes into the image, which cannot change once it is signed, and the image is stapled after. `scripts/release` asks the profile to answer before the build starts, so a missing credential stops it in seconds rather than minutes.
 
-`scripts/sign-release` runs `make release` in the Release configuration, which `project.yml` signs with the `Developer ID Application` certificate for team 6R988MUU27, Hardened Runtime and a secure timestamp. It leaves out `get-task-allow`, which Xcode otherwise signs into both configurations. The bundle carries the default model ("The model store" above), taken from the source the second argument names, as `model download --from` reads it, or from huggingface.co when there is none, and the script requires `model status` to find it whole inside the built bundle. The build goes into a derived-data directory made for the run and deleted after it, so a helper re-signed without changes to its code is always embedded again (low-build-mmp). It then checks the app and `Contents/MacOS/lowtalker-keyboardd` for what the notary service refuses: a signature that is not the team's Developer ID, no Hardened Runtime, no secure timestamp, or `get-task-allow`. The first of those it finds stops it with the binary named. A Debug-signed bundle fails three of the four. The Developer ID certificate lives in the login keychain, and `codesign` signs with it without a prompt.
+`scripts/sign-release` runs `make release` in the Release configuration, which `project.yml` signs with the `Developer ID Application` certificate for team 6R988MUU27, Hardened Runtime and a secure timestamp. It leaves out `get-task-allow`, which Xcode otherwise signs into both configurations. The bundle carries the default model ("The model store" above), taken from the source the second argument names, as `model download --from` reads it, or from huggingface.co when there is none, and the script requires `model status` to find it whole inside the built bundle. It also carries the pinned driver package as `Contents/Resources/Karabiner-DriverKit-VirtualHIDDevice.pkg` ("Installing" below), fetched by `scripts/virtual-hid-driver fetch` and checked inside the built bundle by `scripts/virtual-hid-driver check`. The build goes into a derived-data directory made for the run and deleted after it, so a helper re-signed without changes to its code is always embedded again (low-build-mmp). It then checks the app and `Contents/MacOS/lowtalker-keyboardd` for what the notary service refuses: a signature that is not the team's Developer ID, no Hardened Runtime, no secure timestamp, or `get-task-allow`. The first of those it finds stops it with the binary named. A Debug-signed bundle fails three of the four. The Developer ID certificate lives in the login keychain, and `codesign` signs with it without a prompt.
 
 A Release build's helper admits the Developer ID certificate and nothing else, so the CLI, signed with the dev identity, cannot type through it. A probe compiled from `CallerIdentity.swift` and signed with the Developer ID admitted `dist/LowTalker.app` and its helper, and refused the Debug app and `.build/debug/lowtalker`. Signed with the dev identity, it did the reverse.
 

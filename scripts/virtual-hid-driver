@@ -5,7 +5,11 @@
 #
 #   virtual-hid-driver state             the machine's driver state
 #   virtual-hid-driver expect <verdict>  assert that state, or fail loudly
-#   virtual-hid-driver install           download, install, activate
+#   virtual-hid-driver install [package] download, or take the package a release carries;
+#                                        verify, install, activate
+#   virtual-hid-driver fetch <directory> download and verify the package into a directory,
+#                                        for a release to carry
+#   virtual-hid-driver check <package>   verify a package file against the pins
 #   virtual-hid-driver remove            deactivate, delete files, forget receipt
 #
 # `state` writes the fact table to stderr for a reader and the one-word verdict to
@@ -43,7 +47,8 @@ SIGNING_AUTHORITY="Developer ID Installer: Fumihiko Takayama ($TEAM_ID)"
 # The three spaces are pkgutil's own indent. Matched whole-line below: a chain entry
 # whose Common Name carried this text would satisfy a substring match.
 TRUSTED_STATUS="   Status: signed by a developer certificate issued by Apple for distribution"
-PKG_URL="https://github.com/pqrs-org/Karabiner-DriverKit-VirtualHIDDevice/releases/download/v$PKG_VERSION/Karabiner-DriverKit-VirtualHIDDevice-$PKG_VERSION.pkg"
+PKG_FILE="Karabiner-DriverKit-VirtualHIDDevice-$PKG_VERSION.pkg"
+PKG_URL="https://github.com/pqrs-org/Karabiner-DriverKit-VirtualHIDDevice/releases/download/v$PKG_VERSION/$PKG_FILE"
 
 MANAGER_APP=/Applications/.Karabiner-VirtualHIDDevice-Manager.app
 MANAGER="$MANAGER_APP/Contents/MacOS/Karabiner-VirtualHIDDevice-Manager"
@@ -51,13 +56,14 @@ SUPPORT_DIR="/Library/Application Support/org.pqrs/Karabiner-DriverKit-VirtualHI
 
 die() { echo "virtual-hid-driver: $*" >&2; exit 1; }
 
-# Where the downloaded package lands: one fixed directory under the machine's own temp
+# Where the package lands, downloaded or copied: one fixed directory under the machine's own temp
 # area, holding one fixed filename.
 #
 # This script deletes no directories. It keeps a stable path instead of a per-run
 # temporary one, so the only thing it ever removes here is that single named file, and
 # clearing the directory itself is left to whoever reaps the temp area.
 VHID_SCRATCH="${TMPDIR:-/tmp}/low-talker-virtual-hid-driver"
+SCRATCH_PKG="$VHID_SCRATCH/driver.pkg"
 
 # ---------------------------------------------------------------------------
 # The reading
@@ -189,54 +195,75 @@ warn_shared_payload() {
   esac
 }
 
-cmd_install() {
-  local pkg result signature scratch_owner
+# [LAW:no-silent-failure] Three lies get caught here, and the last two are one report read
+# twice. The checksum catches bytes that are not the pinned release, a moved tag included.
+# The status line catches an untrusted chain and the authority catches the wrong signer:
+# pkgutil prints a Common Name whether or not the chain behind it is trusted, so a forged
+# self-signed certificate survives either check taken alone.
+#
+# [LAW:single-enforcer] Every package this script installs or hands on passes here, whether
+# it came from GitHub or from a release: a file that shipped beside the app is not thereby a
+# trusted file. `what` names the package in the refusal. Called in the main shell, so `die`
+# stops the verb.
+verify_package() {
+  local file=$1 what=$2 signature
+  [ -f "$file" ] || die "$what is not there"
+  echo "$PKG_SHA256  $file" | shasum -a 256 --check --status \
+    || die "$what does not match the checksum pinned for $PKG_VERSION"
+  # Captured rather than piped, so pkgutil's own refusal is its exit status and not a
+  # discarded one. Without the die it would abort under `set -e` holding the reason.
+  signature=$(pkgutil --check-signature "$file") \
+    || die "pkgutil refused $what: $signature"
+  echo "$signature" | grep -qxF "$TRUSTED_STATUS" \
+    || die "$what has no signature macOS trusts; pkgutil did not report '$TRUSTED_STATUS'"
+  echo "$signature" | grep -qF "$SIGNING_AUTHORITY" \
+    || die "$what is not signed by '$SIGNING_AUTHORITY'"
+}
 
-  warn_shared_payload
-
-  # The scratch path is fixed and its parent is shared, and `sudo installer` re-reads
-  # the package after the checksum and signature have already passed. A local attacker
-  # holding this directory could swap the bytes in that gap and be installed as root,
-  # so the directory is proven ours and narrowed before anything is written into it.
-  # Ownership is read before `chmod` on purpose: chmod on somebody else's directory
-  # fails, and under `set -e` that aborts with no sentence naming who owns it.
-  # [LAW:no-silent-failure]
+# The pinned package at SCRATCH_PKG, verified there: downloaded, or copied from `source` when
+# one is given, which is how a release's own copy is installed with the network off.
+#
+# The scratch path is fixed and its parent is shared, and `sudo installer` re-reads the
+# package after the checksum and signature have already passed. A local attacker holding
+# this directory could swap the bytes in that gap and be installed as root, so the directory
+# is proven ours and narrowed before anything is written into it. A package taken from a
+# release is copied in for the same reason, rather than checked where it lies: whoever can
+# write beside the app could swap it after the check. Ownership is read before `chmod` on
+# purpose: chmod on somebody else's directory fails, and under `set -e` that aborts with no
+# sentence naming who owns it. [LAW:no-silent-failure]
+acquire_package() {
+  local source=${1:-} scratch_owner
   mkdir -p "$VHID_SCRATCH"
   scratch_owner=$(stat -f '%u' "$VHID_SCRATCH") \
     || die "could not read the ownership of $VHID_SCRATCH"
   [ "$scratch_owner" = "$(id -u)" ] \
-    || die "$VHID_SCRATCH is owned by uid $scratch_owner and not by you, so nothing downloaded into it can be trusted; remove it, or set TMPDIR and run again"
+    || die "$VHID_SCRATCH is owned by uid $scratch_owner and not by you, so nothing put into it can be trusted; remove it, or set TMPDIR and run again"
   chmod 700 "$VHID_SCRATCH"
 
-  pkg="$VHID_SCRATCH/driver.pkg"
+  # Clear the previous run's package first. A download or copy that dies partway would
+  # otherwise leave an older file sitting here for the checksum to approve, and this would
+  # install the wrong bytes while reporting success. [LAW:no-silent-failure]
+  rm -f "$SCRATCH_PKG"
 
-  # Clear the previous run's package before fetching. A download that dies partway
-  # would otherwise leave an older file sitting here for the checksum below to approve,
-  # and this would install the wrong bytes while reporting success.
-  # [LAW:no-silent-failure]
-  rm -f "$pkg"
+  if [ -n "$source" ]; then
+    echo "==> taking $source" >&2
+    /bin/cp "$source" "$SCRATCH_PKG"
+    verify_package "$SCRATCH_PKG" "the package at $source"
+  else
+    echo "==> downloading $PKG_URL" >&2
+    curl --fail --show-error --silent --location --output "$SCRATCH_PKG" "$PKG_URL"
+    verify_package "$SCRATCH_PKG" "the downloaded package"
+  fi
+}
 
-  echo "==> downloading $PKG_URL" >&2
-  curl --fail --show-error --silent --location --output "$pkg" "$PKG_URL"
+cmd_install() {
+  local result
 
-  # [LAW:no-silent-failure] Three lies get caught here, and the last two are one report
-  # read twice. The checksum catches bytes that are not the pinned release, a moved tag
-  # included. The status line catches an untrusted chain and the authority catches the
-  # wrong signer: pkgutil prints a Common Name whether or not the chain behind it is
-  # trusted, so a forged self-signed certificate survives either check taken alone.
-  echo "$PKG_SHA256  $pkg" | shasum -a 256 --check --status \
-    || die "the downloaded package does not match the checksum pinned for $PKG_VERSION"
-  # Captured rather than piped, so pkgutil's own refusal is its exit status and not a
-  # discarded one. Without the die it would abort under `set -e` holding the reason.
-  signature=$(pkgutil --check-signature "$pkg") \
-    || die "pkgutil refused the downloaded package: $signature"
-  echo "$signature" | grep -qxF "$TRUSTED_STATUS" \
-    || die "the downloaded package has no signature macOS trusts; pkgutil did not report '$TRUSTED_STATUS'"
-  echo "$signature" | grep -qF "$SIGNING_AUTHORITY" \
-    || die "the downloaded package is not signed by '$SIGNING_AUTHORITY'"
+  warn_shared_payload
+  acquire_package "${1:-}"
 
   echo "==> installing (sudo)" >&2
-  sudo installer -pkg "$pkg" -target /
+  sudo installer -pkg "$SCRATCH_PKG" -target /
 
   echo "==> activating the driver extension" >&2
   "$MANAGER" activate
@@ -266,6 +293,24 @@ INSTRUCTION
       die "the package installed but macOS holds no registration for $BUNDLE_ID, so the activation request did not take; run 'install' again" ;;
     *) die "after installing, the driver is '$result', which is not a state installing can leave behind" ;;
   esac
+}
+
+# The verified package, copied to <directory> under its release name, for a release to carry.
+# Prints the copy's path.
+cmd_fetch() {
+  local directory=${1:?usage: virtual-hid-driver fetch <directory>}
+  acquire_package
+  mkdir -p "$directory"
+  /bin/cp "$SCRATCH_PKG" "$directory/$PKG_FILE"
+  echo "$directory/$PKG_FILE"
+}
+
+# A package file judged where it lies, for a build checking what it put in a bundle. An
+# install never trusts this verdict: it copies the file and judges the copy.
+cmd_check() {
+  local package=${1:?usage: virtual-hid-driver check <package>}
+  verify_package "$package" "the package at $package"
+  echo "virtual-hid-driver: $package is the pinned package $PKG_VERSION" >&2
 }
 
 # What `remove` says about a machine standing in one of the two states removal can end
@@ -385,8 +430,10 @@ if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
   case "${1:-}" in
     state)   cmd_state ;;
     expect)  shift; cmd_expect "$@" ;;
-    install) cmd_install ;;
+    install) shift; cmd_install "$@" ;;
+    fetch)   shift; cmd_fetch "$@" ;;
+    check)   shift; cmd_check "$@" ;;
     remove)  cmd_remove ;;
-    *) die "usage: virtual-hid-driver state|expect <verdict>|install|remove" ;;
+    *) die "usage: virtual-hid-driver state|expect <verdict>|install [package]|fetch <directory>|check <package>|remove" ;;
   esac
 fi
