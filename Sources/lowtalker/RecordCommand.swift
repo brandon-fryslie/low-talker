@@ -12,8 +12,8 @@ import LowTalkerCore
 /// command is the first press in its process, and while a press built its own engine that
 /// cost far more than `AudioCapture.warmUpAllowance` allows, so the clip always came back
 /// cut where the microphone was not open and that was the reading rather than a fault.
-/// Now `start` readies the microphone and the press opens one already reached, which is
-/// inside the allowance - so a run comes back whole, and one that says it is cut is a
+/// Now `start` readies the microphone, this waits for that to finish, and the press opens one
+/// already reached, which is inside the allowance - so a run comes back whole, and one that says it is cut is a
 /// fault to chase.
 struct RecordCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -41,6 +41,7 @@ struct RecordCommand: AsyncParsableCommand {
         // would make the recording it takes a different length from the one it reports.
         try capture.start(grant, atRest: .shut)
         defer { capture.stop() }
+        capture.waitUntilReadied()
         // The microphone opens here and closes at `endSession`, so this command holds the
         // device for exactly the seconds it records - the same lifetime a hold gets.
         let session = try capture.beginSession(at: .now)

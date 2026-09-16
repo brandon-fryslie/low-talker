@@ -66,8 +66,8 @@ public struct SliceGrownAtRest: Sendable, CustomStringConvertible {
     @MainActor
     public static func measure(holding hold: Duration) async throws -> SliceGrownAtRest {
         guard try MicrophoneIndicator.read() == .dark else { throw MicrophoneAlreadyRunning() }
-        let input = try HALInput(onStale: {})
-        let device = input.device
+        let input = HALInput(onStale: {})
+        let device = try input.device
         let readiedAt = try ioBuffer(of: device)
         let grownTo = try largestIOBuffer(of: device)
         guard grownTo > readiedAt else { throw DeviceKeepsOneSlice(device: device, frames: readiedAt) }

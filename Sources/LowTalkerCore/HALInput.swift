@@ -22,9 +22,19 @@ import Synchronization
 ///
 /// That last sentence is a claim about a unit bound to a microphone, and it is false of one
 /// bound to anything carrying an output - which is what CoreAudio hands an app that enables
-/// input too early. `init` is written in the order that avoids it and then reads back
+/// input too early. `Reach` is written in the order that avoids it and then reads back
 /// whether the device is running, so the split is proven on each preparation rather than
 /// believed from this paragraph.
+///
+/// Idle is not the same as nobody waiting, though, and the reaching is done off the main
+/// actor. A device change readies again from inside a CoreAudio notification, and the main
+/// actor that notification lands on is the one a key-down handler needs next: a readying
+/// there made the key wait for it, and a run of notifications made it wait for each. So `init`
+/// hands the reaching to one serial queue and returns, and the one moment anything waits for
+/// it is `open` - a press that came for this input before it was ready, which pays whatever
+/// of it is left rather than the whole of it. Measured for low-privacy-o1z.68i on this Mac
+/// under a load average of 10 to 12: a warm readying held the main thread 95-126 ms, and
+/// handing the same work to the queue returned in under 0.1 ms.
 ///
 /// [LAW:effects-at-boundaries] Every CoreAudio call in the capture path is here, behind
 /// `PreparedInput`, so the state machine in `AudioCapture` runs in tests against hardware
@@ -70,7 +80,7 @@ final class HALInput: PreparedInput {
         /// What CoreAudio calls on its own IO thread, as the C function pointer the unit
         /// takes. Reaches the sink it was handed the address of, and nothing else.
         ///
-        /// It lives on the sink rather than inside `HALInput.init` because a closure takes
+        /// It lives on the sink rather than inside `Reach.init` because a closure takes
         /// the isolation of the context it was formed in: one written in a `@MainActor`
         /// member is inferred main-actor-isolated, and converting that to a C function
         /// pointer leaves a runtime isolation check in the thunk which traps the first time
@@ -130,19 +140,301 @@ final class HALInput: PreparedInput {
         }
     }
 
-    private let unit: AudioUnit
-    private let sink: Sink
-    /// What the unit hands a render, and so what each press's buffer is allocated in.
-    private let format: AVAudioFormat
-    /// The device this was prepared against. A prepared input is bound to one device, so
-    /// a default-input change is answered by preparing another rather than by re-pointing
-    /// this one. [LAW:one-source-of-truth] `AudioCapture` is the one place that knows the
-    /// device changed, and asking it for a fresh input is how that knowledge arrives here.
-    let device: AudioObjectID
-    /// Listeners on the bound device, held for as long as this input is - which is as long
-    /// as the binding they watch. They were a press's once, and the stretch that left
-    /// unwatched is what low-privacy-o1z.aa1 was.
-    private let watches: [Disposal]
+    /// A microphone reached: the unit, the device binding, the format and the converter, all
+    /// the way to `AudioUnitInitialize`, with the device read back as not running. Everything
+    /// a press should not have to pay for, and everything that has to be given back.
+    ///
+    /// Isolated to nothing, because it is made on the readying queue and can be let go of
+    /// there too: an input replaced while its reaching was under way is dropped by the queue
+    /// when that reaching finishes. Nothing in it needs a particular thread - the CoreAudio
+    /// calls are safe from any, the watches deliver on the main queue whoever registered
+    /// them, and giving it all back was measured for low-privacy-o1z.68i from the queue while
+    /// the main thread waited on that queue and had a notification for the same listener
+    /// already posted to it, which neither deadlocked nor lost the notification.
+    /// [LAW:no-ambient-temporal-coupling]
+    ///
+    /// [LAW:types-are-the-program] exception: `@unchecked` because an `AudioUnit` is a
+    /// pointer the compiler cannot vouch for. What makes the sharing sound is that nothing
+    /// here is written after `init` returns: the queue makes it, one thread at a time holds
+    /// what `Elsewhere` hands back, and the unit's own calls are CoreAudio's to serialize.
+    private final class Reach: @unchecked Sendable {
+        let unit: AudioUnit
+        let sink: Sink
+        /// What the unit hands a render, and so what each press's buffer is allocated in.
+        let format: AVAudioFormat
+        /// The device this was prepared against. A prepared input is bound to one device, so
+        /// a default-input change is answered by preparing another rather than by re-pointing
+        /// this one. [LAW:one-source-of-truth] `AudioCapture` is the one place that knows the
+        /// device changed, and asking it for a fresh input is how that knowledge arrives here.
+        let device: AudioObjectID
+        /// Listeners on the bound device, held for as long as this is - which is as long as
+        /// the binding they watch. They were a press's once, and the stretch that left
+        /// unwatched is what low-privacy-o1z.aa1 was.
+        private let watches: [@Sendable () -> Void]
+
+        /// Binds a unit to `requested` and takes it as far as it goes without opening the
+        /// device. No device is opened here, and macOS lights no indicator for it.
+        init(binding requested: AudioObjectID, onStale: @escaping @MainActor () -> Void) throws {
+            var description = AudioComponentDescription(
+                componentType: kAudioUnitType_Output,
+                componentSubType: kAudioUnitSubType_HALOutput,
+                componentManufacturer: kAudioUnitManufacturer_Apple,
+                componentFlags: 0,
+                componentFlagsMask: 0
+            )
+            guard let component = AudioComponentFindNext(nil, &description) else {
+                throw AudioHardwareError.noInputComponent
+            }
+            var instance: AudioUnit?
+            try AudioHardwareError.check(AudioComponentInstanceNew(component, &instance), AudioHardwareError.componentUnavailable)
+            guard let unit = instance else { throw AudioHardwareError.componentUnavailable(noErr) }
+
+            // Everything below configures `unit` through locals, and the stored properties are
+            // assigned only once the last throwing call has succeeded. Swift runs a class's
+            // `deinit` for a throwing initializer only when every stored property was already
+            // assigned, so deferring them keeps "init threw" and "deinit ran" mutually
+            // exclusive: the catch here is the one place a preparation gives its unit back, and
+            // it cannot double-free one `deinit` is also about to take. Assigning as we went
+            // leaked a component per attempt instead. [LAW:single-enforcer]
+            let device: AudioObjectID
+            let sink: Sink
+            let format: AVAudioFormat
+            // Appended one at a time below, and read by the catch, so a second registration that
+            // throws still leaves the first one disposable.
+            var registered: [@Sendable () -> Void] = []
+            do {
+                // Output off, then the input device, then input on. The order is load-bearing
+                // and nothing here shows it, so it is written down.
+                //
+                // A HAL unit is born pointing at the default *output* device, which has no
+                // input. Enabling input while it points there asks CoreAudio to capture from a
+                // device that cannot, and it answers by building this process a private
+                // aggregate of the default output and the default input, binding the unit to
+                // that, and handing the same aggregate back to anything that asks for the
+                // default input afterwards. An aggregate carrying an output runs from
+                // `AudioUnitInitialize`, so preparing took the device: LowTalker.app lit the
+                // menu-bar indicator at launch and held it for as long as it ran. Bound to the
+                // microphone first, the unit never sits in the state that provokes the swap.
+                //
+                // Only an app meets it - CoreAudio builds that aggregate for clients it offers
+                // voice isolation to - so `lowtalker mic indicator` read dark on the very code
+                // the app was lighting the menu bar with, and the suite, which never builds the
+                // app target, read nothing at all. The check after `AudioUnitInitialize` is
+                // what makes the next difference of that shape fail rather than ship.
+                var disable: UInt32 = 0
+                try AudioHardwareError.check(
+                    AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, 0, &disable, UInt32(MemoryLayout<UInt32>.size)),
+                    AudioHardwareError.inputUnavailable
+                )
+
+                var binding = requested
+                try AudioHardwareError.check(
+                    AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &binding, UInt32(MemoryLayout<AudioObjectID>.size)),
+                    AudioHardwareError.inputUnavailable
+                )
+
+                // Input on bus 1: this unit captures and never plays.
+                var enable: UInt32 = 1
+                try AudioHardwareError.check(
+                    AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, HALInput.inputBus, &enable, UInt32(MemoryLayout<UInt32>.size)),
+                    AudioHardwareError.inputUnavailable
+                )
+
+                // What the device delivers, which decides what the converter converts from.
+                var source = AudioStreamBasicDescription()
+                var sourceSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+                try AudioHardwareError.check(
+                    AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, HALInput.inputBus, &source, &sourceSize),
+                    AudioHardwareError.inputUnavailable
+                )
+                // Float samples, one buffer per channel: the shape `AudioClip.Converter` reads and
+                // the shape a render can be pointed at channel by channel. The unit converts the
+                // device's own encoding into it, so nothing here has to know what that was.
+                var client = AudioStreamBasicDescription(
+                    mSampleRate: source.mSampleRate,
+                    mFormatID: kAudioFormatLinearPCM,
+                    mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked | kAudioFormatFlagIsNonInterleaved,
+                    mBytesPerPacket: UInt32(MemoryLayout<Float>.size),
+                    mFramesPerPacket: 1,
+                    mBytesPerFrame: UInt32(MemoryLayout<Float>.size),
+                    mChannelsPerFrame: source.mChannelsPerFrame,
+                    mBitsPerChannel: UInt32(MemoryLayout<Float>.size * 8),
+                    mReserved: 0
+                )
+                try AudioHardwareError.check(
+                    AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, HALInput.inputBus, &client, UInt32(MemoryLayout<AudioStreamBasicDescription>.size)),
+                    AudioHardwareError.inputUnavailable
+                )
+                guard let described = AVAudioFormat(streamDescription: &client) else {
+                    throw AudioClipError.unconvertibleFormat(sampleRate: client.mSampleRate, channels: client.mChannelsPerFrame)
+                }
+                format = described
+
+                let built = Sink(converter: try AudioClip.Converter(from: format))
+                built.unit = unit
+
+                var callback = AURenderCallbackStruct(
+                    inputProc: Sink.callback,
+                    inputProcRefCon: Unmanaged.passUnretained(built).toOpaque()
+                )
+                try AudioHardwareError.check(
+                    AudioUnitSetProperty(unit, kAudioOutputUnitProperty_SetInputCallback, kAudioUnitScope_Global, 0, &callback, UInt32(MemoryLayout<AURenderCallbackStruct>.size)),
+                    AudioHardwareError.inputUnavailable
+                )
+
+                // The last of the per-process cost, and still no device open.
+                try AudioHardwareError.check(AudioUnitInitialize(unit), AudioHardwareError.inputUnavailable)
+
+                // Which device the unit came out of initialization bound to, which is
+                // CoreAudio's answer and not the one we asked for. It has answered differently
+                // once already - the aggregate above - and a unit swapped onto one would leave
+                // both of the things below pointed at a device the unit no longer uses: the
+                // watches listening to it for changes, and the guard asking it whether the
+                // preparation took a microphone. [FRAMING:representation]
+                device = try HALInput.boundDevice(unit)
+
+                // This unit is bound to one device, so a device that goes away or changes shape
+                // under it is capture's cue to ready another against whatever replaced it. Both
+                // watches live here rather than in `open()` because what they watch is the
+                // binding, and the binding lasts as long as this input: registered at the press
+                // they left the resting stretch between presses unwatched, and a device that
+                // renegotiated its format there was heard by nobody. See
+                // `AudioHardware.prepareInput` for what that cost. A switch of which device is
+                // the *default* leaves both of these quiet and is `AudioCapture`'s to see.
+                //
+                // Ahead of the guard below, so the claim that a listener costs no device is made
+                // the same way every other claim about preparing is: by reading the device back.
+                // Registering one should not run a device, and this is the line that would fail
+                // the preparation rather than trust it.
+                registered.append(try HALInput.watch(device, kAudioDevicePropertyDeviceIsAlive, scope: kAudioObjectPropertyScopeGlobal, onStale))
+                registered.append(try HALInput.watch(device, kAudioDevicePropertyStreamFormat, scope: kAudioObjectPropertyScopeInput, onStale))
+
+                // [LAW:parse-dont-validate] The border between a microphone reached and a
+                // microphone taken. Everything above claims to cross it without opening a
+                // device, and the epic's whole promise rests on that claim, so this is where a
+                // `Reach` becomes one: the type exists only for a unit whose device is not
+                // running on this process's account.
+                //
+                // Read rather than believed because the claim is about CoreAudio, which is free
+                // to change its mind between releases, between devices and - as the aggregate
+                // above proved - between an app and a command line running the same lines. A
+                // preparation that opened the device throws here and the unwind below gives the
+                // device back; what the user is left with is a press that says there is no
+                // microphone, rather than an indicator lit all day over an app reporting a shut
+                // one. [LAW:no-silent-failure]
+                guard try !HALInput.isRunning(device) else { throw AudioHardwareError.preparingOpenedTheDevice(device) }
+                sink = built
+            } catch {
+                registered.forEach { $0() }
+                HALInput.discard(unit)
+                throw error
+            }
+
+            self.unit = unit
+            self.device = device
+            self.sink = sink
+            self.format = format
+            self.watches = registered
+        }
+
+        /// A buffer that holds the largest slice the device can hand this unit.
+        ///
+        /// Sized by the device rather than by the unit, and at the press rather than at the
+        /// preparation, because both of the other answers were measured wrong on this Mac for
+        /// low-privacy-o1z.c0p. Moving the device's IO buffer from 512 frames to 4096 under a
+        /// prepared, stopped unit handed the next press 4096-frame slices, and a buffer sized
+        /// when the input was readied refused every one of them: the press heard nothing. The
+        /// unit's `kAudioUnitProperty_MaximumFramesPerSlice` does follow the device, but on
+        /// CoreAudio's schedule rather than this one's - read straight after the move it
+        /// answered 512 on two runs and 4096 on twenty-one. [LAW:no-ambient-temporal-coupling]
+        /// The device's own range bounds every size it can be moved to, so no move of the size
+        /// can outgrow it and nothing has to have caught up for it to be true.
+        ///
+        /// Allocated on every open rather than kept and grown, so there is no earlier size for
+        /// this to be compared with. [LAW:one-source-of-truth] What that adds to a press was
+        /// measured the same day: about 0.1 ms, against the 40 ms the open itself costs.
+        func renderBuffer() throws -> AVAudioPCMBuffer {
+            var range = AudioValueRange(mMinimum: 0, mMaximum: 0)
+            var size = UInt32(MemoryLayout<AudioValueRange>.size)
+            var address = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyBufferFrameSizeRange,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            try AudioHardwareError.check(
+                AudioObjectGetPropertyData(device, &address, 0, nil, &size, &range),
+                AudioHardwareError.inputUnavailable
+            )
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(range.mMaximum)) else {
+                throw AudioClipError.bufferAllocationFailed
+            }
+            return buffer
+        }
+
+        /// Gives the device back and leaves the unit prepared, so the next press opens it at
+        /// the prepared price, and answers whether the microphone actually went dark - the fact
+        /// the epic promises, and the one only a caller holding a press can act on.
+        /// [LAW:single-enforcer] Every way a press stops comes through here, including the
+        /// one an `open()` that failed partway takes.
+        ///
+        /// Both steps are idempotent - stopping a stopped unit and clearing a cleared target do
+        /// nothing - so this needs no flag saying whether the device is open. It had one, and
+        /// because it was set only after a successful start, it made this a no-op on exactly the
+        /// path that had something to unwind. [LAW:polishing-by-subtraction]
+        ///
+        /// What it does not do is drop the device watches. They belong to the binding rather
+        /// than to the press, and a key-up that took them down is what left an idle microphone
+        /// unwatched.
+        func close() -> Bool {
+            let stopped = AudioOutputUnitStop(unit)
+            // After the stop, so a render already in flight still has somewhere to put the
+            // audio it holds rather than dropping it on the floor.
+            sink.aim(at: nil)
+            // [LAW:parse-dont-validate] The border `init`'s guard stands on, walked the other
+            // way: that one proves reaching a microphone took no device, this one proves
+            // letting go gave it back.
+            //
+            // The device is read rather than the status trusted because the failure this is
+            // named for returns `noErr` - the `AVAudioEngine` this type replaced stopped
+            // without complaint and left the device running, which the class doc records as the
+            // reason `shut` could not be built on it. A status says whether CoreAudio accepted
+            // the call; only the device says whether the microphone is still on.
+            //
+            // Both halves were read off this Mac for low-privacy-o1z.pr2, where the vocabulary
+            // had been guessed rather than measured. Over ten presses the device read dark the
+            // instant `AudioOutputUnitStop` returned, for about 6 µs against that call's 5 ms,
+            // which is what makes the reading affordable here rather than owed to a later beat.
+            // A device destroyed under a running unit answers every teardown call `noErr` and
+            // this property `'who?'`: a microphone that has gone away cannot say it went dark,
+            // and that is this input's last press either way, so the unreadable arm is an
+            // answer to return rather than an error to raise. [LAW:no-silent-failure]
+            return stopped == noErr && (try? HALInput.isRunning(device)) == false
+        }
+
+        /// The unit is stopped before the sink it renders into is let go, because a render
+        /// already under way holds a pointer to it - `discard` stops first, and the sink goes
+        /// with the stored properties after this returns.
+        ///
+        /// The one place the watches are given back other than the catch in `init`, and the
+        /// two cannot both run: a throwing initializer reaches `deinit` only once every stored
+        /// property is assigned, which is the line after that catch can no longer be taken.
+        /// [LAW:single-enforcer] per path, which is what the unit already relies on.
+        deinit {
+            watches.forEach { $0() }
+            HALInput.discard(unit)
+        }
+    }
+
+    /// Where every microphone is reached, one at a time. Serial so that a run of readyings
+    /// coalesces: one replaced before its turn is skipped - see `Elsewhere` - and a press
+    /// that comes for the newest waits behind at most the one already under way.
+    private static let readying = DispatchQueue(label: "com.lowtalker.readying", qos: .userInitiated)
+
+    /// The device readying was asked to bind, read on the main actor when this was made. A
+    /// property read rather than a readying, so it costs the main actor nothing to take, and
+    /// it is what says which device this input is for while the reaching is still under way.
+    private let asked: Result<AudioObjectID, any Error>
+    private let reach: Elsewhere<Reach>
     /// That this input has stopped being one to open. Held as well as handed to the watches
     /// because the device going away is not the only way that becomes true: a press whose
     /// microphone would not go dark ends on an input nothing should open again either, and
@@ -156,185 +448,37 @@ final class HALInput: PreparedInput {
     /// match the *next* press on this same input and take a healthy engine down mid-word.
     private var presses = 0
 
-    /// Everything a press should not have to pay for: the component, the device binding,
-    /// the format and the converter, all the way to `AudioUnitInitialize`. No device is
-    /// opened here, and macOS lights no indicator for it.
-    init(onStale: @escaping @MainActor () -> Void) throws {
-        var description = AudioComponentDescription(
-            componentType: kAudioUnitType_Output,
-            componentSubType: kAudioUnitSubType_HALOutput,
-            componentManufacturer: kAudioUnitManufacturer_Apple,
-            componentFlags: 0,
-            componentFlagsMask: 0
-        )
-        guard let component = AudioComponentFindNext(nil, &description) else {
-            throw AudioHardwareError.noInputComponent
-        }
-        var instance: AudioUnit?
-        try AudioHardwareError.check(AudioComponentInstanceNew(component, &instance), AudioHardwareError.componentUnavailable)
-        guard let unit = instance else { throw AudioHardwareError.componentUnavailable(noErr) }
+    /// Starts readying a microphone against whatever the default input is now, and returns
+    /// without waiting for it. A default that cannot be read is carried to the press the same
+    /// way a readying that failed is: `open` throws it. [LAW:no-silent-failure]
+    init(onStale: @escaping @MainActor () -> Void) {
+        let asked = Result { try Self.defaultInput() }
+        self.asked = asked
+        reach = Elsewhere(on: Self.readying) { try Reach(binding: asked.get(), onStale: onStale) }
+        self.onStale = onStale    }
 
-        // Everything below configures `unit` through locals, and the stored properties are
-        // assigned only once the last throwing call has succeeded. Swift runs a class's
-        // `deinit` for a throwing initializer only when every stored property was already
-        // assigned, so deferring them keeps "init threw" and "deinit ran" mutually
-        // exclusive: the catch here is the one place a preparation gives its unit back, and
-        // it cannot double-free one `deinit` is also about to take. Assigning as we went
-        // leaked a component per attempt instead - `defaultInput()` below throws on any Mac
-        // with no microphone, which is the case `UnreachableInput` exists to carry, and
-        // every retry prepared another. [LAW:single-enforcer]
-        let device: AudioObjectID
-        let sink: Sink
-        let format: AVAudioFormat
-        // Appended one at a time below, and read by the catch, so a second registration that
-        // throws still leaves the first one disposable.
-        var registered: [Disposal] = []
-        do {
-            // Output off, then the input device, then input on. The order is load-bearing
-            // and nothing here shows it, so it is written down.
-            //
-            // A HAL unit is born pointing at the default *output* device, which has no
-            // input. Enabling input while it points there asks CoreAudio to capture from a
-            // device that cannot, and it answers by building this process a private
-            // aggregate of the default output and the default input, binding the unit to
-            // that, and handing the same aggregate back to anything that asks for the
-            // default input afterwards. An aggregate carrying an output runs from
-            // `AudioUnitInitialize`, so preparing took the device: LowTalker.app lit the
-            // menu-bar indicator at launch and held it for as long as it ran. Bound to the
-            // microphone first, the unit never sits in the state that provokes the swap.
-            //
-            // Only an app meets it - CoreAudio builds that aggregate for clients it offers
-            // voice isolation to - so `lowtalker mic indicator` read dark on the very code
-            // the app was lighting the menu bar with, and the suite, which never builds the
-            // app target, read nothing at all. The check after `AudioUnitInitialize` is
-            // what makes the next difference of that shape fail rather than ship.
-            var disable: UInt32 = 0
-            try AudioHardwareError.check(
-                AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, 0, &disable, UInt32(MemoryLayout<UInt32>.size)),
-                AudioHardwareError.inputUnavailable
-            )
-
-            var binding = try Self.defaultInput()
-            try AudioHardwareError.check(
-                AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &binding, UInt32(MemoryLayout<AudioObjectID>.size)),
-                AudioHardwareError.inputUnavailable
-            )
-
-            // Input on bus 1: this unit captures and never plays.
-            var enable: UInt32 = 1
-            try AudioHardwareError.check(
-                AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, Self.inputBus, &enable, UInt32(MemoryLayout<UInt32>.size)),
-                AudioHardwareError.inputUnavailable
-            )
-
-            // What the device delivers, which decides what the converter converts from.
-            var source = AudioStreamBasicDescription()
-            var sourceSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
-            try AudioHardwareError.check(
-                AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, Self.inputBus, &source, &sourceSize),
-                AudioHardwareError.inputUnavailable
-            )
-            // Float samples, one buffer per channel: the shape `AudioClip.Converter` reads and
-            // the shape a render can be pointed at channel by channel. The unit converts the
-            // device's own encoding into it, so nothing here has to know what that was.
-            var client = AudioStreamBasicDescription(
-                mSampleRate: source.mSampleRate,
-                mFormatID: kAudioFormatLinearPCM,
-                mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked | kAudioFormatFlagIsNonInterleaved,
-                mBytesPerPacket: UInt32(MemoryLayout<Float>.size),
-                mFramesPerPacket: 1,
-                mBytesPerFrame: UInt32(MemoryLayout<Float>.size),
-                mChannelsPerFrame: source.mChannelsPerFrame,
-                mBitsPerChannel: UInt32(MemoryLayout<Float>.size * 8),
-                mReserved: 0
-            )
-            try AudioHardwareError.check(
-                AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, Self.inputBus, &client, UInt32(MemoryLayout<AudioStreamBasicDescription>.size)),
-                AudioHardwareError.inputUnavailable
-            )
-            guard let described = AVAudioFormat(streamDescription: &client) else {
-                throw AudioClipError.unconvertibleFormat(sampleRate: client.mSampleRate, channels: client.mChannelsPerFrame)
-            }
-            format = described
-
-            let built = Sink(converter: try AudioClip.Converter(from: format))
-            built.unit = unit
-
-            var callback = AURenderCallbackStruct(
-                inputProc: Sink.callback,
-                inputProcRefCon: Unmanaged.passUnretained(built).toOpaque()
-            )
-            try AudioHardwareError.check(
-                AudioUnitSetProperty(unit, kAudioOutputUnitProperty_SetInputCallback, kAudioUnitScope_Global, 0, &callback, UInt32(MemoryLayout<AURenderCallbackStruct>.size)),
-                AudioHardwareError.inputUnavailable
-            )
-
-            // The last of the per-process cost, and still no device open.
-            try AudioHardwareError.check(AudioUnitInitialize(unit), AudioHardwareError.inputUnavailable)
-
-            // Which device the unit came out of initialization bound to, which is
-            // CoreAudio's answer and not the one we asked for. It has answered differently
-            // once already - the aggregate above - and a unit swapped onto one would leave
-            // both of the things below pointed at a device the unit no longer uses: the
-            // watches listening to it for changes, and the guard asking it whether the
-            // preparation took a microphone. [FRAMING:representation]
-            device = try Self.boundDevice(unit)
-
-            // This unit is bound to one device, so a device that goes away or changes shape
-            // under it is capture's cue to ready another against whatever replaced it. Both
-            // watches live here rather than in `open()` because what they watch is the
-            // binding, and the binding lasts as long as this input: registered at the press
-            // they left the resting stretch between presses unwatched, and a device that
-            // renegotiated its format there was heard by nobody. See
-            // `AudioHardware.prepareInput` for what that cost. A switch of which device is
-            // the *default* leaves both of these quiet and is `AudioCapture`'s to see.
-            //
-            // Ahead of the guard below, so the claim that a listener costs no device is made
-            // the same way every other claim about preparing is: by reading the device back.
-            // Registering one should not run a device, and this is the line that would fail
-            // the preparation rather than trust it.
-            registered.append(try Self.watch(device, kAudioDevicePropertyDeviceIsAlive, scope: kAudioObjectPropertyScopeGlobal, onStale))
-            registered.append(try Self.watch(device, kAudioDevicePropertyStreamFormat, scope: kAudioObjectPropertyScopeInput, onStale))
-
-            // [LAW:parse-dont-validate] The border between a microphone reached and a
-            // microphone taken. Everything above claims to cross it without opening a
-            // device, and the epic's whole promise rests on that claim, so this is where a
-            // `HALInput` becomes one: the type exists only for a unit whose device is not
-            // running on this process's account.
-            //
-            // Read rather than believed because the claim is about CoreAudio, which is free
-            // to change its mind between releases, between devices and - as the aggregate
-            // above proved - between an app and a command line running the same lines. A
-            // preparation that opened the device throws here and the unwind below gives the
-            // device back; what the user is left with is a press that says there is no
-            // microphone, rather than an indicator lit all day over an app reporting a shut
-            // one. [LAW:no-silent-failure]
-            guard try !Self.isRunning(device) else { throw AudioHardwareError.preparingOpenedTheDevice(device) }
-            sink = built
-        } catch {
-            registered.forEach { $0() }
-            Self.discard(unit)
-            throw error
-        }
-
-        self.unit = unit
-        self.device = device
-        self.sink = sink
-        self.format = format
-        self.watches = registered
-        self.onStale = onStale
+    /// The device this input is bound to, once readying has bound one.
+    var device: AudioObjectID {
+        get throws { try reach.result().get().device }
     }
 
-    /// Opens the device. What a press pays.
+    func waitUntilReadied() {
+        // What it came to is read again by `open`, which is where a failure is reported.
+        _ = reach.result()
+    }
+
+    /// Opens the device. What a press pays - and, for a press that came before readying
+    /// finished, whatever of the readying is left.
     func open(
         appending: @escaping @Sendable ([Float], HostTime) -> Void,
         onFailure: @escaping @MainActor (any Error) -> Void
     ) throws -> Disposal {
+        let reached = try reach.result().get()
         presses += 1
         let press = presses
         do {
-            sink.aim(at: Sink.Target(
-                buffer: try renderBuffer(),
+            reached.sink.aim(at: Sink.Target(
+                buffer: try reached.renderBuffer(),
                 appending: appending,
                 // The audio thread cannot wait for the main actor, so the report is posted
                 // rather than made. [LAW:no-ambient-temporal-coupling]
@@ -343,47 +487,17 @@ final class HALInput: PreparedInput {
             // A press is its own stream: the device was closed between this open and the
             // last, so the resampler starts from nothing rather than carrying the previous
             // press's tail into the head of this one. [LAW:one-source-of-truth]
-            sink.converter.reset()
-            try AudioHardwareError.check(AudioOutputUnitStart(unit), AudioHardwareError.inputUnavailable)
+            reached.sink.converter.reset()
+            try AudioHardwareError.check(AudioOutputUnitStart(reached.unit), AudioHardwareError.inputUnavailable)
         } catch {
-            endPress(press)
+            endPress(press, on: reached)
             throw error
         }
-        return { [weak self] in self?.endPress(press) }
-    }
-
-    /// A buffer that holds the largest slice the device can hand this unit.
-    ///
-    /// Sized by the device rather than by the unit, and at the press rather than at the
-    /// preparation, because both of the other answers were measured wrong on this Mac for
-    /// low-privacy-o1z.c0p. Moving the device's IO buffer from 512 frames to 4096 under a
-    /// prepared, stopped unit handed the next press 4096-frame slices, and a buffer sized when
-    /// the input was readied refused every one of them: the press heard nothing. The unit's
-    /// `kAudioUnitProperty_MaximumFramesPerSlice` does follow the device, but on CoreAudio's
-    /// schedule rather than this one's - read straight after the move it answered 512 on two
-    /// runs and 4096 on twenty-one. [LAW:no-ambient-temporal-coupling] The device's own
-    /// range bounds every size it can be moved to, so no move of the size can outgrow it and
-    /// nothing has to have caught up for it to be true.
-    ///
-    /// Allocated on every open rather than kept and grown, so there is no earlier size for this
-    /// to be compared with. [LAW:one-source-of-truth] What that adds to a press was measured
-    /// the same day: about 0.1 ms, against the 40 ms the open itself costs.
-    private func renderBuffer() throws -> AVAudioPCMBuffer {
-        var range = AudioValueRange(mMinimum: 0, mMaximum: 0)
-        var size = UInt32(MemoryLayout<AudioValueRange>.size)
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyBufferFrameSizeRange,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        try AudioHardwareError.check(
-            AudioObjectGetPropertyData(device, &address, 0, nil, &size, &range),
-            AudioHardwareError.inputUnavailable
-        )
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(range.mMaximum)) else {
-            throw AudioClipError.bufferAllocationFailed
-        }
-        return buffer
+        // `unowned` because this input holds the reach for as long as it lives, and a disposal
+        // that outlived the input is one whose `self` is already gone - so the reach is read
+        // exactly when it is still there, and holding it here would keep a unit this input had
+        // let go of. [LAW:one-source-of-truth] The input is what owns the unit's lifetime.
+        return { [weak self, unowned reached] in self?.endPress(press, on: reached) }
     }
 
     /// Ends a press, whether it ran or never started, and gives the input up when the
@@ -395,13 +509,13 @@ final class HALInput: PreparedInput {
     /// review of PR #55, that is not true of a device swapped out from under a prepared
     /// unit: `AudioOutputUnitStart` against one destroyed underneath returns `noErr` and
     /// lights the real default input instead.
-    private func endPress(_ press: Int) {
-        guard !close() else { return }
+    private func endPress(_ press: Int, on reached: Reach) {
+        guard !reached.close() else { return }
         // The press ended and the microphone cannot be shown to be off. Nothing here can
         // put it out - the unit that would not stop is the one this input is built on - so
         // the input is given up instead: `AudioCapture` readies another, lets this one go,
-        // and the `deinit` that follows uninitializes and disposes the unit, which is what
-        // finally takes the device off this process. An indicator lit between presses is
+        // and the reach's `deinit` that follows uninitializes and disposes the unit, which is
+        // what finally takes the device off this process. An indicator lit between presses is
         // the whole of what `shut` exists to prevent, so it costs the input rather than
         // being dropped. [LAW:no-silent-failure]
         //
@@ -422,47 +536,49 @@ final class HALInput: PreparedInput {
         }
     }
 
-    /// Gives the device back and leaves the input prepared, so the next press opens it at
-    /// the prepared price, and answers whether the microphone actually went dark - the fact
-    /// the epic promises, and the one only a caller holding a press can act on.
-    /// [LAW:single-enforcer] Every way this input stops comes through here, including the
-    /// one `deinit` takes and the one an `open()` that failed partway takes.
+    /// The device this input is bound to: CoreAudio's answer once readying has one, and until
+    /// then the device readying was asked to bind. Nothing for an input readying could not
+    /// reach, which is bound to no device at all.
+    private var binding: AudioObjectID? {
+        switch reach.finished {
+        case .success(let reached)?: reached.device
+        case .failure?: nil
+        case nil: try? asked.get()
+        }
+    }
+
+    /// Compared against the device the unit is bound to rather than the one it was asked for,
+    /// for the reason `Reach.device` is: the binding is CoreAudio's answer. While readying is
+    /// under way there is no answer yet, and the device it was asked for stands in: a
+    /// default-input change that lands then is about that device, and a run of notifications
+    /// for one change would otherwise ready once per notification. [LAW:one-source-of-truth]
     ///
-    /// Both steps are idempotent - stopping a stopped unit and clearing a cleared target do
-    /// nothing - so this needs no flag saying whether the device is open. It had one, and
-    /// because it was set only after a successful start, it made this a no-op on exactly the
-    /// path that had something to unwind. [LAW:polishing-by-subtraction] An input closed
-    /// twice therefore answers the same both times, which is what lets `deinit` stop a unit
-    /// a key-up already stopped and read nothing into it.
-    ///
-    /// What it does not do is drop the device watches. They belong to the input rather than
-    /// to the press, and a key-up that took them down is what left an idle microphone
-    /// unwatched.
-    @discardableResult
-    private func close() -> Bool {
-        let stopped = AudioOutputUnitStop(unit)
-        // After the stop, so a render already in flight still has somewhere to put the
-        // audio it holds rather than dropping it on the floor.
-        sink.aim(at: nil)
-        // [LAW:parse-dont-validate] The border `init`'s guard stands on, walked the other
-        // way: that one proves reaching a microphone took no device, this one proves
-        // letting go gave it back.
-        //
-        // The device is read rather than the status trusted because the failure this is
-        // named for returns `noErr` - the `AVAudioEngine` this type replaced stopped
-        // without complaint and left the device running, which the class doc records as the
-        // reason `shut` could not be built on it. A status says whether CoreAudio accepted
-        // the call; only the device says whether the microphone is still on.
-        //
-        // Both halves were read off this Mac for low-privacy-o1z.pr2, where the vocabulary
-        // had been guessed rather than measured. Over ten presses the device read dark the
-        // instant `AudioOutputUnitStop` returned, for about 6 µs against that call's 5 ms,
-        // which is what makes the reading affordable here rather than owed to a later beat.
-        // A device destroyed under a running unit answers every teardown call `noErr` and
-        // this property `'who?'`: a microphone that has gone away cannot say it went dark,
-        // and that is this input's last press either way, so the unreadable arm is an
-        // answer to return rather than an error to raise. [LAW:no-silent-failure]
-        return stopped == noErr && (try? Self.isRunning(device)) == false
+    /// [LAW:no-silent-failure] exception: a default that cannot be read answers `false` rather
+    /// than throwing. What that sends capture to do is ready another input, and readying reads
+    /// the same property again and carries its failure to the press that opens it - so the
+    /// error is not dropped. It is reported where a press can hear it.
+    var isOnTheDefaultInput: Bool {
+        binding.map { (try? Self.defaultInput()) == $0 } ?? false
+    }
+
+    /// Which device a press would open. Nonisolated because reading it touches nothing this
+    /// class owns, and `MicrophoneIndicator` asks the same question off the main actor: what
+    /// the indicator shows is a fact about that device, so the two must not be free to
+    /// disagree about which one it is. [LAW:one-source-of-truth]
+    nonisolated static func defaultInput() throws -> AudioObjectID {
+        var device = AudioObjectID(0)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        try AudioHardwareError.check(
+            AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device),
+            AudioHardwareError.noDefaultInput
+        )
+        guard device != kAudioObjectUnknown else { throw AudioHardwareError.noDefaultInput(noErr) }
+        return device
     }
 
     /// The scope is the caller's because it is the property's, not this function's:
@@ -476,15 +592,20 @@ final class HALInput: PreparedInput {
     /// rather than the length of a press, and a block that captured `self` would keep that
     /// input alive past the last reference to it - with its unit, and with `deinit` never
     /// reached to give either back.
-    private static func watch(_ device: AudioObjectID, _ selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope, _ onChange: @escaping @MainActor () -> Void) throws -> Disposal {
-        var address = AudioObjectPropertyAddress(
+    nonisolated static func watch(_ device: AudioObjectID, _ selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope, _ onChange: @escaping @MainActor () -> Void) throws -> @Sendable () -> Void {
+        let address = AudioObjectPropertyAddress(
             mSelector: selector,
             mScope: scope,
             mElement: kAudioObjectPropertyElementMain
         )
-        let listener: AudioObjectPropertyListenerBlock = { _, _ in MainActor.assumeIsolated { onChange() } }
+        // Sendable because the removal below can run on the readying queue, where an input
+        // replaced mid-readying is let go of. The block only ever runs on the main queue.
+        let listener: @Sendable @convention(block) (UInt32, UnsafePointer<AudioObjectPropertyAddress>) -> Void = { _, _ in
+            MainActor.assumeIsolated { onChange() }
+        }
+        var adding = address
         try AudioHardwareError.check(
-            AudioObjectAddPropertyListenerBlock(device, &address, .main, listener),
+            AudioObjectAddPropertyListenerBlock(device, &adding, .main, listener),
             AudioHardwareError.deviceWatchFailed
         )
         return {
@@ -512,35 +633,6 @@ final class HALInput: PreparedInput {
         }
     }
 
-    /// Compared against the device the unit is bound to rather than the one it was asked for,
-    /// for the reason `device` is: the binding is CoreAudio's answer.
-    ///
-    /// [LAW:no-silent-failure] exception: a default that cannot be read answers `false` rather
-    /// than throwing. What that sends capture to do is ready another input, and readying reads
-    /// the same property again and carries its failure to the press that opens it - so the
-    /// error is not dropped. It is reported where a press can hear it.
-    var isOnTheDefaultInput: Bool { (try? Self.defaultInput()) == device }
-
-    /// Which device a press would open. Nonisolated because reading it touches nothing this
-    /// class owns, and `MicrophoneIndicator` asks the same question off the main actor: what
-    /// the indicator shows is a fact about that device, so the two must not be free to
-    /// disagree about which one it is. [LAW:one-source-of-truth]
-    nonisolated static func defaultInput() throws -> AudioObjectID {
-        var device = AudioObjectID(0)
-        var size = UInt32(MemoryLayout<AudioObjectID>.size)
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultInputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        try AudioHardwareError.check(
-            AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device),
-            AudioHardwareError.noDefaultInput
-        )
-        guard device != kAudioObjectUnknown else { throw AudioHardwareError.noDefaultInput(noErr) }
-        return device
-    }
-
     /// Whether *this process* has `device` running.
     ///
     /// `kAudioDevicePropertyDeviceIsRunning` answers for the asking process alone, where
@@ -551,7 +643,7 @@ final class HALInput: PreparedInput {
     /// check on the indicator would refuse to ready a microphone because something else was
     /// using one. [FRAMING:representation] Two properties, two questions, and this is the
     /// one about us.
-    private static func isRunning(_ device: AudioObjectID) throws -> Bool {
+    private nonisolated static func isRunning(_ device: AudioObjectID) throws -> Bool {
         var running: UInt32 = 0
         var size = UInt32(MemoryLayout<UInt32>.size)
         var address = AudioObjectPropertyAddress(
@@ -568,7 +660,7 @@ final class HALInput: PreparedInput {
 
     /// Which device `unit` is bound to, asked of the unit rather than remembered from what
     /// it was told.
-    private static func boundDevice(_ unit: AudioUnit) throws -> AudioObjectID {
+    private nonisolated static func boundDevice(_ unit: AudioUnit) throws -> AudioObjectID {
         var device = AudioObjectID(0)
         var size = UInt32(MemoryLayout<AudioObjectID>.size)
         try AudioHardwareError.check(
@@ -579,7 +671,7 @@ final class HALInput: PreparedInput {
     }
 
     /// Gives back everything a unit holds, in the order CoreAudio pairs them.
-    /// [LAW:single-enforcer] Both ways a unit ends come through here - a `HALInput` being
+    /// [LAW:single-enforcer] Both ways a unit ends come through here - a `Reach` being
     /// let go, and a preparation giving up partway - so the two cannot drift apart on how
     /// much of a unit there is to give back. The guard after `AudioUnitInitialize` is why
     /// that matters: it lets a preparation throw holding a fully initialized unit, which
@@ -599,27 +691,11 @@ final class HALInput: PreparedInput {
     /// existing: the unit that held it is gone. That is also what makes `close()`'s report
     /// worth making and this one not. A prepared input that would not stop keeps the
     /// device across presses; a disposed one cannot keep anything.
-    private static func discard(_ unit: AudioUnit) {
+    private nonisolated static func discard(_ unit: AudioUnit) {
         AudioOutputUnitStop(unit)
         AudioUnitUninitialize(unit)
         AudioComponentInstanceDispose(unit)
     }
 
-    private static let inputBus: UInt32 = 1
-
-    deinit {
-        // The unit is stopped before the sink it renders into is let go: a render already
-        // under way holds a pointer to it. `close` is idempotent, so a disposal that
-        // already ran leaves nothing for this to do.
-        //
-        // The one place the watches are given back other than the catch in `init`, and the
-        // two cannot both run: a throwing initializer reaches `deinit` only once every
-        // stored property is assigned, which is the line after that catch can no longer be
-        // taken. [LAW:single-enforcer] per path, which is what the unit already relies on.
-        MainActor.assumeIsolated {
-            close()
-            watches.forEach { $0() }
-            Self.discard(unit)
-        }
-    }
+    private nonisolated static let inputBus: UInt32 = 1
 }

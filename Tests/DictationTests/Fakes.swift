@@ -32,6 +32,8 @@ final class FakeHardware: AudioHardware {
 
         /// This hardware's default input never changes; nothing here watches it.
         var isOnTheDefaultInput: Bool { true }
+
+        func waitUntilReadied() {}
     }
 
     final class Engine {
