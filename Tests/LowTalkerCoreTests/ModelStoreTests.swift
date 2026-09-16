@@ -176,7 +176,7 @@ import Testing
         #expect("\(WhisperKitTranscriber.LoadPhase.installing(.downloading(fractionCompleted: 0.426)))" == "downloading 42%")
         #expect("\(WhisperKitTranscriber.LoadPhase.installing(.unpacking))" == "unpacking model")
         #expect("\(WhisperKitTranscriber.LoadPhase.installing(.copying))" == "copying model")
-        #expect("\(WhisperKitTranscriber.LoadPhase.loading)" == "loading model")
+        #expect("\(WhisperKitTranscriber.LoadPhase.loading)" == "loading model, minutes the first time on this Mac")
     }
 
     /// A file this process may not reach is not a missing file: a download would

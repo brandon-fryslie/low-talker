@@ -45,7 +45,7 @@ public final class WhisperKitTranscriber: Transcriber {
         public var description: String {
             switch self {
             case .installing(let phase): phase.description
-            case .loading: "loading model"
+            case .loading: "loading model, minutes the first time on this Mac"
             }
         }
     }

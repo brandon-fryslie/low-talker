@@ -39,10 +39,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// What the engine is doing, and whether the hotkey is being watched. The two
     /// things in the menu that cannot be read on demand: they arrive from the load's
     /// and the tap's own callbacks, so they are held here while everything else is read
-    /// at the moment the menu opens. Launch sets both before it returns, so no menu can
-    /// open on an empty string.
-    private var engineStatus = ""
+    /// at the moment the menu opens. Launch sets the hotkey's before it returns, so no
+    /// menu can open on an empty string.
+    ///
+    /// The engine's is also the status icon's face, since a first load runs for minutes
+    /// and an icon that looks ready through them reads as an app that is not answering.
+    /// Lazy so it can count from `launched`; only `show(_:)` sets it, which redraws the icon.
+    private lazy var engineReadiness: EngineReadiness = .preparing(nil, since: launched)
     private var hotkeyStatus = ""
+
+    /// When this process began, which every readout of the engine's wait counts from.
+    private let launched = ContinuousClock.now
 
     /// The same readouts in the unified log, where `log show` can time them: a menu
     /// nobody has open is no way to measure a launch, and no way for an agent to check
@@ -79,9 +86,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// [LAW:one-source-of-truth] Every engine status passes through here, so the
     /// menu and the log never tell different stories.
-    private func showEngineStatus(_ status: String) {
-        engineStatus = status
-        log.info("model: \(status, privacy: .public)")
+    private func show(_ readiness: EngineReadiness) {
+        engineReadiness = readiness
+        drawStatusIcon()
+        log.info("model: \(readiness.readout(at: .now), privacy: .public)")
     }
 
     private func showHotkeyStatus(_ status: String) {
@@ -198,8 +206,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // these icons in the menu bar and this label is what tells them apart - to a
         // reader with VoiceOver, and to an agent reading the bar over Accessibility.
         statusItem.button?.image = NSImage(
-            systemSymbolName: wordsOnClipboard ? "doc.on.clipboard.fill" : "mic.fill",
-            accessibilityDescription: wordsOnClipboard ? "\(Self.flavor.displayName): dictation on the clipboard" : Self.flavor.displayName)
+            systemSymbolName: engineReadiness.symbolName(wordsOnClipboard: wordsOnClipboard),
+            accessibilityDescription: engineReadiness.iconDescription(for: Self.flavor.displayName, wordsOnClipboard: wordsOnClipboard))
     }
 
     /// Takes `method` down to the loop: the old loop's hotkey comes down first, ending any
@@ -360,8 +368,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - launch and quit
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        showEngineStatus("checking…")
-        drawStatusIcon()
+        show(.preparing(nil, since: launched))
         statusItem.isVisible = true
         _ = engine
         showHotkeyStatus("starting…")
@@ -434,15 +441,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // reason instead of falling back to a download nobody asked for.
             let source = ModelStore.carried(by: .main).map(ModelSource.store) ?? .huggingFace
             let transcriber = try await WhisperKitTranscriber.load(in: store, from: source) { phase in
-                Task { @MainActor in self.showEngineStatus(phase.description) }
+                Task { @MainActor in
+                    let next = self.engineReadiness.reporting(phase)
+                    if next != self.engineReadiness { self.show(next) }
+                }
             }
-            showEngineStatus("ready (\(transcriber.model))")
+            show(.ready(transcriber.model, after: launched.duration(to: .now)))
             return transcriber
         } catch {
             // [LAW:no-silent-failure] A model that failed to load is the one thing the
             // menu must say, since every session after this would otherwise fail
             // with no explanation on screen.
-            showEngineStatus("failed — \(error)")
+            show(.failed("\(error)"))
             throw error
         }
     }
@@ -525,7 +535,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         log.notice("microphone at rest: \(microphone, privacy: .public)")
 
         menu.removeAllItems()
-        menu.addItem(readout("Whisper model: \(engineStatus)"))
+        menu.addItem(readout("Whisper model: \(engineReadiness.readout(at: .now))"))
+        // A press made during the wait is not lost, and nothing else on screen says so.
+        if case .preparing = engineReadiness { menu.addItem(readout("A press now is heard once the model is ready")) }
         menu.addItem(readout("Microphone: \(microphone)"))
         menu.addItem(readout("Hotkey: \(hotkeyStatus)"))
         if wordsOnClipboard { menu.addItem(readout("Your last dictation is on the clipboard")) }
