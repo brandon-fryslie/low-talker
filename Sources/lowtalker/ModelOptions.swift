@@ -28,6 +28,26 @@ struct ModelOptions: ParsableArguments {
     }
 }
 
+/// Where a command takes a model from when the store does not have it.
+struct SourceOptions: ParsableArguments {
+    @Option(name: .customLong("from"), help: "Where to take a model the store lacks: an http(s) base URL serving <model>.zip, as `model pack` writes them, or a directory holding another model store. Defaults to huggingface.co.")
+    var source: ModelSource = .huggingFace
+}
+
+/// [LAW:parse-dont-validate] A URL with an http or https scheme is a published base and
+/// anything else is a path to a store, so the one flag cannot be read two ways.
+extension ModelSource: ExpressibleByArgument {
+    public init?(argument: String) {
+        if let url = URL(string: argument), ["http", "https"].contains(url.scheme) {
+            self = .published(url)
+        } else {
+            self = .store(ModelStore(directory: URL(fileURLWithPath: argument)))
+        }
+    }
+
+    public var defaultValueDescription: String { description }
+}
+
 /// [LAW:parse-dont-validate] `--model` is parsed into a name at the command line, so a
 /// value that is not one path step is refused before any path is built from it.
 extension ModelName: ExpressibleByArgument {}

@@ -20,14 +20,15 @@ public final class WhisperKitTranscriber: Transcriber {
     }
 
     /// The whole road from a store to a resident model: the store installs whatever
-    /// it lacks, then the model is loaded. `phase` hears each step begin so a status
+    /// it lacks from `source`, then the model is loaded. `phase` hears each step begin so a status
     /// item or a terminal can say what the wait is for.
     public static func load(
         _ model: ModelName = .default,
-        from store: ModelStore,
+        in store: ModelStore,
+        from source: ModelSource,
         phase: @escaping @Sendable (LoadPhase) -> Void
     ) async throws -> WhisperKitTranscriber {
-        let installed = try await store.install(model) { phase(.installing($0)) }
+        let installed = try await store.install(model, from: source) { phase(.installing($0)) }
         phase(.loading)
         return try await WhisperKitTranscriber(installed)
     }
@@ -36,10 +37,9 @@ public final class WhisperKitTranscriber: Transcriber {
     /// returned transcriber is that state.
     public enum LoadPhase: Equatable, Sendable, CustomStringConvertible {
         case installing(ModelStore.InstallPhase)
-        /// Core ML is loading the model. The first load after an install also fetches
-        /// the tokenizer when `tokenizer.json` is not in the hub yet; the first on a
-        /// Mac, after an OS update, or after a change to the app's signing identity
-        /// also specializes the model for the Neural Engine, which takes minutes.
+        /// Core ML is loading the model. The first load on a Mac, after an OS update,
+        /// or after a change to the app's signing identity also specializes the model
+        /// for the Neural Engine, which takes minutes.
         case loading
 
         public var description: String {
@@ -141,7 +141,7 @@ public final class WhisperKitTranscriber: Transcriber {
         nonisolated init(installed: InstalledModel) async throws {
             // WhisperKit logs to stdout when verbose; stdout belongs to whoever called us.
             // `download` gates only the weights, which `modelFolder` supplies; the
-            // tokenizer is read from `tokenizerFolder`, fetched into it when absent.
+            // tokenizer is read from `tokenizerFolder`, where the install put it.
             // The seeker is ours so that a prompted pass keeps its word timings.
             whisperKit = try await WhisperKit(WhisperKitConfig(
                 modelFolder: installed.folder.path,

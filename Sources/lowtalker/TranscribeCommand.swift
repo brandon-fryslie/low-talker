@@ -18,6 +18,7 @@ struct TranscribeCommand: AsyncParsableCommand {
     var file: URL
 
     @OptionGroup var options: ModelOptions
+    @OptionGroup var source: SourceOptions
     @OptionGroup var expected: VocabularyOptions
 
     func run() async throws {
@@ -26,7 +27,7 @@ struct TranscribeCommand: AsyncParsableCommand {
         let reporter = PhaseReporter()
 
         let loadStart = clock.now
-        let transcriber = try await WhisperKitTranscriber.load(options.model, from: options.store(), phase: reporter.report)
+        let transcriber = try await WhisperKitTranscriber.load(options.model, in: options.store(), from: source.source, phase: reporter.report)
         let loaded = clock.now
 
         let transcript = try await transcriber.transcribe(clip, expecting: expected.vocabulary)

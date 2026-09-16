@@ -6,10 +6,11 @@ import WhisperKit
 /// find their files without being told twice where they are.
 ///
 /// [LAW:one-source-of-truth] "Is the model here and whole?" has one answer: the
-/// manifest the store wrote after the last complete download. The hub's own sidecar
-/// files only record which commit a file came from; the manifest records what
-/// arrived, and proves the *set* is complete, which the sidecars cannot, since a
-/// download stopped between files leaves no trace of the files it never started.
+/// manifests the store wrote after each part last arrived complete, one for the
+/// weights and one for the tokenizer they decode with. The hub's own sidecar files
+/// only record which commit a file came from; a manifest records what arrived, and
+/// proves the *set* is complete, which the sidecars cannot, since a download stopped
+/// between files leaves no trace of the files it never started.
 public struct ModelStore: Sendable {
     /// The hub root. A model lives at `models/<org>/<repo>/<variant>` beneath it and
     /// its tokenizer at `models/openai/<whisper variant>`.
@@ -34,33 +35,57 @@ public struct ModelStore: Sendable {
     /// [LAW:parse-dont-validate] The checkpoint. Everything past it takes an
     /// `InstalledModel` and never asks about files again.
     public func presence(of model: ModelName) throws -> Presence {
-        let manifestURL = manifestURL(for: model)
+        let weights = try recording(.weights, of: model)
+        let tokenizer = try recording(.tokenizer, of: model)
+        switch (weights, tokenizer) {
+        case (.whole(let weights), .whole):
+            return .installed(InstalledModel(model: model, folder: directory.appending(path: weights.folder), hub: directory))
+        case (.unrecorded, .unrecorded):
+            return .missing
+        default:
+            return .damaged([(ModelPart.weights, weights), (.tokenizer, tokenizer)].compactMap { part, recording in
+                switch recording {
+                case .whole: nil
+                case .unrecorded: .unrecorded(part)
+                case .damaged(let damage): damage
+                }
+            })
+        }
+    }
+
+    /// What one part's manifest says about its files.
+    enum Recording {
+        case whole(Manifest)
+        case unrecorded
+        case damaged(Damage)
+    }
+
+    func recording(_ part: ModelPart, of model: ModelName) throws -> Recording {
+        let manifestURL = manifestURL(for: model, part)
         let manifest: Manifest
         do {
             manifest = try Manifest(contentsOf: manifestURL)
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
-            return .missing
+            return .unrecorded
         } catch let error where error is DecodingError || error is ManifestError {
-            return .damaged(.manifestUnreadable(manifest: manifestURL, reason: "\(error)"))
+            return .damaged(.manifestUnreadable(manifest: manifestURL, part: part, reason: "\(error)"))
         }
         let folder = directory.appending(path: manifest.folder)
         let faults = try manifest.faults(in: folder)
-        guard faults.isEmpty else {
-            return .damaged(.files(folder: folder, faults: faults))
-        }
-        return .installed(InstalledModel(model: model, folder: folder, hub: directory))
+        return faults.isEmpty ? .whole(manifest) : .damaged(.files(folder: folder, faults: faults))
     }
 
-    /// The installed model, downloading whatever the store lacks first. Files already
-    /// here are not fetched again, so a damaged install costs only the damaged parts,
-    /// and an installed one costs nothing. One installer at a time: a second, from
-    /// any process, waits for the first.
+    /// The installed model, taking whatever the store lacks from `source` first. A
+    /// part already whole here is not taken again, so a damaged install costs only
+    /// the damaged parts, and an installed one costs nothing. One installer at a
+    /// time: a second, from any process, waits for the first.
     ///
-    /// [LAW:dataflow-not-control-flow] The sequence never changes; whether the
-    /// download runs is decided by the store's `Presence` value, the domain's own
-    /// discriminator, judged under the lock so it describes what this installer owns.
+    /// [LAW:dataflow-not-control-flow] The sequence never changes; whether a part is
+    /// fetched is decided by its `Recording`, the domain's own discriminator, judged
+    /// under the lock so it describes what this installer owns.
     public func install(
         _ model: ModelName,
+        from source: ModelSource,
         phase: @escaping @Sendable (InstallPhase) -> Void
     ) async throws -> InstalledModel {
         try await InstallLock.holding(directory, waiting: { phase(.waitingForAnotherInstall) }) {
@@ -69,24 +94,125 @@ public struct ModelStore: Sendable {
             // [LAW:single-enforcer] The hub client trusts its own sidecar once a file
             // exists and never hashes the file, so a truncated file would come back as
             // "already downloaded". The manifest is the one judge of whole; the files it
-            // rejects are removed first so the client has nothing to trust.
+            // rejects are removed first so no source has anything to trust.
             for url in try presence.evictions {
                 try FileManager.default.removeItem(at: url)
             }
-            phase(.downloading(fractionCompleted: 0))
-            let folder = try await WhisperKit.download(variant: model.rawValue, downloadBase: directory) { phase(.downloading(fractionCompleted: $0.fractionCompleted)) }
-            // [LAW:no-silent-failure] The hub client answers cancellation by returning
-            // the folder as far as it got, without throwing. A manifest over that folder
-            // would certify a partial model as whole.
-            try Task.checkCancellation()
-            let manifest = try Manifest(recording: folder, relativeTo: directory)
-            try manifest.write(to: manifestURL(for: model))
-            return InstalledModel(model: model, folder: folder, hub: directory)
+            return try await OpenSource.with(source, model, beside: self, phase: phase) { source in
+                let weights = try await whole(.weights, of: model) {
+                    switch source {
+                    case .huggingFace:
+                        phase(.downloading(fractionCompleted: 0))
+                        let folder = try await WhisperKit.download(variant: model.rawValue, downloadBase: directory) { phase(.downloading(fractionCompleted: $0.fractionCompleted)) }
+                        // [LAW:no-silent-failure] The hub client answers cancellation by
+                        // returning the folder as far as it got, without throwing. A
+                        // manifest over that folder would certify a partial model as whole.
+                        try Task.checkCancellation()
+                        return try Manifest(recording: folder, relativeTo: directory)
+                    case .store(let store):
+                        phase(.copying)
+                        return try copy(.weights, of: model, from: store)
+                    }
+                }
+                let folder = directory.appending(path: weights.folder)
+                _ = try await whole(.tokenizer, of: model) {
+                    switch source {
+                    case .huggingFace:
+                        // WhisperKit fetches the tokenizer on first load, from the hub,
+                        // when it is not already here; taking it now is what lets that
+                        // load, and every one after, run with the network off.
+                        let variant = try ModelVariant(modelConfig: folder.appending(path: "config.json"))
+                        _ = try await ModelUtilities.loadTokenizer(for: variant, tokenizerFolder: directory)
+                        try Task.checkCancellation()
+                        return try Manifest(recording: directory.appending(components: "models", variant.tokenizerRepo), relativeTo: directory)
+                    case .store(let store):
+                        phase(.copying)
+                        return try copy(.tokenizer, of: model, from: store)
+                    }
+                }
+                return InstalledModel(model: model, folder: folder, hub: directory)
+            }
         }
     }
 
-    private func manifestURL(for model: ModelName) -> URL {
-        directory.appending(components: "installed", "\(model.rawValue).json")
+    /// Writes `<directory>/<model>.zip`, the archive a published source serves: a
+    /// store holding `model` alone, taken from this store, which must hold it whole.
+    ///
+    /// [LAW:composability] Packing is an install into an empty store and a zip of the
+    /// result, so an archive holds exactly what an install certifies, manifests and
+    /// all, and nothing a hub client left beside it.
+    public func pack(_ model: ModelName, into directory: URL, phase: @escaping @Sendable (InstallPhase) -> Void) async throws -> URL {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let scratch = try FileManager.default.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: directory, create: true)
+        // [LAW:no-silent-failure] exception: a defer cannot throw, and a staging copy
+        // left behind costs disk, not correctness.
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let staging = ModelStore(directory: scratch.appending(path: "store"))
+        _ = try await staging.install(model, from: .store(self), phase: phase)
+        let archive = directory.appending(path: ModelSource.archiveName(of: model))
+        try Archive.pack(staging.directory, to: archive)
+        return archive
+    }
+
+    /// The part's manifest, taking the part from `fetch` and recording what arrived
+    /// when it is not already whole here.
+    private func whole(_ part: ModelPart, of model: ModelName, fetch: () async throws -> Manifest) async throws -> Manifest {
+        if case .whole(let manifest) = try recording(part, of: model) { return manifest }
+        let manifest = try await fetch()
+        try manifest.write(to: manifestURL(for: model, part))
+        return manifest
+    }
+
+    /// Copies the files `source`'s manifest lists for the part to the same paths
+    /// here, and hands back that manifest once the copies verify against it.
+    ///
+    /// Each file lands under a temporary name and is renamed over its place, so a
+    /// tokenizer another model shares is never absent while it is replaced. Only the
+    /// listed files are copied: a sidecar beside them in the source is not the model.
+    private func copy(_ part: ModelPart, of model: ModelName, from source: ModelStore) throws -> Manifest {
+        let manifest: Manifest
+        switch try source.recording(part, of: model) {
+        case .whole(let whole): manifest = whole
+        case .unrecorded: throw ModelStoreError.sourceLacks(source: source.directory, model: model, part: part, reason: "not installed there")
+        case .damaged(let damage): throw ModelStoreError.sourceLacks(source: source.directory, model: model, part: part, reason: damage.description)
+        }
+        let from = source.directory.appending(path: manifest.folder)
+        let to = directory.appending(path: manifest.folder)
+        for file in manifest.files {
+            let destination = to.appending(path: file.path)
+            let incoming = destination.deletingLastPathComponent().appending(path: ".\(destination.lastPathComponent).\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: incoming.deletingLastPathComponent(), withIntermediateDirectories: true)
+            do {
+                try FileManager.default.copyItem(at: from.appending(path: file.path), to: incoming)
+                guard rename(incoming.path, destination.path) == 0 else {
+                    throw ModelStoreError.renameFailed(from: incoming, to: destination, errno: errno)
+                }
+            } catch {
+                // A hidden name is never recorded or evicted, so a partial copy left
+                // here would outlive every retry. [LAW:no-silent-failure] exception:
+                // the copy's own error is the one the caller needs; a failed removal
+                // of what may never have been created adds nothing to it.
+                try? FileManager.default.removeItem(at: incoming)
+                throw error
+            }
+        }
+        let faults = try manifest.faults(in: to)
+        guard faults.isEmpty else {
+            throw ModelStoreError.sourceLacks(source: source.directory, model: model, part: part, reason: "copied, but \(faults.map(\.description).joined(separator: "; "))")
+        }
+        return manifest
+    }
+
+    /// `installed/<model>.json` for the weights, where every store before the
+    /// tokenizer had a manifest already wrote it, and `installed/tokenizer/<model>.json`
+    /// beside it. Kept per model rather than per tokenizer: a model knows its own
+    /// manifests' names without reading its weights.
+    private func manifestURL(for model: ModelName, _ part: ModelPart) -> URL {
+        let installed = directory.appending(path: "installed")
+        return switch part {
+        case .weights: installed.appending(path: "\(model.rawValue).json")
+        case .tokenizer: installed.appending(components: "tokenizer", "\(model.rawValue).json")
+        }
     }
 
     /// What `install` is doing now. `waitingForAnotherInstall` is reported once,
@@ -97,28 +223,35 @@ public struct ModelStore: Sendable {
     public enum InstallPhase: Equatable, Sendable, CustomStringConvertible {
         case waitingForAnotherInstall
         case downloading(fractionCompleted: Double)
+        /// A published archive has arrived and is being unzipped.
+        case unpacking
+        /// Files are being copied in from another store.
+        case copying
 
         public var description: String {
             switch self {
             case .waitingForAnotherInstall: "waiting for another install"
             case .downloading(let fraction): "downloading \(Int(fraction * 100))%"
+            case .unpacking: "unpacking model"
+            case .copying: "copying model"
             }
         }
     }
 
     public enum Presence: Sendable {
         case installed(InstalledModel)
-        /// Never downloaded here.
+        /// Never installed here.
         case missing
-        /// Downloaded once, but no longer proven whole.
-        case damaged(Damage)
+        /// Some of it was installed once, but the model is no longer proven whole.
+        /// Never empty.
+        case damaged([Damage])
 
-        /// The files a repair must remove before the hub client will fetch them again.
+        /// The files a repair must remove before a source will provide them again.
         public var evictions: [URL] {
             get throws {
                 switch self {
                 case .installed, .missing: []
-                case .damaged(let damage): try damage.evictions
+                case .damaged(let damages): try damages.flatMap { try $0.evictions }
                 }
             }
         }
@@ -127,19 +260,22 @@ public struct ModelStore: Sendable {
     public enum Damage: Sendable, CustomStringConvertible {
         /// The manifest is on disk but does not parse, so nothing is known about the
         /// files.
-        case manifestUnreadable(manifest: URL, reason: String)
+        case manifestUnreadable(manifest: URL, part: ModelPart, reason: String)
         /// Files the manifest lists that are not there as recorded. Never empty.
         case files(folder: URL, faults: [Manifest.Fault])
+        /// This part has no manifest while the other has one: a store written before
+        /// the tokenizer had a manifest of its own reads this way.
+        case unrecorded(ModelPart)
 
         /// A missing file is the one fault that needs no eviction: it is already what
-        /// the client must see. An unreadable manifest names no files, so no file can
+        /// a source must fill. An unreadable manifest names no files, so no file can
         /// be trusted and no repair is offered: a manifest recorded over what a
         /// download left would certify whatever was already there.
         public var evictions: [URL] {
             get throws {
                 switch self {
-                case .manifestUnreadable(let manifest, let reason):
-                    throw ModelStoreError.manifestUnreadable(manifest: manifest, reason: reason)
+                case .manifestUnreadable(let manifest, let part, let reason):
+                    throw ModelStoreError.manifestUnreadable(manifest: manifest, part: part, reason: reason)
                 case .files(let folder, let faults):
                     faults.compactMap { fault in
                         switch fault.kind {
@@ -147,14 +283,16 @@ public struct ModelStore: Sendable {
                         case .wrongSize, .notAFile: folder.appending(path: fault.path)
                         }
                     }
+                case .unrecorded: []
                 }
             }
         }
 
         public var description: String {
             switch self {
-            case .manifestUnreadable(let manifest, let reason): "manifest \(manifest.path) unreadable: \(reason)"
+            case .manifestUnreadable(let manifest, _, let reason): "manifest \(manifest.path) unreadable: \(reason)"
             case .files(_, let faults): faults.map(\.description).joined(separator: "; ")
+            case .unrecorded(let part): "the \(part) is not installed"
             }
         }
     }
@@ -198,15 +336,31 @@ private enum InstallLock {
 }
 
 public enum ModelStoreError: Error, Equatable, CustomStringConvertible {
-    case manifestUnreadable(manifest: URL, reason: String)
+    case manifestUnreadable(manifest: URL, part: ModelPart, reason: String)
     case lockUnavailable(lock: URL, errno: Int32)
+    /// A source store that does not hold the part whole, so there is nothing to take.
+    case sourceLacks(source: URL, model: ModelName, part: ModelPart, reason: String)
+    /// A published base answered with something other than the archive.
+    case downloadRefused(url: URL, status: Int?)
+    case dittoFailed(arguments: [String], status: Int32, message: String)
+    case renameFailed(from: URL, to: URL, errno: Int32)
 
     public var description: String {
         switch self {
-        case .manifestUnreadable(let manifest, let reason):
-            "manifest \(manifest.path) cannot be read (\(reason)); delete it and the model's folder under models, beside installed, then download again"
+        case .manifestUnreadable(let manifest, let part, let reason):
+            // The folder a manifest covered is named by the manifest, which is what
+            // cannot be read, so the instruction names where that part lives.
+            "manifest \(manifest.path) cannot be read (\(reason)); delete it and the \(part.folderDescription), then download again"
         case .lockUnavailable(let lock, let errno):
             "cannot lock \(lock.path): \(String(cString: strerror(errno)))"
+        case .sourceLacks(let source, let model, let part, let reason):
+            "\(source.path) cannot supply the \(part) of \(model): \(reason)"
+        case .downloadRefused(let url, let status):
+            "\(url.absoluteString) answered \(status.map { "HTTP \($0)" } ?? "with no HTTP status"), not the model archive"
+        case .dittoFailed(let arguments, let status, let message):
+            "ditto \(arguments.joined(separator: " ")) exited \(status): \(message)"
+        case .renameFailed(let from, let to, let errno):
+            "cannot move \(from.path) to \(to.path): \(String(cString: strerror(errno)))"
         }
     }
 }
@@ -250,7 +404,9 @@ public struct Manifest: Codable, Equatable, Sendable {
     }
 
     /// Records every regular file under `folder`, in path order so two recordings of
-    /// the same folder are equal.
+    /// the same folder are equal. Hidden files are not the model: the hub client keeps
+    /// its sidecars in a `.cache` folder inside a tokenizer repo, and a copy lands under
+    /// a hidden name before it is renamed into place.
     ///
     /// [LAW:no-silent-failure] The walk stops at its first error, and that error is
     /// the result: a manifest of the files seen before a folder refused to list
@@ -264,7 +420,7 @@ public struct Manifest: Codable, Equatable, Sendable {
         self.folder = String(folderPath.dropFirst(rootPath.count + 1))
 
         var failure: ManifestError?
-        let enumerator = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey]) { url, error in
+        let enumerator = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey], options: .skipsHiddenFiles) { url, error in
             failure = .unreadableFolder(url, reason: "\(error)")
             return false
         }

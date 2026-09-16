@@ -31,6 +31,7 @@ struct BenchCommand: AsyncParsableCommand {
     var runs: Int = 3
 
     @OptionGroup var location: StoreOptions
+    @OptionGroup var source: SourceOptions
     @OptionGroup var expected: VocabularyOptions
 
     func validate() throws {
@@ -46,7 +47,7 @@ struct BenchCommand: AsyncParsableCommand {
             let reporter = PhaseReporter()
             print("model \(model)", to: &stderr)
             let report = try await LatencyHarness.measure(fixtures, deliveries: deliveries, reruns: UInt(runs - 1), expecting: expected.vocabulary) {
-                try await WhisperKitTranscriber.load(model, from: store, phase: reporter.report)
+                try await WhisperKitTranscriber.load(model, in: store, from: source.source, phase: reporter.report)
             }
             for result in report.fixtures {
                 print("  \(result.name) \(result.delivery.rawValue): heard \"\(result.transcript.text)\", \(result.wordErrorRate)", to: &stderr)
