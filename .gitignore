@@ -3,6 +3,8 @@
 DerivedData/
 .DS_Store
 LowTalker.xcodeproj/
+# The entitlements plist xcodegen writes from project.yml.
+App/Generated/
 # Session handoff notes written by the remember hook; local to each checkout.
 .remember/
 # Claude Code worktrees; local to each checkout.
