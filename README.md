@@ -672,8 +672,18 @@ To confirm a build is signed with it:
 
 The `designated =>` line should name `certificate leaf = H"..."`, which is stable across builds. An ad-hoc build shows `cdhash H"..."` instead, and that hash changes every build.
 
+### Hardened Runtime and entitlements
+
+Both installations, and the helper embedded in each, are built with Hardened Runtime, which notarization requires: `project.yml` sets `ENABLE_HARDENED_RUNTIME`. `codesign -dv` on either bundle or its `Contents/MacOS/lowtalker-keyboardd` shows `flags=0x10000(runtime)`.
+
+The runtime holds a program to a set of restrictions, and each exception is an entitlement. The app carries one, `com.apple.security.device.audio-input`, declared under `entitlements` in `project.yml`; xcodegen writes the plist from there into `App/Generated/`, which is ignored. Built with the runtime on and no entitlements, tccd logged `Prompting policy for hardened runtime; service: kTCCServiceMicrophone requires entitlement com.apple.security.device.audio-input but it is missing`. A Mac that already granted the microphone kept hearing. A Mac that never granted it would never be asked, and the app would hear nothing. Nothing else failed. Measured on 2026-09-16 on this Mac, both installations were built that way and each was driven through a held chord while a fixture played at the microphone. Through the virtual keyboard, "Hello world, this is Low Talker." was typed into TextEdit 708 ms (development) and 700 ms (release) after key-up. Through the clipboard, it was on the pasteboard 690 ms and 702 ms after key-up. The hardened helpers still admitted the CLI: `lowtalker onboard` read every row met for both flavors, and `lowtalker type` typed through them.
+
+An entitlement goes in only with the failure that needed it, written in the comment beside it in `project.yml`.
+
+After a build that changes only how the helper is signed, rebuild the bundles from scratch (`rm -rf "DerivedData/Build/Products/Debug/LowTalker Dev.app" DerivedData/Build/Products/Debug/LowTalker.app`, then `make app` and `make release`): Xcode's copy phase does not see a re-signed helper as changed, and keeps embedding the old one (low-build-mmp).
+
 ### Starting over
 
 To recreate the certificate, delete `LowTalker Dev` and its private key in Keychain Access (login keychain, My Certificates), then run `make signing-identity` again. The new certificate is a new signature, so re-grant the app's permissions in System Settings.
 
-This certificate is for local development only. Nobody trusts it and it cannot distribute the app; release builds (Developer ID and notarization) are a separate concern not covered here.
+This certificate is for local development only. Nobody trusts it and it cannot distribute the app; release builds (Developer ID and notarization) are a separate concern not covered here, beyond the Hardened Runtime they need.

@@ -19,6 +19,9 @@ settings:
     SWIFT_VERSION: "6.0"
     CODE_SIGN_STYLE: Manual
     CODE_SIGN_IDENTITY: LowTalker Dev
+    # Notarization refuses a binary without it, and every target in this file is one a
+    # release carries: the app and the helper embedded in it.
+    ENABLE_HARDENED_RUNTIME: YES
 
 packages:
   # [LAW:one-way-deps] The app links the SwiftPM package at the repo root; the
@@ -75,6 +78,24 @@ targetTemplates:
         copy:
           destination: wrapper
           subpath: Contents/MacOS
+    # Every entitlement here is named with the failure that required it, read off a
+    # Hardened Runtime build rather than guessed; one nobody can name is removed.
+    # xcodegen writes the plist from these properties on every generate, so the file
+    # it writes is build output, ignored like the project beside it.
+    #
+    # com.apple.security.device.audio-input: with the runtime on and this absent, tccd
+    # logs "Prompting policy for hardened runtime; service: kTCCServiceMicrophone
+    # requires entitlement com.apple.security.device.audio-input but it is missing".
+    # A Mac that already granted the microphone keeps hearing; a Mac that has not is
+    # never asked, and the app is deaf.
+    #
+    # Measured with nothing else in the file, on both installations: the session event
+    # tap, Accessibility, the paste, SMAppService and the XPC connection to the helper
+    # all work, and the helper, hardened too, needs no entitlements of its own.
+    entitlements:
+      path: App/Generated/LowTalker.entitlements
+      properties:
+        com.apple.security.device.audio-input: true
     settings:
       base:
         PRODUCT_NAME: ${displayName}
