@@ -43,14 +43,19 @@ check() {
 team=$(xcodegen dump --type json | jq -er '.settings.configs.Release.DEVELOPMENT_TEAM // error("project.yml sets no DEVELOPMENT_TEAM for Release")')
 codesign --verify --deep --strict "$app" || fail "$app does not verify"
 check "$app"
-# [LAW:one-source-of-truth] The image is signed by exactly the certificate that signed the
-# app, read off the app's own signature, so one release cannot carry two identities.
-authority=$(codesign -dvv "$app" 2>&1 | sed -n 's/^Authority=//p' | head -n 1)
 
 name=$(basename "$app" .app)
 staging=$(mktemp -d "${TMPDIR:-/tmp}/lowtalker-dmg.XXXXXX")
 mount=$(mktemp -d "${TMPDIR:-/tmp}/lowtalker-dmg-mount.XXXXXX")
 trap 'hdiutil detach -quiet "$mount" 2>/dev/null || true; rm -rf "$staging" "$mount"' EXIT
+
+# [LAW:one-source-of-truth] The image is signed by exactly the certificate that signed the
+# app: its leaf, extracted from the app's own signature and named to codesign by its SHA-1.
+# A certificate's name would not do, since a renewed Developer ID certificate keeps the name
+# of the one it renews, and with both in the keychain the name is ambiguous.
+codesign -d --extract-certificates="$staging/certificate" "$app" 2>/dev/null
+leaf=$(shasum -a 1 "$staging/certificate0" | cut -d ' ' -f 1)
+rm "$staging"/certificate*
 ditto "$app" "$staging/$name.app"
 ln -s /Applications "$staging/Applications"
 
@@ -60,7 +65,7 @@ rm -f "$dmg"
 # LZFSE: the model is most of the bytes and compresses about as well under it as under zlib,
 # and it unpacks faster when the image is mounted and verified.
 hdiutil create -quiet -volname "$name" -srcfolder "$staging" -format ULFO "$dmg"
-codesign --sign "$authority" --timestamp "$dmg"
+codesign --sign "$leaf" --timestamp "$dmg"
 
 codesign --verify --strict "$dmg" || fail "$dmg does not verify"
 check "$dmg"
