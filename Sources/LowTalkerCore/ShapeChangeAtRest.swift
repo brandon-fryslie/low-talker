@@ -117,10 +117,10 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
     /// change to make - a reading taken anyway would be an instrument answering a question it
     /// never managed to put. [LAW:no-silent-failure]
     ///
-    /// The input is a `HALInput` rather than one `SystemAudioHardware` prepared, and
-    /// deliberately: that path turns a preparation that could not happen into an input which
-    /// throws at the press, because resting has no answer for a failure. A reading does, and
-    /// it is to throw here rather than time out at the wait and call the Mac deaf.
+    /// The input's device is asked for before anything is moved, and that waits for readying
+    /// and throws what stopped it. Capture carries a preparation that could not happen to the
+    /// press, because resting has no answer for a failure; a reading does, and it is to throw
+    /// here rather than time out at the wait and call the Mac deaf.
     ///
     /// The indicator is read to refuse and never to judge. Whether readying opened a device is
     /// `HALInput.init`'s own guard, which ends the preparation rather than reporting it, so
@@ -129,8 +129,8 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
     public static func measure(waiting wait: Duration) async throws -> ShapeChangeAtRest {
         guard try MicrophoneIndicator.read() == .dark else { throw MicrophoneAlreadyRunning() }
         let arrival = Arrival()
-        let input = try HALInput(onStale: { arrival.arrived() })
-        let device = input.device
+        let input = HALInput(onStale: { arrival.arrived() })
+        let device = try input.device
         let readiedAt = try nominalRate(of: device)
         let movedTo = try otherRate(of: device, than: readiedAt)
 
@@ -205,7 +205,7 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
     /// one rate. A discrete range offers the same value twice, which costs nothing.
     /// [LAW:dataflow-not-control-flow] Ends are values the search runs over, not a second case
     /// the search has to know it is in.
-    private static func otherRate(of device: AudioObjectID, than rate: Double) throws -> Double {
+    static func otherRate(of device: AudioObjectID, than rate: Double) throws -> Double {
         guard let other = try rates(of: device).flatMap({ [$0.mMinimum, $0.mMaximum] }).first(where: { $0 != rate }) else {
             throw DeviceKeepsOneShape(device: device, rate: rate)
         }
@@ -227,7 +227,7 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
         return ranges
     }
 
-    private static func nominalRate(of device: AudioObjectID) throws -> Double {
+    static func nominalRate(of device: AudioObjectID) throws -> Double {
         var rate = Double(0)
         var size = UInt32(MemoryLayout<Double>.size)
         var address = shape(kAudioDevicePropertyNominalSampleRate)
@@ -238,7 +238,7 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
         return rate
     }
 
-    private static func move(_ device: AudioObjectID, to rate: Double) throws {
+    static func move(_ device: AudioObjectID, to rate: Double) throws {
         var rate = rate
         var address = shape(kAudioDevicePropertyNominalSampleRate)
         try AudioHardwareError.check(

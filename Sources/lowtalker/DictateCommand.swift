@@ -37,6 +37,8 @@ struct DictateCommand: AsyncParsableCommand {
         // presses - an agent running all day that the user has to be able to trust - is
         // not this command's situation. The app is where that setting is honoured.
         try capture.start(try await MicrophonePermission().request().grant(), atRest: .shut)
+        // Readied before the tap goes up, so the first press opens a microphone already reached.
+        capture.waitUntilReadied()
         // Watched before the tap goes up, so no key can be down when an interrupt lands.
         let interrupt = Interrupt.watched()
         let helper = HelperConnection(flavor: installation.flavor)

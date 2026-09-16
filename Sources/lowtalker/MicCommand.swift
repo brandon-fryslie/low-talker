@@ -16,8 +16,8 @@ import LowTalkerCore
 struct MicCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "mic",
-        abstract: "Show, request, or follow microphone authorization, or read the indicator across a hold and a resting microphone across a change of shape or of slice.",
-        subcommands: [Status.self, Request.self, Watch.self, Indicator.self, Shape.self, Slice.self],
+        abstract: "Show, request, or follow microphone authorization, or read the indicator across a hold, a resting microphone across a change of shape or of slice, and a press across a readying.",
+        subcommands: [Status.self, Request.self, Watch.self, Indicator.self, Shape.self, Slice.self, Change.self],
         defaultSubcommand: Status.self
     )
 
@@ -141,6 +141,37 @@ struct MicCommand: ParsableCommand {
         @MainActor
         func run() async throws {
             let across = try await SliceGrownAtRest.measure(holding: .milliseconds(hold))
+            print(across)
+            guard across.kept else { throw ExitCode.failure }
+        }
+    }
+}
+
+extension MicCommand {
+    /// Whether a device change leaves the key-down handler free and a press on it whole.
+    /// Moves the default input's rate and back, like `shape`, and puts it back on every way
+    /// out; exit status is the verdict.
+    struct Change: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Change the input device's shape twice, and report how long the main actor was held and whether a press on the change came back whole."
+        )
+
+        /// Whole milliseconds, like `shape`'s wait. Spent on each change.
+        @Option(help: "Milliseconds to watch each change land.")
+        var wait: Int = 1000
+
+        @Option(help: "Milliseconds to hold the press once it has begun.")
+        var hold: Int = 500
+
+        func validate() throws {
+            guard wait > 0 else { throw ValidationError("--wait must be positive.") }
+            guard hold > 0 else { throw ValidationError("--hold must be positive.") }
+        }
+
+        @MainActor
+        func run() async throws {
+            let grant = try await MicrophonePermission().request().grant()
+            let across = try await ReadyingAcrossChange.measure(waiting: .milliseconds(wait), holding: .milliseconds(hold), with: grant)
             print(across)
             guard across.kept else { throw ExitCode.failure }
         }

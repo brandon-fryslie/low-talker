@@ -4,7 +4,8 @@ import CoreAudio
 /// Gives back something the hardware handed out: an engine, a listener. Called once.
 public typealias Disposal = @MainActor () -> Void
 
-/// A microphone that has paid everything it can pay before being opened.
+/// A microphone that has paid, or is paying elsewhere, everything it can pay before being
+/// opened.
 ///
 /// Preparing one takes no device: nothing is captured and macOS lights no indicator until
 /// `open`. That is why this is a value rather than a step inside `open`: reaching a
@@ -12,6 +13,11 @@ public typealias Disposal = @MainActor () -> Void
 /// opens a device, so an app that prepares while it is idle leaves a press paying only the
 /// opening - which is what lets `shut` keep both the closed microphone and the head of the
 /// first word. What each part costs is measured in `HALInput`, where the split is made.
+///
+/// The paying is not done by whoever asked for it. A readying handed back from
+/// `AudioHardware.prepareInput` may still be under way, and nothing that holds one has to
+/// know: `open` waits for whatever of it is left, and `isOnTheDefaultInput` answers for the
+/// device it was asked to bind until it has bound one. [LAW:no-ambient-temporal-coupling]
 ///
 /// [LAW:types-are-the-program] Prepared and open are two facts about the microphone, and
 /// this type carries the first: a press cannot reach a device nothing prepared, and
@@ -31,6 +37,9 @@ public protocol PreparedInput {
     ///
     /// The disposal gives the device back and leaves the input prepared, so the next
     /// press opens it at the prepared price rather than at the first one's.
+    ///
+    /// Waits for the rest of a readying still under way, which is the one moment anything
+    /// has to: a press is what the microphone is readied for.
     func open(
         appending: @escaping @Sendable ([Float], HostTime) -> Void,
         onFailure: @escaping @MainActor (any Error) -> Void
@@ -45,6 +54,12 @@ public protocol PreparedInput {
     /// Remembering what was owed kept a second copy of this fact, and it outlived the
     /// answer. [FRAMING:representation] Read the territory, not a map of it.
     var isOnTheDefaultInput: Bool { get }
+
+    /// Waits for readying to finish - what `open` does first, for a caller that needs the
+    /// microphone reached before a press can come for it. What readying came to is not
+    /// answered here: a readying that failed throws at `open`, which is where every caller
+    /// already answers a microphone that cannot be had. [LAW:single-enforcer]
+    func waitUntilReadied()
 }
 
 /// What the system does for capture: ready a microphone, open it, and say when the
@@ -56,14 +71,18 @@ public protocol PreparedInput {
 /// and on a CI machine that has no microphone at all.
 @MainActor
 public protocol AudioHardware {
-    /// Readies a microphone without opening it, and watches the device it was readied
-    /// against for the whole life of the input that comes back: `onStale` is called on the
-    /// main actor when this input has stopped being one to open, whether or not a press has
-    /// it open. The device going away or changing shape is how that happens to a resting
-    /// microphone; a press whose microphone cannot be shown to have gone dark is how it
-    /// happens to a held one, and `HALInput` is where that reading is taken. What the
-    /// callers of this share is the answer - ready another - so the rule is what is promised
-    /// here rather than the list of ways it comes about. [LAW:one-source-of-truth]
+    /// Readies a microphone without opening it, and without waiting for it: the reaching
+    /// happens off the main actor, because this is called from inside the notifications that
+    /// say a device changed, and the main actor they land on is the one a key-down needs.
+    ///
+    /// It also watches the device it was readied against for the whole life of the input
+    /// that comes back: `onStale` is called on the main actor when this input has stopped
+    /// being one to open, whether or not a press has it open. The device going away or
+    /// changing shape is how that happens to a resting microphone; a press whose microphone
+    /// cannot be shown to have gone dark is how it happens to a held one, and `HALInput` is
+    /// where that reading is taken. What the callers of this share is the answer - ready
+    /// another - so the rule is what is promised here rather than the list of ways it comes
+    /// about. [LAW:one-source-of-truth]
     ///
     /// That lifetime is why the callback is asked for here rather than at `open`. A prepared
     /// input is bound to one device and fixes its format, its render buffer and its
@@ -167,11 +186,7 @@ public struct SystemAudioHardware: AudioHardware {
     public init() {}
 
     public func prepareInput(onStale: @escaping @MainActor () -> Void) -> any PreparedInput {
-        do { return try HALInput(onStale: onStale) }
-        // Carried rather than raised: see `AudioHardware.prepareInput`. Nothing will call
-        // `onStale` for one of these, and nothing should: there is no device behind an input
-        // that could not be readied, so there is none to change shape.
-        catch { return UnreachableInput(fault: error) }
+        HALInput(onStale: onStale)
     }
 
     public func watchDefaultInput(_ onChange: @escaping @MainActor () -> Void) throws -> Disposal {
@@ -194,24 +209,4 @@ public struct SystemAudioHardware: AudioHardware {
             precondition(status == noErr, "CoreAudio refused to remove the default input listener it added (status \(status))")
         }
     }
-}
-
-/// A microphone that could not be readied, holding the reason until a press asks for it.
-///
-/// [LAW:types-are-the-program] The failure is a value the input carries rather than a
-/// state capture has to represent, so nothing above has to hold "prepared, or else" - and
-/// the press that needs a microphone is told exactly why there is none.
-private struct UnreachableInput: PreparedInput {
-    let fault: any Error
-
-    func open(
-        appending: @escaping @Sendable ([Float], HostTime) -> Void,
-        onFailure: @escaping @MainActor (any Error) -> Void
-    ) throws -> Disposal {
-        throw fault
-    }
-
-    /// No device is behind it, so it is on no default: whatever the default is now, readying
-    /// against it again is the only way a press could reach it.
-    var isOnTheDefaultInput: Bool { false }
 }

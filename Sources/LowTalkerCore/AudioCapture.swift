@@ -25,6 +25,13 @@ import Synchronization
 /// reaching and opening each cost, and how the microphone is reached at all, is
 /// `HALInput`'s.
 ///
+/// Readying never holds the main actor, which is where this class runs and where a device
+/// change is reported to it. A readying asked for here is under way elsewhere when the call
+/// returns, so a run of notifications as a dock or an interface comes up leaves the key-down
+/// handler free, and a readying replaced by a newer one before its turn is never done. A
+/// press that comes for a microphone still being readied waits for the rest of that readying
+/// and no more - see `PreparedInput`.
+///
 /// `open` is the other side of that trade, and buying the look-back back is the whole of
 /// what it does here: the engine started at `start` is never given up between presses, so
 /// the ring is continuous and a press reaches back over real audio. Nothing in this file
@@ -426,13 +433,26 @@ public final class AudioCapture {
             grant: grant,
             atRest: atRest,
             engine: .shut,
-            // Readied here rather than at the first press, which is the point: this is
+            // Readying starts here rather than at the first press, which is the point: this is
             // the moment the app has time to spare, and a press is the moment it has
             // none. No device is opened by it, so a Mac nobody has dictated to still
             // shows no microphone.
             prepared: readiedInput()
         ))
         rest()
+    }
+
+    /// Waits for the microphone a press would open to finish being readied.
+    ///
+    /// `start` returns with readying still under way, which is right for a device change and
+    /// not for a caller about to let presses in: the first press would pay what is left of a
+    /// cold readying, which is the first-press refusal `start` readies to prevent. So a caller
+    /// that installs a hotkey, or presses itself, waits here first. What readying came to is
+    /// the press's to report, and capture that is not started has nothing being readied.
+    /// [LAW:no-ambient-temporal-coupling]
+    public func waitUntilReadied() {
+        guard case .started(let started) = phase else { return }
+        started.prepared.waitUntilReadied()
     }
 
     public func stop() {

@@ -117,7 +117,11 @@ public struct IndicatorAcrossHold: Sendable, CustomStringConvertible {
         // and `open` is the user asking in writing for the opposite of it.
         try capture.start(grant, atRest: .shut)
         defer { capture.stop() }
-        // Readied by `start` and opened by nothing yet.
+        // Readied by `start` and opened by nothing yet. Waited for, because readying runs off
+        // the main actor and `start` returns before it is done: a reading taken ahead of it
+        // would be of a microphone not yet reached, and would call a readying that took the
+        // device dark. [LAW:no-ambient-temporal-coupling]
+        capture.waitUntilReadied()
         let atRest = try MicrophoneIndicator.read()
         let session = try capture.beginSession(at: .now)
         try await Task.sleep(for: hold)

@@ -395,6 +395,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         do {
             let config = try Config.load(for: Self.flavor).config
             try capture.start(try await MicrophonePermission().request().grant(), atRest: config.microphone)
+            // Readied before the hotkey goes up, so the first press opens a microphone
+            // already reached rather than paying for reaching one.
+            capture.waitUntilReadied()
         } catch {
             // Stopping is idempotent, so a grant refused and a capture that failed to
             // start leave by one path. [LAW:dataflow-not-control-flow]
