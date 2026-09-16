@@ -28,6 +28,25 @@ public struct ModelStore: Sendable {
         return ModelStore(directory: support.appending(components: "low-talker", "hub"))
     }
 
+    /// The folder in an app bundle's resources where a release carries a store holding
+    /// its model, so a first launch has something to install from with the network off.
+    ///
+    /// [LAW:one-source-of-truth] project.yml copies the store in under its
+    /// `MODEL_STORE_RESOURCE` setting, which xcodegen cannot read from Swift;
+    /// `CarriedModelStoreTests` holds that copy to this one.
+    public static let carriedResourceName = "model-store"
+
+    /// The store `bundle` carries, if it carries one. A release's bundle does and a
+    /// development build's does not.
+    ///
+    /// A source, never a place a model is loaded from: the app installs out of it into
+    /// `applicationSupport()`, so where a loaded model lives stays one directory. Inside
+    /// the bundle rather than beside it on the disk image, because dragging the app to
+    /// Applications takes the bundle and leaves whatever sat beside it behind.
+    public static func carried(by bundle: Bundle) -> ModelStore? {
+        bundle.url(forResource: carriedResourceName, withExtension: nil).map(ModelStore.init(directory:))
+    }
+
     /// Where the model stands on disk. Only `.installed` yields the proof a load
     /// needs; the other two are why `install` is called. Throws when the store itself
     /// cannot be examined, such as a file or folder this process may not read.

@@ -429,7 +429,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func loadEngine() async throws -> WhisperKitTranscriber {
         do {
             let store = try ModelStore.applicationSupport()
-            let transcriber = try await WhisperKitTranscriber.load(in: store, from: .huggingFace) { phase in
+            // A release carries its model, so its first launch copies rather than
+            // downloads. A carried store that lacks the model fails the load with its
+            // reason instead of falling back to a download nobody asked for.
+            let source = ModelStore.carried(by: .main).map(ModelSource.store) ?? .huggingFace
+            let transcriber = try await WhisperKitTranscriber.load(in: store, from: source) { phase in
                 Task { @MainActor in self.showEngineStatus(phase.description) }
             }
             showEngineStatus("ready (\(transcriber.model))")
