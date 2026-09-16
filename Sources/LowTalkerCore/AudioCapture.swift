@@ -25,12 +25,18 @@ import Synchronization
 /// reaching and opening each cost, and how the microphone is reached at all, is
 /// `HALInput`'s.
 ///
-/// Readying never holds the main actor, which is where this class runs and where a device
-/// change is reported to it. A readying asked for here is under way elsewhere when the call
-/// returns, so a run of notifications as a dock or an interface comes up leaves the key-down
-/// handler free, and a readying replaced by a newer one before its turn is never done. A
-/// press that comes for a microphone still being readied waits for the rest of that readying
-/// and no more - see `PreparedInput`.
+/// Readying a microphone that is only readied never holds the main actor, which is where this
+/// class runs and where a device change is reported to it. A readying asked for here is under
+/// way elsewhere when the call returns, so a run of notifications as a dock or an interface
+/// comes up leaves the key-down handler free, and a readying replaced by a newer one before
+/// its turn is never done. A press that comes for a microphone still being readied waits for
+/// the rest of that readying and no more - see `PreparedInput`.
+///
+/// A change under an engine that has to run again - one `open` holds, a press's, or a failed
+/// one a device appearing retries - does wait here, for the rest of its readying and the
+/// launch. Waiting elsewhere would buy nothing: the device is dark until that launch whoever
+/// makes it, and a key-down queued behind it carries its own moment, so it marks the ring
+/// where it would have and hears its first sample no sooner.
 ///
 /// `open` is the other side of that trade, and buying the look-back back is the whole of
 /// what it does here: the engine started at `start` is never given up between presses, so

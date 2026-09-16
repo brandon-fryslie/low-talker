@@ -9,7 +9,9 @@ import CoreAudio
 /// run of reports held it for each one, so a key pressed as a dock came up waited for all of
 /// them and came back refused. Readying now happens off the main actor; this is what says so
 /// on a real device, since a fake's readying costs nothing and a suite would read it as free
-/// whichever actor paid.
+/// whichever actor paid. It reads a microphone at rest under `shut`, where a change readies
+/// and launches nothing - a change that relaunches waits for the launch, and `AudioCapture`
+/// says why that costs a press nothing.
 ///
 /// Two readings on one device, changed twice. Across the first change, how long the main
 /// actor went without a turn, set against what one readying costs on this Mac right then:
