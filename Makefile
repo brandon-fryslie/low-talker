@@ -213,8 +213,9 @@ cli:
 HELPER := .build/debug/lowtalker-keyboardd
 helper:
 	swift build --product lowtalker-keyboardd
-	codesign --force --sign "$$(scripts/signing-identity)" \
-		--identifier "$$(xcodegen dump --type json | jq -er '.targets["lowtalker-keyboardd"].settings.base.PRODUCT_BUNDLE_IDENTIFIER')" "$(HELPER)"
+	# Read into a variable first: a failed lookup inside the codesign line would sign as "null".
+	identifier=$$(xcodegen dump --type json | jq -er '.targets["lowtalker-keyboardd"].settings.base.PRODUCT_BUNDLE_IDENTIFIER // error("project.yml sets no PRODUCT_BUNDLE_IDENTIFIER for lowtalker-keyboardd")') \
+		&& codesign --force --sign "$$(scripts/signing-identity)" --identifier "$$identifier" "$(HELPER)"
 	@echo "$(HELPER)"
 
 # Once per Mac. Until it has run, `make app`, `make cli`, `make helper` and `make test`
