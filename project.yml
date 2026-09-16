@@ -187,5 +187,6 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: ai.promptctl.low-talker.keyboardd
         # Xcode signs a tool under its product name and ignores the identifier above, so it
         # is passed to codesign by hand; the copy into each bundle keeps it. `make helper`
-        # reads the same setting, so both builds of the helper are one code identity.
-        OTHER_CODE_SIGN_FLAGS: --identifier $(PRODUCT_BUNDLE_IDENTIFIER)
+        # reads the same setting, so both builds of the helper are one code identity. Inherited,
+        # so a Release build keeps the project's --timestamp, which notarization requires.
+        OTHER_CODE_SIGN_FLAGS: $(inherited) --identifier $(PRODUCT_BUNDLE_IDENTIFIER)
