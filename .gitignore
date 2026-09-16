@@ -9,3 +9,5 @@ App/Generated/
 .remember/
 # Claude Code worktrees; local to each checkout.
 .claude/worktrees/
+# What scripts/sign-release and scripts/notarize leave behind to hand out.
+dist/
