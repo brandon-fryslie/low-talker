@@ -22,6 +22,21 @@ settings:
     # Notarization refuses a binary without it, and every target in this file is one a
     # release carries: the app and the helper embedded in it.
     ENABLE_HARDENED_RUNTIME: YES
+  # A build to hand to someone else: the Developer ID certificate, which Gatekeeper trusts
+  # and notarization accepts, in place of the dev identity nobody trusts. The helper admits
+  # exactly the certificate that signed it, so the app and the helper embedded in it change
+  # certificate together; a CLI signed with the dev identity is refused by this build's
+  # helper, as it should be. scripts/sign-release builds this configuration.
+  #
+  # Notarization refuses two things Xcode signs in by default, in Release as in Debug:
+  # the get-task-allow entitlement, which CODE_SIGN_INJECT_BASE_ENTITLEMENTS adds, and a
+  # signature with no secure timestamp, since Xcode passes --timestamp=none unless told.
+  configs:
+    Release:
+      CODE_SIGN_IDENTITY: Developer ID Application
+      DEVELOPMENT_TEAM: 6R988MUU27
+      CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+      OTHER_CODE_SIGN_FLAGS: --timestamp
 
 packages:
   # [LAW:one-way-deps] The app links the SwiftPM package at the repo root; the

@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Notarizes a signed app or disk image, staples the ticket to it, and asks Gatekeeper about
+# it the way a Mac that downloaded it would.
+#
+#   NOTARY_PROFILE=<profile> scripts/notarize <path to .app or .dmg>
+#
+# The profile is a notarytool credential in the login keychain, made once per Mac with
+# `xcrun notarytool store-credentials <profile>`, from an Apple ID and an app-specific
+# password or from an App Store Connect API key.
+set -euo pipefail
+
+target=${1:?usage: NOTARY_PROFILE=<profile> scripts/notarize <path to .app or .dmg>}
+# A bundle is a directory, so completion leaves a slash that would hide its extension.
+target=${target%/}
+profile=${NOTARY_PROFILE:?NOTARY_PROFILE names the notarytool keychain profile; make one with xcrun notarytool store-credentials}
+
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/lowtalker-notarize.XXXXXX")
+trap 'rm -rf "$scratch"' EXIT
+
+# The notary service takes a disk image as it is and an app only inside an archive; Gatekeeper
+# judges an app as something to run and a disk image as something to open.
+case "$target" in
+  *.app)
+    submission="$scratch/$(basename "$target" .app).zip"
+    ditto -c -k --keepParent "$target" "$submission"
+    assess=(--type execute)
+    ;;
+  *.dmg)
+    submission=$target
+    assess=(--type open --context context:primary-signature)
+    ;;
+  *)
+    echo "notarize: $target is neither an .app nor a .dmg" >&2
+    exit 2
+    ;;
+esac
+
+# notarytool's exit status alone does not separate a refused submission from one that never
+# reached the service, and only the first has a log to fetch; the status field decides.
+set +e
+result=$(xcrun notarytool submit "$submission" --keychain-profile "$profile" --wait --output-format json)
+submitted=$?
+set -e
+status=$(jq -r '.status // empty' <<<"$result" 2>/dev/null || true)
+if [ "$status" != Accepted ]; then
+  echo "notarize: notarytool exited $submitted with status '${status:-none}': $result" >&2
+  id=$(jq -r '.id // empty' <<<"$result" 2>/dev/null || true)
+  if [ -n "$id" ]; then
+    xcrun notarytool log "$id" --keychain-profile "$profile" >&2
+  fi
+  exit 1
+fi
+
+xcrun stapler staple "$target"
+xcrun stapler validate "$target"
+assessment=$(spctl --assess "${assess[@]}" -vv "$target" 2>&1) || {
+  echo "notarize: Gatekeeper refuses $target: $assessment" >&2
+  exit 1
+}
+grep -q 'source=Notarized Developer ID' <<<"$assessment" || {
+  echo "notarize: Gatekeeper accepts $target, but not as notarized: $assessment" >&2
+  exit 1
+}
+echo "$assessment" >&2
+echo "$target"

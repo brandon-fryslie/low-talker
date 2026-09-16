@@ -682,8 +682,21 @@ An entitlement goes in only with the failure that needed it, written in the comm
 
 After a build that changes only how the helper is signed, rebuild the bundles from scratch (`rm -rf "DerivedData/Build/Products/Debug/LowTalker Dev.app" DerivedData/Build/Products/Debug/LowTalker.app`, then `make app` and `make release`): Xcode's copy phase does not see a re-signed helper as changed, and keeps embedding the old one (low-build-mmp).
 
+### Signing for release
+
+    scripts/sign-release dist                                # dist/LowTalker.app, Developer ID signed
+    NOTARY_PROFILE=<profile> scripts/notarize dist/LowTalker.app
+
+`scripts/sign-release` runs `make release` in the Release configuration, which `project.yml` signs with the `Developer ID Application` certificate for team 6R988MUU27, Hardened Runtime and a secure timestamp. It leaves out `get-task-allow`, which Xcode otherwise signs into both configurations. The build goes into a derived-data directory made for the run and deleted after it, so a helper re-signed without changes to its code is always embedded again (low-build-mmp). It then checks the app and `Contents/MacOS/lowtalker-keyboardd` for what the notary service refuses: a signature that is not the team's Developer ID, no Hardened Runtime, no secure timestamp, or `get-task-allow`. The first of those it finds stops it with the binary named. A Debug-signed bundle fails three of the four. The Developer ID certificate lives in the login keychain, and `codesign` signs with it without a prompt.
+
+A Release build's helper admits the Developer ID certificate and nothing else, so the CLI, signed with the dev identity, cannot type through it. A probe compiled from `CallerIdentity.swift` and signed with the Developer ID admitted `dist/LowTalker.app` and its helper, and refused the Debug app and `.build/debug/lowtalker`. Signed with the dev identity, it did the reverse.
+
+`scripts/notarize` takes the signed app or a disk image, submits it with `notarytool` under the keychain profile `NOTARY_PROFILE` names, waits, and prints the notary log when the answer is anything but Accepted. It then staples the ticket and requires Gatekeeper to assess the result as `source=Notarized Developer ID`. The profile is made once per Mac with `xcrun notarytool store-credentials <profile>`, from an Apple ID with an app-specific password or from an App Store Connect API key. This Mac has none yet, so no submission has been made. A missing profile, a profile that does not exist, and a path that is neither an `.app` nor a `.dmg` each stop the script with a message.
+
+`syspolicy_check notary-submission` is no help on this Mac. It reports `Internal Xprotect Error` for this app, for the Debug build, and for a one-line Swift app signed the same way, while iTerm and Karabiner-Elements pass. So the notary service's answer is the one that counts.
+
 ### Starting over
 
 To recreate the certificate, delete `LowTalker Dev` and its private key in Keychain Access (login keychain, My Certificates), then run `make signing-identity` again. The new certificate is a new signature, so re-grant the app's permissions in System Settings.
 
-This certificate is for local development only. Nobody trusts it and it cannot distribute the app; release builds (Developer ID and notarization) are a separate concern not covered here, beyond the Hardened Runtime they need.
+This certificate is for local development only. Nobody trusts it and it cannot distribute the app; release builds sign with Developer ID instead, as "Signing for release" above describes.
