@@ -198,16 +198,6 @@ public final class Hotkey {
         unfinished.map { was?.onTransition($0) }
     }
 
-    /// Ends a latched tap's listening without a key, at the handler it began at, and
-    /// answers whether there was one to end. What the Insert Dictation service calls, so the
-    /// shortcut that asks for the words is also the one that stops listening for them.
-    @discardableResult
-    public func release() -> Bool {
-        guard let ended = detector.release() else { return false }
-        installed?.onTransition(ended)
-        return true
-    }
-
     // A non-Sendable @MainActor class is only ever held by main-actor code, so its
     // last release is on the main actor; assumeIsolated traps if that stops holding.
     // Only the tap comes down: nothing is left to hear an ending told from here.
