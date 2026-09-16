@@ -29,6 +29,9 @@ final class FakeHardware: AudioHardware {
         ) throws -> Disposal {
             try hardware.openEngine(appending: appending, onFailure: onFailure)
         }
+
+        /// This hardware's default input never changes; nothing here watches it.
+        var isOnTheDefaultInput: Bool { true }
     }
 
     final class Engine {

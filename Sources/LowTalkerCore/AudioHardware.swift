@@ -35,6 +35,16 @@ public protocol PreparedInput {
         appending: @escaping @Sendable ([Float], HostTime) -> Void,
         onFailure: @escaping @MainActor (any Error) -> Void
     ) throws -> Disposal
+
+    /// Whether the device this is bound to is the system default input now.
+    ///
+    /// Read off the hardware, because nothing else can answer it. A default-input
+    /// notification says only that the default changed - not to what, and not whether
+    /// anything has answered it yet - and CoreAudio does not order it against the bound
+    /// device's own watch, so a change can be answered before its notification lands.
+    /// Remembering what was owed kept a second copy of this fact, and it outlived the
+    /// answer. [FRAMING:representation] Read the territory, not a map of it.
+    var isOnTheDefaultInput: Bool { get }
 }
 
 /// What the system does for capture: ready a microphone, open it, and say when the
@@ -200,4 +210,8 @@ private struct UnreachableInput: PreparedInput {
     ) throws -> Disposal {
         throw fault
     }
+
+    /// No device is behind it, so it is on no default: whatever the default is now, readying
+    /// against it again is the only way a press could reach it.
+    var isOnTheDefaultInput: Bool { false }
 }

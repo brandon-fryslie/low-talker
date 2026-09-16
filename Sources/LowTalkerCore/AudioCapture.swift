@@ -119,17 +119,6 @@ public final class AudioCapture {
         /// inferred from a microphone that is now open for two different reasons.
         /// [FRAMING:representation]
         var sessionIsOpen = false
-        /// The default input changed while a session was open, and readying against it was
-        /// put off until the press ended rather than cutting the recording in flight.
-        ///
-        /// [LAW:no-ambient-temporal-coupling] The watch fires once and does not fire again
-        /// until the default changes a second time, so a press that swallowed the one
-        /// notification would leave every later press on the device that stopped being the
-        /// default. Deferring the work is not dropping it, and this is where the deferral
-        /// stands until it is paid - at the key-up, or sooner by anything that readies a
-        /// microphone against the current default first. [LAW:single-enforcer] `ready` is
-        /// the one place either happens.
-        var readyAgainAtRest = false
     }
 
     private enum Phase {
@@ -479,18 +468,9 @@ public final class AudioCapture {
         live.dispose()
     }
 
-    /// Readies a microphone against whatever the default input is now, and spends any
-    /// deferral that was waiting for one.
-    ///
-    /// [LAW:single-enforcer] Every way a prepared input is *replaced* comes through here,
-    /// which is what keeps `readyAgainAtRest` from outliving the staleness it stands for.
-    /// A press books the deferral and the bound device then dies before the key-up:
-    /// `replaceEngine` readies another against the new default, so the booking is already
-    /// paid, and a `rest()` that still saw it standing would tear down a microphone
-    /// pointing at the right device to ready an identical one.
+    /// Readies a microphone against whatever the default input is now.
     private func ready(_ started: inout Started) {
         started.prepared = readiedInput()
-        started.readyAgainAtRest = false
     }
 
     /// A microphone readied against whatever the default input is now, wired so that the
@@ -516,19 +496,26 @@ public final class AudioCapture {
     private func rest() {
         guard case .started(var started) = phase else { return }
         started.sessionIsOpen = false
-        // The default input changed under the press that just ended, and answering it was
-        // put off to here rather than cutting the recording. Done before the resting mode
-        // is read, so what the mode does next it does with the new device: `shut` holds a
+        // The default input may have changed under the press that just ended, and answering
+        // that was put off to here rather than cutting the recording. Done before the resting
+        // mode is read, so what the mode does next it does with the new device: `shut` holds a
         // microphone readied against it, and `open` launches on it rather than relaunching
         // on the one the press was holding.
         //
+        // [LAW:no-ambient-temporal-coupling] Asked of the input rather than of anything the
+        // notification left behind. The watch fires once per change, and CoreAudio can deliver
+        // it before or after the bound device's own report that readies a replacement mid-press
+        // - so a record of what was owed could be written after the debt was paid, and this
+        // key-up would then tear down a microphone already on the right device. Whether the
+        // input is on the default is true or false whichever report came first.
+        //
         // Only a running engine is given up. The press's engine can have died between the
-        // booking and here, and that engine's outage is still open: taking it to `.shut`
+        // change and here, and that engine's outage is still open: taking it to `.shut`
         // would drop the reason and the moment it began, and `open` would relaunch over the
         // top of a gap nothing had booked. Readying is the half that is owed either way -
         // skip it for a failed engine and the next press opens the device that stopped
         // being the default, which is the whole of what this defers. [LAW:no-silent-failure]
-        if started.readyAgainAtRest {
+        if !started.prepared.isOnTheDefaultInput {
             if case .running(let live) = started.engine {
                 dispose(live)
                 started.engine = .shut
@@ -680,11 +667,18 @@ public final class AudioCapture {
         // so `prepared` is the only strong reference to the open input and replacing it under
         // a live press would deinit the device out from under it. That is also the right
         // answer on its own terms - a switch of the default input is not a reason to cut the
-        // recording the speaker is in the middle of making - but forgetting it happened is
-        // not, so the work is booked for `rest()`, the moment "no session is open" becomes
-        // true, and done there.
+        // recording the speaker is in the middle of making - and nothing is forgotten by
+        // leaving it, because `rest()`, the moment "no session is open" becomes true, asks the
+        // input whether it is still on the default.
         case .running where started.sessionIsOpen:
-            started.readyAgainAtRest = true
+            return
+        // Already answered: the bound device's own report reached here first and readied an
+        // input on the new default. A second answer would give up a microphone on the right
+        // device for an identical one, and under `open` would splice the look-back to do it.
+        // A failed engine is not asked, because a default-input change is also how one tries
+        // a device again. [LAW:no-ambient-temporal-coupling]
+        case .shut where started.prepared.isOnTheDefaultInput, .running where started.prepared.isOnTheDefaultInput:
+            return
         // With no session open there is nothing to cut, and the engine is replaced on the new
         // default the same way a device that went away replaces it.
         case .running(let live):

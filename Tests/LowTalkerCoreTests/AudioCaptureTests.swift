@@ -23,6 +23,9 @@ private final class FakeHardware: AudioHardware {
         /// thing a test can say "the press opened the microphone readied against the new
         /// device" with - a count of readyings says one happened, not which one was used.
         let readying: Int
+        /// The device that was the default when this was readied, which is the device a real
+        /// input binds to.
+        let device: Int
         /// Fired by a test to say the device this was readied against went away or changed
         /// shape. It belongs to the readied input rather than to an engine because that is
         /// where the real one lives, and that is what lets a test reach the stretch where the
@@ -33,6 +36,7 @@ private final class FakeHardware: AudioHardware {
         init(_ hardware: FakeHardware, readying: Int, onStale: @escaping @MainActor () -> Void) {
             self.hardware = hardware
             self.readying = readying
+            device = hardware.defaultInput
             self.onStale = onStale
         }
 
@@ -42,6 +46,8 @@ private final class FakeHardware: AudioHardware {
         ) throws -> Disposal {
             try hardware.open(on: self, appending: appending, onFailure: onFailure)
         }
+
+        var isOnTheDefaultInput: Bool { device == hardware.defaultInput }
     }
 
     final class Engine {
@@ -75,6 +81,10 @@ private final class FakeHardware: AudioHardware {
     /// because a readied input is watched for its whole life and a test that could only
     /// count them could not reach one that was never opened.
     private(set) var inputs: [Input] = []
+    /// Which device is the system default input. Moved apart from the notification that
+    /// announces it, because CoreAudio delivers that notification in no fixed order against
+    /// the bound device's own reports, and a test has to be able to land either one first.
+    private(set) var defaultInput = 1
 
     /// How many microphones have been readied. Never a device: the count exists so a
     /// test can say that resting readied one and opened nothing.
@@ -109,11 +119,29 @@ private final class FakeHardware: AudioHardware {
 
     var isWatching: Bool { onDefaultInputChange != nil }
 
-    /// The system default input device changed.
+    /// The system default input device changed, and the watch was told.
     func changeDefaultInput() throws {
+        moveDefaultInput()
+        try announceDefaultInput()
+    }
+
+    /// Another device became the default input, and the notification saying so has not
+    /// landed yet.
+    func moveDefaultInput() { defaultInput += 1 }
+
+    /// The notification that the default input changed lands.
+    func announceDefaultInput() throws {
         let onChange = try #require(onDefaultInputChange, "nothing is watching the default input")
         onChange()
     }
+}
+
+/// The order the two reports of one unplug land in. Unplugging the default input moves the
+/// default and kills the device the microphone is bound to, and CoreAudio orders neither
+/// report against the other.
+enum UnplugReports: CaseIterable, Sendable {
+    case defaultFirst
+    case deviceFirst
 }
 
 private struct Authorized: MicrophoneAuthority {
@@ -714,8 +742,8 @@ private struct Authorized: MicrophoneAuthority {
 
     /// Two things going wrong at once, which is where a deferral's bookkeeping can swallow
     /// someone else's. The default input changes mid-press, and then the device the press
-    /// is on dies before the key-up: the booking is still standing, and the engine is no
-    /// longer running but failed, with a gap open since it died. Answering the booking by
+    /// is on dies before the key-up: the readying is still owed, and the engine is no
+    /// longer running but failed, with a gap open since it died. Answering the change by
     /// forcing that engine shut would throw the gap away - `open` would relaunch over the
     /// top of it and the outage would never be booked, which is the accounting this file
     /// treats as the failure itself. [LAW:no-silent-failure] So the key-up readies against
@@ -767,6 +795,107 @@ private struct Authorized: MicrophoneAuthority {
         #expect(hardware.engines.count == 2)
         #expect(hardware.engines[1].readying == 2)
         _ = capture.endSession(next)
+    }
+
+    /// Unplugs the default input under whatever microphone capture has readied last, landing
+    /// the two reports in `order`. The default moves before either lands, as it does on a
+    /// Mac: a report is posted after the change it announces.
+    private func unplugTheDefaultInput(_ hardware: FakeHardware, reportedIn order: UnplugReports) throws {
+        let bound = try #require(hardware.inputs.last)
+        hardware.moveDefaultInput()
+        switch order {
+        case .defaultFirst:
+            try hardware.announceDefaultInput()
+            bound.onStale()
+        case .deviceFirst:
+            bound.onStale()
+            try hardware.announceDefaultInput()
+        }
+    }
+
+    /// One unplug under a held press, answered once. The bound device's report replaces the
+    /// engine mid-press so the rest of the utterance is salvaged on the new default - and
+    /// when that report lands before the default-input one, the default-input one is about a
+    /// change already answered. Reading it as news had the key-up give up the replacement
+    /// and relaunch, which splices the ring at the key-up and leaves the next press no
+    /// look-back over audio the replacement had already captured: the one thing `open` is
+    /// held for.
+    @Test(arguments: UnplugReports.allCases)
+    func aHeldMicrophoneUnpluggedMidPressIsReplacedOnceWhicheverReportLandsFirst(_ order: UnplugReports) throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .open)
+        let session = try capture.beginSession(at: origin, preRoll: 0)
+        hardware.engines[0].appending([1, 2], origin)
+
+        try unplugTheDefaultInput(hardware, reportedIn: order)
+        hardware.engines[1].appending([3, 4], after(2))
+        #expect(try capture.endSession(session) == .partial(AudioClip(samples: [1, 2, 3, 4]), lost: loss(interrupted: true)))
+
+        #expect(hardware.prepared == 2)
+        #expect(hardware.engines.count == 2)
+        #expect(!hardware.engines[1].disposed)
+        #expect(capture.deviceChanges == 1)
+
+        // The replacement kept running across the key-up, so the next press reaches back
+        // over what it captured before and after it.
+        hardware.engines[1].appending([5, 6], after(4))
+        let next = try capture.beginSession(at: after(6), preRoll: AudioSession.defaultPreRoll)
+        #expect(next.preRoll == 4)
+        hardware.engines[1].appending([7, 8], after(6))
+        #expect(capture.endSession(next) == .whole(AudioClip(samples: [3, 4, 5, 6, 7, 8])))
+    }
+
+    /// The same unplug under `shut`, where what a second answer costs is a readying at the
+    /// key-up rather than a splice: the replacement's input is already on the new default,
+    /// and the press after the key-up opens it.
+    @Test(arguments: UnplugReports.allCases)
+    func aShutMicrophoneUnpluggedMidPressIsReadiedOnceWhicheverReportLandsFirst(_ order: UnplugReports) throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        let session = try opened(capture)
+
+        try unplugTheDefaultInput(hardware, reportedIn: order)
+        _ = capture.endSession(session)
+        #expect(hardware.prepared == 2)
+        #expect(hardware.engines.count == 2)
+        #expect(hardware.engines[1].disposed)
+
+        let next = try capture.beginSession(at: after(0), preRoll: 0)
+        #expect(hardware.engines.count == 3)
+        #expect(hardware.engines[2].readying == 2)
+        _ = capture.endSession(next)
+    }
+
+    /// With nobody pressing, both reports reach code that acts at once, so neither ordering
+    /// can hide behind a key-up: the second report used to replace a held engine already on
+    /// the new default, a second swap and a second splice for one unplug.
+    @Test(arguments: UnplugReports.allCases)
+    func aHeldMicrophoneUnpluggedWhileIdleIsReplacedOnceWhicheverReportLandsFirst(_ order: UnplugReports) throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .open)
+
+        try unplugTheDefaultInput(hardware, reportedIn: order)
+        #expect(hardware.prepared == 2)
+        #expect(hardware.engines.count == 2)
+        #expect(!hardware.engines[1].disposed)
+        #expect(capture.deviceChanges == 1)
+        #expect(isListening(capture))
+    }
+
+    /// The idle unplug under `shut`, where a second answer is a second readying and nothing
+    /// is opened either way.
+    @Test(arguments: UnplugReports.allCases)
+    func aShutMicrophoneUnpluggedWhileIdleIsReadiedOnceWhicheverReportLandsFirst(_ order: UnplugReports) throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .shut)
+
+        try unplugTheDefaultInput(hardware, reportedIn: order)
+        #expect(hardware.prepared == 2)
+        #expect(hardware.engines.isEmpty)
+        #expect(isListening(capture))
     }
 
     /// Quitting gives the device back, however the run was holding it.
@@ -1048,7 +1177,7 @@ private struct Authorized: MicrophoneAuthority {
     /// A default input change under a live press launches nothing. The device the press is
     /// recording on is still alive and still the shape it was - what changed is which device
     /// the *next* press should open - so cutting this one buys nothing, and the readying it
-    /// does owe is booked for the key-up.
+    /// does owe is the key-up's.
     @Test func aDefaultInputChangeWhileRunningLaunchesNothing() throws {
         let hardware = FakeHardware()
         let capture = AudioCapture(hardware: hardware)
