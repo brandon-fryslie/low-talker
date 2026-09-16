@@ -33,7 +33,7 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
     /// The reverse-DNS identity of the release build, which every other name here is
     /// built from. Named once so a rename reaches all of them together.
     /// [LAW:one-source-of-truth]
-    private static let releaseBundleIdentifier = "ltd.deadgrass.low-talker"
+    private static let releaseBundleIdentifier = "ai.promptctl.low-talker"
     private static let releaseMachServiceName = "com.lowtalker.keyboardd"
 
     /// What the development build suffixes onto each of the release build's names. One

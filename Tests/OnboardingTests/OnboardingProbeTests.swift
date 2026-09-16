@@ -38,7 +38,7 @@ import Testing
     \tactive count = 1
     \tpath = (submitted by smd.338)
     \tstate = running
-    \tparent bundle identifier = ltd.deadgrass.low-talker
+    \tparent bundle identifier = ai.promptctl.low-talker
     \tenvironment = {
     \t\tXPC_SERVICE_NAME => com.lowtalker.keyboardd
     \t}
