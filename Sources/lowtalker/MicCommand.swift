@@ -16,8 +16,8 @@ import LowTalkerCore
 struct MicCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "mic",
-        abstract: "Show, request, or follow microphone authorization, or read the indicator across a hold and a resting microphone across a change of shape.",
-        subcommands: [Status.self, Request.self, Watch.self, Indicator.self, Shape.self],
+        abstract: "Show, request, or follow microphone authorization, or read the indicator across a hold and a resting microphone across a change of shape or of slice.",
+        subcommands: [Status.self, Request.self, Watch.self, Indicator.self, Shape.self, Slice.self],
         defaultSubcommand: Status.self
     )
 
@@ -116,6 +116,31 @@ struct MicCommand: ParsableCommand {
         @MainActor
         func run() async throws {
             let across = try await ShapeChangeAtRest.measure(waiting: .milliseconds(wait))
+            print(across)
+            guard across.kept else { throw ExitCode.failure }
+        }
+    }
+
+    /// A press on a microphone readied before its device's IO buffer grew. Grows this
+    /// process's IO buffer on the default input while nothing has it open, holds one press,
+    /// and reports whether that press heard anything. The size is per process, so nothing on
+    /// the Mac outlives the run.
+    struct Slice: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Grow the input device's IO buffer while a microphone rests, and report whether the next press heard."
+        )
+
+        /// Whole milliseconds, like `indicator`'s hold.
+        @Option(help: "Milliseconds to hold the press.")
+        var hold: Int = 500
+
+        func validate() throws {
+            guard hold > 0 else { throw ValidationError("--hold must be positive.") }
+        }
+
+        @MainActor
+        func run() async throws {
+            let across = try await SliceGrownAtRest.measure(holding: .milliseconds(hold))
             print(across)
             guard across.kept else { throw ExitCode.failure }
         }

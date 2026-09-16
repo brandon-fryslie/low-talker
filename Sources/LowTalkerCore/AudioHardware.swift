@@ -118,7 +118,7 @@ public enum AudioHardwareError: Error, Equatable, CustomStringConvertible {
     /// meant to make was never made.
     case deviceShapeUnchangeable(OSStatus)
     case renderFailed(OSStatus)
-    /// The device asked to hand over more audio at once than the unit said it would.
+    /// The device asked to hand over more audio at once than it offered when the press opened.
     case overlongSlice(frames: Int, capacity: Int)
 
     public var description: String {
@@ -135,7 +135,7 @@ public enum AudioHardwareError: Error, Equatable, CustomStringConvertible {
         case .deviceShapeUnreadable(let status): "CoreAudio would not say what shape the input device is in (status \(status))"
         case .deviceShapeUnchangeable(let status): "the input device would not be moved to a shape it offers (status \(status))"
         case .renderFailed(let status): "the input device refused to hand over a buffer it had announced (status \(status))"
-        case .overlongSlice(let frames, let capacity): "the input device asked to hand over \(frames) frames at once, past the \(capacity) it was prepared for"
+        case .overlongSlice(let frames, let capacity): "the input device asked to hand over \(frames) frames at once, past the \(capacity) it offered when the press opened"
         }
     }
 

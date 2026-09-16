@@ -47,18 +47,22 @@ final class HALInput: PreparedInput {
         /// quiesced, so the two never overlap; a lock here would put an acquisition in the
         /// render path to guard a call that cannot race it.
         nonisolated(unsafe) let converter: AudioClip.Converter
-        nonisolated(unsafe) let buffer: AVAudioPCMBuffer
         nonisolated(unsafe) var unit: AudioUnit?
 
         struct Target {
+            /// What a render fills, sized at the press rather than at the preparation: the
+            /// device's slices can grow while the input rests, and a size fixed when it was
+            /// readied is outgrown before it is ever opened - see `renderBuffer`. Written by
+            /// the main actor before the unit starts and read only by renders after, the same
+            /// handover the converter's reset relies on.
+            nonisolated(unsafe) let buffer: AVAudioPCMBuffer
             let appending: @Sendable ([Float], HostTime) -> Void
             /// Already hops to the main actor; the audio thread cannot wait for one.
             let onFailure: @Sendable (any Error) -> Void
         }
 
-        init(converter: AudioClip.Converter, buffer: AVAudioPCMBuffer) {
+        init(converter: AudioClip.Converter) {
             self.converter = converter
-            self.buffer = buffer
         }
 
         func aim(at new: Target?) { target.withLock { $0 = new } }
@@ -89,9 +93,11 @@ final class HALInput: PreparedInput {
             frames: UInt32
         ) -> OSStatus {
             guard let unit, let target = target.withLock({ $0 }) else { return noErr }
-            // A device that asks for more than the slice it was initialized for would
-            // overrun the buffer; refusing is the loud version of that.
-            // [LAW:no-silent-failure]
+            let buffer = target.buffer
+            // A device that asks for more than the buffer holds would overrun it; refusing is
+            // the loud version of that. The buffer holds the largest slice the device offered
+            // when the press opened, so what reaches this is a device whose range grew during
+            // the press. [LAW:no-silent-failure]
             guard frames <= buffer.frameCapacity else {
                 target.onFailure(AudioHardwareError.overlongSlice(frames: Int(frames), capacity: Int(buffer.frameCapacity)))
                 return kAudio_ParamError
@@ -126,6 +132,8 @@ final class HALInput: PreparedInput {
 
     private let unit: AudioUnit
     private let sink: Sink
+    /// What the unit hands a render, and so what each press's buffer is allocated in.
+    private let format: AVAudioFormat
     /// The device this was prepared against. A prepared input is bound to one device, so
     /// a default-input change is answered by preparing another rather than by re-pointing
     /// this one. [LAW:one-source-of-truth] `AudioCapture` is the one place that knows the
@@ -149,8 +157,8 @@ final class HALInput: PreparedInput {
     private var presses = 0
 
     /// Everything a press should not have to pay for: the component, the device binding,
-    /// the format, the converter and the buffers, all the way to `AudioUnitInitialize`.
-    /// No device is opened here, and macOS lights no indicator for it.
+    /// the format and the converter, all the way to `AudioUnitInitialize`. No device is
+    /// opened here, and macOS lights no indicator for it.
     init(onStale: @escaping @MainActor () -> Void) throws {
         var description = AudioComponentDescription(
             componentType: kAudioUnitType_Output,
@@ -177,6 +185,7 @@ final class HALInput: PreparedInput {
         // every retry prepared another. [LAW:single-enforcer]
         let device: AudioObjectID
         let sink: Sink
+        let format: AVAudioFormat
         // Appended one at a time below, and read by the catch, so a second registration that
         // throws still leaves the first one disposable.
         var registered: [Disposal] = []
@@ -243,24 +252,12 @@ final class HALInput: PreparedInput {
                 AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, Self.inputBus, &client, UInt32(MemoryLayout<AudioStreamBasicDescription>.size)),
                 AudioHardwareError.inputUnavailable
             )
-            guard let format = AVAudioFormat(streamDescription: &client) else {
+            guard let described = AVAudioFormat(streamDescription: &client) else {
                 throw AudioClipError.unconvertibleFormat(sampleRate: client.mSampleRate, channels: client.mChannelsPerFrame)
             }
+            format = described
 
-            // The largest slice this unit may ask for, which is what the render buffer has to
-            // be able to hold. Read rather than assumed: a render bigger than the buffer is a
-            // crash, and the number is the unit's to state.
-            var slice: UInt32 = 0
-            var sliceSize = UInt32(MemoryLayout<UInt32>.size)
-            try AudioHardwareError.check(
-                AudioUnitGetProperty(unit, kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global, 0, &slice, &sliceSize),
-                AudioHardwareError.inputUnavailable
-            )
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(slice)) else {
-                throw AudioClipError.bufferAllocationFailed
-            }
-
-            let built = Sink(converter: try AudioClip.Converter(from: format), buffer: buffer)
+            let built = Sink(converter: try AudioClip.Converter(from: format))
             built.unit = unit
 
             var callback = AURenderCallbackStruct(
@@ -323,6 +320,7 @@ final class HALInput: PreparedInput {
         self.unit = unit
         self.device = device
         self.sink = sink
+        self.format = format
         self.watches = registered
         self.onStale = onStale
     }
@@ -332,15 +330,16 @@ final class HALInput: PreparedInput {
         appending: @escaping @Sendable ([Float], HostTime) -> Void,
         onFailure: @escaping @MainActor (any Error) -> Void
     ) throws -> Disposal {
-        sink.aim(at: Sink.Target(
-            appending: appending,
-            // The audio thread cannot wait for the main actor, so the report is posted
-            // rather than made. [LAW:no-ambient-temporal-coupling]
-            onFailure: { error in Task { @MainActor in onFailure(error) } }
-        ))
         presses += 1
         let press = presses
         do {
+            sink.aim(at: Sink.Target(
+                buffer: try renderBuffer(),
+                appending: appending,
+                // The audio thread cannot wait for the main actor, so the report is posted
+                // rather than made. [LAW:no-ambient-temporal-coupling]
+                onFailure: { error in Task { @MainActor in onFailure(error) } }
+            ))
             // A press is its own stream: the device was closed between this open and the
             // last, so the resampler starts from nothing rather than carrying the previous
             // press's tail into the head of this one. [LAW:one-source-of-truth]
@@ -351,6 +350,40 @@ final class HALInput: PreparedInput {
             throw error
         }
         return { [weak self] in self?.endPress(press) }
+    }
+
+    /// A buffer that holds the largest slice the device can hand this unit.
+    ///
+    /// Sized by the device rather than by the unit, and at the press rather than at the
+    /// preparation, because both of the other answers were measured wrong on this Mac for
+    /// low-privacy-o1z.c0p. Moving the device's IO buffer from 512 frames to 4096 under a
+    /// prepared, stopped unit handed the next press 4096-frame slices, and a buffer sized when
+    /// the input was readied refused every one of them: the press heard nothing. The unit's
+    /// `kAudioUnitProperty_MaximumFramesPerSlice` does follow the device, but on CoreAudio's
+    /// schedule rather than this one's - read straight after the move it answered 512 on two
+    /// runs and 4096 on twenty-one. [LAW:no-ambient-temporal-coupling] The device's own
+    /// range bounds every size it can be moved to, so no move of the size can outgrow it and
+    /// nothing has to have caught up for it to be true.
+    ///
+    /// Allocated on every open rather than kept and grown, so there is no earlier size for this
+    /// to be compared with. [LAW:one-source-of-truth] What that adds to a press was measured
+    /// the same day: about 0.1 ms, against the 40 ms the open itself costs.
+    private func renderBuffer() throws -> AVAudioPCMBuffer {
+        var range = AudioValueRange(mMinimum: 0, mMaximum: 0)
+        var size = UInt32(MemoryLayout<AudioValueRange>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyBufferFrameSizeRange,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        try AudioHardwareError.check(
+            AudioObjectGetPropertyData(device, &address, 0, nil, &size, &range),
+            AudioHardwareError.inputUnavailable
+        )
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(range.mMaximum)) else {
+            throw AudioClipError.bufferAllocationFailed
+        }
+        return buffer
     }
 
     /// Ends a press, whether it ran or never started, and gives the input up when the
