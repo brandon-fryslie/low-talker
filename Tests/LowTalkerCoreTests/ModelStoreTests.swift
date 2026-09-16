@@ -158,6 +158,17 @@ import Testing
         #expect(try presence.evictions.map(\.standardizedFileURL) == [empty.standardizedFileURL])
     }
 
+    /// An installed model is found before any source is opened, so a published base
+    /// that cannot be reached costs nothing when there is nothing to take from it.
+    @Test func installOnAnInstalledStoreNeverOpensAPublishedSource() async throws {
+        let scratch = try Scratch(files: Self.files)
+        try scratch.record()
+        let phases = Mutex<[ModelStore.InstallPhase]>([])
+        let installed = try await ModelStore(directory: scratch.root).install("test", from: .published(URL(string: "http://127.0.0.1:9/")!)) { phase in phases.withLock { $0.append(phase) } }
+        #expect(installed.folder.standardizedFileURL == scratch.folder.standardizedFileURL)
+        #expect(phases.withLock { $0 }.isEmpty)
+    }
+
     /// The menu bar and the terminal both show a phase's own words, so the words
     /// are pinned once, here.
     @Test func phasesDescribeThemselves() {
