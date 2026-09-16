@@ -244,7 +244,7 @@ import Testing
         let scratch = try Scratch(files: Self.files)
         let url = try scratch.writeManifest("not json")
         let presence = try ModelStore(directory: scratch.root).presence(of: "test")
-        guard case .damaged(let damages) = presence, case .manifestUnreadable(let manifest, _) = damages.first else {
+        guard case .damaged(let damages) = presence, case .manifestUnreadable(let manifest, .weights, _) = damages.first else {
             Issue.record("a corrupt manifest must count as damaged, not missing")
             return
         }
@@ -275,7 +275,7 @@ import Testing
         await #expect {
             try await ModelStore(directory: scratch.root).install("test", from: .huggingFace) { _ in }
         } throws: { error in
-            guard case ModelStoreError.manifestUnreadable(let manifest, _) = error else { return false }
+            guard case ModelStoreError.manifestUnreadable(let manifest, .weights, _) = error else { return false }
             return manifest == url
         }
     }
@@ -445,5 +445,35 @@ import Testing
             return
         }
         #expect(!FileManager.default.fileExists(atPath: unpacked.appending(components: "models", "argmaxinc", "whisperkit-coreml", "openai_whisper-test", "extra.metadata").path))
+    }
+
+    /// The repair instruction names the folder the unreadable manifest covered, so a
+    /// corrupt tokenizer manifest never sends anyone to delete healthy weights.
+    @Test func unreadableTokenizerManifestNamesTheTokenizerFolder() async throws {
+        let scratch = try Scratch(files: Self.files)
+        try scratch.record()
+        try "not json".write(to: scratch.tokenizerManifestURL, atomically: true, encoding: .utf8)
+        await #expect {
+            try await ModelStore(directory: scratch.root).install("test", from: .huggingFace) { _ in }
+        } throws: { error in
+            guard case ModelStoreError.manifestUnreadable(_, .tokenizer, _) = error else { return false }
+            return "\(error)".contains("tokenizer's folder under models/openai")
+        }
+    }
+
+    /// A copy that fails part way leaves no hidden partial file behind, since nothing
+    /// records or evicts a hidden name and every retry would add another.
+    @Test func failedCopyLeavesNoPartialFile() async throws {
+        let source = try Scratch(files: Self.files)
+        try source.record()
+        let unreadable = source.folder.appending(path: "config.json")
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: unreadable.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: unreadable.path) }
+        let destination = try Scratch(files: [:], tokenizer: [:])
+        await #expect(throws: (any Error).self) {
+            try await ModelStore(directory: destination.root).install("test", from: .store(ModelStore(directory: source.root))) { _ in }
+        }
+        let left = try FileManager.default.contentsOfDirectory(atPath: destination.folder.path)
+        #expect(!left.contains { $0.hasPrefix(".config.json.") })
     }
 }

@@ -1,3 +1,4 @@
+import Foundation
 @testable import LowTalkerCore
 import Testing
 @testable import WhisperKit
@@ -13,4 +14,14 @@ import Testing
         #expect(ModelVariant(logitsDim: logitsDim, encoderDim: encoderDim).tokenizerRepo == whisperKit)
     }
 
+    /// A task cancelled before it was resumed can end before the caller waits; the
+    /// caller that arrives second still hears how it ended.
+    @Test(.timeLimit(.minutes(1))) func transferThatEndsBeforeTheCallerWaitsStillAnswersIt() async throws {
+        let url = URL(string: "http://127.0.0.1:9/never.zip")!
+        let transfer = Archive.Transfer(source: url, destination: FileManager.default.temporaryDirectory.appending(path: "never.zip")) { _ in }
+        transfer.urlSession(.shared, task: URLSession.shared.dataTask(with: url), didCompleteWithError: URLError(.cancelled))
+        await #expect(throws: URLError(.cancelled)) {
+            try await withCheckedThrowingContinuation { transfer.wait($0) }
+        }
+    }
 }

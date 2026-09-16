@@ -80,6 +80,14 @@ public enum ModelPart: String, Sendable, CustomStringConvertible {
     case tokenizer
 
     public var description: String { rawValue }
+
+    /// Where this part's files live in a store, in the words a repair instruction uses.
+    var folderDescription: String {
+        switch self {
+        case .weights: "model's folder under models/argmaxinc/whisperkit-coreml"
+        case .tokenizer: "tokenizer's folder under models/openai"
+        }
+    }
 }
 
 extension ModelVariant {
@@ -133,7 +141,7 @@ enum Archive {
         let task = session.downloadTask(with: url)
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-                transfer.finished.withLock { $0 = continuation }
+                transfer.wait(continuation)
                 task.resume()
             }
         } onCancel: {
@@ -169,13 +177,34 @@ enum Archive {
     /// One download's delegate. The session calls it on its own serial queue, and the
     /// file it is handed exists only until `didFinishDownloadingTo` returns, so the
     /// move and the status check happen there and their verdict waits for completion.
-    private final class Transfer: NSObject, URLSessionDownloadDelegate, Sendable {
+    final class Transfer: NSObject, URLSessionDownloadDelegate, Sendable {
         let source: URL
         let destination: URL
         let progress: @Sendable (Double) -> Void
-        /// Set before the task resumes, so every callback below finds it.
-        let finished = Mutex<CheckedContinuation<Void, any Error>?>(nil)
         private let outcome = Mutex<(any Error)?>(nil)
+        private let meeting = Mutex<Meeting>(.apart)
+
+        /// The download's caller and the task's end, in whichever order they arrive: a
+        /// task cancelled before it was resumed can end before anyone waits for it.
+        ///
+        /// [LAW:no-ambient-temporal-coupling] The order is state, and whichever side
+        /// comes second is the one that resumes the caller, so neither order is lost.
+        private enum Meeting {
+            case apart
+            case waiting(CheckedContinuation<Void, any Error>)
+            case ended(Result<Void, any Error>)
+        }
+
+        func wait(_ continuation: CheckedContinuation<Void, any Error>) {
+            let ended: Result<Void, any Error>? = meeting.withLock { meeting in
+                guard case .ended(let result) = meeting else {
+                    meeting = .waiting(continuation)
+                    return nil
+                }
+                return result
+            }
+            if let ended { continuation.resume(with: ended) }
+        }
 
         init(source: URL, destination: URL, progress: @escaping @Sendable (Double) -> Void) {
             self.source = source
@@ -201,8 +230,15 @@ enum Archive {
         }
 
         func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
-            let continuation = finished.withLock { $0.take()! }
-            continuation.resume(with: Result { if let failure = error ?? outcome.withLock({ $0 }) { throw failure } })
+            let result = Result<Void, any Error> { if let failure = error ?? outcome.withLock({ $0 }) { throw failure } }
+            let waiter: CheckedContinuation<Void, any Error>? = meeting.withLock { meeting in
+                guard case .waiting(let continuation) = meeting else {
+                    meeting = .ended(result)
+                    return nil
+                }
+                return continuation
+            }
+            if let waiter { waiter.resume(with: result) }
         }
     }
 }

@@ -68,7 +68,7 @@ public struct ModelStore: Sendable {
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
             return .unrecorded
         } catch let error where error is DecodingError || error is ManifestError {
-            return .damaged(.manifestUnreadable(manifest: manifestURL, reason: "\(error)"))
+            return .damaged(.manifestUnreadable(manifest: manifestURL, part: part, reason: "\(error)"))
         }
         let folder = directory.appending(path: manifest.folder)
         let faults = try manifest.faults(in: folder)
@@ -182,9 +182,18 @@ public struct ModelStore: Sendable {
             let destination = to.appending(path: file.path)
             let incoming = destination.deletingLastPathComponent().appending(path: ".\(destination.lastPathComponent).\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: incoming.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try FileManager.default.copyItem(at: from.appending(path: file.path), to: incoming)
-            guard rename(incoming.path, destination.path) == 0 else {
-                throw ModelStoreError.renameFailed(from: incoming, to: destination, errno: errno)
+            do {
+                try FileManager.default.copyItem(at: from.appending(path: file.path), to: incoming)
+                guard rename(incoming.path, destination.path) == 0 else {
+                    throw ModelStoreError.renameFailed(from: incoming, to: destination, errno: errno)
+                }
+            } catch {
+                // A hidden name is never recorded or evicted, so a partial copy left
+                // here would outlive every retry. [LAW:no-silent-failure] exception:
+                // the copy's own error is the one the caller needs; a failed removal
+                // of what may never have been created adds nothing to it.
+                try? FileManager.default.removeItem(at: incoming)
+                throw error
             }
         }
         let faults = try manifest.faults(in: to)
@@ -251,7 +260,7 @@ public struct ModelStore: Sendable {
     public enum Damage: Sendable, CustomStringConvertible {
         /// The manifest is on disk but does not parse, so nothing is known about the
         /// files.
-        case manifestUnreadable(manifest: URL, reason: String)
+        case manifestUnreadable(manifest: URL, part: ModelPart, reason: String)
         /// Files the manifest lists that are not there as recorded. Never empty.
         case files(folder: URL, faults: [Manifest.Fault])
         /// This part has no manifest while the other has one: a store written before
@@ -265,8 +274,8 @@ public struct ModelStore: Sendable {
         public var evictions: [URL] {
             get throws {
                 switch self {
-                case .manifestUnreadable(let manifest, let reason):
-                    throw ModelStoreError.manifestUnreadable(manifest: manifest, reason: reason)
+                case .manifestUnreadable(let manifest, let part, let reason):
+                    throw ModelStoreError.manifestUnreadable(manifest: manifest, part: part, reason: reason)
                 case .files(let folder, let faults):
                     faults.compactMap { fault in
                         switch fault.kind {
@@ -281,7 +290,7 @@ public struct ModelStore: Sendable {
 
         public var description: String {
             switch self {
-            case .manifestUnreadable(let manifest, let reason): "manifest \(manifest.path) unreadable: \(reason)"
+            case .manifestUnreadable(let manifest, _, let reason): "manifest \(manifest.path) unreadable: \(reason)"
             case .files(_, let faults): faults.map(\.description).joined(separator: "; ")
             case .unrecorded(let part): "the \(part) is not installed"
             }
@@ -327,7 +336,7 @@ private enum InstallLock {
 }
 
 public enum ModelStoreError: Error, Equatable, CustomStringConvertible {
-    case manifestUnreadable(manifest: URL, reason: String)
+    case manifestUnreadable(manifest: URL, part: ModelPart, reason: String)
     case lockUnavailable(lock: URL, errno: Int32)
     /// A source store that does not hold the part whole, so there is nothing to take.
     case sourceLacks(source: URL, model: ModelName, part: ModelPart, reason: String)
@@ -338,8 +347,10 @@ public enum ModelStoreError: Error, Equatable, CustomStringConvertible {
 
     public var description: String {
         switch self {
-        case .manifestUnreadable(let manifest, let reason):
-            "manifest \(manifest.path) cannot be read (\(reason)); delete it and the model's folder under models, beside installed, then download again"
+        case .manifestUnreadable(let manifest, let part, let reason):
+            // The folder a manifest covered is named by the manifest, which is what
+            // cannot be read, so the instruction names where that part lives.
+            "manifest \(manifest.path) cannot be read (\(reason)); delete it and the \(part.folderDescription), then download again"
         case .lockUnavailable(let lock, let errno):
             "cannot lock \(lock.path): \(String(cString: strerror(errno)))"
         case .sourceLacks(let source, let model, let part, let reason):
