@@ -60,7 +60,7 @@ public enum EngineReadiness: Sendable, Equatable {
     public func iconDescription(for name: String, wordsOnClipboard: Bool) -> String {
         switch self {
         case .preparing: "\(name): preparing the model"
-        case .ready: wordsOnClipboard ? "\(name): dictation on the clipboard" : name
+        case .ready: wordsOnClipboard ? "\(name): last dictation copied to the clipboard" : name
         case .failed: "\(name): the model failed to load"
         }
     }

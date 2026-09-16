@@ -24,6 +24,9 @@ import Testing
         let router = Router(routes: [.dictation])
         #expect(router.actions(for: Transcript(words: []), in: Self.context) == [])
         #expect(router.actions(for: Transcript(typed: "   "), in: Self.context) == [])
+        // The engine can hand back a lone whitespace word: text is " ", non-empty but
+        // nothing said, which text.isEmpty would let through as an insert of a space.
+        #expect(router.actions(for: Transcript(words: [.init(text: " ", time: 0...0, confidence: 1.0)]), in: Self.context) == [])
     }
 
     /// Routes are an ordered list; the first that claims the utterance decides.

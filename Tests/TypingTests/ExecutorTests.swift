@@ -74,8 +74,8 @@ import Typing
                 [.insertText(text: "héllo there", target: .focus)], in: Self.textEdit, on: Self.us, since: .now)
             #expect(pasteboard.string(forType: .string) == "héllo there")
             #expect(performed.count == 1)
-            guard case .copied(let characters) = performed[0].what else { Issue.record("not copied"); return }
-            #expect(characters == 11)
+            guard case .copied(let text) = performed[0].what else { Issue.record("not copied"); return }
+            #expect(text == "héllo there")
             #expect("\(performed[0])".hasPrefix("copied 11 characters to the clipboard with com.apple.TextEdit in front, key-up to acknowledged "))
         }
     }

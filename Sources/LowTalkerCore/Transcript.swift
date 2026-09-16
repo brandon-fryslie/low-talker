@@ -29,6 +29,16 @@ public struct Transcript: Hashable, Codable, Sendable {
         words.map(\.text).joined()
     }
 
+    /// Whether nothing was said: no words, or only whitespace. The `typed:` initializer
+    /// drops whitespace-only input to no words, but the engine can hand back a lone
+    /// whitespace word, so an empty utterance is this predicate — not `text.isEmpty`,
+    /// which a whitespace-only word slips past.
+    /// [LAW:one-source-of-truth] one test for "nothing said", so the route that inserts
+    /// nothing and the Insert Dictation service that refuses agree on what nothing is.
+    public var isBlank: Bool {
+        !text.contains { !$0.isWhitespace }
+    }
+
     public struct Word: Hashable, Codable, Sendable {
         public let text: String
         /// Seconds from the start of the clip. A ClosedRange makes an end before a

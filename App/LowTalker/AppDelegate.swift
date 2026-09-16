@@ -195,11 +195,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// before it, so there is only ever one loop being built.
     private var switching: Task<Void, Never>?
 
-    /// Words are on the clipboard from the last press, and no press has begun since. What
-    /// the status item's icon is drawn from, so the icon cannot say something this does not.
-    private var wordsOnClipboard = false {
+    /// The words the last press copied, while no press has begun since: what the Insert
+    /// Dictation service hands back, and what the status item's icon is drawn from, so the
+    /// icon cannot say something the service would not return. [LAW:one-source-of-truth]
+    private var lastDictation: String? {
         didSet { drawStatusIcon() }
     }
+
+    private var wordsOnClipboard: Bool { lastDictation != nil }
 
     private func drawStatusIcon() {
         // Named from the flavor, because with both copies installed there are two of
@@ -234,7 +237,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // replaced would be the worse failure of the two. [LAW:no-silent-failure]
             do { try await previous.dictation.finish() } catch { report(.failure(error)) }
         }
-        // `wordsOnClipboard` is left as it stands: a session the wait let finish may just
+        // `lastDictation` is left as it stands: a session the wait let finish may just
         // have copied, and words on the clipboard stay there whichever method comes next.
         let hotkey = Hotkey(for: Self.flavor, heardBy: method)
         let dictation = Dictation(
@@ -248,7 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let chord = chordName(heardBy: method)
         do {
             try hotkey.start({ [unowned self] transition in
-                if case .began = transition { wordsOnClipboard = false }
+                if case .began = transition { lastDictation = nil }
                 dictation.press(transition)
             }, onLapse: { [unowned self] in report($0) })
             let status = switch method {
@@ -370,6 +373,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         show(.preparing(nil, since: launched))
         statusItem.isVisible = true
+        // The Insert Dictation service, declared under NSServices in project.yml, is
+        // answered by this delegate. The update makes a freshly built copy's entry
+        // known without a logout.
+        NSApp.servicesProvider = self
+        NSUpdateDynamicServices()
         _ = engine
         showHotkeyStatus("starting…")
         Task { await listen() }
@@ -467,8 +475,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch outcome {
         case .success(let session):
             sessions.notice("\(session.description, privacy: .public): \(session.transcript.text, privacy: .private)")
-            // Only a copy leaves anything on the clipboard to say so about.
-            wordsOnClipboard = session.performed.contains { if case .copied = $0.what { true } else { false } }
+            // Only a copy leaves anything on the clipboard to say so about, or to insert.
+            lastDictation = session.performed.compactMap { if case .copied(let text) = $0.what { text } else { nil } }.last
         case .failure(let error):
             // The kind of failure is public and its account is not: a TypingStopped
             // names the character left half typed, which is a character the user
@@ -488,6 +496,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// fixed sentence, and no part of it is anything the user dictated.
     private func report(_ lapse: KeyboardTapLapse) {
         sessions.error("\(lapse.description, privacy: .public)")
+    }
+
+    // MARK: - the Insert Dictation service
+
+    /// The Insert Dictation service: the words of the last completed dictation, handed to
+    /// the app that asked, which puts them at its cursor. No key is posted and nothing is
+    /// pressed in that app, so it needs no grant; the app's own Services machinery does the
+    /// inserting.
+    ///
+    /// It hands back what is ready and drives nothing: the user ends their own dictation —
+    /// releasing a hold, or a second tap — and the words land in `lastDictation` the moment
+    /// that session is heard, the same moment they reach the clipboard and the icon becomes
+    /// one. So a service call is a read, not a wait: it cannot end a listening whose words
+    /// are not yet transcribed and then return the press before it, and it cannot block the
+    /// main actor the transcription needs. [LAW:no-ambient-temporal-coupling]
+    ///
+    /// [LAW:no-silent-failure] With no words ready it refuses with a reason rather than
+    /// inserting nothing. `began` clears `lastDictation`, so a press in flight refuses until
+    /// it completes rather than serving the one before it; under the virtual keyboard, where
+    /// a session types rather than copies, nothing is ever left here and the service has
+    /// nothing to insert, which is right — those words are already in the app.
+    @objc func insertDictation(_ pasteboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
+        guard let words = lastDictation else {
+            let reason = "no dictation ready to insert — dictate first, and insert once the words are on the clipboard"
+            error.pointee = reason as NSString
+            log.notice("insert dictation: \(reason, privacy: .public)")
+            return
+        }
+        pasteboard.clearContents()
+        pasteboard.setString(words, forType: .string)
+        log.notice("insert dictation: returned \(words.count, privacy: .public) characters")
     }
 
     // MARK: - the menu
@@ -543,7 +582,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if case .preparing = engineReadiness { menu.addItem(readout("A press now is heard once the model is ready")) }
         menu.addItem(readout("Microphone: \(microphone)"))
         menu.addItem(readout("Hotkey: \(hotkeyStatus)"))
-        if wordsOnClipboard { menu.addItem(readout("Your last dictation is on the clipboard")) }
+        if wordsOnClipboard { menu.addItem(readout("Your last dictation was copied to the clipboard")) }
         // Every requirement, met or not, and its step under it as the lines it was
         // written in - one item per line, so nothing here wraps text the requirement
         // already broke. A list that showed only what was missing would leave a reader

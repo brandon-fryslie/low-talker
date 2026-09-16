@@ -42,6 +42,6 @@ import Testing
         #expect(EngineReadiness.preparing(nil, since: launch).iconDescription(for: "LowTalker", wordsOnClipboard: false) == "LowTalker: preparing the model")
         #expect(EngineReadiness.failed("x").iconDescription(for: "LowTalker", wordsOnClipboard: false) == "LowTalker: the model failed to load")
         #expect(EngineReadiness.ready(.default, after: .seconds(5)).iconDescription(for: "LowTalker", wordsOnClipboard: false) == "LowTalker")
-        #expect(EngineReadiness.ready(.default, after: .seconds(5)).iconDescription(for: "LowTalker", wordsOnClipboard: true) == "LowTalker: dictation on the clipboard")
+        #expect(EngineReadiness.ready(.default, after: .seconds(5)).iconDescription(for: "LowTalker", wordsOnClipboard: true) == "LowTalker: last dictation copied to the clipboard")
     }
 }

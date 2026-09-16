@@ -64,8 +64,9 @@ public struct Executor {
             case clicked(at: ScreenPoint, button: MouseButton, times: Clicks, reports: Int)
             case scrolled(at: ScreenPoint, vertical: WheelCounts, horizontal: WheelCounts)
             /// Left on the clipboard, where the user pastes it: `into` is the app that was
-            /// in front, not an app the text reached.
-            case copied(characters: Int)
+            /// in front, not an app the text reached. The words themselves, because a copy is
+            /// something the user can still ask for, through the Insert Dictation service.
+            case copied(String)
         }
 
         public let what: What
@@ -78,7 +79,7 @@ public struct Executor {
             case .pressed(let chord): "pressed \(Hotkey.held(chord)) into \(into.rawValue)"
             case .clicked(let at, let button, let times, let reports): "clicked \(button.rawValue) \(times.spelled) at \(at) after \(reports) move reports into \(into.rawValue)"
             case .scrolled(let at, let vertical, let horizontal): "scrolled vertical \(vertical.rawValue) horizontal \(horizontal.rawValue) at \(at) into \(into.rawValue)"
-            case .copied(let characters): "copied \(characters) characters to the clipboard with \(into.rawValue) in front"
+            case .copied(let text): "copied \(text.count) characters to the clipboard with \(into.rawValue) in front"
             }
             return "\(act), key-up to acknowledged \(Int(acknowledged / .milliseconds(1))) ms"
         }
@@ -131,7 +132,7 @@ public struct Executor {
         case .insertText(let text, .focus):
             return Step(into: frontmost) {
                 try clipboard.write(text)
-                return .copied(characters: text.count)
+                return .copied(text)
             }
         // Text for a named app included: the clipboard reaches whatever the user pastes
         // into, so an action that names its app is one this output would only pretend to.
