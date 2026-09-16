@@ -215,18 +215,18 @@ check_contains "verify_package names the package and the checksum" "the impostor
 check_contains "verify_package says a missing package is missing" "the absentee is not there" \
   "$( ( verify_package "$STUB_DIR/absent.pkg" "the absentee" ) 2>&1 )"
 
-# A release's copy is judged only after it is copied into the scratch directory this script
-# owns, so the bytes judged are the bytes installed. Pointed at a scratch directory of the
+# A release's copy is judged only after it is copied into a run directory of this script's
+# own, so the bytes judged are the bytes installed. Pointed at a scratch directory of the
 # suite's own, so the machine's is never touched.
-(
-  VHID_SCRATCH="$STUB_DIR/scratch"; SCRATCH_PKG="$VHID_SCRATCH/driver.pkg"
-  acquire_package "$STUB_DIR/impostor.pkg"
-) >/dev/null 2>&1
+( VHID_SCRATCH="$STUB_DIR/scratch"; acquire_package "$STUB_DIR/impostor.pkg" ) >/dev/null 2>&1
 check "acquire_package refuses a carried package that is not the pin" 1 "$?"
-check "acquire_package judged a copy in its own scratch directory" "not the pinned package" \
-  "$(cat "$STUB_DIR/scratch/driver.pkg" 2>&1)"
 check "acquire_package narrowed its scratch directory to its owner" 700 \
   "$(stat -f '%Lp' "$STUB_DIR/scratch")"
+# A refused run takes its copy and its run directory with it, so nothing it judged is left
+# for a later run to find.
+check "acquire_package leaves nothing behind" "" "$(ls -A "$STUB_DIR/scratch")"
+check_contains "acquire_package names a carried package that is not there" "there is no package at $STUB_DIR/absent.pkg" \
+  "$( ( VHID_SCRATCH="$STUB_DIR/scratch"; acquire_package "$STUB_DIR/absent.pkg" ) 2>&1 )"
 
 # ---------------------------------------------------------------------------
 # remove_outcome - the exit codes a caller scripts against

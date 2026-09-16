@@ -56,14 +56,11 @@ SUPPORT_DIR="/Library/Application Support/org.pqrs/Karabiner-DriverKit-VirtualHI
 
 die() { echo "virtual-hid-driver: $*" >&2; exit 1; }
 
-# Where the package lands, downloaded or copied: one fixed directory under the machine's own temp
-# area, holding one fixed filename.
-#
-# This script deletes no directories. It keeps a stable path instead of a per-run
-# temporary one, so the only thing it ever removes here is that single named file, and
-# clearing the directory itself is left to whoever reaps the temp area.
+# Where the package lands, downloaded or copied: one fixed directory under the machine's own
+# temp area, proven ours before use, holding one directory per run with the package in it.
+# A run removes only what it made there, the package and the directory it made for it;
+# the fixed directory itself is left to whoever reaps the temp area.
 VHID_SCRATCH="${TMPDIR:-/tmp}/low-talker-virtual-hid-driver"
-SCRATCH_PKG="$VHID_SCRATCH/driver.pkg"
 
 # ---------------------------------------------------------------------------
 # The reading
@@ -221,7 +218,8 @@ verify_package() {
 }
 
 # The pinned package at SCRATCH_PKG, verified there: downloaded, or copied from `source` when
-# one is given, which is how a release's own copy is installed with the network off.
+# one is given, which is how a release's own copy is installed with the network off. Sets
+# SCRATCH_PKG, and removes it when the verb exits.
 #
 # The scratch path is fixed and its parent is shared, and `sudo installer` re-reads the
 # package after the checksum and signature have already passed. A local attacker holding
@@ -233,6 +231,8 @@ verify_package() {
 # sentence naming who owns it. [LAW:no-silent-failure]
 acquire_package() {
   local source=${1:-} scratch_owner
+  # Global, not local: the EXIT trap reads it after this function has returned.
+  run_dir=
   mkdir -p "$VHID_SCRATCH"
   scratch_owner=$(stat -f '%u' "$VHID_SCRATCH") \
     || die "could not read the ownership of $VHID_SCRATCH"
@@ -240,12 +240,17 @@ acquire_package() {
     || die "$VHID_SCRATCH is owned by uid $scratch_owner and not by you, so nothing put into it can be trusted; remove it, or set TMPDIR and run again"
   chmod 700 "$VHID_SCRATCH"
 
-  # Clear the previous run's package first. A download or copy that dies partway would
-  # otherwise leave an older file sitting here for the checksum to approve, and this would
-  # install the wrong bytes while reporting success. [LAW:no-silent-failure]
-  rm -f "$SCRATCH_PKG"
+  # A file no other run can reach, made fresh by mktemp inside the directory just proven ours.
+  # A shared path would let a second run replace the bytes this one judged while it waits at
+  # the sudo prompt: an install beside a build's fetch, or two installs. Fresh, it also holds
+  # no older bytes for the checksum to approve after a download or copy dies partway.
+  # [LAW:no-ambient-temporal-coupling]
+  run_dir=$(mktemp -d "$VHID_SCRATCH/run.XXXXXX")
+  SCRATCH_PKG="$run_dir/driver.pkg"
+  trap 'rm -f "$SCRATCH_PKG"; rmdir "$run_dir"' EXIT
 
   if [ -n "$source" ]; then
+    [ -f "$source" ] || die "there is no package at $source"
     echo "==> taking $source" >&2
     /bin/cp "$source" "$SCRATCH_PKG"
     verify_package "$SCRATCH_PKG" "the package at $source"
