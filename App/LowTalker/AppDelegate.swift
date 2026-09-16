@@ -429,7 +429,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func loadEngine() async throws -> WhisperKitTranscriber {
         do {
             let store = try ModelStore.applicationSupport()
-            let transcriber = try await WhisperKitTranscriber.load(from: store) { phase in
+            let transcriber = try await WhisperKitTranscriber.load(in: store, from: .huggingFace) { phase in
                 Task { @MainActor in self.showEngineStatus(phase.description) }
             }
             showEngineStatus("ready (\(transcriber.model))")

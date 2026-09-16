@@ -7,19 +7,30 @@ import Testing
 /// place of model weights. The download itself needs the network and 632 MB, so it
 /// is exercised by `lowtalker model download` on a Mac, not here.
 @Suite struct ModelStoreTests {
-    /// A store root with a model folder inside it, deleted when the test ends.
+    /// A store root with a model folder and a tokenizer folder inside it, deleted when
+    /// the test ends.
     struct Scratch: ~Copyable {
         let root: URL
         let folder: URL
+        let tokenizer: URL
 
-        init(files: [String: String]) throws {
+        init(files: [String: String], tokenizer tokenizerFiles: [String: String] = ModelStoreTests.tokenizerFiles) throws {
             root = FileManager.default.temporaryDirectory.appending(path: "ModelStoreTests-\(UUID().uuidString)")
             folder = root.appending(components: "models", "argmaxinc", "whisperkit-coreml", "openai_whisper-test")
-            for (path, contents) in files {
-                let url = folder.appending(path: path)
-                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try contents.write(to: url, atomically: true, encoding: .utf8)
+            tokenizer = root.appending(components: "models", "openai", "whisper-test")
+            for (base, files) in [(folder, files), (tokenizer, tokenizerFiles)] {
+                for (path, contents) in files {
+                    let url = base.appending(path: path)
+                    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try contents.write(to: url, atomically: true, encoding: .utf8)
+                }
             }
+        }
+
+        /// Writes both manifests over what is on disk, as a finished install would.
+        func record() throws {
+            try Manifest(recording: folder, relativeTo: root).write(to: manifestURL)
+            try Manifest(recording: tokenizer, relativeTo: root).write(to: tokenizerManifestURL)
         }
 
         /// Puts `contents` where the store expects the manifest for model `test`.
@@ -31,11 +42,17 @@ import Testing
         }
 
         var manifestURL: URL { root.appending(components: "installed", "test.json") }
+        var tokenizerManifestURL: URL { root.appending(components: "installed", "tokenizer", "test.json") }
 
         deinit {
             try? FileManager.default.removeItem(at: root)
         }
     }
+
+    static let tokenizerFiles = [
+        "tokenizer.json": "{\"model\": {}}",
+        "tokenizer_config.json": "{}",
+    ]
 
     static let files = [
         "config.json": "{}",
@@ -52,6 +69,14 @@ import Testing
             .init(path: "AudioEncoder.mlmodelc/weights/weight.bin", size: 10),
             .init(path: "config.json", size: 2),
         ])
+    }
+
+    /// The hub client's sidecars sit inside a tokenizer's folder; they describe a
+    /// download, not the model, and a manifest listing them would travel into every
+    /// archive packed from it.
+    @Test func recordingLeavesOutHiddenFiles() throws {
+        let scratch = try Scratch(files: ["tokenizer.json": "{}", ".cache/huggingface/download/tokenizer.json.metadata": "etag"])
+        #expect(try Manifest(recording: scratch.folder, relativeTo: scratch.root).files == [.init(path: "tokenizer.json", size: 2)])
     }
 
     @Test func recordingRefusesAFolderOutsideTheRoot() throws {
@@ -120,12 +145,12 @@ import Testing
     @Test func folderInAFilesPlaceIsAFaultTheRepairEvicts() throws {
         let scratch = try Scratch(files: Self.files.merging(["empty.txt": ""]) { _, new in new })
         let store = ModelStore(directory: scratch.root)
-        try Manifest(recording: scratch.folder, relativeTo: scratch.root).write(to: scratch.manifestURL)
+        try scratch.record()
         let empty = scratch.folder.appending(path: "empty.txt")
         try FileManager.default.removeItem(at: empty)
         try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: false)
         let presence = try store.presence(of: "test")
-        guard case .damaged(.files(_, let faults)) = presence else {
+        guard case .damaged(let damages) = presence, case .files(_, let faults) = damages.first, damages.count == 1 else {
             Issue.record("a folder in a listed file's place must count as damaged")
             return
         }
@@ -138,6 +163,8 @@ import Testing
     @Test func phasesDescribeThemselves() {
         #expect("\(WhisperKitTranscriber.LoadPhase.installing(.waitingForAnotherInstall))" == "waiting for another install")
         #expect("\(WhisperKitTranscriber.LoadPhase.installing(.downloading(fractionCompleted: 0.426)))" == "downloading 42%")
+        #expect("\(WhisperKitTranscriber.LoadPhase.installing(.unpacking))" == "unpacking model")
+        #expect("\(WhisperKitTranscriber.LoadPhase.installing(.copying))" == "copying model")
         #expect("\(WhisperKitTranscriber.LoadPhase.loading)" == "loading model")
     }
 
@@ -165,7 +192,7 @@ import Testing
     @Test func storeWithAManifestThatVerifiesIsInstalled() throws {
         let scratch = try Scratch(files: Self.files)
         let store = ModelStore(directory: scratch.root)
-        try Manifest(recording: scratch.folder, relativeTo: scratch.root).write(to: scratch.manifestURL)
+        try scratch.record()
         guard case .installed(let installed) = try store.presence(of: "test") else {
             Issue.record("a verified manifest must count as installed")
             return
@@ -178,10 +205,10 @@ import Testing
     @Test func storeWithAManifestThatDoesNotVerifyIsDamaged() throws {
         let scratch = try Scratch(files: Self.files)
         let store = ModelStore(directory: scratch.root)
-        try Manifest(recording: scratch.folder, relativeTo: scratch.root).write(to: scratch.manifestURL)
+        try scratch.record()
         try FileManager.default.removeItem(at: scratch.folder.appending(path: "config.json"))
         let presence = try store.presence(of: "test")
-        guard case .damaged(.files(_, let faults)) = presence else {
+        guard case .damaged(let damages) = presence, case .files(_, let faults) = damages.first, damages.count == 1 else {
             Issue.record("a manifest naming a missing file must count as damaged")
             return
         }
@@ -194,7 +221,7 @@ import Testing
     @Test func storeThatCannotBeSearchedThrowsRatherThanReadingDamaged() throws {
         let scratch = try Scratch(files: Self.files)
         let store = ModelStore(directory: scratch.root)
-        try Manifest(recording: scratch.folder, relativeTo: scratch.root).write(to: scratch.manifestURL)
+        try scratch.record()
         let weights = scratch.folder.appending(path: "AudioEncoder.mlmodelc/weights")
         try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: weights.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: weights.path) }
@@ -208,7 +235,7 @@ import Testing
     @Test func truncatedFileIsEvictedByARepair() throws {
         let scratch = try Scratch(files: Self.files)
         let store = ModelStore(directory: scratch.root)
-        try Manifest(recording: scratch.folder, relativeTo: scratch.root).write(to: scratch.manifestURL)
+        try scratch.record()
         try "{".write(to: scratch.folder.appending(path: "config.json"), atomically: true, encoding: .utf8)
         #expect(try store.presence(of: "test").evictions.map(\.standardizedFileURL) == [scratch.folder.appending(path: "config.json").standardizedFileURL])
     }
@@ -217,7 +244,7 @@ import Testing
         let scratch = try Scratch(files: Self.files)
         let url = try scratch.writeManifest("not json")
         let presence = try ModelStore(directory: scratch.root).presence(of: "test")
-        guard case .damaged(.manifestUnreadable(let manifest, _)) = presence else {
+        guard case .damaged(let damages) = presence, case .manifestUnreadable(let manifest, _) = damages.first else {
             Issue.record("a corrupt manifest must count as damaged, not missing")
             return
         }
@@ -232,7 +259,7 @@ import Testing
     @Test func storeWhoseManifestCannotBeReadThrowsRatherThanReadingDamaged() throws {
         let scratch = try Scratch(files: Self.files)
         let store = ModelStore(directory: scratch.root)
-        try Manifest(recording: scratch.folder, relativeTo: scratch.root).write(to: scratch.manifestURL)
+        try scratch.record()
         try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: scratch.manifestURL.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: scratch.manifestURL.path) }
         #expect(throws: CocoaError.self) {
@@ -246,7 +273,7 @@ import Testing
         let scratch = try Scratch(files: Self.files)
         let url = try scratch.writeManifest("not json")
         await #expect {
-            try await ModelStore(directory: scratch.root).install("test") { _ in }
+            try await ModelStore(directory: scratch.root).install("test", from: .huggingFace) { _ in }
         } throws: { error in
             guard case ModelStoreError.manifestUnreadable(let manifest, _) = error else { return false }
             return manifest == url
@@ -261,7 +288,7 @@ import Testing
         #expect(throws: ManifestError.pathEscapes("../../etc")) {
             try Manifest(contentsOf: url)
         }
-        guard case .damaged(.manifestUnreadable) = try ModelStore(directory: scratch.root).presence(of: "test") else {
+        guard case .damaged(let damages) = try ModelStore(directory: scratch.root).presence(of: "test"), case .manifestUnreadable = damages.first else {
             Issue.record("a manifest that escapes the store must count as damaged")
             return
         }
@@ -289,7 +316,7 @@ import Testing
     /// second installer waits for the first, then finds its work already done.
     @Test(.timeLimit(.minutes(1))) func installWaitsForAnotherInstallerAndTakesItsResult() async throws {
         let scratch = try Scratch(files: Self.files)
-        try Manifest(recording: scratch.folder, relativeTo: scratch.root).write(to: scratch.manifestURL)
+        try scratch.record()
         let lock = scratch.root.appending(components: "installed", ".lock")
         let descriptor = open(lock.path, O_RDONLY | O_CREAT, 0o644)
         try #require(descriptor >= 0)
@@ -303,7 +330,7 @@ import Testing
         let store = ModelStore(directory: scratch.root)
         let installing = Task {
             defer { report.finish() }
-            return try await store.install("test") { report.yield($0) }
+            return try await store.install("test", from: .huggingFace) { report.yield($0) }
         }
         var reported = phases.makeAsyncIterator()
         try #require(await reported.next() == .waitingForAnotherInstall, "the second installer reports the wait before anything else")
@@ -317,10 +344,106 @@ import Testing
     /// An installed model costs nothing to install again.
     @Test func installOnAnInstalledStoreReturnsItWithoutDownloading() async throws {
         let scratch = try Scratch(files: Self.files)
-        try Manifest(recording: scratch.folder, relativeTo: scratch.root).write(to: scratch.manifestURL)
+        try scratch.record()
         let phases = Mutex<[ModelStore.InstallPhase]>([])
-        let installed = try await ModelStore(directory: scratch.root).install("test") { phase in phases.withLock { $0.append(phase) } }
+        let installed = try await ModelStore(directory: scratch.root).install("test", from: .huggingFace) { phase in phases.withLock { $0.append(phase) } }
         #expect(installed.folder.standardizedFileURL == scratch.folder.standardizedFileURL)
         #expect(phases.withLock { $0 }.isEmpty)
+    }
+
+    /// A store written before the tokenizer had a manifest has whole weights and no
+    /// record of the tokenizer: it is not installed, and nothing in it is evicted,
+    /// since the repair only has to record a tokenizer the hub folder already holds.
+    @Test func storeWithWeightsButNoTokenizerManifestIsDamagedWithNothingToEvict() throws {
+        let scratch = try Scratch(files: Self.files)
+        try Manifest(recording: scratch.folder, relativeTo: scratch.root).write(to: scratch.manifestURL)
+        let presence = try ModelStore(directory: scratch.root).presence(of: "test")
+        guard case .damaged(let damages) = presence, case .unrecorded(.tokenizer) = damages.first, damages.count == 1 else {
+            Issue.record("weights without a tokenizer must not count as installed")
+            return
+        }
+        #expect(try presence.evictions.isEmpty)
+        #expect("\(damages[0])" == "the tokenizer is not installed")
+    }
+
+    /// Both parts are judged, so a damaged tokenizer is evicted in the same repair as
+    /// damaged weights.
+    @Test func damageInBothPartsIsReportedAndEvictedTogether() throws {
+        let scratch = try Scratch(files: Self.files)
+        try scratch.record()
+        try "{".write(to: scratch.folder.appending(path: "config.json"), atomically: true, encoding: .utf8)
+        try "{".write(to: scratch.tokenizer.appending(path: "tokenizer.json"), atomically: true, encoding: .utf8)
+        let presence = try ModelStore(directory: scratch.root).presence(of: "test")
+        #expect(try presence.evictions.map(\.standardizedFileURL) == [
+            scratch.folder.appending(path: "config.json").standardizedFileURL,
+            scratch.tokenizer.appending(path: "tokenizer.json").standardizedFileURL,
+        ])
+    }
+
+    /// Another store is a source: both parts arrive at the same paths with their
+    /// manifests, and a sidecar beside the files in the source stays behind.
+    @Test func installFromAStoreCopiesBothPartsAndTheirManifests() async throws {
+        let source = try Scratch(files: Self.files)
+        try source.record()
+        try "sidecar".write(to: source.folder.appending(path: "extra.metadata"), atomically: true, encoding: .utf8)
+        let destination = try Scratch(files: [:], tokenizer: [:])
+        let store = ModelStore(directory: destination.root)
+        let phases = Mutex<[ModelStore.InstallPhase]>([])
+        let installed = try await store.install("test", from: .store(ModelStore(directory: source.root))) { phase in phases.withLock { $0.append(phase) } }
+        #expect(installed.folder.standardizedFileURL == destination.folder.standardizedFileURL)
+        guard case .installed = try store.presence(of: "test") else {
+            Issue.record("a copied model must read as installed")
+            return
+        }
+        #expect(try Manifest(contentsOf: destination.manifestURL) == Manifest(contentsOf: source.manifestURL))
+        #expect(try Manifest(contentsOf: destination.tokenizerManifestURL) == Manifest(contentsOf: source.tokenizerManifestURL))
+        #expect(!FileManager.default.fileExists(atPath: destination.folder.appending(path: "extra.metadata").path))
+        #expect(phases.withLock { $0 } == [.copying, .copying])
+    }
+
+    /// A repair from a store replaces only what the destination lacks: a whole part
+    /// is not copied again.
+    @Test func installFromAStoreRepairsOnlyTheDamagedPart() async throws {
+        let source = try Scratch(files: Self.files)
+        try source.record()
+        let destination = try Scratch(files: Self.files)
+        try destination.record()
+        try "0123".write(to: destination.folder.appending(path: "AudioEncoder.mlmodelc/weights/weight.bin"), atomically: true, encoding: .utf8)
+        let phases = Mutex<[ModelStore.InstallPhase]>([])
+        let store = ModelStore(directory: destination.root)
+        _ = try await store.install("test", from: .store(ModelStore(directory: source.root))) { phase in phases.withLock { $0.append(phase) } }
+        #expect(try Data(contentsOf: destination.folder.appending(path: "AudioEncoder.mlmodelc/weights/weight.bin")) == Data("0123456789".utf8))
+        #expect(phases.withLock { $0 } == [.copying])
+    }
+
+    /// A source that does not hold the model whole has nothing to give, and says
+    /// which part and why rather than copying what it has.
+    @Test func installFromAStoreWithoutTheTokenizerIsRefused() async throws {
+        let source = try Scratch(files: Self.files)
+        try Manifest(recording: source.folder, relativeTo: source.root).write(to: source.manifestURL)
+        let destination = try Scratch(files: [:], tokenizer: [:])
+        await #expect(throws: ModelStoreError.sourceLacks(source: source.root, model: "test", part: .tokenizer, reason: "not installed there")) {
+            try await ModelStore(directory: destination.root).install("test", from: .store(ModelStore(directory: source.root))) { _ in }
+        }
+    }
+
+    /// The archive a published base serves unpacks into a store that holds the model
+    /// installed, and holds nothing the source's manifests do not list.
+    @Test func packedArchiveUnpacksIntoAStoreHoldingTheModel() async throws {
+        let source = try Scratch(files: Self.files)
+        try source.record()
+        try "sidecar".write(to: source.folder.appending(path: "extra.metadata"), atomically: true, encoding: .utf8)
+        let out = try Scratch(files: [:], tokenizer: [:])
+        let archive = try await ModelStore(directory: source.root).pack("test", into: out.root) { _ in }
+        #expect(archive.lastPathComponent == "test.zip")
+        let unpacked = out.root.appending(path: "unpacked")
+        let ditto = try Process.run(URL(filePath: "/usr/bin/ditto"), arguments: ["-x", "-k", archive.path, unpacked.path])
+        ditto.waitUntilExit()
+        try #require(ditto.terminationStatus == 0)
+        guard case .installed = try ModelStore(directory: unpacked).presence(of: "test") else {
+            Issue.record("a packed archive must unpack into an installed store")
+            return
+        }
+        #expect(!FileManager.default.fileExists(atPath: unpacked.appending(components: "models", "argmaxinc", "whisperkit-coreml", "openai_whisper-test", "extra.metadata").path))
     }
 }

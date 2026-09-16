@@ -21,6 +21,7 @@ struct DictateCommand: AsyncParsableCommand {
     )
 
     @OptionGroup var options: ModelOptions
+    @OptionGroup var source: SourceOptions
 
     @OptionGroup var installation: FlavorOption
 
@@ -28,7 +29,7 @@ struct DictateCommand: AsyncParsableCommand {
     func run() async throws {
         setvbuf(stdout, nil, _IOLBF, 0)
         let reporter = PhaseReporter()
-        let transcriber = try await WhisperKitTranscriber.load(options.model, from: options.store(), phase: reporter.report)
+        let transcriber = try await WhisperKitTranscriber.load(options.model, in: options.store(), from: source.source, phase: reporter.report)
         let capture = AudioCapture()
         // The resting mode is not read from the config here, and not because the config is
         // unavailable: a command run from a terminal is watched by the operator who ran it

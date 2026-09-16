@@ -9,7 +9,7 @@ struct ModelCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "model",
         abstract: "Inspect and download the Whisper model the app loads at launch.",
-        subcommands: [Status.self, Download.self]
+        subcommands: [Status.self, Download.self, Pack.self]
     )
 
     struct Status: ParsableCommand {
@@ -28,8 +28,8 @@ struct ModelCommand: AsyncParsableCommand {
             case .missing:
                 print("missing: \(options.model)")
                 throw ExitCode(1)
-            case .damaged(let damage):
-                print("damaged: \(damage)")
+            case .damaged(let damages):
+                print("damaged: \(damages.map(\.description).joined(separator: "; "))")
                 throw ExitCode(1)
             }
         }
@@ -37,15 +37,35 @@ struct ModelCommand: AsyncParsableCommand {
 
     struct Download: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Download the model into the store, or finish a download that stopped."
+            abstract: "Install the model into the store, or finish an install that stopped."
+        )
+
+        @OptionGroup var options: ModelOptions
+        @OptionGroup var source: SourceOptions
+
+        func run() async throws {
+            let reporter = PhaseReporter()
+            let installed = try await options.store().install(options.model, from: source.source) { reporter.report(.installing($0)) }
+            print("installed: \(installed.folder.path)")
+        }
+    }
+
+    /// The archive a published base serves, made from a model this store holds, so a
+    /// Mac that cannot reach huggingface.co can install it with `download --from`.
+    struct Pack: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Write <model>.zip, a store holding the installed model alone, for a published base to serve."
         )
 
         @OptionGroup var options: ModelOptions
 
+        @Option(name: .customLong("to"), help: "The directory to write <model>.zip into.", transform: URL.init(fileURLWithPath:))
+        var directory: URL
+
         func run() async throws {
             let reporter = PhaseReporter()
-            let installed = try await options.store().install(options.model) { reporter.report(.installing($0)) }
-            print("installed: \(installed.folder.path)")
+            let archive = try await options.store().pack(options.model, into: directory) { reporter.report(.installing($0)) }
+            print("packed: \(archive.path)")
         }
     }
 }
