@@ -479,6 +479,15 @@ final class HALInput: PreparedInput {
         }
     }
 
+    /// Compared against the device the unit is bound to rather than the one it was asked for,
+    /// for the reason `device` is: the binding is CoreAudio's answer.
+    ///
+    /// [LAW:no-silent-failure] exception: a default that cannot be read answers `false` rather
+    /// than throwing. What that sends capture to do is ready another input, and readying reads
+    /// the same property again and carries its failure to the press that opens it - so the
+    /// error is not dropped. It is reported where a press can hear it.
+    var isOnTheDefaultInput: Bool { (try? Self.defaultInput()) == device }
+
     /// Which device a press would open. Nonisolated because reading it touches nothing this
     /// class owns, and `MicrophoneIndicator` asks the same question off the main actor: what
     /// the indicator shows is a fact about that device, so the two must not be free to
