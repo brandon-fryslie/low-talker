@@ -77,7 +77,9 @@ public struct SliceGrownAtRest: Sendable, CustomStringConvertible {
         let close = try input.open(appending: { _, _ in press.delivered.add(1, ordering: .relaxed) }, onFailure: press.failed)
         // Failures are posted to the main actor, and this sleep is where they land.
         try await Task.sleep(for: hold)
-        close()
+        // The disposal holds the input weakly and nothing else here uses it after `open`, so
+        // this is what keeps its unit running through the hold rather than to its last use.
+        withExtendedLifetime(input) { close() }
         return SliceGrownAtRest(
             device: device,
             readiedAt: readiedAt,
