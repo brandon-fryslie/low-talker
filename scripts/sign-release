@@ -33,10 +33,15 @@ derived=$(mktemp -d "${TMPDIR:-/tmp}/lowtalker-release.XXXXXX")
 trap 'rm -rf "$derived"' EXIT
 
 # The CLI decides which model is the default and installs it whole, manifests and all, so
-# this script names neither. [LAW:one-source-of-truth]
+# this script names neither. [LAW:one-source-of-truth] It installs twice, the way `model
+# pack` does: a store filled from Hugging Face also holds the hub client's own metadata, and
+# a copy out of it takes only the files the manifests list, so the bundle carries exactly
+# what an install certifies.
 cli=$(make cli | tee /dev/stderr | tail -n 1)
+fetched="$derived/fetched-store"
 carried="$derived/model-store"
-"$cli" model download --models-dir "$carried" ${source:+--from "$source"} >&2
+"$cli" model download --models-dir "$fetched" ${source:+--from "$source"} >&2
+"$cli" model download --models-dir "$carried" --from "$fetched" >&2
 
 make release CONFIGURATION=Release DERIVED_DATA="$derived" BUNDLED_MODEL_STORE="$carried" >&2
 
