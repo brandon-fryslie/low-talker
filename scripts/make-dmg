@@ -47,7 +47,12 @@ check "$app"
 name=$(basename "$app" .app)
 staging=$(mktemp -d "${TMPDIR:-/tmp}/lowtalker-dmg.XXXXXX")
 mount=$(mktemp -d "${TMPDIR:-/tmp}/lowtalker-dmg-mount.XXXXXX")
-trap 'hdiutil detach -quiet "$mount" 2>/dev/null || true; rm -rf "$staging" "$mount"' EXIT
+# The image is detached here and not in line: the file is already written by then, and
+# Spotlight can hold a fresh mount busy for a moment, which is no reason to fail the release.
+# rmdir, not rm -rf, so a mount that would not let go is never emptied through.
+trap 'hdiutil detach -quiet "$mount" 2>/dev/null || hdiutil detach -quiet -force "$mount" 2>/dev/null || true
+rmdir "$mount" 2>/dev/null || true
+rm -rf "$staging"' EXIT
 
 # [LAW:one-source-of-truth] The image is signed by exactly the certificate that signed the
 # app: its leaf, extracted from the app's own signature and named to codesign by its SHA-1.
@@ -72,5 +77,4 @@ check "$dmg"
 # The app as a person will find it: read back out of the image, not out of the staging copy.
 hdiutil attach -quiet -nobrowse -readonly -mountpoint "$mount" "$dmg"
 codesign --verify --deep --strict "$mount/$name.app" || fail "the app inside $dmg does not verify"
-hdiutil detach -quiet "$mount"
 echo "$dmg"
