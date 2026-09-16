@@ -11,14 +11,14 @@ import Testing
         #expect("\(across)" == "device 140: readied at 512 frames, grown to 4096 while resting, press delivered 5 buffers")
     }
 
-    /// What the code before low-privacy-o1z.c0p printed on this Mac: every render refused, and
-    /// the refusal is the reading's evidence.
+    /// A press whose every render was refused, which is what this Mac printed before
+    /// low-privacy-o1z.c0p: the refusal is the reading's evidence.
     @Test func aRefusedPressCarriesItsFailureAndTheDefectItMeans() {
-        let across = SliceGrownAtRest(device: 140, readiedAt: 512, grownTo: 4096, delivered: 0, failure: "past the 512 it was prepared for")
+        let across = SliceGrownAtRest(device: 140, readiedAt: 512, grownTo: 4096, delivered: 0, failure: "past the 512 frames it was readied at")
         #expect(!across.kept)
         let lines = "\(across)".split(separator: "\n")
         #expect(lines.count == 2)
-        #expect(lines[0].hasSuffix("past the 512 it was prepared for"))
+        #expect(lines[0].hasSuffix("past the 512 frames it was readied at"))
     }
 
     /// A press that reports nothing and delivers nothing lost the same utterance, only quietly.
