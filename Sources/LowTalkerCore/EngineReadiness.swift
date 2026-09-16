@@ -20,6 +20,21 @@ public enum EngineReadiness: Sendable, Equatable {
     /// The load stopped with this reason, and nothing will retry it until the next launch.
     case failed(String)
 
+    /// This state once the load has reported `phase`. Only a wait advances: a report
+    /// that arrives after the load has already finished or failed leaves that verdict
+    /// standing.
+    ///
+    /// [LAW:no-ambient-temporal-coupling] Load phases reach the main actor as tasks of
+    /// their own, and nothing orders them against the load's return, so a "copying"
+    /// queued just before a fast failure can run after it. The transition, not the
+    /// timing, is what keeps a failed load from being drawn as a wait forever.
+    public func reporting(_ phase: WhisperKitTranscriber.LoadPhase) -> EngineReadiness {
+        switch self {
+        case .preparing(_, let since): .preparing(phase, since: since)
+        case .ready, .failed: self
+        }
+    }
+
     /// The words for the menu and the log, read at `now`. A wait says how long it has run,
     /// which is what tells a slow load from a stuck one.
     public func readout(at now: ContinuousClock.Instant) -> String {

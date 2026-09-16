@@ -20,6 +20,15 @@ import Testing
         #expect(EngineReadiness.failed("no model").readout(at: launch) == "failed — no model")
     }
 
+    /// A phase report queued behind the load's end cannot reopen the wait it ended.
+    @Test func aLatePhaseLeavesAFinishedLoadFinished() {
+        let failed = EngineReadiness.failed("the carried store lacks the tokenizer")
+        let ready = EngineReadiness.ready(.default, after: .seconds(5))
+        #expect(failed.reporting(.installing(.copying)) == failed)
+        #expect(ready.reporting(.loading) == ready)
+        #expect(EngineReadiness.preparing(nil, since: launch).reporting(.loading) == .preparing(.loading, since: launch))
+    }
+
     /// The icon of a ready engine is the only one that can say words are waiting: nothing
     /// is heard before the engine is ready, so a clipboard icon over a wait would be a lie.
     @Test(arguments: [false, true])

@@ -369,7 +369,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         show(.preparing(nil, since: launched))
-        drawStatusIcon()
         statusItem.isVisible = true
         _ = engine
         showHotkeyStatus("starting…")
@@ -442,7 +441,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // reason instead of falling back to a download nobody asked for.
             let source = ModelStore.carried(by: .main).map(ModelSource.store) ?? .huggingFace
             let transcriber = try await WhisperKitTranscriber.load(in: store, from: source) { phase in
-                Task { @MainActor in self.show(.preparing(phase, since: self.launched)) }
+                Task { @MainActor in
+                    let next = self.engineReadiness.reporting(phase)
+                    if next != self.engineReadiness { self.show(next) }
+                }
             }
             show(.ready(transcriber.model, after: launched.duration(to: .now)))
             return transcriber
