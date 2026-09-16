@@ -120,11 +120,13 @@ targetTemplates:
         basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
+          carried="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/${MODEL_STORE_RESOURCE}"
+          # Removed on every build, named store or not: Xcode leaves a file it did not make
+          # in the bundle, so a store an earlier build carried would ride along, and ditto
+          # merges into a folder already there.
+          rm -rf "${carried}"
           # An empty setting reaches the script unset, not empty.
           [ -n "${BUNDLED_MODEL_STORE:-}" ] || exit 0
-          carried="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/${MODEL_STORE_RESOURCE}"
-          # Removed first: ditto merges into a folder already there.
-          rm -rf "${carried}"
           ditto "${BUNDLED_MODEL_STORE}" "${carried}"
     settings:
       base:
