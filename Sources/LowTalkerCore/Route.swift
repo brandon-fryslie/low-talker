@@ -47,14 +47,14 @@ public struct Route: Hashable, Sendable, CustomStringConvertible {
 
     /// What a claimed utterance becomes.
     public enum Emit: Hashable, Sendable, CustomStringConvertible {
-        /// The transcript's text, inserted as one action. An empty transcript inserts
-        /// nothing, so it produces no action rather than an action that does nothing.
+        /// The transcript's text, inserted as one action. A blank transcript — nothing
+        /// said — produces no action rather than an action that does nothing.
         case insertTranscript(target: InsertTarget)
 
         public func actions(for transcript: Transcript, in context: Context) -> [Action] {
             switch self {
             case .insertTranscript(let target):
-                transcript.text.isEmpty ? [] : [.insertText(text: transcript.text, target: target)]
+                transcript.isBlank ? [] : [.insertText(text: transcript.text, target: target)]
             }
         }
 
