@@ -688,14 +688,24 @@ After a build that changes only how the helper is signed, rebuild the bundles fr
 
 ### Signing for release
 
+    NOTARY_PROFILE=<profile> scripts/release dist ~/Library/Application\ Support/low-talker/hub   # dist/LowTalker.dmg
+
+`scripts/release` is the whole release, three scripts run in order, each of which also runs alone:
+
     scripts/sign-release dist ~/Library/Application\ Support/low-talker/hub   # dist/LowTalker.app, Developer ID signed
-    NOTARY_PROFILE=<profile> scripts/notarize dist/LowTalker.app
+    NOTARY_PROFILE=<profile> scripts/notarize dist/LowTalker.app                # notarized and stapled
+    scripts/make-dmg dist/LowTalker.app dist                                    # dist/LowTalker.dmg, signed
+    NOTARY_PROFILE=<profile> scripts/notarize dist/LowTalker.dmg                # notarized and stapled
+
+The app and the disk image are each signed, notarized and stapled. Gatekeeper judges the image when it is mounted and the app again when it is first run. On a Mac with no network, a stapled ticket is the only way it can reach a verdict on either. So the app is stapled before it goes into the image, which cannot change once it is signed, and the image is stapled after. `scripts/release` asks the profile to answer before the build starts, so a missing credential stops it in seconds rather than minutes.
 
 `scripts/sign-release` runs `make release` in the Release configuration, which `project.yml` signs with the `Developer ID Application` certificate for team 6R988MUU27, Hardened Runtime and a secure timestamp. It leaves out `get-task-allow`, which Xcode otherwise signs into both configurations. The bundle carries the default model ("The model store" above), taken from the source the second argument names, as `model download --from` reads it, or from huggingface.co when there is none, and the script requires `model status` to find it whole inside the built bundle. The build goes into a derived-data directory made for the run and deleted after it, so a helper re-signed without changes to its code is always embedded again (low-build-mmp). It then checks the app and `Contents/MacOS/lowtalker-keyboardd` for what the notary service refuses: a signature that is not the team's Developer ID, no Hardened Runtime, no secure timestamp, or `get-task-allow`. The first of those it finds stops it with the binary named. A Debug-signed bundle fails three of the four. The Developer ID certificate lives in the login keychain, and `codesign` signs with it without a prompt.
 
 A Release build's helper admits the Developer ID certificate and nothing else, so the CLI, signed with the dev identity, cannot type through it. A probe compiled from `CallerIdentity.swift` and signed with the Developer ID admitted `dist/LowTalker.app` and its helper, and refused the Debug app and `.build/debug/lowtalker`. Signed with the dev identity, it did the reverse.
 
 `scripts/notarize` takes the signed app or a disk image, submits it with `notarytool` under the keychain profile `NOTARY_PROFILE` names, waits, and prints the notary log when the answer is anything but Accepted. It then staples the ticket and requires Gatekeeper to assess the result as `source=Notarized Developer ID`. The profile is made once per Mac with `xcrun notarytool store-credentials <profile>`, from an Apple ID with an app-specific password or from an App Store Connect API key. This Mac has none yet, so no submission has been made. A missing profile, a profile that does not exist, and a path that is neither an `.app` nor a `.dmg` each stop the script with a message.
+
+`scripts/make-dmg` puts the app beside a link to `/Applications` in an LZFSE-compressed image, and signs the image with the certificate that signed the app, read off the app's own signature. It refuses an app that is not signed with the team's Developer ID, checks the image for that signature and a secure timestamp, and mounts the image to verify the app as a person will find it. The dev-signed Debug app is refused by name. Measured on 2026-09-16 with the release carrying the default model, the image took 21 s to make and is 482,836,863 bytes. Before notarization, `spctl --assess --type open --context context:primary-signature` rejects it with `source=Unnotarized Developer ID`, which is the step still missing.
 
 `syspolicy_check notary-submission` is no help on this Mac. It reports `Internal Xprotect Error` for this app, for the Debug build, and for a one-line Swift app signed the same way, while iTerm and Karabiner-Elements pass. So the notary service's answer is the one that counts.
 

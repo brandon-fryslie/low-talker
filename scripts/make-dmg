@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Packs a signed LowTalker.app into the disk image a person downloads, and signs the image
+# with the certificate that signed the app.
+#
+#   scripts/make-dmg <path to .app> <output directory>    # prints <output directory>/<name>.dmg
+#
+# Gatekeeper judges the image when it is mounted and the app again when it is first run, and
+# with no network it can judge either only from a ticket stapled to it, so both are signed
+# and both are notarized: the app before it goes in, the image once it is made. That order is
+# scripts/release's; this script makes and signs the image and checks both signatures.
+#
+# The image opens on the app beside a link to /Applications, which is how a person installs it.
+set -euo pipefail
+
+usage="usage: scripts/make-dmg <path to .app> <output directory>"
+app=${1:?$usage}
+out=${2:?$usage}
+# A bundle is a directory, so completion leaves a slash that would hide its name.
+app=${app%/}
+# Resolved before the move to the repo root, which xcodegen needs, so relative paths mean
+# the ones the caller named.
+mkdir -p "$out"
+out=$(cd "$out" && pwd)
+app=$(cd "$(dirname "$app")" && pwd)/$(basename "$app")
+cd "$(dirname "$0")/.."
+
+fail() {
+  echo "make-dmg: $1" >&2
+  exit 1
+}
+
+# What the notary service would refuse of the image: no Developer ID signature from the
+# team, or no secure timestamp.
+check() {
+  local signed=$1 signature
+  signature=$(codesign -dvv "$signed" 2>&1)
+  grep -qx "Authority=Developer ID Application: .* ($team)" <<<"$signature" \
+    || fail "$signed is not signed with a Developer ID Application certificate for team $team"
+  grep -q '^Timestamp=' <<<"$signature" \
+    || fail "$signed has no secure timestamp"
+}
+
+team=$(xcodegen dump --type json | jq -er '.settings.configs.Release.DEVELOPMENT_TEAM // error("project.yml sets no DEVELOPMENT_TEAM for Release")')
+codesign --verify --deep --strict "$app" || fail "$app does not verify"
+check "$app"
+# [LAW:one-source-of-truth] The image is signed by exactly the certificate that signed the
+# app, read off the app's own signature, so one release cannot carry two identities.
+authority=$(codesign -dvv "$app" 2>&1 | sed -n 's/^Authority=//p' | head -n 1)
+
+name=$(basename "$app" .app)
+staging=$(mktemp -d "${TMPDIR:-/tmp}/lowtalker-dmg.XXXXXX")
+mount=$(mktemp -d "${TMPDIR:-/tmp}/lowtalker-dmg-mount.XXXXXX")
+trap 'hdiutil detach -quiet "$mount" 2>/dev/null || true; rm -rf "$staging" "$mount"' EXIT
+ditto "$app" "$staging/$name.app"
+ln -s /Applications "$staging/Applications"
+
+dmg="$out/$name.dmg"
+# Removed first: hdiutil refuses to write over an image already there.
+rm -f "$dmg"
+# LZFSE: the model is most of the bytes and compresses about as well under it as under zlib,
+# and it unpacks faster when the image is mounted and verified.
+hdiutil create -quiet -volname "$name" -srcfolder "$staging" -format ULFO "$dmg"
+codesign --sign "$authority" --timestamp "$dmg"
+
+codesign --verify --strict "$dmg" || fail "$dmg does not verify"
+check "$dmg"
+# The app as a person will find it: read back out of the image, not out of the staging copy.
+hdiutil attach -quiet -nobrowse -readonly -mountpoint "$mount" "$dmg"
+codesign --verify --deep --strict "$mount/$name.app" || fail "the app inside $dmg does not verify"
+hdiutil detach -quiet "$mount"
+echo "$dmg"
