@@ -44,9 +44,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     ///
     /// The engine's is also the status icon's face, since a first load runs for minutes
     /// and an icon that looks ready through them reads as an app that is not answering.
-    private var engineReadiness: EngineReadiness = .preparing(nil) {
-        didSet { drawStatusIcon() }
-    }
+    /// Lazy so it can count from `launched`; only `show(_:)` sets it, which redraws the icon.
+    private lazy var engineReadiness: EngineReadiness = .preparing(nil, since: launched)
     private var hotkeyStatus = ""
 
     /// When this process began, which every readout of the engine's wait counts from.
@@ -89,7 +88,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// menu and the log never tell different stories.
     private func show(_ readiness: EngineReadiness) {
         engineReadiness = readiness
-        log.info("model: \(readiness.readout(after: self.launched.duration(to: .now)), privacy: .public)")
+        drawStatusIcon()
+        log.info("model: \(readiness.readout(at: .now), privacy: .public)")
     }
 
     private func showHotkeyStatus(_ status: String) {
@@ -368,7 +368,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - launch and quit
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        show(.preparing(nil))
+        show(.preparing(nil, since: launched))
         drawStatusIcon()
         statusItem.isVisible = true
         _ = engine
@@ -442,9 +442,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // reason instead of falling back to a download nobody asked for.
             let source = ModelStore.carried(by: .main).map(ModelSource.store) ?? .huggingFace
             let transcriber = try await WhisperKitTranscriber.load(in: store, from: source) { phase in
-                Task { @MainActor in self.show(.preparing(phase)) }
+                Task { @MainActor in self.show(.preparing(phase, since: self.launched)) }
             }
-            show(.ready(transcriber.model))
+            show(.ready(transcriber.model, after: launched.duration(to: .now)))
             return transcriber
         } catch {
             // [LAW:no-silent-failure] A model that failed to load is the one thing the
@@ -533,7 +533,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         log.notice("microphone at rest: \(microphone, privacy: .public)")
 
         menu.removeAllItems()
-        menu.addItem(readout("Whisper model: \(engineReadiness.readout(after: launched.duration(to: .now)))"))
+        menu.addItem(readout("Whisper model: \(engineReadiness.readout(at: .now))"))
         // A press made during the wait is not lost, and nothing else on screen says so.
         if case .preparing = engineReadiness { menu.addItem(readout("A press now is heard once the model is ready")) }
         menu.addItem(readout("Microphone: \(microphone)"))

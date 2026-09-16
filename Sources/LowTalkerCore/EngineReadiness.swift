@@ -11,19 +11,21 @@ import Foundation
 /// [LAW:one-source-of-truth] The icon and the words are both read off this one value, so
 /// the menu bar cannot show a microphone while the menu says the model failed.
 public enum EngineReadiness: Sendable, Equatable {
-    /// Launched, and not yet able to hear: `phase` is nil until the load reports its first
-    /// step.
-    case preparing(WhisperKitTranscriber.LoadPhase?)
-    case ready(ModelName)
+    /// Not yet able to hear, waiting `since` that instant: `phase` is nil until the load
+    /// reports its first step.
+    case preparing(WhisperKitTranscriber.LoadPhase?, since: ContinuousClock.Instant)
+    /// Loaded, the wait having lasted `after`. Kept rather than measured when read, so the
+    /// menu opened an hour later says how long the load took, not how long ago launch was.
+    case ready(ModelName, after: Duration)
     /// The load stopped with this reason, and nothing will retry it until the next launch.
     case failed(String)
 
-    /// The words for the menu and the log, `elapsed` after launch. A wait says how long it
-    /// has run, which is what tells a slow load from a stuck one.
-    public func readout(after elapsed: Duration) -> String {
+    /// The words for the menu and the log, read at `now`. A wait says how long it has run,
+    /// which is what tells a slow load from a stuck one.
+    public func readout(at now: ContinuousClock.Instant) -> String {
         switch self {
-        case .preparing(let phase): "\(phase?.description ?? "checking the model"), \(Self.spoken(elapsed)) so far"
-        case .ready(let model): "ready (\(model)) after \(Self.spoken(elapsed))"
+        case .preparing(let phase, let since): "\(phase?.description ?? "checking the model"), \(Self.spoken(since.duration(to: now))) so far"
+        case .ready(let model, let wait): "ready (\(model)) after \(Self.spoken(wait))"
         case .failed(let reason): "failed — \(reason)"
         }
     }
