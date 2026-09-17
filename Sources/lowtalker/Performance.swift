@@ -39,12 +39,7 @@ enum Performance {
                 print(performed)
             }
         } catch {
-            // [LAW:dataflow-not-control-flow] Every failure leaves the same way: said on
-            // stderr, then the code its kind is owed. A failure this names nothing about
-            // exits 1, as ArgumentParser's own would.
-            let failure = PerformExit.classify(error, flavor: flavor, machine: .of(flavor))
-            FileHandle.standardError.write(Data("Error: \(failure.said)\n".utf8))
-            throw ExitCode(failure.exit?.rawValue ?? ExitCode.failure.rawValue)
+            throw PerformExit.fail(error, flavor: flavor)
         }
     }
 }
@@ -53,7 +48,7 @@ enum Performance {
 struct TargetOption: ParsableArguments {
     @Option(
         name: .customLong("into"),
-        help: "The bundle id of the app to type into, raised first. Defaults to the app in front when the command starts, which from a terminal is the terminal.")
+        help: "The bundle id of the app to act in, raised first. Defaults to the app in front when the command starts, which from a terminal is the terminal.")
     var stated: BundleID?
 
     /// [LAW:one-source-of-truth] The app in front is macOS's to say, so it is read rather
@@ -82,10 +77,24 @@ enum PerformExit: Int32, CaseIterable {
     }
 
     /// The exit codes as `--help` lists them, from the cases themselves.
-    static let discussion = (["Exits 0 when every action was performed, and otherwise:"]
-        + allCases.map { "  \($0.rawValue)  \($0.meaning)" }
-        + ["  1  anything else, such as focus moving mid-run or an interrupt, said on stderr with how much landed."])
-        .joined(separator: "\n")
+    static let discussion = discussion(for: allCases, success: "Exits 0 when every action was performed")
+
+    /// The exit codes a command can end with, for a command that can end with only some.
+    static func discussion(for codes: [PerformExit], success: String) -> String {
+        ([success + ", and otherwise:"]
+            + codes.map { "  \($0.rawValue)  \($0.meaning)" }
+            + ["  1  anything else, such as focus moving mid-run or an interrupt, said on stderr with how much landed."])
+            .joined(separator: "\n")
+    }
+
+    /// [LAW:dataflow-not-control-flow] Every failure leaves the same way: said on stderr,
+    /// then the code its kind is owed. A failure this names nothing about exits 1, as
+    /// ArgumentParser's own would.
+    static func fail(_ error: any Error, flavor: Flavor) -> ExitCode {
+        let failure = classify(error, flavor: flavor, machine: .of(flavor))
+        FileHandle.standardError.write(Data("Error: \(failure.said)\n".utf8))
+        return ExitCode(failure.exit?.rawValue ?? ExitCode.failure.rawValue)
+    }
 
     /// A failure's code and the account of it for stderr.
     ///

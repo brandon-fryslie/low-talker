@@ -178,7 +178,7 @@ public struct Pointer {
     /// Every button up, on the way out of a run that stopped, for the reason `Typist`'s
     /// release gives: a button the driver believes is down is a drag that continues.
     /// [LAW:no-silent-failure] A release that fails is reported beside the stop.
-    private func release() async -> (any Error)? {
+    func release() async -> (any Error)? {
         do {
             try await mouse.releaseAll()
             return nil
