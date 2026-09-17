@@ -37,4 +37,20 @@ import Testing
         #expect(across.faults == [.unheard, .leftReshaped])
         #expect("\(across)".split(separator: "\n").count == 3)
     }
+
+    /// An operator's Ctrl-C withdraws the question. It is not deafness, so it is not the
+    /// `unheard` fault, and the one thing the reading still owes is the line saying where it
+    /// left the device - the sentence a process that obeyed the signal never printed.
+    @Test func anInterruptedReadingIsNotDeafAndStillSaysWhereItLeftTheDevice() {
+        let across = ShapeChangeAtRest(device: 143, readiedAt: 48000, movedTo: 44100, report: .interrupted, leftAt: 48000)
+        #expect(across.kept)
+        #expect("\(across)" == "device 143: readied at 48000.0 Hz, moved to 44100.0 Hz while resting, interrupted before it could be heard, left at 48000.0 Hz")
+    }
+
+    /// Interrupted and not put back is the case this whole reading was reopened for, and it
+    /// is the same fault it is on any other way out: the Mac was left changed.
+    @Test func anInterruptedReadingThatCouldNotPutTheDeviceBackSaysSo() {
+        let across = ShapeChangeAtRest(device: 143, readiedAt: 48000, movedTo: 44100, report: .interrupted, leftAt: 44100)
+        #expect(across.faults == [.leftReshaped])
+    }
 }

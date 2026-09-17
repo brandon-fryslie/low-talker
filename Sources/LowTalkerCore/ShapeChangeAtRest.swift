@@ -30,11 +30,15 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
         case heard
         /// Nothing arrived before the wait ran out.
         case never
+        /// The operator stopped the reading before it arrived, so the question was withdrawn
+        /// rather than answered. Not a fault of the code, and not a promise kept either.
+        case interrupted
 
         public var description: String {
             switch self {
             case .heard: "heard"
             case .never: "not heard"
+            case .interrupted: "interrupted before it could be heard"
             }
         }
     }
@@ -109,7 +113,8 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
     }
 
     /// Readies a microphone on this Mac, changes the shape of the device it bound to while
-    /// nothing has it open, and reports whether the readied microphone heard that.
+    /// nothing has it open, and reports whether the readied microphone heard that. `stop` is
+    /// asked between turns of every wait, and a wait it ends is reported as `interrupted`.
     ///
     /// [LAW:single-enforcer] Every reading of this kind comes through here, so the refusals
     /// are written once. Two of them: a device something else is already running cannot be
@@ -126,7 +131,7 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
     /// `HALInput.init`'s own guard, which ends the preparation rather than reporting it, so
     /// there is nothing for this to re-check. [LAW:single-enforcer]
     @MainActor
-    public static func measure(waiting wait: Duration) async throws -> ShapeChangeAtRest {
+    public static func measure(waiting wait: Duration, stoppingFor stop: @escaping @MainActor () -> Bool) async throws -> ShapeChangeAtRest {
         guard try MicrophoneIndicator.read() == .dark else { throw MicrophoneAlreadyRunning() }
         let arrival = Arrival()
         let input = HALInput(onStale: { arrival.arrived() })
@@ -134,10 +139,8 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
         let readiedAt = try nominalRate(of: device)
         let movedTo = try otherRate(of: device, than: readiedAt)
 
-        let report = try await report(to: arrival, ofMoving: device, from: readiedAt, to: movedTo, waiting: wait)
-        // The device was asked to go back before that returned; this is the time it is given to
-        // take the shape it started in, and the rate below is what it actually did.
-        try await Task.sleep(for: wait)
+        let report = try await report(to: arrival, ofMoving: device, from: readiedAt, to: movedTo, waiting: wait, stoppingFor: stop)
+        try await putBack(device, to: readiedAt, told: arrival, within: wait)
 
         // The input is what holds the watch, and a reading that let it go before the report
         // arrived would be measuring its own deinit. Nothing above uses it after the
@@ -160,7 +163,12 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
     /// every way out of the scope runs the `defer`, a cancelled wait included.
     ///
     /// SIGINT is not a way out of a scope. It kills the process where it stands and runs no
-    /// `defer` at all, so Ctrl-C during the wait leaves the device moved - low-privacy-o1z.lwn.
+    /// `defer` at all, so a Ctrl-C the process obeyed left the device moved for the length of
+    /// `--wait` - low-privacy-o1z.lwn. It reaches here as `stop` instead, a value the wait reads
+    /// between turns, so an interrupt ends the wait the way a report does and the move back is
+    /// the same call on the same path. [LAW:dataflow-not-control-flow] The device stands moved
+    /// for as long as CoreAudio takes to publish the change, and for `--wait` only on a Mac
+    /// that never does.
     ///
     /// [LAW:no-silent-failure] exception: the status of the ask is dropped because `measure`
     /// reads the rate back off the device afterwards, which answers the same question better
@@ -172,27 +180,100 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
         ofMoving device: AudioObjectID,
         from readiedAt: Double,
         to movedTo: Double,
-        waiting wait: Duration
+        waiting wait: Duration,
+        stoppingFor stop: @escaping @MainActor () -> Bool
     ) async throws -> Report {
+        let heardBefore = arrival.count
         try move(device, to: movedTo)
         defer { try? move(device, to: readiedAt) }
         // The whole reading is this wait. CoreAudio publishes the change asynchronously, so the
         // bound is a fact about the hardware rather than a sleep hiding a race: a report that
         // has not arrived by the deadline is what an unwatched device looks like, and `--wait`
         // is where an operator says how long this Mac gets.
-        try await Task.sleep(for: wait)
-        // Read before the `defer` moves the device back, because that is another change of
+        //
+        // Taken before the `defer` moves the device back, because that is another change of
         // shape the same watch reports, and this reading is about the first one.
-        return arrival.report
+        return switch try await arrival.wait(past: heardBefore, for: wait, stoppingFor: stop) {
+        case .arrived: .heard
+        case .ranOut: .never
+        case .stopped: .interrupted
+        }
     }
 
-    /// Where the report lands. A class because the listener and the wait below it have to
-    /// reach the same one, and `@MainActor` because that is where `HALInput` calls back.
+    /// Asks for the shape the device was found in until the device says it is in it, for at
+    /// most `wait`. `report` already asked once on its way out; this is what makes that ask
+    /// stick.
+    ///
+    /// Asked again rather than trusted, because one ask is not enough on this Mac: measured for
+    /// low-privacy-o1z.lwn, a move back asked within about 150 ms of the move - which is where
+    /// an interrupt lands - was accepted with `noErr` and never happened, and the built-in
+    /// microphone was left at 44100 Hz. CoreAudio drops a rate set that arrives while the
+    /// device is still taking the previous one. [FRAMING:representation] The status is a map
+    /// of the ask; the rate read off the device is the territory, and the only thing this
+    /// believes. The put-back is owed whatever stopped the reading, so nothing stops this.
+    ///
+    /// Nor is one read enough. The rate read straight after the put-back's report answered the
+    /// rate just asked for, and the run after found the device at the other one: a change still
+    /// in flight when the ask was made lands after the read and undoes it, so the report says
+    /// the ask was taken and not that the device is done. What is believed instead is a rate
+    /// read after the device has gone `quiet` without a report - a device still changing is
+    /// still reporting - and the device is asked again only when that read disagrees. A device
+    /// that never agrees is left where it is, and `leftReshaped` is the reading that says so.
+    /// [LAW:no-silent-failure]
     @MainActor
-    private final class Arrival {
-        private(set) var report = Report.never
+    private static func putBack(_ device: AudioObjectID, to rate: Double, told arrival: Arrival, within wait: Duration) async throws {
+        let deadline = ContinuousClock.now + wait
+        while ContinuousClock.now < deadline {
+            try await arrival.settled(for: quiet, by: deadline)
+            guard try nominalRate(of: device) != rate else { return }
+            try move(device, to: rate)
+        }
+    }
 
-        func arrived() { report = .heard }
+    /// How long a device has to go without reporting a change before what it says about its
+    /// shape is read as where it came to rest. Measured for low-privacy-o1z.lwn on the built-in
+    /// microphone: a rate change lands within a few tens of milliseconds of its ask, and a
+    /// read taken sooner than that after the last report was the one the next run contradicted.
+    static let quiet = Duration.milliseconds(200)
+
+    /// Where the reports land, and how a wait for the next one ends. A class because the
+    /// listener and the wait have to reach the same one, and `@MainActor` because that is where
+    /// `HALInput` calls back.
+    ///
+    /// Counted rather than flagged, because the watch reports every change of shape and this
+    /// reading makes two: a wait is for a report past the ones already heard.
+    @MainActor
+    final class Arrival {
+        enum Outcome { case arrived, ranOut, stopped }
+
+        private(set) var count = 0
+
+        func arrived() { count += 1 }
+
+        /// Waits until a report past `seen` has landed, `wait` has run out, or `stop` says so -
+        /// whichever comes first. The reports and `stop` are both read between turns of the main
+        /// actor, every few milliseconds: the same place `Interrupt` is read everywhere else, and
+        /// short enough that a device stands moved for about as long as CoreAudio takes to say
+        /// so. [LAW:dataflow-not-control-flow] Three ways a wait ends, and the caller is told
+        /// which rather than left to infer it from what was and was not thrown.
+        func wait(past seen: Int, for wait: Duration, stoppingFor stop: @escaping @MainActor () -> Bool) async throws -> Outcome {
+            let deadline = ContinuousClock.now + wait
+            while count <= seen {
+                if stop() { return .stopped }
+                guard ContinuousClock.now < deadline else { return .ranOut }
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            return .arrived
+        }
+
+        /// Waits until `quiet` has passed with no report, or `deadline` has: a device that is
+        /// still changing is still reporting, and one that has stopped is where it will stay.
+        func settled(for quiet: Duration, by deadline: ContinuousClock.Instant) async throws {
+            while ContinuousClock.now < deadline {
+                let seen = count
+                guard try await wait(past: seen, for: min(quiet, deadline - ContinuousClock.now), stoppingFor: { false }) == .arrived else { return }
+            }
+        }
     }
 
     /// A shape this device offers that is not the one it is in.

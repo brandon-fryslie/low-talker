@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import LowTalkerCore
+import Typing
 
 /// The microphone from the command line: what macOS will let this process do with it, and
 /// what macOS shows the user while something is doing it. The request, the denied state, a
@@ -98,14 +99,17 @@ struct MicCommand: ParsableCommand {
     /// This Mac is changed for the length of the run, which is why it is a command someone
     /// asks for rather than anything the app does: the reading names the rate it left the
     /// device at, so a run that could not put it back says so instead of leaving it to be
-    /// noticed later.
+    /// noticed later. Ctrl-C is answered rather than obeyed for the same reason - obeyed, it
+    /// ended the process with the device moved and nothing said - so an interrupted run puts
+    /// the device back, prints where it left it, and exits as interrupted.
     struct Shape: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             abstract: "Change the input device's shape while a microphone rests, and report whether it was heard."
         )
 
-        /// Whole milliseconds, like `indicator`'s hold. Spent twice: once waiting for the
-        /// report, once giving the device time to take the shape it started in back.
+        /// Whole milliseconds, like `indicator`'s hold. The most this Mac gets to publish each
+        /// change: the reading goes on the moment a report lands, so this is spent in full only
+        /// on a Mac that never reports.
         @Option(help: "Milliseconds to wait for the report, and again for the device to change back.")
         var wait: Int = 1000
 
@@ -115,9 +119,13 @@ struct MicCommand: ParsableCommand {
 
         @MainActor
         func run() async throws {
-            let across = try await ShapeChangeAtRest.measure(waiting: .milliseconds(wait))
+            let interrupt = Interrupt.watched()
+            let across = try await ShapeChangeAtRest.measure(waiting: .milliseconds(wait), stoppingFor: { interrupt.isRaised })
             print(across)
             guard across.kept else { throw ExitCode.failure }
+            // The shell's own status for a command Ctrl-C ended, so a script reads an interrupted
+            // reading the way it reads any other interrupted command and never as a promise kept.
+            guard across.report != .interrupted else { throw ExitCode(130) }
         }
     }
 

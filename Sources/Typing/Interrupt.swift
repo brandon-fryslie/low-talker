@@ -44,9 +44,18 @@ public final class Interrupt: @unchecked Sendable {
     /// [LAW:no-silent-failure] An interrupt is a named failure like any other, so it
     /// travels the same path and is reported with the same count beside it.
     public func check() throws {
+        if let raised = number { throw Interrupted(number: raised) }
+    }
+
+    /// Whether one has been raised, for a run that answers an interrupt as an outcome of its
+    /// own rather than as a failure - a hardware reading stops, puts the Mac back and says it
+    /// was interrupted, where a burst throws. Same fact, read without the throw.
+    public var isRaised: Bool { number != nil }
+
+    private var number: Int32? {
         lock.lock()
         defer { lock.unlock() }
-        if let raised { throw Interrupted(number: raised) }
+        return raised
     }
 }
 
