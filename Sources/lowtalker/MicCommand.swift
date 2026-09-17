@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import LowTalkerCore
+import Typing
 
 /// The microphone from the command line: what macOS will let this process do with it, and
 /// what macOS shows the user while something is doing it. The request, the denied state, a
@@ -98,25 +99,44 @@ struct MicCommand: ParsableCommand {
     /// This Mac is changed for the length of the run, which is why it is a command someone
     /// asks for rather than anything the app does: the reading names the rate it left the
     /// device at, so a run that could not put it back says so instead of leaving it to be
-    /// noticed later.
+    /// noticed later. Ctrl-C is answered rather than obeyed for the same reason - obeyed, it
+    /// ended the process with the device moved and nothing said - so an interrupted run puts
+    /// the device back, prints where it left it, and then fails the way every interrupted
+    /// command here fails. Only Ctrl-C is answered: the put-back can hold the process for up to
+    /// `--wait` after it, and a supervisor's SIGTERM keeps its meaning.
     struct Shape: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             abstract: "Change the input device's shape while a microphone rests, and report whether it was heard."
         )
 
-        /// Whole milliseconds, like `indicator`'s hold. Spent twice: once waiting for the
-        /// report, once giving the device time to take the shape it started in back.
-        @Option(help: "Milliseconds to wait for the report, and again for the device to change back.")
+        /// Whole milliseconds, like `indicator`'s hold. The most this Mac gets to publish each
+        /// change: the reading goes on the moment a report lands, so what a run spends waiting
+        /// is a few reports' worth plus the settling the put-back needs, and this in full only
+        /// on a Mac that never reports.
+        @Option(help: ArgumentHelp("Milliseconds to wait for each report, and the most the put-back may take; a device is read as settled after \(settling) ms without one."))
         var wait: Int = 1000
 
+        /// The settling, in this command's unit.
+        private static let settling = Int(ShapeChangeAtRest.quiet / .milliseconds(1))
+
+        /// No shorter than a settling, because a put-back that can never be confirmed would
+        /// report `leftReshaped` for a device that is on its way back.
         func validate() throws {
-            guard wait > 0 else { throw ValidationError("--wait must be positive.") }
+            guard wait >= Self.settling else {
+                throw ValidationError("--wait must be at least \(Self.settling) ms, the settling a put-back is read after.")
+            }
         }
 
         @MainActor
         func run() async throws {
-            let across = try await ShapeChangeAtRest.measure(waiting: .milliseconds(wait))
+            let interrupt = Interrupt.watched([SIGINT])
+            let across = try await ShapeChangeAtRest.measure(waiting: .milliseconds(wait), stoppingFor: { interrupt.isRaised })
             print(across)
+            // An interrupt is the same failure it is on every other command, thrown after the
+            // reading has said where it left the device - and ahead of the verdict, so a run that
+            // was interrupted and could not put the device back is still the interrupted one on
+            // stderr. [LAW:single-enforcer]
+            try interrupt.check()
             guard across.kept else { throw ExitCode.failure }
         }
     }
@@ -149,8 +169,9 @@ struct MicCommand: ParsableCommand {
 
 extension MicCommand {
     /// Whether a device change leaves the key-down handler free and a press on it whole.
-    /// Moves the default input's rate and back, like `shape`, and puts it back on every way
-    /// out; exit status is the verdict.
+    /// Moves the default input's rate and back, like `shape`, and puts it back on every throw -
+    /// not on Ctrl-C, which `shape` answers and this still obeys: low-privacy-pon. Exit status
+    /// is the verdict.
     struct Change: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             abstract: "Change the input device's shape twice, and report how long the main actor was held and whether a press on the change came back whole."
