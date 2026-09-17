@@ -132,10 +132,12 @@ struct MicCommand: ParsableCommand {
             let interrupt = Interrupt.watched([SIGINT])
             let across = try await ShapeChangeAtRest.measure(waiting: .milliseconds(wait), stoppingFor: { interrupt.isRaised })
             print(across)
-            guard across.kept else { throw ExitCode.failure }
             // An interrupt is the same failure it is on every other command, thrown after the
-            // reading has said where it left the device. [LAW:single-enforcer]
+            // reading has said where it left the device - and ahead of the verdict, so a run that
+            // was interrupted and could not put the device back is still the interrupted one on
+            // stderr. [LAW:single-enforcer]
             try interrupt.check()
+            guard across.kept else { throw ExitCode.failure }
         }
     }
 

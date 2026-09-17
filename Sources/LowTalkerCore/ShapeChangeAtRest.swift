@@ -160,10 +160,10 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
     /// [LAW:no-ambient-temporal-coupling] A device moved and a device put back are one lifetime,
     /// so they are one scope with one owner rather than two calls a happy path reaches in order.
     /// Every way out of the scope puts the device back: the ordinary ways through `putBack`,
-    /// which asks until the device agrees, and a cancelled task through the `defer`, which is
-    /// the one ask a task that can no longer wait can still make. The `defer` is that and no
-    /// more - see `putBack` for why one ask is not enough - and a cancelled reading, which
-    /// nothing here cancels, is the only way out it covers alone.
+    /// which asks until the device agrees, and a wait that threw through one ask on its way
+    /// out, which is all a task that can no longer wait can do. That throw is a cancelled
+    /// task's, which nothing here cancels, so the one-shot ask is the way out nothing takes -
+    /// see `putBack` for why one ask is not enough on the ways out something does.
     ///
     /// SIGINT is not a way out of a scope. It kills the process where it stands and runs no
     /// `defer` at all, so a Ctrl-C the process obeyed left the device moved for the length of
@@ -174,10 +174,10 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
     /// moved for as long as CoreAudio takes to publish the change, and for `--wait` only on a
     /// Mac that never does.
     ///
-    /// [LAW:no-silent-failure] exception: the status of the `defer`'s ask is dropped because
-    /// `measure` reads the rate back off the device afterwards, which answers the same question
-    /// better than a status does, and because throwing from a `defer` is not a thing that can
-    /// be done anyway. A move that would not go back comes back as `leftReshaped`.
+    /// [LAW:no-silent-failure] exception: the status of the one-shot ask is dropped because
+    /// the error already on its way out is the one to report, and `measure` reads the rate
+    /// back off the device on every other way out, which answers the question better than a
+    /// status does. A move that would not go back comes back as `leftReshaped`.
     @MainActor
     private static func report(
         to arrival: Arrival,
@@ -197,7 +197,6 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
         await Task.yield()
         let heardBefore = arrival.count
         try move(device, to: movedTo)
-        defer { try? move(device, to: readiedAt) }
         // The whole reading is this wait. CoreAudio publishes the change asynchronously, so the
         // bound is a fact about the hardware rather than a sleep hiding a race: a report that
         // has not arrived by the deadline is what an unwatched device looks like, and `--wait`
@@ -205,7 +204,13 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
         //
         // Taken before the device is moved back, because that is another change of shape the
         // same watch reports, and this reading is about the first one.
-        let outcome = try await arrival.wait(past: heardBefore, for: wait, stoppingFor: stop)
+        let outcome: Arrival.Outcome
+        do {
+            outcome = try await arrival.wait(past: heardBefore, for: wait, stoppingFor: stop)
+        } catch {
+            try? move(device, to: readiedAt)
+            throw error
+        }
         try await putBack(device, to: readiedAt, told: arrival, within: wait)
         return switch outcome {
         case .arrived: .heard
@@ -230,19 +235,20 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
     /// in flight when the ask was made lands after the read and undoes it, so the report says
     /// the ask was taken and not that the device is done. What is believed instead is a rate
     /// read after the device has gone `quiet` without a report - a device still changing is
-    /// still reporting - and the device is asked again only when that read disagrees. Every ask
-    /// is followed by that settling and none is made once the deadline has passed, so the rate
-    /// `measure` reads after this is never one taken on the heels of an ask. A device that
-    /// never agrees is left where it is, and `leftReshaped` is the reading that says so.
-    /// [LAW:no-silent-failure]
+    /// still reporting - and the device is asked again only when that read disagrees. The ask
+    /// comes first and the settling after it, so a wait as short as one settling still asks
+    /// once and reads once, a device that never goes quiet has still been asked before the
+    /// deadline is spent on it, and the rate `measure` reads after this is never one taken on
+    /// the heels of an ask. A device that never agrees is left where it is, and `leftReshaped`
+    /// is the reading that says so. [LAW:no-silent-failure]
     @MainActor
     private static func putBack(_ device: AudioObjectID, to rate: Double, told arrival: Arrival, within wait: Duration) async throws {
-        let deadline = ContinuousClock.now + wait
-        while true {
-            try await arrival.settled(for: quiet, by: deadline)
-            guard try nominalRate(of: device) != rate, ContinuousClock.now < deadline else { return }
+        let clock = ContinuousClock()
+        let deadline = clock.now + wait
+        repeat {
             try move(device, to: rate)
-        }
+            try await arrival.settled(for: quiet, by: deadline, on: clock)
+        } while try nominalRate(of: device) != rate && clock.now < deadline
     }
 
     /// How long a device has to go without reporting a change before what it says about its
@@ -291,8 +297,10 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
 
         /// Waits until `quiet` has passed with no report, or `deadline` has: a device that is
         /// still changing is still reporting, and one that has stopped is where it will stay.
-        func settled(for quiet: Duration, by deadline: ContinuousClock.Instant) async throws {
-            while try await wait(past: count, for: min(quiet, deadline - ContinuousClock.now)) == .arrived {}
+        /// Every report starts the quiet over, so a device that reports more often than that
+        /// is never read as settled and the deadline is what ends this.
+        func settled<C: Clock>(for quiet: Duration, by deadline: C.Instant, on clock: C) async throws where C.Duration == Duration {
+            while try await wait(past: count, for: min(quiet, clock.now.duration(to: deadline)), on: clock) == .arrived {}
         }
     }
 

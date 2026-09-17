@@ -16,9 +16,14 @@ final class StepClock: Clock, @unchecked Sendable {
 
     private(set) var now = Instant(since: .zero)
     let minimumResolution: Duration = .zero
+    /// Run at each tick with the instant the hands moved to, before the sleeper wakes: where
+    /// a test puts what the world does while the code under test sleeps. A sleep on this
+    /// clock never suspends, so nothing else gets a turn to do it.
+    var onTick: ((Instant) -> Void)?
 
     func sleep(until deadline: Instant, tolerance: Duration?) async throws {
         try Task.checkCancellation()
         now = deadline
+        onTick?(deadline)
     }
 }
