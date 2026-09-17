@@ -39,10 +39,11 @@ public struct ModelStore: Sendable {
     /// The store `bundle` carries, if it carries one. A release's bundle does and a
     /// development build's does not.
     ///
-    /// A source, never a place a model is loaded from: the app installs out of it into
-    /// `applicationSupport()`, so where a loaded model lives stays one directory. Inside
-    /// the bundle rather than beside it on the disk image, because dragging the app to
-    /// Applications takes the bundle and leaves whatever sat beside it behind.
+    /// A release loads this store in place, read-only, and writes no model data outside
+    /// its bundle: the carried store is already whole and sealed by the code signature, so
+    /// nothing has to be copied out of it first. Inside the bundle rather than beside it on
+    /// the disk image, because dragging the app to Applications takes the bundle and leaves
+    /// whatever sat beside it behind.
     public static func carried(by bundle: Bundle) -> ModelStore? {
         bundle.url(forResource: carriedResourceName, withExtension: nil).map(ModelStore.init(directory:))
     }
@@ -107,7 +108,13 @@ public struct ModelStore: Sendable {
         from source: ModelSource,
         phase: @escaping @Sendable (InstallPhase) -> Void
     ) async throws -> InstalledModel {
-        try await InstallLock.holding(directory, waiting: { phase(.waitingForAnotherInstall) }) {
+        // [LAW:no-ambient-temporal-coupling] The lock owns the order of evict, download,
+        // and manifest write, so a store with nothing to write needs no turn in it — and a
+        // release's carried store is read-only, where taking the lock is both pointless and
+        // impossible. Judge presence first; only a store that must be written locks and
+        // re-judges under the lock, where the reading describes what this installer owns.
+        if case .installed(let installed) = try presence(of: model) { return installed }
+        return try await InstallLock.holding(directory, waiting: { phase(.waitingForAnotherInstall) }) {
             let presence = try presence(of: model)
             if case .installed(let installed) = presence { return installed }
             // [LAW:single-enforcer] The hub client trusts its own sidecar once a file

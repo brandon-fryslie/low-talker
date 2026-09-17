@@ -446,11 +446,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// run on WhisperKit's own threads, and only the status text comes back here.
     private func loadEngine() async throws -> WhisperKitTranscriber {
         do {
-            let store = try ModelStore.applicationSupport()
-            // A release carries its model, so its first launch copies rather than
-            // downloads. A carried store that lacks the model fails the load with its
-            // reason instead of falling back to a download nobody asked for.
-            let source = ModelStore.carried(by: .main).map(ModelSource.store) ?? .huggingFace
+            // [LAW:dataflow-not-control-flow] A release loads the store it carries in
+            // place, read-only, and writes no model data outside its bundle; a development
+            // build carries none and downloads into Application Support. The carried store
+            // is both where a release loads from and its own source, so a load never falls
+            // back to a download nobody asked for: a carried store that lacks the model
+            // fails with its reason. [LAW:no-silent-failure]
+            let carried = ModelStore.carried(by: .main)
+            let store = try carried ?? ModelStore.applicationSupport()
+            let source = carried.map(ModelSource.store) ?? .huggingFace
             let transcriber = try await WhisperKitTranscriber.load(in: store, from: source) { phase in
                 Task { @MainActor in
                     let next = self.engineReadiness.reporting(phase)
