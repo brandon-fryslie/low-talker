@@ -48,7 +48,7 @@ public final class WhisperKitTranscriber: Transcriber {
         return try await WhisperKitTranscriber(installed)
     }
 
-    /// What `load(_:from:phase:)` is doing right now. There is no "ready" case: the
+    /// What a load is doing right now. There is no "ready" case: the
     /// returned transcriber is that state.
     public enum LoadPhase: Equatable, Sendable, CustomStringConvertible {
         case installing(ModelStore.InstallPhase)

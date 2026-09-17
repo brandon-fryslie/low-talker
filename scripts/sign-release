@@ -5,7 +5,7 @@
 #   scripts/sign-release <output directory> [model source]    # prints <output directory>/LowTalker.app
 #
 # The bundle carries the default model in Contents/Resources/model-store, so a first launch
-# installs it with the network off, and the pinned virtual keyboard driver package beside it,
+# loads it in place with the network off, and the pinned virtual keyboard driver package beside it,
 # so installing the driver needs no GitHub. The model source is what `lowtalker model download
 # --from` takes: a store holding the model, such as ~/Library/Application Support/low-talker/hub,
 # or a base URL serving the archive `lowtalker model pack` writes. With none, the model comes
