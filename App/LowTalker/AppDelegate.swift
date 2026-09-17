@@ -228,11 +228,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         await this.value
     }
 
+    /// Returns once the main queue has run everything already on it.
+    ///
+    /// The hotkey hands presses on by way of the main queue rather than from inside the
+    /// tap's callback, so a press the tap read moments before `stop()` can still be
+    /// sitting there unqueued into the loop. Draining first is what keeps "its sessions
+    /// are waited out" true: `finish()` waits on the sessions a loop has been given, and
+    /// cannot wait for one that has not reached it yet.
+    ///
+    /// [LAW:no-ambient-temporal-coupling] The queue itself is waited on, never a duration
+    /// chosen to be long enough, so this is exactly as long as the work and no longer.
+    private func mainQueueDrained() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+    }
+
     private func adopt(_ method: InputMethod) async {
         chosenMethod = method
         if let previous = listening {
             listening = nil
             previous.hotkey.stop()
+            await mainQueueDrained()
             // A refused wait is reported and the switch still made: a loop that cannot be
             // replaced would be the worse failure of the two. [LAW:no-silent-failure]
             do { try await previous.dictation.finish() } catch { report(.failure(error)) }
@@ -357,11 +374,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // why. `switching` is set only by a choice taken down to a loop, which `listen`
         // makes first. [LAW:no-ambient-temporal-coupling]
         //
-        // The method already chosen is not chosen again: rebuilding the loop would end a
-        // latched press as lapsed and throw its recording away.
-        let already = chosenMethod == chosen
+        // The method already chosen is not chosen again while its hotkey is up: rebuilding
+        // the loop would end a latched press as lapsed and throw its recording away.
+        // A hotkey that has come down has no press to lose and nothing listening, so
+        // choosing its method again is how the user starts it - and is what the status
+        // line tells them to do.
+        let rebuilding = chosenMethod == chosen && listening?.hotkey.isWatching == true
         chosenMethod = chosen
-        guard switching != nil, !already else { return }
+        guard switching != nil, !rebuilding else { return }
         Task {
             await choose(chosen)
             showWhatIsMissing(for: chosen)
@@ -434,6 +454,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task {
             // A switch in progress is let finish first, so the loop waited on is the last one.
             await switching?.value
+            await mainQueueDrained()
             // A refused wait is reported and the quit still granted: an app that cannot
             // be quit would be the worse failure of the two. [LAW:no-silent-failure]
             do { try await listening?.dictation.finish() } catch { report(.failure(error)) }
@@ -513,7 +534,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // open, which is no use to someone whose keyboard has just started misbehaving
         // and who is trying to work out which app is doing it.
         case .comeDown:
-            showHotkeyStatus("off - the keyboard tap was too slow to answer \(lapse.count) times and has been taken down, so the keyboard is the session's alone; choose an input method below to start it again")
+            showHotkeyStatus("off - the keyboard tap kept lapsing and has been taken down, so the keyboard is the session's alone; choose an input method below to start it again")
         }
     }
 

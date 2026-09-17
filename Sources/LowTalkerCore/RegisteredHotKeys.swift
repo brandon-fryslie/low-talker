@@ -71,7 +71,7 @@ public struct RegisteredHotKeys: KeyboardTap {
     public func install(
         listeningFor chords: Set<KeyChord>,
         handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery,
-        onLapse: @escaping @MainActor (HostTime) -> LapseResponse
+        onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse
     ) throws -> Disposal {
         // [LAW:parse-dont-validate] Every chord is proven registrable before anything is
         // registered, so a set with one bad chord registers none of them. Sorted so the

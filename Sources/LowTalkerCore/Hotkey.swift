@@ -20,21 +20,35 @@ import Flavors
 /// is holding.
 public struct KeyboardTapLapse: Hashable, Sendable, CustomStringConvertible {
     /// Lapses since `Hotkey.start`, this one counted: the first reports 1.
+    ///
+    /// Every lapse, whatever its cause. This is not the number the cap is drawn against -
+    /// that one counts only the recent ones this app was too slow for - so nothing here
+    /// offers it as the reason a tap came down.
     public let count: Int
+    /// Why the system switched the tap off.
+    public let cause: LapseCause
     /// What the tap did about this one.
     public let response: LapseResponse
 
-    public init(count: Int, response: LapseResponse) {
+    public init(count: Int, cause: LapseCause, response: LapseResponse) {
         self.count = count
+        self.cause = cause
         self.response = response
+    }
+
+    private var why: String {
+        switch cause {
+        case .tooSlow: "this app did not answer the window server in time"
+        case .userInput: "the system switched it off around the user's own input"
+        }
     }
 
     public var description: String {
         switch response {
         case .rearm:
-            "the keyboard tap lapsed and was switched back on, losing the events in between; \(count) since listening began"
+            "the keyboard tap lapsed and was switched back on, losing the events in between - \(why); \(count) since listening began"
         case .comeDown:
-            "the keyboard tap lapsed \(count) times and has been taken down; the hotkey is off and the keyboard is the session's alone until it is started again"
+            "the keyboard tap has been taken down for lapsing too often - \(why); \(count) lapses since listening began, and the hotkey is off until it is started again"
         }
     }
 }
@@ -177,9 +191,13 @@ public final class Hotkey {
     /// second way to ask is a second answer: this one moves between the lapse and any
     /// later reading of it. [LAW:one-source-of-truth]
     private var lapses = 0
-    /// The moments of the lapses still inside `lapseWindow`, which is the whole of what
-    /// deciding to come down needs to know. Trimmed on each lapse, so it holds at most
+    /// The moments of the recent lapses this app was too slow for, which is the whole of
+    /// what deciding to come down needs to know. Trimmed on each one, so it holds at most
     /// `lapsesBeforeComingDown` of them and never grows with the app's life.
+    ///
+    /// Only `.tooSlow` lands here. A lapse the system took around the user's own input is
+    /// not something this app can go faster to avoid, so counting it would take the hotkey
+    /// down for something it did not do.
     private var recentLapses: [HostTime] = []
 
     public init(chords: Set<KeyChord>, tapThreshold: Duration = defaultTapThreshold, tap: any KeyboardTap = SystemKeyboardTap()) {
@@ -199,6 +217,14 @@ public final class Hotkey {
     }
 
     public var phase: HotkeyDetector.Phase { detector.phase }
+
+    /// Whether a tap is up and presses are being heard.
+    ///
+    /// False before the first `start`, after `stop`, and after a tap that kept lapsing
+    /// was taken down. [LAW:one-source-of-truth] derived from the installation itself, so
+    /// it cannot disagree with whether anything is actually listening - which is the
+    /// question a caller offering the user a way to start it again has to ask.
+    public var isWatching: Bool { installed != nil }
 
     /// Starts watching. Each press begins and ends at `onTransition`, and every lapse
     /// of the tap arrives at `onLapse`, both on the main actor and both on the main
@@ -224,7 +250,9 @@ public final class Hotkey {
             // A hotkey that has been released cannot decide anything, and an armed tap
             // with nothing behind it is a gate in front of the session's keyboard that
             // nobody is minding.
-            onLapse: { [weak self] moment in self?.lapse(at: moment, onTransition, onLapse) ?? .comeDown }
+            onLapse: { [weak self] moment, cause in
+                self?.lapse(at: moment, because: cause, onTransition, onLapse) ?? .comeDown
+            }
         )
         installed = (dispose, onTransition)
     }
@@ -271,18 +299,32 @@ public final class Hotkey {
     /// report goes out afterwards like everything else.
     private func lapse(
         at moment: HostTime,
+        because cause: LapseCause,
         _ onTransition: @escaping @MainActor (HotkeyDetector.Transition) -> Void,
         _ onLapse: @escaping @MainActor (KeyboardTapLapse) -> Void
     ) -> LapseResponse {
         lapses += 1
-        recentLapses.removeAll { moment - $0 >= Self.lapseWindow }
-        recentLapses.append(moment)
+        switch cause {
+        case .tooSlow:
+            recentLapses.removeAll { moment - $0 >= Self.lapseWindow }
+            recentLapses.append(moment)
+        case .userInput:
+            break
+        }
         let response: LapseResponse = recentLapses.count >= Self.lapsesBeforeComingDown ? .comeDown : .rearm
-        let lapse = KeyboardTapLapse(count: lapses, response: response)
+        let lapse = KeyboardTapLapse(count: lapses, cause: cause, response: response)
         // The lapse before what it did to the press, so a reader of either meets the
         // cause ahead of the consequence.
         after { onLapse(lapse) }
         detector.lapse().map { transition in after { onTransition(transition) } }
+        // A tap left switched off is still an installation holding a disposal, and
+        // `isWatching` would go on saying this hotkey is up. Taken down properly once the
+        // callback has returned, which is the only place it is safe to dispose the port
+        // the callback is running inside.
+        switch response {
+        case .rearm: break
+        case .comeDown: after { [weak self] in self?.stop() }
+        }
         return response
     }
 }

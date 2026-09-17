@@ -12,10 +12,10 @@ private final class FakeTap: KeyboardTap {
     final class Installation {
         let chords: Set<KeyChord>
         let handle: @MainActor (KeyEvent) -> HotkeyDetector.Delivery
-        let onLapse: @MainActor (HostTime) -> LapseResponse
+        let onLapse: @MainActor (HostTime, LapseCause) -> LapseResponse
         var disposed = false
 
-        init(chords: Set<KeyChord>, handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery, onLapse: @escaping @MainActor (HostTime) -> LapseResponse) {
+        init(chords: Set<KeyChord>, handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery, onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse) {
             self.chords = chords
             self.handle = handle
             self.onLapse = onLapse
@@ -29,7 +29,7 @@ private final class FakeTap: KeyboardTap {
         self.refusal = refusal
     }
 
-    func install(listeningFor chords: Set<KeyChord>, handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery, onLapse: @escaping @MainActor (HostTime) -> LapseResponse) throws -> Disposal {
+    func install(listeningFor chords: Set<KeyChord>, handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery, onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse) throws -> Disposal {
         if let refusal { throw refusal }
         let installation = Installation(chords: chords, handle: handle, onLapse: onLapse)
         installations.append(installation)
@@ -141,10 +141,10 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         var transitions: [HotkeyDetector.Transition] = []
         var lapses: [KeyboardTapLapse] = []
         try hotkey.start({ transitions.append($0) }, onLapse: { lapses.append($0) })
-        #expect(tap.installations[0].onLapse(at(0)) == .rearm)
-        #expect(tap.installations[0].onLapse(at(1000)) == .rearm)
+        #expect(tap.installations[0].onLapse(at(0), .tooSlow) == .rearm)
+        #expect(tap.installations[0].onLapse(at(1000), .tooSlow) == .rearm)
         await settle()
-        #expect(lapses == [KeyboardTapLapse(count: 1, response: .rearm), KeyboardTapLapse(count: 2, response: .rearm)])
+        #expect(lapses == [KeyboardTapLapse(count: 1, cause: .tooSlow, response: .rearm), KeyboardTapLapse(count: 2, cause: .tooSlow, response: .rearm)])
         #expect(transitions.isEmpty)
     }
 
@@ -160,11 +160,30 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         try hotkey.start({ _ in }, onLapse: { lapses.append($0) })
         let installation = try #require(tap.installations.first)
         for index in 1..<Hotkey.lapsesBeforeComingDown {
-            #expect(installation.onLapse(at(Int64(index) * 100)) == .rearm)
+            #expect(installation.onLapse(at(Int64(index) * 100), .tooSlow) == .rearm)
         }
-        #expect(installation.onLapse(at(Int64(Hotkey.lapsesBeforeComingDown) * 100)) == .comeDown)
+        #expect(installation.onLapse(at(Int64(Hotkey.lapsesBeforeComingDown) * 100), .tooSlow) == .comeDown)
         await settle()
-        #expect(lapses.last == KeyboardTapLapse(count: Hotkey.lapsesBeforeComingDown, response: .comeDown))
+        #expect(lapses.last == KeyboardTapLapse(count: Hotkey.lapsesBeforeComingDown, cause: .tooSlow, response: .comeDown))
+        // Taken down in full, not left as a switched-off tap nobody disposed: a caller
+        // offering the user a way to start it again has to be able to tell it is off.
+        #expect(!hotkey.isWatching)
+        #expect(installation.disposed)
+    }
+
+    /// A lapse the system took around the user's own input is not this app being slow, so
+    /// it never counts towards the cap. Counting it would take the hotkey down for
+    /// something this app did not do and could go no faster to avoid.
+    @Test func lapsesTheUserCausedNeverTakeTheTapDown() async throws {
+        let tap = FakeTap()
+        let hotkey = Hotkey(chords: [rightOption], tap: tap)
+        try hotkey.start({ _ in }, onLapse: { _ in })
+        let installation = try #require(tap.installations.first)
+        for index in 1...(Hotkey.lapsesBeforeComingDown * 3) {
+            #expect(installation.onLapse(at(Int64(index) * 100), .userInput) == .rearm,
+                    "lapse \(index) took the tap down for input this app did not cause")
+        }
+        #expect(hotkey.isWatching)
     }
 
     /// Lapses far enough apart are separate bad moments rather than a tap that cannot
@@ -177,7 +196,7 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         let apart = Hotkey.lapseWindow + .milliseconds(1)
         for index in 0..<(Hotkey.lapsesBeforeComingDown * 3) {
             let moment = HostTime(uptime: apart * Double(index))
-            #expect(installation.onLapse(moment) == .rearm, "lapse \(index + 1) took the tap down")
+            #expect(installation.onLapse(moment, .tooSlow) == .rearm, "lapse \(index + 1) took the tap down")
         }
     }
 
@@ -188,11 +207,11 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         let hotkey = Hotkey(chords: [rightOption], tap: tap)
         var lapses: [KeyboardTapLapse] = []
         try hotkey.start({ _ in }, onLapse: { lapses.append($0) })
-        _ = tap.installations[0].onLapse(at(0))
+        _ = tap.installations[0].onLapse(at(0), .tooSlow)
         try hotkey.start({ _ in }, onLapse: { lapses.append($0) })
-        _ = tap.installations[1].onLapse(at(1000))
+        _ = tap.installations[1].onLapse(at(1000), .tooSlow)
         await settle()
-        #expect(lapses == [KeyboardTapLapse(count: 1, response: .rearm), KeyboardTapLapse(count: 1, response: .rearm)])
+        #expect(lapses == [KeyboardTapLapse(count: 1, cause: .tooSlow, response: .rearm), KeyboardTapLapse(count: 1, cause: .tooSlow, response: .rearm)])
         #expect(tap.installations[0].disposed)
         #expect(tap.installations.count == 2)
     }
@@ -209,10 +228,10 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         try hotkey.start({ transitions.append($0) }, onLapse: { lapses.append($0) })
         let installation = try #require(tap.installations.first)
         _ = installation.handle(rightOption(.down, at: 0))
-        _ = installation.onLapse(at(500))
+        _ = installation.onLapse(at(500), .tooSlow)
         await settle()
         // Both told: the lapse in its own right, and the press it ended.
-        #expect(lapses == [KeyboardTapLapse(count: 1, response: .rearm)])
+        #expect(lapses == [KeyboardTapLapse(count: 1, cause: .tooSlow, response: .rearm)])
         #expect(transitions == [.began(rightOption, at: at(0)), .ended(rightOption, .lapsed)])
         #expect(hotkey.phase == .idle)
         #expect(installation.handle(rightOption(.down, at: 1000)) == .swallow)

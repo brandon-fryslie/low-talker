@@ -185,8 +185,8 @@ struct DextWatchCommand: AsyncParsableCommand {
             },
             // This watches and swallows nothing, and it runs only for as long as someone
             // is sitting in front of it, so it goes back on and says that it did.
-            onLapse: { _ in
-                print("the tap lapsed and was switched back on")
+            onLapse: { _, cause in
+                print("the tap lapsed (\(cause)) and was switched back on")
                 return .rearm
             }
         )
