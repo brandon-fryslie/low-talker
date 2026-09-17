@@ -35,7 +35,7 @@ struct PlayCommand: AsyncParsableCommand {
               {"t_ms":16.7,"wheel":{"v":-1,"h":0}}   wheel ticks, -127 to 127; v positive scrolls content up
               {"t_ms":1000,"up":true}                every button up
             A script is refused whole, before the cursor moves, if a line is malformed, t_ms goes \
-            backwards, or it ends with a button held.
+            backwards or past an hour, or it ends with a button held.
 
             Stdout is JSON Lines: one {"report":{"index":…,"scheduled_us":…,"sent_us":…,"acked_us":…}} \
             per report, times in microseconds since the Unix epoch, then \

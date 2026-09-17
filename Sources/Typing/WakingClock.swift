@@ -24,7 +24,8 @@ public struct WakingClock: Clock {
     public var now: Instant { ContinuousClock.now }
     public var minimumResolution: Duration { ContinuousClock().minimumResolution }
 
-    /// A deadline already past wakes at once: `mach_wait_until` returns for a time behind it.
+    /// A deadline already past does not block the thread, since `mach_wait_until` returns
+    /// for a time behind it, but the caller still pays the hop back to its actor.
     public func sleep(until deadline: Instant, tolerance: Duration? = nil) async throws {
         let remaining = max(.zero, now.duration(to: deadline)).components
         let nanoseconds = UInt64(remaining.seconds) * 1_000_000_000 + UInt64(remaining.attoseconds / 1_000_000_000)

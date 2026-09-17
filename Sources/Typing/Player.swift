@@ -27,6 +27,8 @@ public struct Player<C: Clock> where C.Duration == Duration {
     /// main actor, until the deadline comes: a sleep resumes late by the hop back onto
     /// this actor, and a watch that is already here does not pay it.
     public let lead: Duration
+    /// The longest a wait goes without asking whether the play may go on.
+    static var slice: Duration { .milliseconds(50) }
 
     public init(pointer: Pointer, clock: C, wall: @escaping () -> Int64, lead: Duration) {
         self.pointer = pointer
@@ -44,7 +46,15 @@ public struct Player<C: Clock> where C.Duration == Duration {
             let at = { (offset: Duration) in epoch + offset.microseconds }
             for event in play.events {
                 let deadline = started.advanced(by: event.at)
-                try await clock.sleep(until: deadline.advanced(by: .zero - lead), tolerance: .zero)
+                let wake = deadline.advanced(by: .zero - lead)
+                // A wait of any length is slices, each asking the mouse's check, so an
+                // interrupt or a lost app ends a long hold within a slice and not at the
+                // next report. A deadline already inside the lead sleeps not at all, since
+                // even a sleep that returns at once pays the hop back. [LAW:single-enforcer]
+                while clock.now < wake {
+                    try pointer.mouse.check()
+                    try await clock.sleep(until: min(wake, clock.now.advanced(by: Self.slice)), tolerance: .zero)
+                }
                 while clock.now < deadline { await Task.yield() }
                 try pointer.mouse.check()
                 let sent = started.duration(to: clock.now)
@@ -74,7 +84,9 @@ public struct Played: Hashable, Sendable {
     public let reports: [Report]
 
     /// One report's times, each in microseconds since the Unix epoch: when it was due,
-    /// when it was handed to the mouse, and when the mouse acknowledged it. Its place in
+    /// when it was handed to the mouse, and when the mouse acknowledged it. A button going
+    /// down is handed over before the mouse reads whether a system alert is up, so that
+    /// reading falls between its sent and acked. Its place in
     /// the script is its place in the list, since reports go out in order and a stop
     /// ends the list rather than leaving a gap in it.
     public struct Report: Hashable, Sendable {

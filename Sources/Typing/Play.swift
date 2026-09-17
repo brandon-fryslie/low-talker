@@ -17,6 +17,11 @@ public struct Play: Hashable, Sendable {
     public let start: ScreenPoint
     public let events: [Timed]
 
+    /// The latest a report may be due, in milliseconds: an hour, far past any measurement
+    /// and far short of the nanoseconds an `Int64` holds, so a mistyped exponent is
+    /// refused by name rather than trapping the conversion.
+    public static let longest = 3_600_000.0
+
     /// One report and when it is due, as an offset from the clock's start.
     public struct Timed: Hashable, Sendable {
         public let at: Duration
@@ -37,7 +42,8 @@ public struct Play: Hashable, Sendable {
     /// skipped. A key a line does not take is refused, so a misspelt report is never
     /// played as something else. [LAW:no-silent-failure]
     public static func parse(_ text: String) throws -> Play {
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).enumerated()
+        // Any newline, because "\r\n" is one Character and a split on "\n" never finds it.
+        let lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).enumerated()
             .map { (number: $0.offset + 1, text: $0.element.trimmingCharacters(in: .whitespaces)) }
             .filter { !$0.text.isEmpty }
         guard let first = lines.first, let last = lines.last, lines.count > 1 else {
@@ -126,7 +132,9 @@ private struct ReportLine: Decodable {
             throw Refusal(reason: "a line carries exactly one of \(Self.reports.sorted().joined(separator: ", ")), and this one has \(named.isEmpty ? "none" : named.joined(separator: " and "))")
         }
         let milliseconds = try line.decode(Double.self, forKey: AnyKey("t_ms"))
-        guard milliseconds.isFinite, milliseconds >= 0 else { throw Refusal(reason: "t_ms is \(milliseconds), and it is milliseconds from the start, 0 or more") }
+        guard (0...Play.longest).contains(milliseconds) else {
+            throw Refusal(reason: "t_ms is \(milliseconds), and it is milliseconds from the start, 0 through \(Int(Play.longest)), an hour")
+        }
         let key = AnyKey(report)
         let decoded: Play.Report
         switch report {
