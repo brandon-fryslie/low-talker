@@ -313,18 +313,24 @@ public final class Hotkey {
         }
         let response: LapseResponse = recentLapses.count >= Self.lapsesBeforeComingDown ? .comeDown : .rearm
         let lapse = KeyboardTapLapse(count: lapses, cause: cause, response: response)
-        // The lapse before what it did to the press, so a reader of either meets the
-        // cause ahead of the consequence.
-        after { onLapse(lapse) }
-        detector.lapse().map { transition in after { onTransition(transition) } }
-        // A tap left switched off is still an installation holding a disposal, and
-        // `isWatching` would go on saying this hotkey is up. Taken down properly once the
-        // callback has returned, which is the only place it is safe to dispose the port
-        // the callback is running inside.
+        // Ended here rather than inside the teardown below, so the press is ended once
+        // however the two are ordered.
+        let unfinished = detector.lapse()
+        // **Down before it is reported.** A tap left switched off is still an installation
+        // holding a disposal, and `isWatching` would go on saying this hotkey is up. It is
+        // taken down once the callback has returned, which is the only point it is safe to
+        // dispose the port the callback is running inside - and it goes on the queue ahead
+        // of the report so that a handler told the tap has come down finds it already
+        // down. A hotkey started from that handler, which is exactly what the report
+        // invites, would otherwise be disposed by this teardown a turn later.
         switch response {
         case .rearm: break
         case .comeDown: after { [weak self] in self?.stop() }
         }
+        // The lapse before what it did to the press, so a reader of either meets the
+        // cause ahead of the consequence.
+        after { onLapse(lapse) }
+        unfinished.map { transition in after { onTransition(transition) } }
         return response
     }
 }

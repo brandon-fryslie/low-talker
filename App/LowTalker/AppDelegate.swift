@@ -534,7 +534,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // open, which is no use to someone whose keyboard has just started misbehaving
         // and who is trying to work out which app is doing it.
         case .comeDown:
-            showHotkeyStatus("off - the keyboard tap kept lapsing and has been taken down, so the keyboard is the session's alone; choose an input method below to start it again")
+            showHotkeyStatus("off — kept lapsing; choose an input method below to start it again")
         }
     }
 

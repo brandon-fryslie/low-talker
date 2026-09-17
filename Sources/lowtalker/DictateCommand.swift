@@ -79,6 +79,16 @@ struct DictateCommand: AsyncParsableCommand {
             // The release happens on the session's own way out, so the process may not
             // go before the session has: returning here at the speed of the poll would
             // beat a burst to its release and leave a key down.
+            //
+            // The tap comes down first so no further press can arrive, and the main queue
+            // is drained before the wait because the hotkey hands presses on by way of it:
+            // a key-up the tap has already read can still be sitting there, and `finish()`
+            // waits on the sessions the loop has been given, never on one that has not
+            // reached it yet. [LAW:no-ambient-temporal-coupling]
+            hotkey.stop()
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.async { continuation.resume() }
+            }
             try await dictation.finish()
             throw error
         }

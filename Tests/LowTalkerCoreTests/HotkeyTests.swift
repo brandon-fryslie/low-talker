@@ -171,6 +171,29 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         #expect(installation.disposed)
     }
 
+    /// **The tap is down before the come-down is reported.**
+    ///
+    /// The report invites the user to start the hotkey again, so a handler acting on it
+    /// immediately is the contract read plainly. A teardown still waiting its turn behind
+    /// that report would dispose the tap the handler just installed and leave the app with
+    /// no keyboard at all.
+    @Test func aTapStartedFromTheComeDownReportIsNotTornDown() async throws {
+        let tap = FakeTap()
+        let hotkey = Hotkey(chords: [rightOption], tap: tap)
+        try hotkey.start({ _ in }, onLapse: { [weak hotkey] lapse in
+            guard case .comeDown = lapse.response, let hotkey else { return }
+            try? hotkey.start({ _ in }, onLapse: { _ in })
+        })
+        let installation = try #require(tap.installations.first)
+        for index in 1...Hotkey.lapsesBeforeComingDown {
+            _ = installation.onLapse(at(Int64(index) * 100), .tooSlow)
+        }
+        await settle()
+        #expect(tap.installations.count == 2, "the report did not reach a handler able to start again")
+        #expect(!tap.installations[1].disposed, "the restarted tap was disposed by a teardown still queued behind the report")
+        #expect(hotkey.isWatching)
+    }
+
     /// A lapse the system took around the user's own input is not this app being slow, so
     /// it never counts towards the cap. Counting it would take the hotkey down for
     /// something this app did not do and could go no faster to avoid.
