@@ -1,8 +1,9 @@
 import Carbon.HIToolbox
+import Dispatch
 import Flavors
 
-/// The system switching the keyboard tap off for being slow to answer, and it being
-/// switched back on. The events in between were lost.
+/// The system switching the keyboard tap off for being slow to answer. The events in
+/// between were lost.
 ///
 /// Reported whether or not a press was open to end, because only one of the two leaves
 /// anything else behind. A lapse during a press also ends it as `.lapsed`, and the press
@@ -13,28 +14,61 @@ import Flavors
 /// [LAW:types-are-the-program] The count travels with the lapse rather than being left
 /// on the tap for a reader to ask for afterwards: a count read later is the count as of
 /// the asking, which by the second lapse is not the number that belongs to this one.
+/// `response` travels with it for a sharper reason: "the tap lost some keys and is
+/// listening again" and "the tap is down and this app has no hotkey" are two different
+/// facts about the session, and a reader handed only a count cannot tell which one it
+/// is holding.
 public struct KeyboardTapLapse: Hashable, Sendable, CustomStringConvertible {
     /// Lapses since `Hotkey.start`, this one counted: the first reports 1.
     public let count: Int
+    /// What the tap did about this one.
+    public let response: LapseResponse
 
-    public init(count: Int) {
+    public init(count: Int, response: LapseResponse) {
         self.count = count
+        self.response = response
     }
 
     public var description: String {
-        "the keyboard tap lapsed and was switched back on, losing the events in between; \(count) since listening began"
+        switch response {
+        case .rearm:
+            "the keyboard tap lapsed and was switched back on, losing the events in between; \(count) since listening began"
+        case .comeDown:
+            "the keyboard tap lapsed \(count) times and has been taken down; the hotkey is off and the keyboard is the session's alone until it is started again"
+        }
     }
 }
 
 /// The hotkey for the life of the app: a tap in front of the session's keyboard,
-/// a detector reading its events, and the presses it finds handed on as they happen.
+/// a detector reading its events, and the presses it finds handed on.
 ///
-/// The handler runs inside the tap's callback, on the main actor, so key-down reaches
-/// the pipeline with nothing in between; what it does there must be quick, since a
-/// slow handler is what makes the system switch the tap off.
+/// Inside the tap's callback this does one thing: ask the detector what to do with the
+/// event and answer the window server. Everything a press sets in motion leaves by the
+/// main queue once that answer is given. An active tap is a gate the whole session's
+/// keyboard queues behind, and a callback that opens a microphone or asks another
+/// process what is in front holds every key on the Mac for as long as that takes.
+/// [LAW:effects-at-boundaries]
 @MainActor
 public final class Hotkey {
     nonisolated public static let defaultTapThreshold: Duration = .milliseconds(250)
+    /// How many lapses inside `lapseWindow` mean the tap is not recovering, and comes
+    /// down instead of going back on.
+    ///
+    /// A tap lapses because this app took too long to answer the window server, and
+    /// every lapse is keystrokes the user typed and nobody received. One is a bad
+    /// moment - a wake, a model loading - and worth riding out. Several inside a minute
+    /// is a process that cannot hold up its end, and each re-arm buys another round of
+    /// swallowed keys. At that point the tap is costing the session more than the hotkey
+    /// returns, and the only answer that respects the user is to get out of the way.
+    ///
+    /// [LAW:no-silent-failure] A tap that re-arms without limit is a smoke alarm with
+    /// the battery out: it can go on taking the keyboard for as long as the app runs and
+    /// report it nowhere the user will look.
+    nonisolated public static let lapsesBeforeComingDown = 5
+    /// The span `lapsesBeforeComingDown` is counted over. Long enough that lapses from
+    /// separate bad moments do not accumulate into a false verdict, short enough that a
+    /// tap failing repeatedly is caught while the user is still in the same sitting.
+    nonisolated public static let lapseWindow: Duration = .seconds(60)
     /// The chord an installation listens for until its config file says otherwise.
     ///
     /// Right Option for the installed copy, and Right Option held together with Right
@@ -143,6 +177,10 @@ public final class Hotkey {
     /// second way to ask is a second answer: this one moves between the lapse and any
     /// later reading of it. [LAW:one-source-of-truth]
     private var lapses = 0
+    /// The moments of the lapses still inside `lapseWindow`, which is the whole of what
+    /// deciding to come down needs to know. Trimmed on each lapse, so it holds at most
+    /// `lapsesBeforeComingDown` of them and never grows with the app's life.
+    private var recentLapses: [HostTime] = []
 
     public init(chords: Set<KeyChord>, tapThreshold: Duration = defaultTapThreshold, tap: any KeyboardTap = SystemKeyboardTap()) {
         self.tap = tap
@@ -163,9 +201,11 @@ public final class Hotkey {
     public var phase: HotkeyDetector.Phase { detector.phase }
 
     /// Starts watching. Each press begins and ends at `onTransition`, and every lapse
-    /// of the tap arrives at `onLapse`, both on the main actor, from inside the tap's
-    /// callback. The count begins again here: it counts the tap that is up now, not the
-    /// app's whole life.
+    /// of the tap arrives at `onLapse`, both on the main actor and both on the main
+    /// queue once the tap's callback has answered - never inside it. Neither is bound by
+    /// the window server's deadline, so either may take as long as its work takes. The
+    /// count begins again here: it counts the tap that is up now, not the app's whole
+    /// life.
     ///
     /// [LAW:no-silent-failure] `onLapse` has no default. A caller that watches the
     /// keyboard is a caller that can find out the keyboard went unwatched, and a
@@ -177,10 +217,14 @@ public final class Hotkey {
     ) throws {
         stop()
         lapses = 0
+        recentLapses = []
         let dispose = try tap.install(
             listeningFor: detector.chords,
             handling: { [weak self] event in self?.handle(event, onTransition) ?? .pass },
-            onLapse: { [weak self] in self?.lapse(onTransition, onLapse) }
+            // A hotkey that has been released cannot decide anything, and an armed tap
+            // with nothing behind it is a gate in front of the session's keyboard that
+            // nobody is minding.
+            onLapse: { [weak self] moment in self?.lapse(at: moment, onTransition, onLapse) ?? .comeDown }
         )
         installed = (dispose, onTransition)
     }
@@ -195,7 +239,9 @@ public final class Hotkey {
         installed = nil
         was?.dispose()
         detector = HotkeyDetector(chords: detector.chords, tapThreshold: detector.tapThreshold)
-        unfinished.map { was?.onTransition($0) }
+        unfinished.map { transition in
+            was.map { installation in after { installation.onTransition(transition) } }
+        }
     }
 
     // A non-Sendable @MainActor class is only ever held by main-actor code, so its
@@ -203,20 +249,40 @@ public final class Hotkey {
     // Only the tap comes down: nothing is left to hear an ending told from here.
     deinit { MainActor.assumeIsolated { installed?.dispose() } }
 
-    private func handle(_ event: KeyEvent, _ onTransition: @MainActor (HotkeyDetector.Transition) -> Void) -> HotkeyDetector.Delivery {
+    /// Runs `work` on the main queue once the tap's callback has returned.
+    ///
+    /// [LAW:single-enforcer] The one way anything leaves this class. The main queue is
+    /// first-in-first-out, which is what keeps a `began` ahead of the `ended` that
+    /// follows it: `Dictation.press` traps on a pair out of order rather than repairing
+    /// one, so the order is a correctness property and not a preference.
+    private func after(_ work: @escaping @MainActor () -> Void) {
+        DispatchQueue.main.async { MainActor.assumeIsolated(work) }
+    }
+
+    private func handle(_ event: KeyEvent, _ onTransition: @escaping @MainActor (HotkeyDetector.Transition) -> Void) -> HotkeyDetector.Delivery {
         let verdict = detector.handle(event)
-        verdict.transition.map(onTransition)
+        verdict.transition.map { transition in after { onTransition(transition) } }
         return verdict.delivery
     }
 
+    /// Counts this lapse, says whether the tap goes back on, and reports it.
+    ///
+    /// The answer is worked out here and now because the tap is waiting on it; the
+    /// report goes out afterwards like everything else.
     private func lapse(
-        _ onTransition: @MainActor (HotkeyDetector.Transition) -> Void,
-        _ onLapse: @MainActor (KeyboardTapLapse) -> Void
-    ) {
+        at moment: HostTime,
+        _ onTransition: @escaping @MainActor (HotkeyDetector.Transition) -> Void,
+        _ onLapse: @escaping @MainActor (KeyboardTapLapse) -> Void
+    ) -> LapseResponse {
         lapses += 1
+        recentLapses.removeAll { moment - $0 >= Self.lapseWindow }
+        recentLapses.append(moment)
+        let response: LapseResponse = recentLapses.count >= Self.lapsesBeforeComingDown ? .comeDown : .rearm
+        let lapse = KeyboardTapLapse(count: lapses, response: response)
         // The lapse before what it did to the press, so a reader of either meets the
         // cause ahead of the consequence.
-        onLapse(KeyboardTapLapse(count: lapses))
-        detector.lapse().map(onTransition)
+        after { onLapse(lapse) }
+        detector.lapse().map { transition in after { onTransition(transition) } }
+        return response
     }
 }

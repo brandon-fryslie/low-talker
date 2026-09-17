@@ -2,6 +2,24 @@ import Carbon.HIToolbox
 import CoreGraphics
 import IOKit.hidsystem
 
+/// What a tap does about the system having switched it off for being slow to answer.
+///
+/// An active tap is a gate: the window server holds every keystroke in the session
+/// behind this process until the callback returns, and switches the tap off when it
+/// waits too long. Switching it back on is therefore a choice with the whole machine's
+/// keyboard on the other side of it, and this is that choice made explicit.
+///
+/// [LAW:dataflow-not-control-flow] The tap always asks and always obeys; which of the
+/// two happens is a value the policy above returns, not a branch the tap owns.
+public enum LapseResponse: Hashable, Sendable {
+    /// Switch the tap back on and keep listening.
+    case rearm
+    /// Leave it off. From the moment this is returned the session's keys reach the
+    /// frontmost app without passing through this process, and the hotkey is gone until
+    /// something starts it again. The user's keyboard outranks this app's hotkey.
+    case comeDown
+}
+
 /// A place in front of every keyboard event in the login session, where each one is
 /// seen before the frontmost app and can be kept from it.
 ///
@@ -12,8 +30,9 @@ import IOKit.hidsystem
 public protocol KeyboardTap {
     /// Puts `handle` in front of the session's keyboard events, on the main actor;
     /// what it returns is what the frontmost app gets. `onLapse` reports, also on
-    /// the main actor, that the system had switched the tap off and it has been
-    /// switched back on; the events in between are lost.
+    /// the main actor, that the system switched the tap off and carries the moment it
+    /// did; the events in between are lost, and what it answers decides whether the tap
+    /// goes back on.
     /// Throws when the session refuses a tap, which is a permission matter.
     ///
     /// `chords` are what the detector above will look for. A tap that sees every key may
@@ -21,7 +40,7 @@ public protocol KeyboardTap {
     func install(
         listeningFor chords: Set<KeyChord>,
         handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery,
-        onLapse: @escaping @MainActor () -> Void
+        onLapse: @escaping @MainActor (HostTime) -> LapseResponse
     ) throws -> Disposal
 }
 
@@ -102,10 +121,10 @@ public struct SystemKeyboardTap: KeyboardTap {
     /// port, which the callback needs to switch the tap back on.
     private final class Installed {
         let handle: @MainActor (KeyEvent) -> HotkeyDetector.Delivery
-        let onLapse: @MainActor () -> Void
+        let onLapse: @MainActor (HostTime) -> LapseResponse
         var port: CFMachPort?
 
-        init(handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery, onLapse: @escaping @MainActor () -> Void) {
+        init(handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery, onLapse: @escaping @MainActor (HostTime) -> LapseResponse) {
             self.handle = handle
             self.onLapse = onLapse
         }
@@ -114,9 +133,15 @@ public struct SystemKeyboardTap: KeyboardTap {
         func deliver(_ event: CGEvent, type: CGEventType) -> HotkeyDetector.Delivery {
             switch type {
             case .tapDisabledByTimeout, .tapDisabledByUserInput:
+                // The window server stamps this like any other event, so the moment the
+                // tap went deaf is the event's own rather than whenever this runs - the
+                // same reason `Transition.began` carries the moment of its key-down.
+                switch onLapse(HostTime(uptime: .nanoseconds(event.timestamp))) {
                 // The port is set before the tap is enabled, so a callback cannot precede it.
-                CGEvent.tapEnable(tap: port!, enable: true)
-                onLapse()
+                case .rearm: CGEvent.tapEnable(tap: port!, enable: true)
+                // Left off. Saying so is the policy's job, not this one's.
+                case .comeDown: break
+                }
                 return .pass
             default:
                 guard let key = KeyEvent(event, type: type) else { return .pass }
@@ -131,7 +156,7 @@ public struct SystemKeyboardTap: KeyboardTap {
     public func install(
         listeningFor chords: Set<KeyChord>,
         handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery,
-        onLapse: @escaping @MainActor () -> Void
+        onLapse: @escaping @MainActor (HostTime) -> LapseResponse
     ) throws -> Disposal {
         let installed = Unmanaged.passRetained(Installed(handle: handle, onLapse: onLapse))
         let interest: CGEventMask = [CGEventType.flagsChanged, .keyDown, .keyUp].reduce(0) { $0 | 1 << $1.rawValue }

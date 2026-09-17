@@ -1,3 +1,4 @@
+import Dispatch
 import Flavors
 import LowTalkerCore
 import Testing
@@ -11,10 +12,10 @@ private final class FakeTap: KeyboardTap {
     final class Installation {
         let chords: Set<KeyChord>
         let handle: @MainActor (KeyEvent) -> HotkeyDetector.Delivery
-        let onLapse: @MainActor () -> Void
+        let onLapse: @MainActor (HostTime) -> LapseResponse
         var disposed = false
 
-        init(chords: Set<KeyChord>, handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery, onLapse: @escaping @MainActor () -> Void) {
+        init(chords: Set<KeyChord>, handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery, onLapse: @escaping @MainActor (HostTime) -> LapseResponse) {
             self.chords = chords
             self.handle = handle
             self.onLapse = onLapse
@@ -28,11 +29,23 @@ private final class FakeTap: KeyboardTap {
         self.refusal = refusal
     }
 
-    func install(listeningFor chords: Set<KeyChord>, handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery, onLapse: @escaping @MainActor () -> Void) throws -> Disposal {
+    func install(listeningFor chords: Set<KeyChord>, handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery, onLapse: @escaping @MainActor (HostTime) -> LapseResponse) throws -> Disposal {
         if let refusal { throw refusal }
         let installation = Installation(chords: chords, handle: handle, onLapse: onLapse)
         installations.append(installation)
         return { installation.disposed = true }
+    }
+}
+
+/// Lets the main queue run what the hotkey put on it.
+///
+/// The queue is first-in-first-out, so everything queued before this call has run by the
+/// time it resumes. Waiting on the queue itself rather than on a duration, so the wait is
+/// exactly as long as the work and a slow machine cannot make it flake.
+/// [LAW:no-ambient-temporal-coupling]
+private func settle() async {
+    await withCheckedContinuation { continuation in
+        DispatchQueue.main.async { continuation.resume() }
     }
 }
 
@@ -46,17 +59,42 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
 
 @MainActor
 @Suite struct HotkeyTests {
-    @Test func aPressReachesTheHandlerFromInsideTheTapAndIsSwallowed() throws {
+    @Test func aPressReachesTheHandlerAndIsSwallowed() async throws {
         let tap = FakeTap()
         let hotkey = Hotkey(chords: [rightOption], tap: tap)
         var transitions: [HotkeyDetector.Transition] = []
         try hotkey.start({ transitions.append($0) }, onLapse: { _ in })
         let installation = try #require(tap.installations.first)
         #expect(installation.handle(rightOption(.down, at: 0)) == .swallow)
-        #expect(transitions == [.began(rightOption, at: at(0))])
         #expect(hotkey.phase == .held(rightOption, since: at(0)))
+        await settle()
+        #expect(transitions == [.began(rightOption, at: at(0))])
         #expect(installation.handle(rightOption(.up, at: 400)) == .swallow)
+        await settle()
         #expect(transitions == [.began(rightOption, at: at(0)), .ended(rightOption, .released(.hold))])
+    }
+
+    /// **The callback answers the window server and does nothing else.**
+    ///
+    /// An active tap is a gate: every keystroke in the login session waits behind this
+    /// callback until it returns, so a handler that opens a microphone or asks another
+    /// process what is in front holds the whole machine's keyboard for as long as that
+    /// takes. Run long enough and the system switches the tap off and throws away every
+    /// key that queued in the meantime.
+    ///
+    /// The press is dated by the event's own stamp, so arriving a turn later costs it
+    /// nothing. [LAW:behavior-not-structure] asserted as what the caller can observe -
+    /// a decision in hand with the handler not yet run.
+    @Test func theCallbackDecidesBeforeTheHandlerRuns() async throws {
+        let tap = FakeTap()
+        let hotkey = Hotkey(chords: [rightOption], tap: tap)
+        var transitions: [HotkeyDetector.Transition] = []
+        try hotkey.start({ transitions.append($0) }, onLapse: { _ in })
+        let installation = try #require(tap.installations.first)
+        #expect(installation.handle(rightOption(.down, at: 0)) == .swallow)
+        #expect(transitions.isEmpty, "the handler ran inside the tap's callback")
+        await settle()
+        #expect(transitions == [.began(rightOption, at: at(0))])
     }
 
     /// A tap that can hear only what it asks for is told what the detector looks for.
@@ -69,7 +107,7 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
 
     /// A registered hot key reports the chord going down and coming up as its key moving
     /// under its modifiers, and the detector tells a hold from a tap from those two alone.
-    @Test func aChordWithAKeyIsHeldAndTappedFromItsKeyAlone() throws {
+    @Test func aChordWithAKeyIsHeldAndTappedFromItsKeyAlone() async throws {
         let chord = Hotkey.defaultChord(for: .release, heardBy: .clipboard)
         let key = try #require(chord.key)
         func moved(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEvent {
@@ -86,6 +124,7 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         _ = installation.handle(moved(.up, at: 1050))
         #expect(hotkey.phase == .latched(chord))
         _ = installation.handle(moved(.down, at: 3000))
+        await settle()
         #expect(transitions == [
             .began(chord, at: at(0)), .ended(chord, .released(.hold)),
             .began(chord, at: at(1000)), .ended(chord, .released(.tap)),
@@ -96,29 +135,64 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
     /// with no press open tells nothing else — no press ended, so no session is reported
     /// — and that is the lapse that swallows the next key-down, so it is the one that
     /// must not pass in silence.
-    @Test func everyLapseIsReportedWithItsRunningCount() throws {
+    @Test func everyLapseIsReportedWithItsRunningCount() async throws {
         let tap = FakeTap()
         let hotkey = Hotkey(chords: [rightOption], tap: tap)
         var transitions: [HotkeyDetector.Transition] = []
         var lapses: [KeyboardTapLapse] = []
         try hotkey.start({ transitions.append($0) }, onLapse: { lapses.append($0) })
-        tap.installations[0].onLapse()
-        tap.installations[0].onLapse()
-        #expect(lapses == [KeyboardTapLapse(count: 1), KeyboardTapLapse(count: 2)])
+        #expect(tap.installations[0].onLapse(at(0)) == .rearm)
+        #expect(tap.installations[0].onLapse(at(1000)) == .rearm)
+        await settle()
+        #expect(lapses == [KeyboardTapLapse(count: 1, response: .rearm), KeyboardTapLapse(count: 2, response: .rearm)])
         #expect(transitions.isEmpty)
     }
 
-    /// The count belongs to the tap that is up now: a start puts a fresh one in front of
-    /// the keyboard, and what the last one lost is not charged to it.
-    @Test func aStartCountsFromTheTapItInstalls() throws {
+    /// **A tap that keeps lapsing comes down instead of going back on.**
+    ///
+    /// Every lapse is keys the user typed that nobody received, and switching the tap
+    /// back on buys another round of them. Past the cap the tap is costing the session
+    /// more than the hotkey returns, and the keyboard is worth more than the hotkey.
+    @Test func aTapThatKeepsLapsingComesDown() async throws {
         let tap = FakeTap()
         let hotkey = Hotkey(chords: [rightOption], tap: tap)
         var lapses: [KeyboardTapLapse] = []
         try hotkey.start({ _ in }, onLapse: { lapses.append($0) })
-        tap.installations[0].onLapse()
+        let installation = try #require(tap.installations.first)
+        for index in 1..<Hotkey.lapsesBeforeComingDown {
+            #expect(installation.onLapse(at(Int64(index) * 100)) == .rearm)
+        }
+        #expect(installation.onLapse(at(Int64(Hotkey.lapsesBeforeComingDown) * 100)) == .comeDown)
+        await settle()
+        #expect(lapses.last == KeyboardTapLapse(count: Hotkey.lapsesBeforeComingDown, response: .comeDown))
+    }
+
+    /// Lapses far enough apart are separate bad moments rather than a tap that cannot
+    /// keep up, so the hotkey survives any number of them.
+    @Test func lapsesSpreadWiderThanTheWindowKeepTheTapUp() async throws {
+        let tap = FakeTap()
+        let hotkey = Hotkey(chords: [rightOption], tap: tap)
+        try hotkey.start({ _ in }, onLapse: { _ in })
+        let installation = try #require(tap.installations.first)
+        let apart = Hotkey.lapseWindow + .milliseconds(1)
+        for index in 0..<(Hotkey.lapsesBeforeComingDown * 3) {
+            let moment = HostTime(uptime: apart * Double(index))
+            #expect(installation.onLapse(moment) == .rearm, "lapse \(index + 1) took the tap down")
+        }
+    }
+
+    /// The count belongs to the tap that is up now: a start puts a fresh one in front of
+    /// the keyboard, and what the last one lost is not charged to it.
+    @Test func aStartCountsFromTheTapItInstalls() async throws {
+        let tap = FakeTap()
+        let hotkey = Hotkey(chords: [rightOption], tap: tap)
+        var lapses: [KeyboardTapLapse] = []
         try hotkey.start({ _ in }, onLapse: { lapses.append($0) })
-        tap.installations[1].onLapse()
-        #expect(lapses == [KeyboardTapLapse(count: 1), KeyboardTapLapse(count: 1)])
+        _ = tap.installations[0].onLapse(at(0))
+        try hotkey.start({ _ in }, onLapse: { lapses.append($0) })
+        _ = tap.installations[1].onLapse(at(1000))
+        await settle()
+        #expect(lapses == [KeyboardTapLapse(count: 1, response: .rearm), KeyboardTapLapse(count: 1, response: .rearm)])
         #expect(tap.installations[0].disposed)
         #expect(tap.installations.count == 2)
     }
@@ -127,7 +201,7 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
     /// an end the tap never saw, and the next press begins from rest. The handler is
     /// told a lapse ended it, not a release: the tap went deaf and the speaker may
     /// still have been talking into it.
-    @Test func aLapseEndsTheOpenPressAtTheHandler() throws {
+    @Test func aLapseEndsTheOpenPressAtTheHandler() async throws {
         let tap = FakeTap()
         let hotkey = Hotkey(chords: [rightOption], tap: tap)
         var transitions: [HotkeyDetector.Transition] = []
@@ -135,18 +209,20 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         try hotkey.start({ transitions.append($0) }, onLapse: { lapses.append($0) })
         let installation = try #require(tap.installations.first)
         _ = installation.handle(rightOption(.down, at: 0))
-        installation.onLapse()
+        _ = installation.onLapse(at(500))
+        await settle()
         // Both told: the lapse in its own right, and the press it ended.
-        #expect(lapses == [KeyboardTapLapse(count: 1)])
+        #expect(lapses == [KeyboardTapLapse(count: 1, response: .rearm)])
         #expect(transitions == [.began(rightOption, at: at(0)), .ended(rightOption, .lapsed)])
         #expect(hotkey.phase == .idle)
         #expect(installation.handle(rightOption(.down, at: 1000)) == .swallow)
+        await settle()
         #expect(transitions.last == .began(rightOption, at: at(1000)))
     }
 
     /// Stopping mid-press ends the press as lapsed at its handler, since its release can
     /// no longer arrive, and a later start begins from rest.
-    @Test func stopEndsAnOpenPressAndDisposesTheTap() throws {
+    @Test func stopEndsAnOpenPressAndDisposesTheTap() async throws {
         let tap = FakeTap()
         let hotkey = Hotkey(chords: [rightOption], tap: tap)
         var transitions: [HotkeyDetector.Transition] = []
@@ -155,8 +231,11 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         hotkey.stop()
         #expect(tap.installations[0].disposed)
         #expect(hotkey.phase == .idle)
+        await settle()
+        // The ending goes out the same way the beginning did, so it cannot overtake it.
         #expect(transitions == [.began(rightOption, at: at(0)), .ended(rightOption, .lapsed)])
         hotkey.stop()
+        await settle()
         #expect(transitions.count == 2)
     }
 

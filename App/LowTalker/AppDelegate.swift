@@ -503,6 +503,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// fixed sentence, and no part of it is anything the user dictated.
     private func report(_ lapse: KeyboardTapLapse) {
         sessions.error("\(lapse.description, privacy: .public)")
+        switch lapse.response {
+        // The tap is still up and the hotkey still works, so the line the menu reads is
+        // still true and is left alone.
+        case .rearm:
+            break
+        // [LAW:no-silent-failure] The hotkey is gone, and the menu is where a user looks
+        // to find out what this app is doing. A log is somewhere they have no reason to
+        // open, which is no use to someone whose keyboard has just started misbehaving
+        // and who is trying to work out which app is doing it.
+        case .comeDown:
+            showHotkeyStatus("off - the keyboard tap was too slow to answer \(lapse.count) times and has been taken down, so the keyboard is the session's alone; choose an input method below to start it again")
+        }
     }
 
     // MARK: - the Insert Dictation service
