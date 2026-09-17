@@ -15,14 +15,19 @@ import Typing
 ///
 /// [LAW:no-ambient-temporal-coupling] Sessions are heard and typed on one serial
 /// queue, so two presses in quick succession type in the order they were spoken and
-/// never interleave, however long the engine takes on either. Key-down and key-up run
-/// inside the tap's callback, where a slow handler is what makes macOS switch the tap
-/// off, so what they do is counted: one read of which app is in front, two ring
-/// positions, and the microphone opening and shutting. The opening is the expensive
-/// one - what it costs is measured at `AudioCapture.warmUpAllowance` - and it is spent
-/// here rather than behind an await because an engine started off the callback would
-/// start later still, and every millisecond of it is speech the microphone was not open
-/// for. Sessions are typed on this same actor, so the typing
+/// never interleave, however long the engine takes on either. Key-down and key-up reach
+/// this from the main queue once the tap's callback has answered the window server, never
+/// from inside it: an active tap holds every keystroke in the login session behind that
+/// callback, so a microphone opened there is one the whole machine's keyboard waits on.
+///
+/// What that costs is a queue turn before the microphone opens, and it is only a real cost
+/// with the microphone shut at rest - audio before the engine launches does not exist, so
+/// a later launch is a longer head the microphone was not open for, and `beginSession`
+/// reports that head. Held open at rest there is nothing to launch and the press is a mark
+/// on a ring that is already turning. A press carries the moment its key went down and the
+/// ring is read from there, so nothing already recorded is lost by arriving late. The
+/// exchange is a bounded head of speech against every key on the Mac stopping, which is
+/// not a close one. Sessions are typed on this same actor, so the typing
 /// awaits each key's acknowledgement rather than holding the actor for it: a press made
 /// in the middle of an insert is marked on the ring when it is made.
 @MainActor
@@ -145,8 +150,9 @@ public final class Dictation {
                 // clip it left behind, which was never the whole utterance anyway. A
                 // microphone that was not there at all was refused at key-down, so it
                 // never reaches here. The focused element's role is a synchronous call
-                // into another process, up to half a second of it, which the tap's
-                // callback cannot afford; a route that wants it reads it off this thread.
+                // into another process, up to half a second of it, and this is the main
+                // actor: a press waits on it, and so does every window this app draws.
+                // A route that wants the role reads it off this thread.
                 heard = switch (ending, audio) {
                 case (.lapsed, _): .failure(PressLapsed(chord: chord))
                 case (.released(let kind), .whole(let clip)):

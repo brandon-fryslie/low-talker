@@ -65,10 +65,13 @@ public struct RegisteredHotKeys: KeyboardTap {
 
     public init() {}
 
+    /// `onLapse` is never called. The system hands this handler the one chord it
+    /// registered and nothing else, so it is not in front of the session's keyboard and
+    /// there is no tap for the system to switch off.
     public func install(
         listeningFor chords: Set<KeyChord>,
         handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery,
-        onLapse: @escaping @MainActor () -> Void
+        onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse
     ) throws -> Disposal {
         // [LAW:parse-dont-validate] Every chord is proven registrable before anything is
         // registered, so a set with one bad chord registers none of them. Sorted so the

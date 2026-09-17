@@ -183,7 +183,12 @@ struct DextWatchCommand: AsyncParsableCommand {
                 continuation.yield((event, .now))
                 return .pass
             },
-            onLapse: { print("the tap lapsed and was switched back on") }
+            // This watches and swallows nothing, and it runs only for as long as someone
+            // is sitting in front of it, so it goes back on and says that it did.
+            onLapse: { _, cause in
+                print("the tap lapsed (\(cause)) and was switched back on")
+                return .rearm
+            }
         )
         print("watching the session's keyboard events")
         for await (event, arrived) in events {

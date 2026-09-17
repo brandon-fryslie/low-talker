@@ -2,6 +2,39 @@ import Carbon.HIToolbox
 import CoreGraphics
 import IOKit.hidsystem
 
+/// What a tap does about the system having switched it off for being slow to answer.
+///
+/// An active tap is a gate: the window server holds every keystroke in the session
+/// behind this process until the callback returns, and switches the tap off when it
+/// waits too long. Switching it back on is therefore a choice with the whole machine's
+/// keyboard on the other side of it, and this is that choice made explicit.
+///
+/// [LAW:dataflow-not-control-flow] The tap always asks and always obeys; which of the
+/// two happens is a value the policy above returns, not a branch the tap owns.
+public enum LapseResponse: Hashable, Sendable {
+    /// Switch the tap back on and keep listening.
+    case rearm
+    /// Leave it off. From the moment this is returned the session's keys reach the
+    /// frontmost app without passing through this process, and the hotkey is gone until
+    /// something starts it again. The user's keyboard outranks this app's hotkey.
+    case comeDown
+}
+
+/// Why the system switched the tap off.
+///
+/// [LAW:types-are-the-program] Only one of these is this process's fault, and a policy
+/// that counts them together would take the hotkey down for something it did not do and
+/// could not have avoided - then tell the user this app was too slow, sending them after
+/// the wrong thing entirely.
+public enum LapseCause: Hashable, Sendable {
+    /// This process did not answer inside the window server's deadline. The keys that
+    /// queued behind it in the meantime were thrown away.
+    case tooSlow
+    /// The system switched the tap off around the user's own input. Not this process's
+    /// doing, and nothing it can go faster to avoid.
+    case userInput
+}
+
 /// A place in front of every keyboard event in the login session, where each one is
 /// seen before the frontmost app and can be kept from it.
 ///
@@ -12,8 +45,8 @@ import IOKit.hidsystem
 public protocol KeyboardTap {
     /// Puts `handle` in front of the session's keyboard events, on the main actor;
     /// what it returns is what the frontmost app gets. `onLapse` reports, also on
-    /// the main actor, that the system had switched the tap off and it has been
-    /// switched back on; the events in between are lost.
+    /// the main actor, that the system switched the tap off, when, and why; the events
+    /// in between are lost, and what it answers decides whether the tap goes back on.
     /// Throws when the session refuses a tap, which is a permission matter.
     ///
     /// `chords` are what the detector above will look for. A tap that sees every key may
@@ -21,7 +54,7 @@ public protocol KeyboardTap {
     func install(
         listeningFor chords: Set<KeyChord>,
         handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery,
-        onLapse: @escaping @MainActor () -> Void
+        onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse
     ) throws -> Disposal
 }
 
@@ -102,21 +135,36 @@ public struct SystemKeyboardTap: KeyboardTap {
     /// port, which the callback needs to switch the tap back on.
     private final class Installed {
         let handle: @MainActor (KeyEvent) -> HotkeyDetector.Delivery
-        let onLapse: @MainActor () -> Void
+        let onLapse: @MainActor (HostTime, LapseCause) -> LapseResponse
         var port: CFMachPort?
 
-        init(handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery, onLapse: @escaping @MainActor () -> Void) {
+        init(handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery, onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse) {
             self.handle = handle
             self.onLapse = onLapse
         }
 
+        /// The moment a lapse is reported with is read from the clock here rather than
+        /// off the event.
+        ///
+        /// A key event carries a stamp the window server took from the device, which is
+        /// why `KeyEvent` reads it. A `tapDisabled` event is synthesized, and nothing
+        /// promises its stamp is on the uptime clock or set at all. A policy that counted
+        /// lapses inside a window would quietly stop working on a stamp that never moves
+        /// - every lapse landing at the same moment, the window never sliding, and the
+        /// cap becoming "five lapses for the life of the tap". This callback runs at the
+        /// lapse, so the clock here is the moment, and it cannot be wrong.
+        /// [LAW:one-source-of-truth]
         @MainActor
         func deliver(_ event: CGEvent, type: CGEventType) -> HotkeyDetector.Delivery {
             switch type {
             case .tapDisabledByTimeout, .tapDisabledByUserInput:
+                let cause: LapseCause = type == .tapDisabledByTimeout ? .tooSlow : .userInput
+                switch onLapse(.now, cause) {
                 // The port is set before the tap is enabled, so a callback cannot precede it.
-                CGEvent.tapEnable(tap: port!, enable: true)
-                onLapse()
+                case .rearm: CGEvent.tapEnable(tap: port!, enable: true)
+                // Left off. Saying so is the policy's job, not this one's.
+                case .comeDown: break
+                }
                 return .pass
             default:
                 guard let key = KeyEvent(event, type: type) else { return .pass }
@@ -131,7 +179,7 @@ public struct SystemKeyboardTap: KeyboardTap {
     public func install(
         listeningFor chords: Set<KeyChord>,
         handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery,
-        onLapse: @escaping @MainActor () -> Void
+        onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse
     ) throws -> Disposal {
         let installed = Unmanaged.passRetained(Installed(handle: handle, onLapse: onLapse))
         let interest: CGEventMask = [CGEventType.flagsChanged, .keyDown, .keyUp].reduce(0) { $0 | 1 << $1.rawValue }

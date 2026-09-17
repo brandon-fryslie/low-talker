@@ -194,6 +194,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// one's and leave a hotkey up that nothing can take down. Each switch awaits the one
     /// before it, so there is only ever one loop being built.
     private var switching: Task<Void, Never>?
+    /// Set the moment a quit is asked for, and never cleared.
+    ///
+    /// A choice taken after that point would chain a switch behind the one the quit is
+    /// waiting on, and that switch installs a fresh tap - after the quit has taken the
+    /// old one down, and with nothing left to wait for its sessions. The app would exit
+    /// with a live tap in front of the session's keyboard. [LAW:no-ambient-temporal-coupling]
+    private var quitting = false
 
     /// The words the last press copied, while no press has begun since: what the Insert
     /// Dictation service hands back, and what the status item's icon is drawn from, so the
@@ -232,7 +239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         chosenMethod = method
         if let previous = listening {
             listening = nil
-            previous.hotkey.stop()
+            await previous.hotkey.stopAndDeliver()
             // A refused wait is reported and the switch still made: a loop that cannot be
             // replaced would be the worse failure of the two. [LAW:no-silent-failure]
             do { try await previous.dictation.finish() } catch { report(.failure(error)) }
@@ -357,11 +364,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // why. `switching` is set only by a choice taken down to a loop, which `listen`
         // makes first. [LAW:no-ambient-temporal-coupling]
         //
-        // The method already chosen is not chosen again: rebuilding the loop would end a
-        // latched press as lapsed and throw its recording away.
-        let already = chosenMethod == chosen
+        // The method already chosen is not chosen again while its hotkey is up: rebuilding
+        // the loop would end a latched press as lapsed and throw its recording away.
+        // A hotkey that has come down has no press to lose and nothing listening, so
+        // choosing its method again is how the user starts it - and is what the status
+        // line tells them to do. Only that one case: a loop still being built has no
+        // hotkey to read yet, and letting the absence pass for a come-down would chain a
+        // second teardown and rebuild behind the first, alert and all.
+        let cameDown = listening?.hotkey.isWatching == false
+        let rebuilding = chosenMethod == chosen && !cameDown
         chosenMethod = chosen
-        guard switching != nil, !already else { return }
+        guard switching != nil, !rebuilding, !quitting else { return }
         Task {
             await choose(chosen)
             showWhatIsMissing(for: chosen)
@@ -430,10 +443,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// short, and the wait is what lets it reach its release.
     /// [LAW:no-ambient-temporal-coupling] The quit has an owner, rather than a race.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        quitting = true
         interrupt.raise(SIGTERM)
         Task {
             // A switch in progress is let finish first, so the loop waited on is the last one.
             await switching?.value
+            // The tap comes down before the wait, as at every other teardown: a press open
+            // when the quit arrives is ended as lapsed and reported, rather than the app
+            // going mid-utterance leaving nothing behind to say it did, and no key-down
+            // landing during the wait can open a session there is no longer anyone to close.
+            await listening?.hotkey.stopAndDeliver()
             // A refused wait is reported and the quit still granted: an app that cannot
             // be quit would be the worse failure of the two. [LAW:no-silent-failure]
             do { try await listening?.dictation.finish() } catch { report(.failure(error)) }
@@ -503,6 +522,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// fixed sentence, and no part of it is anything the user dictated.
     private func report(_ lapse: KeyboardTapLapse) {
         sessions.error("\(lapse.description, privacy: .public)")
+        switch lapse.response {
+        // The tap is still up and the hotkey still works, so the line the menu reads is
+        // still true and is left alone.
+        case .rearm:
+            break
+        // [LAW:no-silent-failure] The hotkey is gone, and the menu is where a user looks
+        // to find out what this app is doing. A log is somewhere they have no reason to
+        // open, which is no use to someone whose keyboard has just started misbehaving
+        // and who is trying to work out which app is doing it.
+        case .comeDown:
+            showHotkeyStatus("off — kept lapsing; choose an input method below to start it again")
+        }
     }
 
     // MARK: - the Insert Dictation service
