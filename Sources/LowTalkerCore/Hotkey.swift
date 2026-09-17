@@ -81,7 +81,16 @@ public final class Hotkey {
     nonisolated public static let lapsesBeforeComingDown = 5
     /// The span `lapsesBeforeComingDown` is counted over. Long enough that lapses from
     /// separate bad moments do not accumulate into a false verdict, short enough that a
-    /// tap failing repeatedly is caught while the user is still in the same sitting.
+    /// tap failing repeatedly is caught while the user is still in front of it.
+    ///
+    /// A minute of the machine being awake, not a minute of wall clock: lapses are stamped
+    /// on `HostTime`, which counts up-time and stands still while the Mac sleeps. That is
+    /// the measure this cap wants. Every lapse is a moment this app was running and did not
+    /// answer in time, so the question is whether it has failed repeatedly across a short
+    /// span of *running* - and hours of sleep between two lapses is not evidence that the
+    /// second one is a fresh incident. Reading a wall clock here would also put a second
+    /// time base in a decision `HostTime` already answers, and hand it one that can jump
+    /// under it. [LAW:one-source-of-truth]
     nonisolated public static let lapseWindow: Duration = .seconds(60)
     /// The chord an installation listens for until its config file says otherwise.
     ///

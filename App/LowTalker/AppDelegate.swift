@@ -378,8 +378,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // the loop would end a latched press as lapsed and throw its recording away.
         // A hotkey that has come down has no press to lose and nothing listening, so
         // choosing its method again is how the user starts it - and is what the status
-        // line tells them to do.
-        let rebuilding = chosenMethod == chosen && listening?.hotkey.isWatching == true
+        // line tells them to do. Only that one case: a loop still being built has no
+        // hotkey to read yet, and letting the absence pass for a come-down would chain a
+        // second teardown and rebuild behind the first, alert and all.
+        let cameDown = listening?.hotkey.isWatching == false
+        let rebuilding = chosenMethod == chosen && !cameDown
         chosenMethod = chosen
         guard switching != nil, !rebuilding else { return }
         Task {
@@ -454,6 +457,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task {
             // A switch in progress is let finish first, so the loop waited on is the last one.
             await switching?.value
+            // The tap comes down before the wait, as at every other teardown: a press open
+            // when the quit arrives is ended as lapsed and reported, rather than the app
+            // going mid-utterance leaving nothing behind to say it did, and no key-down
+            // landing during the wait can open a session there is no longer anyone to close.
+            listening?.hotkey.stop()
             await mainQueueDrained()
             // A refused wait is reported and the quit still granted: an app that cannot
             // be quit would be the worse failure of the two. [LAW:no-silent-failure]
