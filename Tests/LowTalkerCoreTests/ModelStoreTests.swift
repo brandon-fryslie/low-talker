@@ -368,6 +368,10 @@ import Testing
     /// a lock file would need, so any write would throw; returning the model proves none
     /// is attempted. [LAW:parse-dont-validate]
     @Test func installedModelOnAWholeReadOnlyStoreReturnsWithoutWriting() throws {
+        // 0o555 stops writes for a non-root user only; root ignores the mode bits and would
+        // pass this test vacuously, hiding a regression that began writing under the lock.
+        // [LAW:no-silent-failure] the precondition fails loudly rather than proving nothing.
+        try #require(geteuid() != 0, "run as a non-root user; 0o555 does not stop root")
         let scratch = try Scratch(files: Self.files)
         try scratch.record()
         let installedFolder = scratch.root.appending(path: "installed")
