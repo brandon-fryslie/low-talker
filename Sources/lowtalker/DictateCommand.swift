@@ -65,7 +65,15 @@ struct DictateCommand: AsyncParsableCommand {
             }
         )
         let hotkey = Hotkey(chords: listening)
-        try hotkey.start(dictation.press) { print("\($0)") }
+        // A tap that has come down will never hear another press, and a command that goes
+        // on polling looks ready while being deaf - with the one line that said otherwise
+        // long scrolled away. [LAW:no-silent-failure] The loop below ends on it, so the
+        // reason is the last thing printed and a script reads it off the exit code.
+        let cameDown = CameDown()
+        try hotkey.start(dictation.press) { lapse in
+            print("\(lapse)")
+            if case .comeDown = lapse.response { cameDown.lapse = lapse }
+        }
         print("ready: hold \(Hotkey.held(chord)) to dictate")
         // The tap runs on the main run loop; this keeps the command on it until the
         // operator's interrupt, which is read rather than let end the process, so a
@@ -73,24 +81,34 @@ struct DictateCommand: AsyncParsableCommand {
         do {
             while true {
                 try interrupt.check()
+                if let lapse = cameDown.lapse { throw HotkeyCameDown(lapse: lapse) }
                 try await Task.sleep(for: .milliseconds(100))
             }
         } catch {
             // The release happens on the session's own way out, so the process may not
             // go before the session has: returning here at the speed of the poll would
-            // beat a burst to its release and leave a key down.
-            //
-            // The tap comes down first so no further press can arrive, and the main queue
-            // is drained before the wait because the hotkey hands presses on by way of it:
-            // a key-up the tap has already read can still be sitting there, and `finish()`
-            // waits on the sessions the loop has been given, never on one that has not
-            // reached it yet. [LAW:no-ambient-temporal-coupling]
-            hotkey.stop()
-            await withCheckedContinuation { continuation in
-                DispatchQueue.main.async { continuation.resume() }
-            }
+            // beat a burst to its release and leave a key down. The tap comes down and
+            // hands over what it had already read before the wait, which is what lets
+            // that wait cover the last press.
+            await hotkey.stopAndDeliver()
             try await dictation.finish()
             throw error
         }
     }
+}
+
+/// Where the hotkey's come-down report is left for the polling loop to find. A class
+/// because the report arrives at a closure the command handed over before the loop began.
+@MainActor private final class CameDown {
+    var lapse: KeyboardTapLapse?
+}
+
+/// The tap came down, so this command can hear nothing more.
+///
+/// An error rather than a line on the way past: it is the reason the command ended, and
+/// a non-zero exit is how anything but a person reading the scrollback finds that out.
+private struct HotkeyCameDown: Error, CustomStringConvertible {
+    let lapse: KeyboardTapLapse
+
+    var description: String { "\(lapse)" }
 }

@@ -281,6 +281,26 @@ public final class Hotkey {
         }
     }
 
+    /// Stops watching, and returns once everything already handed to the main queue has
+    /// been delivered.
+    ///
+    /// [LAW:single-enforcer] What a caller waiting out a loop's sessions needs is both of
+    /// these, in this order, and the pairing lives here rather than at each call site.
+    /// Presses leave by the main queue, so a key-up the tap read moments ago can still be
+    /// sitting on it, and a wait on the sessions a loop has been given cannot cover one
+    /// that has not reached it yet. Spelled out at three teardowns and forgotten at a
+    /// fourth, that is a final session lost in silence - which is the failure the wait was
+    /// put there to prevent.
+    ///
+    /// [LAW:no-ambient-temporal-coupling] The queue itself is waited on, never a duration
+    /// chosen to be long enough, so this is exactly as long as the work and no longer.
+    public func stopAndDeliver() async {
+        stop()
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+    }
+
     // A non-Sendable @MainActor class is only ever held by main-actor code, so its
     // last release is on the main actor; assumeIsolated traps if that stops holding.
     // Only the tap comes down: nothing is left to hear an ending told from here.

@@ -150,8 +150,9 @@ public final class Dictation {
                 // clip it left behind, which was never the whole utterance anyway. A
                 // microphone that was not there at all was refused at key-down, so it
                 // never reaches here. The focused element's role is a synchronous call
-                // into another process, up to half a second of it, which the tap's
-                // callback cannot afford; a route that wants it reads it off this thread.
+                // into another process, up to half a second of it, and this is the main
+                // actor: a press waits on it, and so does every window this app draws.
+                // A route that wants the role reads it off this thread.
                 heard = switch (ending, audio) {
                 case (.lapsed, _): .failure(PressLapsed(chord: chord))
                 case (.released(let kind), .whole(let clip)):

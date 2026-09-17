@@ -194,6 +194,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// one's and leave a hotkey up that nothing can take down. Each switch awaits the one
     /// before it, so there is only ever one loop being built.
     private var switching: Task<Void, Never>?
+    /// Set the moment a quit is asked for, and never cleared.
+    ///
+    /// A choice taken after that point would chain a switch behind the one the quit is
+    /// waiting on, and that switch installs a fresh tap - after the quit has taken the
+    /// old one down, and with nothing left to wait for its sessions. The app would exit
+    /// with a live tap in front of the session's keyboard. [LAW:no-ambient-temporal-coupling]
+    private var quitting = false
 
     /// The words the last press copied, while no press has begun since: what the Insert
     /// Dictation service hands back, and what the status item's icon is drawn from, so the
@@ -228,28 +235,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         await this.value
     }
 
-    /// Returns once the main queue has run everything already on it.
-    ///
-    /// The hotkey hands presses on by way of the main queue rather than from inside the
-    /// tap's callback, so a press the tap read moments before `stop()` can still be
-    /// sitting there unqueued into the loop. Draining first is what keeps "its sessions
-    /// are waited out" true: `finish()` waits on the sessions a loop has been given, and
-    /// cannot wait for one that has not reached it yet.
-    ///
-    /// [LAW:no-ambient-temporal-coupling] The queue itself is waited on, never a duration
-    /// chosen to be long enough, so this is exactly as long as the work and no longer.
-    private func mainQueueDrained() async {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.main.async { continuation.resume() }
-        }
-    }
-
     private func adopt(_ method: InputMethod) async {
         chosenMethod = method
         if let previous = listening {
             listening = nil
-            previous.hotkey.stop()
-            await mainQueueDrained()
+            await previous.hotkey.stopAndDeliver()
             // A refused wait is reported and the switch still made: a loop that cannot be
             // replaced would be the worse failure of the two. [LAW:no-silent-failure]
             do { try await previous.dictation.finish() } catch { report(.failure(error)) }
@@ -384,7 +374,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let cameDown = listening?.hotkey.isWatching == false
         let rebuilding = chosenMethod == chosen && !cameDown
         chosenMethod = chosen
-        guard switching != nil, !rebuilding else { return }
+        guard switching != nil, !rebuilding, !quitting else { return }
         Task {
             await choose(chosen)
             showWhatIsMissing(for: chosen)
@@ -453,6 +443,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// short, and the wait is what lets it reach its release.
     /// [LAW:no-ambient-temporal-coupling] The quit has an owner, rather than a race.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        quitting = true
         interrupt.raise(SIGTERM)
         Task {
             // A switch in progress is let finish first, so the loop waited on is the last one.
@@ -461,8 +452,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // when the quit arrives is ended as lapsed and reported, rather than the app
             // going mid-utterance leaving nothing behind to say it did, and no key-down
             // landing during the wait can open a session there is no longer anyone to close.
-            listening?.hotkey.stop()
-            await mainQueueDrained()
+            await listening?.hotkey.stopAndDeliver()
             // A refused wait is reported and the quit still granted: an app that cannot
             // be quit would be the worse failure of the two. [LAW:no-silent-failure]
             do { try await listening?.dictation.finish() } catch { report(.failure(error)) }

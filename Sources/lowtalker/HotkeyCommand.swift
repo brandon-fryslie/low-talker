@@ -42,7 +42,14 @@ struct HotkeyCommand: AsyncParsableCommand {
             case .began(_, let moment): print("began, delivered \(Int((HostTime.now - moment) / .microseconds(1))) us after its stamp")
             case .ended(_, let ending): print("ended (\(ending))")
             }
-        } onLapse: { print("\($0)") }
+        } onLapse: { lapse in
+            print("\(lapse)")
+            // Nothing below this watches for anything else, so a tap that has come down
+            // leaves a run loop spinning over a keyboard it can no longer hear. Ending
+            // here says so, and non-zero says it to whatever ran this.
+            // [LAW:no-silent-failure]
+            if case .comeDown = lapse.response { Foundation.exit(1) }
+        }
         // Named from the chord rather than spelled here, because the two installations
         // do not watch the same keys, and in the app's words for how it is heard.
         // [LAW:one-source-of-truth]
