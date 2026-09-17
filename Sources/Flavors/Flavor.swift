@@ -18,8 +18,9 @@
 /// - the launchd label, which Background Task Management files the approval record under;
 /// - the config file, so a setting changed for one build does not move the other.
 ///
-/// Nothing else needs to differ. The model store is deliberately shared: the weights are
-/// gigabytes and identical, and two copies of them would cost disk to no end.
+/// Nothing else needs to differ by flavor. The model store differs too, but by whether
+/// the bundle carries one, not by this type: a release loads the store it carries in place,
+/// read-only, and a development build downloads into Application Support.
 ///
 /// [LAW:one-way-deps] This module depends on nothing, which is what lets both the helper
 /// - a root daemon that must stay lean - and the app's higher layers read from one source

@@ -39,10 +39,11 @@ public struct ModelStore: Sendable {
     /// The store `bundle` carries, if it carries one. A release's bundle does and a
     /// development build's does not.
     ///
-    /// A source, never a place a model is loaded from: the app installs out of it into
-    /// `applicationSupport()`, so where a loaded model lives stays one directory. Inside
-    /// the bundle rather than beside it on the disk image, because dragging the app to
-    /// Applications takes the bundle and leaves whatever sat beside it behind.
+    /// A release loads this store in place, read-only, and writes no model data outside
+    /// its bundle: the carried store is already whole and sealed by the code signature, so
+    /// nothing has to be copied out of it first. Inside the bundle rather than beside it on
+    /// the disk image, because dragging the app to Applications takes the bundle and leaves
+    /// whatever sat beside it behind.
     public static func carried(by bundle: Bundle) -> ModelStore? {
         bundle.url(forResource: carriedResourceName, withExtension: nil).map(ModelStore.init(directory:))
     }
@@ -69,6 +70,20 @@ public struct ModelStore: Sendable {
                 case .damaged(let damage): damage
                 }
             })
+        }
+    }
+
+    /// The model, verified present, or the reason the store does not hold it. The read-only
+    /// counterpart to `install`: a store already whole is loaded where it sits, with no lock
+    /// and no write, which is how a release loads its carried, code-signed store. A store
+    /// that is not whole cannot be made whole here — nothing to download, nowhere to write —
+    /// so it fails with the part-level reason rather than a permission error from a lock it
+    /// could not take. [LAW:parse-dont-validate] [LAW:no-silent-failure]
+    public func installedModel(_ model: ModelName) throws -> InstalledModel {
+        switch try presence(of: model) {
+        case .installed(let installed): return installed
+        case .missing: throw ModelStoreError.storeLacksModel(store: directory, model: model, reason: "the model is not installed")
+        case .damaged(let damages): throw ModelStoreError.storeLacksModel(store: directory, model: model, reason: damages.map { "\($0)" }.joined(separator: "; "))
         }
     }
 
@@ -363,6 +378,9 @@ public enum ModelStoreError: Error, Equatable, CustomStringConvertible {
     case downloadRefused(url: URL, status: Int?)
     case dittoFailed(arguments: [String], status: Int32, message: String)
     case renameFailed(from: URL, to: URL, errno: Int32)
+    /// A store that does not hold the model whole, with no source to make it whole from:
+    /// a release's read-only carried store, verified in place. [LAW:no-silent-failure]
+    case storeLacksModel(store: URL, model: ModelName, reason: String)
 
     public var description: String {
         switch self {
@@ -380,6 +398,8 @@ public enum ModelStoreError: Error, Equatable, CustomStringConvertible {
             "ditto \(arguments.joined(separator: " ")) exited \(status): \(message)"
         case .renameFailed(let from, let to, let errno):
             "cannot move \(from.path) to \(to.path): \(String(cString: strerror(errno)))"
+        case .storeLacksModel(let store, let model, let reason):
+            "\(store.path) does not hold \(model) whole: \(reason)"
         }
     }
 }

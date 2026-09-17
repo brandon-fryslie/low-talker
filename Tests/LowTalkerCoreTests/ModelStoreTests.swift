@@ -362,6 +362,47 @@ import Testing
         #expect(phases.withLock { $0 }.isEmpty)
     }
 
+    /// A whole store loads read-only, in place. A release's carried store sits inside a
+    /// signed, read-only bundle, so `installedModel` confirms it and returns without a
+    /// lock or a write. The store here is made unwritable, down to the `installed` folder
+    /// a lock file would need, so any write would throw; returning the model proves none
+    /// is attempted. [LAW:parse-dont-validate]
+    @Test func installedModelOnAWholeReadOnlyStoreReturnsWithoutWriting() throws {
+        // 0o555 stops writes for a non-root user only; root ignores the mode bits and would
+        // pass this test vacuously, hiding a regression that began writing under the lock.
+        // [LAW:no-silent-failure] the precondition fails loudly rather than proving nothing.
+        try #require(geteuid() != 0, "run as a non-root user; 0o555 does not stop root")
+        let scratch = try Scratch(files: Self.files)
+        try scratch.record()
+        let installedFolder = scratch.root.appending(path: "installed")
+        let setMode: (Int, URL) throws -> Void = { mode, url in
+            try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: url.path)
+        }
+        try setMode(0o555, installedFolder)
+        try setMode(0o555, scratch.root)
+        defer {
+            // Restore write so `Scratch`'s deinit can delete the tree.
+            try? setMode(0o755, scratch.root)
+            try? setMode(0o755, installedFolder)
+        }
+        let installed = try ModelStore(directory: scratch.root).installedModel("test")
+        #expect(installed.folder.standardizedFileURL == scratch.folder.standardizedFileURL)
+    }
+
+    /// A store that does not hold the model whole fails with the part-level reason, not a
+    /// lock or permission error: `installedModel` never tries to write it, so a read-only
+    /// carried store that is somehow incomplete says why rather than "read-only file
+    /// system". [LAW:no-silent-failure]
+    @Test func installedModelOnAStoreLackingTheModelFailsWithTheReason() throws {
+        let scratch = try Scratch(files: [:], tokenizer: [:])
+        do {
+            _ = try ModelStore(directory: scratch.root).installedModel("test")
+            Issue.record("a store that lacks the model must fail")
+        } catch let error as ModelStoreError {
+            #expect("\(error)".contains("does not hold") && "\(error)".contains("not installed"))
+        }
+    }
+
     /// A store written before the tokenizer had a manifest has whole weights and no
     /// record of the tokenizer: it is not installed, and nothing in it is evicted,
     /// since the repair only has to record a tokenizer the hub folder already holds.

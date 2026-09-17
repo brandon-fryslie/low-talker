@@ -33,7 +33,22 @@ public final class WhisperKitTranscriber: Transcriber {
         return try await WhisperKitTranscriber(installed)
     }
 
-    /// What `load(_:from:phase:)` is doing right now. There is no "ready" case: the
+    /// Loads a model a store already holds, verified in place and never written to: a
+    /// release's carried store is read-only and code-signed, so the model is confirmed
+    /// whole where it sits, with no install and no lock. There is no installing phase — a
+    /// store that does not hold the model whole fails with the reason before any load
+    /// begins. [LAW:parse-dont-validate]
+    public static func loadInPlace(
+        _ model: ModelName = .default,
+        in store: ModelStore,
+        phase: @escaping @Sendable (LoadPhase) -> Void
+    ) async throws -> WhisperKitTranscriber {
+        let installed = try store.installedModel(model)
+        phase(.loading)
+        return try await WhisperKitTranscriber(installed)
+    }
+
+    /// What a load is doing right now. There is no "ready" case: the
     /// returned transcriber is that state.
     public enum LoadPhase: Equatable, Sendable, CustomStringConvertible {
         case installing(ModelStore.InstallPhase)
