@@ -131,7 +131,7 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
     /// `HALInput.init`'s own guard, which ends the preparation rather than reporting it, so
     /// there is nothing for this to re-check. [LAW:single-enforcer]
     @MainActor
-    public static func measure(waiting wait: Duration, stoppingFor stop: @escaping @MainActor () -> Bool) async throws -> ShapeChangeAtRest {
+    public static func measure(waiting wait: Duration, stoppingFor stop: @MainActor () -> Bool) async throws -> ShapeChangeAtRest {
         guard try MicrophoneIndicator.read() == .dark else { throw MicrophoneAlreadyRunning() }
         let arrival = Arrival()
         let input = HALInput(onStale: { arrival.arrived() })
@@ -140,7 +140,6 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
         let movedTo = try otherRate(of: device, than: readiedAt)
 
         let report = try await report(to: arrival, ofMoving: device, from: readiedAt, to: movedTo, waiting: wait, stoppingFor: stop)
-        try await putBack(device, to: readiedAt, told: arrival, within: wait)
 
         // The input is what holds the watch, and a reading that let it go before the report
         // arrived would be measuring its own deinit. Nothing above uses it after the
@@ -159,21 +158,26 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
     /// against, and the only place this Mac is moved or put back.
     ///
     /// [LAW:no-ambient-temporal-coupling] A device moved and a device put back are one lifetime,
-    /// so they are one scope with one owner rather than two calls a happy path reaches in order:
-    /// every way out of the scope runs the `defer`, a cancelled wait included.
+    /// so they are one scope with one owner rather than two calls a happy path reaches in order.
+    /// Every way out of the scope puts the device back: the ordinary ways through `putBack`,
+    /// which asks until the device agrees, and a cancelled task through the `defer`, which is
+    /// the one ask a task that can no longer wait can still make. The `defer` is that and no
+    /// more - see `putBack` for why one ask is not enough - and a cancelled reading, which
+    /// nothing here cancels, is the only way out it covers alone.
     ///
     /// SIGINT is not a way out of a scope. It kills the process where it stands and runs no
     /// `defer` at all, so a Ctrl-C the process obeyed left the device moved for the length of
-    /// `--wait` - low-privacy-o1z.lwn. It reaches here as `stop` instead, a value the wait reads
-    /// between turns, so an interrupt ends the wait the way a report does and the move back is
-    /// the same call on the same path. [LAW:dataflow-not-control-flow] The device stands moved
-    /// for as long as CoreAudio takes to publish the change, and for `--wait` only on a Mac
-    /// that never does.
+    /// `--wait` - low-privacy-o1z.lwn. It reaches here as `stop` instead, a value read before the
+    /// device is moved and between turns of the wait, so an interrupt that lands first touches
+    /// nothing, one that lands during the wait ends it the way a report does, and the move back
+    /// is the same call on the same path. [LAW:dataflow-not-control-flow] The device stands
+    /// moved for as long as CoreAudio takes to publish the change, and for `--wait` only on a
+    /// Mac that never does.
     ///
-    /// [LAW:no-silent-failure] exception: the status of the ask is dropped because `measure`
-    /// reads the rate back off the device afterwards, which answers the same question better
-    /// than a status does, and because throwing from a `defer` is not a thing that can be done
-    /// anyway. A move that would not go back comes back as `leftReshaped`.
+    /// [LAW:no-silent-failure] exception: the status of the `defer`'s ask is dropped because
+    /// `measure` reads the rate back off the device afterwards, which answers the same question
+    /// better than a status does, and because throwing from a `defer` is not a thing that can
+    /// be done anyway. A move that would not go back comes back as `leftReshaped`.
     @MainActor
     private static func report(
         to arrival: Arrival,
@@ -181,8 +185,16 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
         from readiedAt: Double,
         to movedTo: Double,
         waiting wait: Duration,
-        stoppingFor stop: @escaping @MainActor () -> Bool
+        stoppingFor stop: @MainActor () -> Bool
     ) async throws -> Report {
+        guard !stop() else { return .interrupted }
+        // Anything CoreAudio has already posted to the main queue - the liveness and format
+        // listeners readying registered, on a device that renegotiates on its own - runs at this
+        // reading's first suspension, and taken as the count stands it would run inside the wait
+        // and pass for the report of the move. One turn given up here lets it land first, so
+        // the count the wait is measured past is a count of reports that came before the move.
+        // [LAW:no-ambient-temporal-coupling]
+        await Task.yield()
         let heardBefore = arrival.count
         try move(device, to: movedTo)
         defer { try? move(device, to: readiedAt) }
@@ -191,9 +203,11 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
         // has not arrived by the deadline is what an unwatched device looks like, and `--wait`
         // is where an operator says how long this Mac gets.
         //
-        // Taken before the `defer` moves the device back, because that is another change of
-        // shape the same watch reports, and this reading is about the first one.
-        return switch try await arrival.wait(past: heardBefore, for: wait, stoppingFor: stop) {
+        // Taken before the device is moved back, because that is another change of shape the
+        // same watch reports, and this reading is about the first one.
+        let outcome = try await arrival.wait(past: heardBefore, for: wait, stoppingFor: stop)
+        try await putBack(device, to: readiedAt, told: arrival, within: wait)
+        return switch outcome {
         case .arrived: .heard
         case .ranOut: .never
         case .stopped: .interrupted
@@ -201,15 +215,14 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
     }
 
     /// Asks for the shape the device was found in until the device says it is in it, for at
-    /// most `wait`. `report` already asked once on its way out; this is what makes that ask
-    /// stick.
+    /// most `wait`.
     ///
-    /// Asked again rather than trusted, because one ask is not enough on this Mac: measured for
-    /// low-privacy-o1z.lwn, a move back asked within about 150 ms of the move - which is where
-    /// an interrupt lands - was accepted with `noErr` and never happened, and the built-in
-    /// microphone was left at 44100 Hz. CoreAudio drops a rate set that arrives while the
-    /// device is still taking the previous one. [FRAMING:representation] The status is a map
-    /// of the ask; the rate read off the device is the territory, and the only thing this
+    /// Asked and then read rather than asked and trusted, because one ask is not enough on this
+    /// Mac: measured for low-privacy-o1z.lwn, a move back asked within about 150 ms of the move
+    /// - which is where an interrupt lands - was accepted with `noErr` and never happened, and
+    /// the built-in microphone was left at 44100 Hz. CoreAudio drops a rate set that arrives
+    /// while the device is still taking the previous one. [FRAMING:representation] The status is
+    /// a map of the ask; the rate read off the device is the territory, and the only thing this
     /// believes. The put-back is owed whatever stopped the reading, so nothing stops this.
     ///
     /// Nor is one read enough. The rate read straight after the put-back's report answered the
@@ -217,15 +230,17 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
     /// in flight when the ask was made lands after the read and undoes it, so the report says
     /// the ask was taken and not that the device is done. What is believed instead is a rate
     /// read after the device has gone `quiet` without a report - a device still changing is
-    /// still reporting - and the device is asked again only when that read disagrees. A device
-    /// that never agrees is left where it is, and `leftReshaped` is the reading that says so.
+    /// still reporting - and the device is asked again only when that read disagrees. Every ask
+    /// is followed by that settling and none is made once the deadline has passed, so the rate
+    /// `measure` reads after this is never one taken on the heels of an ask. A device that
+    /// never agrees is left where it is, and `leftReshaped` is the reading that says so.
     /// [LAW:no-silent-failure]
     @MainActor
     private static func putBack(_ device: AudioObjectID, to rate: Double, told arrival: Arrival, within wait: Duration) async throws {
         let deadline = ContinuousClock.now + wait
-        while ContinuousClock.now < deadline {
+        while true {
             try await arrival.settled(for: quiet, by: deadline)
-            guard try nominalRate(of: device) != rate else { return }
+            guard try nominalRate(of: device) != rate, ContinuousClock.now < deadline else { return }
             try move(device, to: rate)
         }
     }
@@ -234,7 +249,9 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
     /// shape is read as where it came to rest. Measured for low-privacy-o1z.lwn on the built-in
     /// microphone: a rate change lands within a few tens of milliseconds of its ask, and a
     /// read taken sooner than that after the last report was the one the next run contradicted.
-    static let quiet = Duration.milliseconds(200)
+    /// Public because a wait shorter than this could never confirm a put-back, and the command
+    /// that takes `--wait` is where that is refused. [LAW:one-source-of-truth]
+    public static let quiet = Duration.milliseconds(200)
 
     /// Where the reports land, and how a wait for the next one ends. A class because the
     /// listener and the wait have to reach the same one, and `@MainActor` because that is where
@@ -248,31 +265,34 @@ public struct ShapeChangeAtRest: Sendable, CustomStringConvertible {
 
         private(set) var count = 0
 
+        /// How often the reports and the stop are asked after: the same place `Interrupt` is
+        /// read everywhere else, and short enough that a device stands moved for about as long
+        /// as CoreAudio takes to say so.
+        static let poll = Duration.milliseconds(5)
+
         func arrived() { count += 1 }
 
         /// Waits until a report past `seen` has landed, `wait` has run out, or `stop` says so -
-        /// whichever comes first. The reports and `stop` are both read between turns of the main
-        /// actor, every few milliseconds: the same place `Interrupt` is read everywhere else, and
-        /// short enough that a device stands moved for about as long as CoreAudio takes to say
-        /// so. [LAW:dataflow-not-control-flow] Three ways a wait ends, and the caller is told
-        /// which rather than left to infer it from what was and was not thrown.
-        func wait(past seen: Int, for wait: Duration, stoppingFor stop: @escaping @MainActor () -> Bool) async throws -> Outcome {
-            let deadline = ContinuousClock.now + wait
-            while count <= seen {
-                if stop() { return .stopped }
-                guard ContinuousClock.now < deadline else { return .ranOut }
-                try await Task.sleep(for: .milliseconds(5))
-            }
-            return .arrived
+        /// whichever comes first. [LAW:dataflow-not-control-flow] Three ways a wait ends, and
+        /// the caller is told which rather than left to infer it from what was and was not
+        /// thrown. A report that had landed by the time the stop was raised is an answer: the
+        /// question was answered before it was withdrawn.
+        func wait(past seen: Int, for wait: Duration, stoppingFor stop: @MainActor () -> Bool = { false }) async throws -> Outcome {
+            try await self.wait(past: seen, for: wait, on: ContinuousClock(), stoppingFor: stop)
+        }
+
+        /// The same wait against a clock the caller owns, for the reason `holds(on:)` exists:
+        /// a test hands in a clock it advances itself, and the ending is a fact rather than a
+        /// race. [LAW:no-ambient-temporal-coupling]
+        func wait<C: Clock>(past seen: Int, for wait: C.Duration, on clock: C, stoppingFor stop: @MainActor () -> Bool = { false }) async throws -> Outcome where C.Duration == Duration {
+            let ended = try await holds(within: wait, askingEvery: Self.poll, on: clock) { count > seen || stop() }
+            return count > seen ? .arrived : ended ? .stopped : .ranOut
         }
 
         /// Waits until `quiet` has passed with no report, or `deadline` has: a device that is
         /// still changing is still reporting, and one that has stopped is where it will stay.
         func settled(for quiet: Duration, by deadline: ContinuousClock.Instant) async throws {
-            while ContinuousClock.now < deadline {
-                let seen = count
-                guard try await wait(past: seen, for: min(quiet, deadline - ContinuousClock.now), stoppingFor: { false }) == .arrived else { return }
-            }
+            while try await wait(past: count, for: min(quiet, deadline - ContinuousClock.now)) == .arrived {}
         }
     }
 

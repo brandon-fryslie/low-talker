@@ -101,31 +101,41 @@ struct MicCommand: ParsableCommand {
     /// device at, so a run that could not put it back says so instead of leaving it to be
     /// noticed later. Ctrl-C is answered rather than obeyed for the same reason - obeyed, it
     /// ended the process with the device moved and nothing said - so an interrupted run puts
-    /// the device back, prints where it left it, and exits as interrupted.
+    /// the device back, prints where it left it, and then fails the way every interrupted
+    /// command here fails. Only Ctrl-C is answered: the put-back can hold the process for up to
+    /// `--wait` after it, and a supervisor's SIGTERM keeps its meaning.
     struct Shape: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             abstract: "Change the input device's shape while a microphone rests, and report whether it was heard."
         )
 
         /// Whole milliseconds, like `indicator`'s hold. The most this Mac gets to publish each
-        /// change: the reading goes on the moment a report lands, so this is spent in full only
+        /// change: the reading goes on the moment a report lands, so what a run spends waiting
+        /// is a few reports' worth plus the settling the put-back needs, and this in full only
         /// on a Mac that never reports.
-        @Option(help: "Milliseconds to wait for the report, and again for the device to change back.")
+        @Option(help: ArgumentHelp("Milliseconds to wait for each report, and the most the put-back may take; a device is read as settled after \(settling) ms without one."))
         var wait: Int = 1000
 
+        /// The settling, in this command's unit.
+        private static let settling = Int(ShapeChangeAtRest.quiet / .milliseconds(1))
+
+        /// No shorter than a settling, because a put-back that can never be confirmed would
+        /// report `leftReshaped` for a device that is on its way back.
         func validate() throws {
-            guard wait > 0 else { throw ValidationError("--wait must be positive.") }
+            guard wait >= Self.settling else {
+                throw ValidationError("--wait must be at least \(Self.settling) ms, the settling a put-back is read after.")
+            }
         }
 
         @MainActor
         func run() async throws {
-            let interrupt = Interrupt.watched()
+            let interrupt = Interrupt.watched([SIGINT])
             let across = try await ShapeChangeAtRest.measure(waiting: .milliseconds(wait), stoppingFor: { interrupt.isRaised })
             print(across)
             guard across.kept else { throw ExitCode.failure }
-            // The shell's own status for a command Ctrl-C ended, so a script reads an interrupted
-            // reading the way it reads any other interrupted command and never as a promise kept.
-            guard across.report != .interrupted else { throw ExitCode(130) }
+            // An interrupt is the same failure it is on every other command, thrown after the
+            // reading has said where it left the device. [LAW:single-enforcer]
+            try interrupt.check()
         }
     }
 
@@ -157,8 +167,9 @@ struct MicCommand: ParsableCommand {
 
 extension MicCommand {
     /// Whether a device change leaves the key-down handler free and a press on it whole.
-    /// Moves the default input's rate and back, like `shape`, and puts it back on every way
-    /// out; exit status is the verdict.
+    /// Moves the default input's rate and back, like `shape`, and puts it back on every throw -
+    /// not on Ctrl-C, which `shape` answers and this still obeys: low-privacy-pon. Exit status
+    /// is the verdict.
     struct Change: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             abstract: "Change the input device's shape twice, and report how long the main actor was held and whether a press on the change came back whole."

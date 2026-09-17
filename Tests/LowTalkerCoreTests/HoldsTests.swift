@@ -1,28 +1,8 @@
 import LowTalkerCore
 import Testing
 
-/// A clock whose hands move only when the code under test sleeps. Nothing here waits
-/// on the machine, so what these tests assert is the polling loop's behaviour rather
-/// than how fast this Mac happened to schedule it: on a loaded runner the first real
-/// 5 ms sleep can overrun a one-second window, which is a fact about the runner and
-/// not about `holds`. [LAW:no-ambient-temporal-coupling]
-private final class StepClock: Clock, @unchecked Sendable {
-    struct Instant: InstantProtocol {
-        var since: Duration
-        func advanced(by duration: Duration) -> Instant { Instant(since: since + duration) }
-        func duration(to other: Instant) -> Duration { other.since - since }
-        static func < (a: Instant, b: Instant) -> Bool { a.since < b.since }
-    }
-
-    private(set) var now = Instant(since: .zero)
-    let minimumResolution: Duration = .zero
-
-    func sleep(until deadline: Instant, tolerance: Duration?) async throws {
-        try Task.checkCancellation()
-        now = deadline
-    }
-}
-
+/// Every wait here runs on `StepClock`, so what these tests assert is the polling loop's
+/// behaviour rather than how fast this Mac happened to schedule it.
 @Suite struct HoldsTests {
     @Test func trueTheAskItComesToHold() async throws {
         let clock = StepClock()
