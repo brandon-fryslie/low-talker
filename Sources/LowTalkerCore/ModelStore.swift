@@ -73,6 +73,20 @@ public struct ModelStore: Sendable {
         }
     }
 
+    /// The model, verified present, or the reason the store does not hold it. The read-only
+    /// counterpart to `install`: a store already whole is loaded where it sits, with no lock
+    /// and no write, which is how a release loads its carried, code-signed store. A store
+    /// that is not whole cannot be made whole here — nothing to download, nowhere to write —
+    /// so it fails with the part-level reason rather than a permission error from a lock it
+    /// could not take. [LAW:parse-dont-validate] [LAW:no-silent-failure]
+    public func installedModel(_ model: ModelName) throws -> InstalledModel {
+        switch try presence(of: model) {
+        case .installed(let installed): return installed
+        case .missing: throw ModelStoreError.storeLacksModel(store: directory, model: model, reason: "the model is not installed")
+        case .damaged(let damages): throw ModelStoreError.storeLacksModel(store: directory, model: model, reason: damages.map { "\($0)" }.joined(separator: "; "))
+        }
+    }
+
     /// What one part's manifest says about its files.
     enum Recording {
         case whole(Manifest)
@@ -108,13 +122,7 @@ public struct ModelStore: Sendable {
         from source: ModelSource,
         phase: @escaping @Sendable (InstallPhase) -> Void
     ) async throws -> InstalledModel {
-        // [LAW:no-ambient-temporal-coupling] The lock owns the order of evict, download,
-        // and manifest write, so a store with nothing to write needs no turn in it — and a
-        // release's carried store is read-only, where taking the lock is both pointless and
-        // impossible. Judge presence first; only a store that must be written locks and
-        // re-judges under the lock, where the reading describes what this installer owns.
-        if case .installed(let installed) = try presence(of: model) { return installed }
-        return try await InstallLock.holding(directory, waiting: { phase(.waitingForAnotherInstall) }) {
+        try await InstallLock.holding(directory, waiting: { phase(.waitingForAnotherInstall) }) {
             let presence = try presence(of: model)
             if case .installed(let installed) = presence { return installed }
             // [LAW:single-enforcer] The hub client trusts its own sidecar once a file
@@ -370,6 +378,9 @@ public enum ModelStoreError: Error, Equatable, CustomStringConvertible {
     case downloadRefused(url: URL, status: Int?)
     case dittoFailed(arguments: [String], status: Int32, message: String)
     case renameFailed(from: URL, to: URL, errno: Int32)
+    /// A store that does not hold the model whole, with no source to make it whole from:
+    /// a release's read-only carried store, verified in place. [LAW:no-silent-failure]
+    case storeLacksModel(store: URL, model: ModelName, reason: String)
 
     public var description: String {
         switch self {
@@ -387,6 +398,8 @@ public enum ModelStoreError: Error, Equatable, CustomStringConvertible {
             "ditto \(arguments.joined(separator: " ")) exited \(status): \(message)"
         case .renameFailed(let from, let to, let errno):
             "cannot move \(from.path) to \(to.path): \(String(cString: strerror(errno)))"
+        case .storeLacksModel(let store, let model, let reason):
+            "\(store.path) does not hold \(model) whole: \(reason)"
         }
     }
 }

@@ -446,20 +446,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// run on WhisperKit's own threads, and only the status text comes back here.
     private func loadEngine() async throws -> WhisperKitTranscriber {
         do {
-            // [LAW:dataflow-not-control-flow] A release loads the store it carries in
-            // place, read-only, and writes no model data outside its bundle; a development
-            // build carries none and downloads into Application Support. The carried store
-            // is both where a release loads from and its own source, so a load never falls
-            // back to a download nobody asked for: a carried store that lacks the model
-            // fails with its reason. [LAW:no-silent-failure]
-            let carried = ModelStore.carried(by: .main)
-            let store = try carried ?? ModelStore.applicationSupport()
-            let source = carried.map(ModelSource.store) ?? .huggingFace
-            let transcriber = try await WhisperKitTranscriber.load(in: store, from: source) { phase in
+            // [LAW:decomposition] Two operations, not one with a flag: a release loads the
+            // store it carries in place — read-only, verified whole where the code signature
+            // sealed it, written to never — while a development build, carrying none,
+            // downloads into Application Support. A read-only store cannot be installed into,
+            // only confirmed and loaded, so a carried store that lacks the model fails with
+            // its reason rather than a permission error from a lock it could not take.
+            let report: @Sendable (WhisperKitTranscriber.LoadPhase) -> Void = { phase in
                 Task { @MainActor in
                     let next = self.engineReadiness.reporting(phase)
                     if next != self.engineReadiness { self.show(next) }
                 }
+            }
+            let transcriber: WhisperKitTranscriber
+            if let carried = ModelStore.carried(by: .main) {
+                transcriber = try await WhisperKitTranscriber.loadInPlace(in: carried, phase: report)
+            } else {
+                transcriber = try await WhisperKitTranscriber.load(in: ModelStore.applicationSupport(), from: .huggingFace, phase: report)
             }
             show(.ready(transcriber.model, after: launched.duration(to: .now)))
             return transcriber

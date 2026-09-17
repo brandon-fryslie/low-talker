@@ -323,18 +323,12 @@ import Testing
         #expect(ModelName(rawValue: "base.en")?.rawValue == "base.en")
     }
 
-    /// The app's launch load and the CLI's `model download` share one store, and a
-    /// store that must be installed is written by one installer at a time: the second
-    /// waits for the first, then takes its result. The destination starts empty, so the
-    /// fast path cannot short-circuit and the installer must reach the lock; the first
-    /// installer's work is done while its lock is held, so the waiter finds the model
-    /// whole and copies nothing.
+    /// The app's launch load and the CLI's `model download` share one store: the
+    /// second installer waits for the first, then finds its work already done.
     @Test(.timeLimit(.minutes(1))) func installWaitsForAnotherInstallerAndTakesItsResult() async throws {
-        let source = try Scratch(files: Self.files)
-        try source.record()
-        let scratch = try Scratch(files: [:], tokenizer: [:])
+        let scratch = try Scratch(files: Self.files)
+        try scratch.record()
         let lock = scratch.root.appending(components: "installed", ".lock")
-        try FileManager.default.createDirectory(at: lock.deletingLastPathComponent(), withIntermediateDirectories: true)
         let descriptor = open(lock.path, O_RDONLY | O_CREAT, 0o644)
         try #require(descriptor >= 0)
         defer { close(descriptor) }
@@ -347,24 +341,15 @@ import Testing
         let store = ModelStore(directory: scratch.root)
         let installing = Task {
             defer { report.finish() }
-            return try await store.install("test", from: .store(ModelStore(directory: source.root))) { report.yield($0) }
+            return try await store.install("test", from: .huggingFace) { report.yield($0) }
         }
         var reported = phases.makeAsyncIterator()
         try #require(await reported.next() == .waitingForAnotherInstall, "the second installer reports the wait before anything else")
-
-        // What the first installer would do under the lock: make the destination whole.
-        // The waiter re-judges presence under the lock and finds nothing left to copy.
-        for (from, to) in [(source.folder, scratch.folder), (source.tokenizer, scratch.tokenizer)] {
-            try FileManager.default.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try FileManager.default.copyItem(at: from, to: to)
-        }
-        try Manifest(recording: scratch.folder, relativeTo: scratch.root).write(to: scratch.manifestURL)
-        try Manifest(recording: scratch.tokenizer, relativeTo: scratch.root).write(to: scratch.tokenizerManifestURL)
         try #require(flock(descriptor, LOCK_UN) == 0)
 
         let installed = try await installing.value
         #expect(installed.model == "test")
-        #expect(await reported.next() == nil, "the waiter found the model whole and copied nothing")
+        #expect(await reported.next() == nil, "an installed model is taken as found, with no download")
     }
 
     /// An installed model costs nothing to install again.
@@ -377,13 +362,12 @@ import Testing
         #expect(phases.withLock { $0 }.isEmpty)
     }
 
-    /// A complete store loads read-only. A release's carried store sits inside a signed,
-    /// read-only bundle, so `install` must take no lock and write nothing when the model
-    /// is already whole. The store here is made unwritable, down to the `installed`
-    /// folder the lock file would go in, so a load that reached the lock would throw
-    /// `lockUnavailable`; returning the model proves the lock is never reached.
-    /// [LAW:no-ambient-temporal-coupling]
-    @Test func installOnACompleteReadOnlyStoreLoadsWithoutLocking() async throws {
+    /// A whole store loads read-only, in place. A release's carried store sits inside a
+    /// signed, read-only bundle, so `installedModel` confirms it and returns without a
+    /// lock or a write. The store here is made unwritable, down to the `installed` folder
+    /// a lock file would need, so any write would throw; returning the model proves none
+    /// is attempted. [LAW:parse-dont-validate]
+    @Test func installedModelOnAWholeReadOnlyStoreReturnsWithoutWriting() throws {
         let scratch = try Scratch(files: Self.files)
         try scratch.record()
         let installedFolder = scratch.root.appending(path: "installed")
@@ -397,8 +381,22 @@ import Testing
             try? setMode(0o755, scratch.root)
             try? setMode(0o755, installedFolder)
         }
-        let installed = try await ModelStore(directory: scratch.root).install("test", from: .huggingFace) { _ in }
+        let installed = try ModelStore(directory: scratch.root).installedModel("test")
         #expect(installed.folder.standardizedFileURL == scratch.folder.standardizedFileURL)
+    }
+
+    /// A store that does not hold the model whole fails with the part-level reason, not a
+    /// lock or permission error: `installedModel` never tries to write it, so a read-only
+    /// carried store that is somehow incomplete says why rather than "read-only file
+    /// system". [LAW:no-silent-failure]
+    @Test func installedModelOnAStoreLackingTheModelFailsWithTheReason() throws {
+        let scratch = try Scratch(files: [:], tokenizer: [:])
+        do {
+            _ = try ModelStore(directory: scratch.root).installedModel("test")
+            Issue.record("a store that lacks the model must fail")
+        } catch let error as ModelStoreError {
+            #expect("\(error)".contains("does not hold") && "\(error)".contains("not installed"))
+        }
     }
 
     /// A store written before the tokenizer had a manifest has whole weights and no
