@@ -25,11 +25,11 @@ public struct RegisteredHotKeys: KeyboardTap {
     @MainActor
     private final class Installed {
         let registrations: [Registration]
-        let handle: @MainActor (KeyEvent) -> HotkeyDetector.Delivery
+        let handle: @MainActor (KeyEvent) -> HotkeyDetector.Passage
         var handler: EventHandlerRef?
         var hotKeys: [EventHotKeyRef] = []
 
-        init(registrations: [Registration], handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery) {
+        init(registrations: [Registration], handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Passage) {
             self.registrations = registrations
             self.handle = handle
         }
@@ -70,7 +70,7 @@ public struct RegisteredHotKeys: KeyboardTap {
     /// there is no tap for the system to switch off.
     public func install(
         listeningFor chords: Set<KeyChord>,
-        handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery,
+        handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Passage,
         onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse
     ) throws -> Disposal {
         // [LAW:parse-dont-validate] Every chord is proven registrable before anything is

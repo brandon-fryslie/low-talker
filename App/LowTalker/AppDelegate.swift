@@ -159,28 +159,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// reports to this delegate's menu; touching it is what starts the load.
     private lazy var engine: Task<WhisperKitTranscriber, any Error> = Task { try await loadEngine() }
 
-    // MARK: - the input method
+    // MARK: - the delivery
 
     /// Where this installation's choice is kept: its own defaults domain, so the two
     /// installations choose apart. [LAW:one-source-of-truth] The menu and the first-launch
     /// question write it, launch reads it, and nothing else holds a copy.
-    private static let inputMethodKey = "inputMethod"
+    ///
+    /// Still spelled `inputMethod`, which the type no longer is, because the word on disk
+    /// is every installed copy's stored answer and renaming it would ask them all again.
+    private static let deliveryKey = "inputMethod"
 
-    /// The method the user chose, or nil for an installation that has never been asked.
-    /// A stored word that names no method reads as never asked, and the question comes
+    /// The delivery the user chose, or nil for an installation that has never been asked.
+    /// A stored word that names no delivery reads as never asked, and the question comes
     /// back: that is the one answer to it a person can act on.
-    private var chosenMethod: InputMethod? {
-        get { UserDefaults.standard.string(forKey: Self.inputMethodKey).flatMap(InputMethod.init(rawValue:)) }
-        set { UserDefaults.standard.set(newValue?.rawValue, forKey: Self.inputMethodKey) }
+    private var chosenDelivery: Delivery? {
+        get { UserDefaults.standard.string(forKey: Self.deliveryKey).flatMap(Delivery.init(rawValue:)) }
+        set { UserDefaults.standard.set(newValue?.rawValue, forKey: Self.deliveryKey) }
     }
 
-    /// The loop that is listening now, and the method it was built for.
+    /// The loop that is listening now, and the delivery it was built for.
     ///
     /// [LAW:types-are-the-program] The three are one value because they are only ever
     /// right together: a clipboard hotkey feeding a typing executor is a chord nobody
     /// could have pressed for the output it reaches.
     private struct Listening {
-        let method: InputMethod
+        let delivery: Delivery
         let hotkey: Hotkey
         let dictation: Dictation
     }
@@ -220,23 +223,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             accessibilityDescription: engineReadiness.iconDescription(for: Self.flavor.displayName, wordsOnClipboard: wordsOnClipboard))
     }
 
-    /// Takes `method` down to the loop: the old loop's hotkey comes down first, ending any
-    /// press it had open, its sessions are waited out, and then the new method's hotkey
-    /// goes up in front of a loop whose output is that method's.
+    /// Takes `delivery` down to the loop: the old loop's hotkey comes down first, ending any
+    /// press it had open, its sessions are waited out, and then the new delivery's hotkey
+    /// goes up in front of a loop whose output is that delivery's.
     ///
     /// Queued behind any switch still in progress; see `switching`.
-    private func choose(_ method: InputMethod) async {
+    private func choose(_ delivery: Delivery) async {
         let before = switching
         let this = Task {
             await before?.value
-            await adopt(method)
+            await adopt(delivery)
         }
         switching = this
         await this.value
     }
 
-    private func adopt(_ method: InputMethod) async {
-        chosenMethod = method
+    private func adopt(_ delivery: Delivery) async {
+        chosenDelivery = delivery
         if let previous = listening {
             listening = nil
             await previous.hotkey.stopAndDeliver()
@@ -245,23 +248,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             do { try await previous.dictation.finish() } catch { report(.failure(error)) }
         }
         // `lastDictation` is left as it stands: a session the wait let finish may just
-        // have copied, and words on the clipboard stay there whichever method comes next.
-        let hotkey = Hotkey(for: Self.flavor, heardBy: method)
+        // have copied, and words on the clipboard stay there whichever delivery comes next.
+        let hotkey = Hotkey(for: Self.flavor, heardBy: delivery)
         let dictation = Dictation(
             capture: capture,
             transcriber: { [unowned self] in try await engine.value },
             router: Router(routes: [.dictation]),
-            executor: executor(for: method),
+            executor: executor(for: delivery),
             report: { [unowned self] in report($0) }
         )
-        listening = Listening(method: method, hotkey: hotkey, dictation: dictation)
-        let chord = chordName(heardBy: method)
+        listening = Listening(delivery: delivery, hotkey: hotkey, dictation: dictation)
+        let chord = chordName(heardBy: delivery)
         do {
             try hotkey.start({ [unowned self] transition in
                 if case .began = transition { lastDictation = nil }
                 dictation.press(transition)
             }, onLapse: { [unowned self] in report($0) })
-            let status = switch method {
+            let status = switch delivery {
             case .virtualKeyboard: "hold \(chord) to dictate"
             case .clipboard: "hold \(chord), or tap it to start and again to stop; then paste"
             }
@@ -271,15 +274,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // surface it has, in the words the user can act on.
             showHotkeyStatus("off — \(error)")
         }
-        switch method {
+        switch delivery {
         case .virtualKeyboard: registerKeyboardHelper()
         case .clipboard: break
         }
     }
 
-    /// [LAW:single-enforcer] The one place a method becomes the output its words reach.
-    private func executor(for method: InputMethod) -> Executor {
-        switch method {
+    /// [LAW:single-enforcer] The one place a delivery becomes the output its words reach.
+    private func executor(for delivery: Delivery) -> Executor {
+        switch delivery {
         case .virtualKeyboard:
             // The typist proves the target app in front before every key, so this app
             // never activates itself around a session; `LSUIElement` is what keeps its own
@@ -292,30 +295,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Asked when an installation has never chosen, which is its first launch.
     ///
-    /// The buttons are the methods in `InputMethod.allCases`' order, and the answer is read
-    /// back by that same order, so a button can never pick a method it does not name.
+    /// The buttons are the deliveries in `Delivery.allCases`' order, and the answer is read
+    /// back by that same order, so a button can never pick a delivery it does not name.
     /// [LAW:one-source-of-truth]
-    private func askForMethod() -> InputMethod {
+    private func askForDelivery() -> Delivery {
         let alert = NSAlert()
         alert.messageText = "How should \(Self.flavor.displayName) give you what you say?"
-        alert.informativeText = InputMethod.allCases.map { "\($0.title): \(explanation(of: $0))" }.joined(separator: "\n\n")
+        alert.informativeText = Delivery.allCases.map { "\($0.title): \(explanation(of: $0))" }.joined(separator: "\n\n")
             + "\n\nYou can change this at any time from the menu bar."
-        InputMethod.allCases.forEach { alert.addButton(withTitle: $0.title) }
+        Delivery.allCases.forEach { alert.addButton(withTitle: $0.title) }
         NSApp.activate()
         let response = alert.runModal()
-        let answer = InputMethod.allCases[response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue]
+        let answer = Delivery.allCases[response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue]
         // [LAW:verifiable-goals] The question has no other trace: an agent checking that a
         // first launch asked, and what it was told, reads it here.
-        log.notice("input method: asked, answered \(answer, privacy: .public) (modal response \(response.rawValue, privacy: .public))")
+        log.notice("delivery: asked, answered \(answer, privacy: .public) (modal response \(response.rawValue, privacy: .public))")
         return answer
     }
 
-    /// This installation's chord for `method`, named on the layout the user types on now.
+    /// This installation's chord for `delivery`, named on the layout the user types on now.
     /// Read at each use rather than kept, since the user can switch layouts at any moment.
-    private func chordName(heardBy method: InputMethod) -> String {
-        let chord = Hotkey.defaultChord(for: Self.flavor, heardBy: method)
+    private func chordName(heardBy delivery: Delivery) -> String {
+        let chord = Hotkey.defaultChord(for: Self.flavor, heardBy: delivery)
         do {
-            return Hotkey.named(chord, heardBy: method, on: try KeyboardLayout.current())
+            return Hotkey.named(chord, heardBy: delivery, on: try KeyboardLayout.current())
         } catch {
             // [LAW:no-silent-failure] A layout that cannot be read still leaves the reader a
             // chord to press, in the spelling `held` gives every chord, and the log says why.
@@ -324,9 +327,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func explanation(of method: InputMethod) -> String {
-        let chord = chordName(heardBy: method)
-        return switch method {
+    private func explanation(of delivery: Delivery) -> String {
+        let chord = chordName(heardBy: delivery)
+        return switch delivery {
         case .clipboard:
             "press \(chord) to start and again to stop, then paste what you said with ⌘V. Nothing to install and nothing for an administrator to approve."
         case .virtualKeyboard:
@@ -337,8 +340,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// After the user has chosen the virtual keyboard: what it still needs, in front of
     /// them, when it needs anything. Not on a launch that only remembers the choice, which
     /// the menu already answers every time it opens.
-    private func showWhatIsMissing(for method: InputMethod) {
-        switch method {
+    private func showWhatIsMissing(for delivery: Delivery) {
+        switch delivery {
         case .clipboard:
             return
         case .virtualKeyboard:
@@ -354,9 +357,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc private func chooseMethod(_ item: NSMenuItem) {
-        guard let method = item.representedObject as? String, let chosen = InputMethod(rawValue: method) else {
-            preconditionFailure("an input method item carries its method's raw value")
+    @objc private func chooseDelivery(_ item: NSMenuItem) {
+        guard let spelling = item.representedObject as? String, let chosen = Delivery(rawValue: spelling) else {
+            preconditionFailure("a delivery item carries its delivery's raw value")
         }
         // Before `listen` has the microphone - its prompt still open, or refused - the choice
         // is only kept: `listen` takes it up once the microphone is held, and a hotkey put
@@ -364,16 +367,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // why. `switching` is set only by a choice taken down to a loop, which `listen`
         // makes first. [LAW:no-ambient-temporal-coupling]
         //
-        // The method already chosen is not chosen again while its hotkey is up: rebuilding
+        // The delivery already chosen is not chosen again while its hotkey is up: rebuilding
         // the loop would end a latched press as lapsed and throw its recording away.
         // A hotkey that has come down has no press to lose and nothing listening, so
-        // choosing its method again is how the user starts it - and is what the status
+        // choosing its delivery again is how the user starts it - and is what the status
         // line tells them to do. Only that one case: a loop still being built has no
         // hotkey to read yet, and letting the absence pass for a come-down would chain a
         // second teardown and rebuild behind the first, alert and all.
         let cameDown = listening?.hotkey.isWatching == false
-        let rebuilding = chosenMethod == chosen && !cameDown
-        chosenMethod = chosen
+        let rebuilding = chosenDelivery == chosen && !cameDown
+        chosenDelivery = chosen
         guard switching != nil, !rebuilding, !quitting else { return }
         Task {
             await choose(chosen)
@@ -426,11 +429,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             showHotkeyStatus("off — \(error)")
             return
         }
-        if let remembered = chosenMethod {
-            log.notice("input method: remembered \(remembered, privacy: .public)")
+        if let remembered = chosenDelivery {
+            log.notice("delivery: remembered \(remembered, privacy: .public)")
             await choose(remembered)
         } else {
-            let asked = askForMethod()
+            let asked = askForDelivery()
             await choose(asked)
             showWhatIsMissing(for: asked)
         }
@@ -532,7 +535,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // open, which is no use to someone whose keyboard has just started misbehaving
         // and who is trying to work out which app is doing it.
         case .comeDown:
-            showHotkeyStatus("off — kept lapsing; choose an input method below to start it again")
+            showHotkeyStatus("off — kept lapsing; choose a delivery below to start it again")
         }
     }
 
@@ -598,11 +601,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// before the menu is laid out, so the items are in place when it is measured.
     func menuNeedsUpdate(_ menu: NSMenu) {
         // The kept choice while nothing listens yet, so a choice made then is shown as made.
-        let method = listening?.method ?? chosenMethod
-        // The virtual keyboard's requirements are read only while it is the method: on the
+        let delivery = listening?.delivery ?? chosenDelivery
+        // The virtual keyboard's requirements are read only while it is the delivery: on the
         // clipboard nothing is missing, and a list of driver steps would be a list of
         // things to install for an output nobody is using.
-        let requirements = switch method {
+        let requirements = switch delivery {
         case .virtualKeyboard: readVirtualKeyboardReadiness().requirements
         case .clipboard, nil: [Requirement]()
         }
@@ -631,17 +634,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             for line in requirement.stepLines { menu.addItem(readout("    \(line)")) }
         }
         menu.addItem(.separator())
-        menu.addItem(readout("Input method"))
-        for choice in InputMethod.allCases {
-            let item = NSMenuItem(title: "    \(choice.title)", action: #selector(chooseMethod(_:)), keyEquivalent: "")
+        menu.addItem(readout("Delivery"))
+        for choice in Delivery.allCases {
+            let item = NSMenuItem(title: "    \(choice.title)", action: #selector(chooseDelivery(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = choice.rawValue
-            item.state = choice == method ? .on : .off
+            item.state = choice == delivery ? .on : .off
             menu.addItem(item)
         }
         menu.addItem(.separator())
         // Where every step that asks for a click sends a reader, one click closer.
-        if method == .virtualKeyboard {
+        if delivery == .virtualKeyboard {
             menu.addItem(withTitle: "Open Login Items & Extensions…", action: #selector(openLoginItems), keyEquivalent: "")
         }
         menu.addItem(withTitle: "Quit \(Self.flavor.displayName)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -654,7 +657,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 }
 
-private extension InputMethod {
+private extension Delivery {
     /// The name a person picks it by, in the menu and in the first-launch question.
     var title: String {
         switch self {
