@@ -88,7 +88,7 @@ public struct Mode: Hashable, Sendable {
     }
 
     /// Hold the hotkey, speak, and the words are typed wherever the focus is. The
-    /// virtual keyboard's chord, because typing at the focus is that method's.
+    /// virtual keyboard's chord, because typing at the focus is that delivery's.
     public static func dictation(for flavor: Flavor) -> Mode {
         Mode(name: "dictation", chord: Hotkey.defaultChord(for: flavor, heardBy: .virtualKeyboard), vocabulary: .empty, router: .dictation)
     }
