@@ -16,7 +16,10 @@
 ///   keys Microphone, Accessibility and Input Monitoring grants to;
 /// - the Mach service, which exactly one process may own;
 /// - the launchd label, which Background Task Management files the approval record under;
-/// - the config file, so a setting changed for one build does not move the other.
+/// - the config file, so a setting changed for one build does not move the other;
+/// - the input method's bundle identifier, input source identifier and connection name,
+///   which the text input system keys a text input source by: two copies sharing any one
+///   of them is the second failing to register beside the first.
 ///
 /// Nothing else needs to differ by flavor. The model store differs too, but by whether
 /// the bundle carries one, not by this type: a release loads the store it carries in place,
@@ -38,6 +41,10 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
     /// The helper nested under the app it belongs to, the shape Apple's own embedded
     /// helpers take, so the parentage Background Task Management records reads in the name.
     private static let releaseMachServiceName = releaseBundleIdentifier + ".keyboardd"
+    /// The input method nested under the app that carries it, the way the helper is, and
+    /// under the `.inputmethod` segment Apple's own text input sources use
+    /// (`com.apple.inputmethod.Kotoeri`).
+    private static let releaseInputMethodBundleIdentifier = releaseBundleIdentifier + ".inputmethod"
 
     /// What the development build suffixes onto each of the release build's names. One
     /// suffix for all of them, so the two installations are told apart the same way
@@ -90,8 +97,44 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
     /// label governs; that is still 3ti.13's to answer at startup.
     public var launchdLabel: String { machServiceName }
 
+    /// What `CFBundleIdentifier` holds inside this flavor's input method bundle, the one
+    /// the app carries and installs into `~/Library/Input Methods`.
+    ///
+    /// The seed the other two input method names are grown from, so a flavor branches
+    /// once here and the rest follow by construction rather than by three more switches
+    /// somebody has to keep in step. [LAW:dataflow-not-control-flow]
+    public var inputMethodBundleIdentifier: String {
+        switch self {
+        case .release: Self.releaseInputMethodBundleIdentifier
+        case .development: Self.releaseInputMethodBundleIdentifier + Self.developmentSuffix
+        }
+    }
+
+    /// What `TISSelectInputSource` selects this flavor's source by, and what the Input
+    /// menu files it under: the input mode the bundle declares, which is the identifier
+    /// the text input system reports back.
+    ///
+    /// One mode and not a list, because there is one thing this input method does. It is
+    /// namespaced under the bundle rather than spelled apart, so a source can never be
+    /// filed under an installation that does not own the bundle serving it.
+    public var inputSourceIdentifier: String { inputMethodBundleIdentifier + ".dictation" }
+
+    /// The name the text input system reaches this flavor's input method server on, which
+    /// its `Info.plist` publishes as `InputMethodConnectionName` and `IMKServer` answers.
+    ///
+    /// A port name, so it is the same kind of fact as `machServiceName`: exactly one
+    /// process may answer on it, and two copies sharing it would leave the second's
+    /// server unreachable rather than refused. [LAW:no-silent-failure]
+    public var inputMethodConnectionName: String { inputMethodBundleIdentifier + "_Connection" }
+
     /// The name shown in the menu bar and in Login Items, where the whole point is that a
     /// person can tell the two apart at a glance.
+    ///
+    /// It is also the name the Input Sources list and the Input menu show for this
+    /// flavor's input method, deliberately reused rather than copied into a name of its
+    /// own: a person choosing the source is choosing this app, and two spellings of that
+    /// one fact could disagree about which copy they had picked.
+    /// [LAW:one-source-of-truth]
     public var displayName: String {
         switch self {
         case .release: "LowTalker"
