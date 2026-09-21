@@ -41,10 +41,6 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
     /// The helper nested under the app it belongs to, the shape Apple's own embedded
     /// helpers take, so the parentage Background Task Management records reads in the name.
     private static let releaseMachServiceName = releaseBundleIdentifier + ".keyboardd"
-    /// The input method nested under the app that carries it, the way the helper is, and
-    /// under the `.inputmethod` segment Apple's own text input sources use
-    /// (`com.apple.inputmethod.Kotoeri`).
-    private static let releaseInputMethodBundleIdentifier = releaseBundleIdentifier + ".inputmethod"
 
     /// What the development build suffixes onto each of the release build's names. One
     /// suffix for all of them, so the two installations are told apart the same way
@@ -98,17 +94,23 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
     public var launchdLabel: String { machServiceName }
 
     /// What `CFBundleIdentifier` holds inside this flavor's input method bundle, the one
-    /// the app carries and installs into `~/Library/Input Methods`.
+    /// the app carries and installs into `~/Library/Input Methods`, under the
+    /// `.inputmethod` segment Apple's own text input sources use
+    /// (`com.apple.inputmethod.Kotoeri`).
     ///
-    /// The seed the other two input method names are grown from, so a flavor branches
-    /// once here and the rest follow by construction rather than by three more switches
-    /// somebody has to keep in step. [LAW:dataflow-not-control-flow]
-    public var inputMethodBundleIdentifier: String {
-        switch self {
-        case .release: Self.releaseInputMethodBundleIdentifier
-        case .development: Self.releaseInputMethodBundleIdentifier + Self.developmentSuffix
-        }
-    }
+    /// Grown from `bundleIdentifier` and not from the release seed the way the helper's
+    /// names are, which is the one place this type departs from "suffix `.dev` onto the
+    /// release name" - deliberately, because the input method is a *bundle nested inside
+    /// the app bundle* where the helper is a plain tool, and a nested bundle's identifier
+    /// belongs under the identifier of the bundle carrying it. Suffixing the release seed
+    /// instead would give the development copy `…low-talker.inputmethod.dev` sitting
+    /// inside `…low-talker.dev`, nested under the release app's namespace rather than its
+    /// own container's.
+    ///
+    /// Doing it this way also means no flavor branches here at all: `bundleIdentifier` is
+    /// the one switch, and all three input method names fall out of it.
+    /// [LAW:dataflow-not-control-flow]
+    public var inputMethodBundleIdentifier: String { bundleIdentifier + ".inputmethod" }
 
     /// What `TISSelectInputSource` selects this flavor's source by, and what the Input
     /// menu files it under: the input mode the bundle declares, which is the identifier

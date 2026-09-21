@@ -195,9 +195,9 @@ targets:
       bundleIdentifier: ai.promptctl.low-talker.dev
       serviceKey: "!"
       launchdLabel: ai.promptctl.low-talker.keyboardd.dev
-      inputMethodBundleIdentifier: ai.promptctl.low-talker.inputmethod.dev
-      inputSourceIdentifier: ai.promptctl.low-talker.inputmethod.dev.dictation
-      inputMethodConnectionName: ai.promptctl.low-talker.inputmethod.dev_Connection
+      inputMethodBundleIdentifier: ai.promptctl.low-talker.dev.inputmethod
+      inputSourceIdentifier: ai.promptctl.low-talker.dev.inputmethod.dictation
+      inputMethodConnectionName: ai.promptctl.low-talker.dev.inputmethod_Connection
 
   # The root keyboard helper, built here from the same sources Package.swift builds it
   # from, because an Xcode app can embed an Xcode tool and cannot embed a package's

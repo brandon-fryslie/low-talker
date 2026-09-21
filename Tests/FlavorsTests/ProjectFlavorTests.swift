@@ -64,26 +64,36 @@ private let repository = URL(fileURLWithPath: #filePath)
         #expect(mine["inputMethodConnectionName"] == flavor.inputMethodConnectionName)
     }
 
-    /// Counted per flavor rather than in total, so a third target copied from one of these
-    /// - carrying whichever names its author forgot to change - still fails, while a
-    /// second *kind* of target per flavor does not.
+    /// Every block belongs to one flavor, and each flavor builds exactly one app bundle.
     ///
-    /// The input method bundle (low-input-method-s71.0ae) is that second kind: it adds one
-    /// block per flavor, and a flat `count == Flavor.allCases.count` would have failed on
-    /// the arrival of a correct target. What has to hold is not how many blocks there are
-    /// but that every one belongs to exactly one flavor and that no flavor has more of
-    /// them than its sibling - which is the real question, since a stray target is exactly
-    /// a flavor gaining a block the other did not. [LAW:behavior-not-structure]
+    /// This replaced a flat `installations.count == Flavor.allCases.count`, which would
+    /// have failed the moment low-input-method-s71.0ae added a *correct* input method
+    /// target per flavor. Counting per flavor instead is not enough on its own, and the
+    /// first attempt at it here was weaker than what it replaced: "the flavors hold equal
+    /// numbers of blocks" passes a project.yml where the development input method target
+    /// was deleted and the development app target duplicated, and passes a wholesale
+    /// copied pair of targets that still build `ai.promptctl.low-talker` - the
+    /// LaunchServices and TCC collision this suite's header calls silent in the worst way,
+    /// which the flat count did catch.
+    ///
+    /// So the count that matters is of *app* blocks, which are the ones setting
+    /// `bundleIdentifier`: exactly one per flavor, no more and none shared. Blocks of any
+    /// other kind - the input method's, which sets no `bundleIdentifier` - are still held
+    /// to belonging to exactly one flavor, and are free to arrive without this failing.
+    /// [LAW:behavior-not-structure]
     @Test func theProjectBuildsNothingThatIsNotAFlavor() throws {
-        var blocksPerFlavor: [Flavor: Int] = [:]
+        var appsPerFlavor: [Flavor: [String]] = [:]
         for block in try Self.installations() {
             let values = Set(block.values)
             let owners = Flavor.allCases.filter { !Self.names(of: $0).isDisjoint(with: values) }
             #expect(owners.count == 1, "a templateAttributes block names \(owners) rather than one flavor: \(block)")
-            owners.first.map { blocksPerFlavor[$0, default: 0] += 1 }
+            guard let owner = owners.first, let identifier = block["bundleIdentifier"] else { continue }
+            appsPerFlavor[owner, default: []].append(identifier)
         }
-        #expect(blocksPerFlavor.count == Flavor.allCases.count, "a flavor has no target at all: \(blocksPerFlavor)")
-        #expect(Set(blocksPerFlavor.values).count == 1, "the flavors have different numbers of targets: \(blocksPerFlavor)")
+        for flavor in Flavor.allCases {
+            #expect(appsPerFlavor[flavor] == [flavor.bundleIdentifier],
+                    "\(flavor) is built by \(appsPerFlavor[flavor] ?? []) rather than by exactly one target under its own identifier")
+        }
     }
 
     /// The helper signs under the name the release copy's helper serves: one namespace for
