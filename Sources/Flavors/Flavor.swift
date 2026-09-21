@@ -94,9 +94,10 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
     public var launchdLabel: String { machServiceName }
 
     /// What `CFBundleIdentifier` holds inside this flavor's input method bundle, the one
-    /// the app carries and installs into `~/Library/Input Methods`, under the
-    /// `.inputmethod` segment Apple's own text input sources use
-    /// (`com.apple.inputmethod.Kotoeri`).
+    /// the app carries and installs into `~/Library/Input Methods`, carrying the
+    /// `.inputmethod` segment that marks a text input source - Apple's own sit together in
+    /// a shared `com.apple.inputmethod.*` namespace, where this one nests under the app
+    /// bundle carrying it.
     ///
     /// Grown from `bundleIdentifier` and not from the release seed the way the helper's
     /// names are, which is the one place this type departs from "suffix `.dev` onto the
@@ -110,6 +111,12 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
     /// Doing it this way also means no flavor branches here at all: `bundleIdentifier` is
     /// the one switch, and all three input method names fall out of it.
     /// [LAW:dataflow-not-control-flow]
+    ///
+    /// One consequence belongs with the name that causes it: the input method runs as its
+    /// own process out of its own bundle, so `Flavor(bundleIdentifier:)` answers nil for
+    /// the identifier this property returns, by design. That process reads the flavor off
+    /// the app bundle it is nested inside, never off itself - low-input-method-s71.0ae is
+    /// where that reading is written.
     public var inputMethodBundleIdentifier: String { bundleIdentifier + ".inputmethod" }
 
     /// What `TISSelectInputSource` selects this flavor's source by, and what the Input
@@ -132,11 +139,13 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
     /// The name shown in the menu bar and in Login Items, where the whole point is that a
     /// person can tell the two apart at a glance.
     ///
-    /// It is also the name the Input Sources list and the Input menu show for this
-    /// flavor's input method, deliberately reused rather than copied into a name of its
-    /// own: a person choosing the source is choosing this app, and two spellings of that
-    /// one fact could disagree about which copy they had picked.
-    /// [LAW:one-source-of-truth]
+    /// It is the name the Input Sources list is to show for this flavor's input method
+    /// too - reused deliberately rather than coined a second time, because a person
+    /// choosing the source is choosing this app, and two spellings of that one fact could
+    /// disagree about which copy they had picked. [LAW:one-source-of-truth] macOS reads
+    /// that name off the input method bundle itself, not off anything here, so the reuse
+    /// holds only once low-input-method-s71.0ae builds that bundle's `CFBundleName` from
+    /// this property; until then it is a requirement on that ticket rather than a fact.
     public var displayName: String {
         switch self {
         case .release: "LowTalker"

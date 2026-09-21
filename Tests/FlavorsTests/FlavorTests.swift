@@ -89,6 +89,8 @@ struct FlavorTests {
                         "\(flavor)'s input method bundle is inside \(other)'s: \(flavor.inputMethodBundleIdentifier)")
                 #expect(!flavor.inputSourceIdentifier.hasPrefix(other.inputMethodBundleIdentifier),
                         "\(flavor)'s input source is inside \(other)'s bundle: \(flavor.inputSourceIdentifier)")
+                #expect(!flavor.inputMethodConnectionName.hasPrefix(other.inputMethodBundleIdentifier),
+                        "\(flavor)'s connection is inside \(other)'s bundle: \(flavor.inputMethodConnectionName)")
             }
         }
     }

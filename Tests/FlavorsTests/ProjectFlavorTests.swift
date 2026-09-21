@@ -64,35 +64,36 @@ private let repository = URL(fileURLWithPath: #filePath)
         #expect(mine["inputMethodConnectionName"] == flavor.inputMethodConnectionName)
     }
 
-    /// Every block belongs to one flavor, and each flavor builds exactly one app bundle.
+    /// Every block belongs to one flavor and builds under a name that flavor owns, and
+    /// each flavor's app bundle is built by exactly one of them.
     ///
-    /// This replaced a flat `installations.count == Flavor.allCases.count`, which would
-    /// have failed the moment low-input-method-s71.0ae added a *correct* input method
-    /// target per flavor. Counting per flavor instead is not enough on its own, and the
-    /// first attempt at it here was weaker than what it replaced: "the flavors hold equal
-    /// numbers of blocks" passes a project.yml where the development input method target
-    /// was deleted and the development app target duplicated, and passes a wholesale
-    /// copied pair of targets that still build `ai.promptctl.low-talker` - the
-    /// LaunchServices and TCC collision this suite's header calls silent in the worst way,
-    /// which the flat count did catch.
+    /// The flat `installations.count == Flavor.allCases.count` this replaced would fail
+    /// the moment low-input-method-s71.0ae adds a *correct* input method target per
+    /// flavor, so what is counted is the blocks building a flavor's own app identifier -
+    /// and a block is read by the identifier it sets, never by which attributes it sets,
+    /// so that target may name its own `bundleIdentifier` like any other bundle does.
     ///
-    /// So the count that matters is of *app* blocks, which are the ones setting
-    /// `bundleIdentifier`: exactly one per flavor, no more and none shared. Blocks of any
-    /// other kind - the input method's, which sets no `bundleIdentifier` - are still held
-    /// to belonging to exactly one flavor, and are free to arrive without this failing.
-    /// [LAW:behavior-not-structure]
+    /// Both failures the flat count caught outlive it. A target copied wholesale from
+    /// release still builds `ai.promptctl.low-talker`, the LaunchServices and TCC
+    /// collision this suite's header calls silent in the worst way: that is a second block
+    /// under one flavor's identifier. A copy whose author changed the identifier but not
+    /// the rest builds a stranger under release's other names: that is a block building
+    /// under no name its flavor owns. [LAW:behavior-not-structure]
     @Test func theProjectBuildsNothingThatIsNotAFlavor() throws {
-        var appsPerFlavor: [Flavor: [String]] = [:]
+        var appsPerFlavor: [Flavor: Int] = [:]
         for block in try Self.installations() {
             let values = Set(block.values)
             let owners = Flavor.allCases.filter { !Self.names(of: $0).isDisjoint(with: values) }
             #expect(owners.count == 1, "a templateAttributes block names \(owners) rather than one flavor: \(block)")
-            guard let owner = owners.first, let identifier = block["bundleIdentifier"] else { continue }
-            appsPerFlavor[owner, default: []].append(identifier)
+            guard owners.count == 1, let owner = owners.first else { continue }
+            guard let identifier = block["bundleIdentifier"] else { continue }
+            #expect(Self.names(of: owner).contains(identifier),
+                    "a target builds \(identifier), which is not one of \(owner)'s names: \(block)")
+            if identifier == owner.bundleIdentifier { appsPerFlavor[owner, default: 0] += 1 }
         }
         for flavor in Flavor.allCases {
-            #expect(appsPerFlavor[flavor] == [flavor.bundleIdentifier],
-                    "\(flavor) is built by \(appsPerFlavor[flavor] ?? []) rather than by exactly one target under its own identifier")
+            #expect(appsPerFlavor[flavor, default: 0] == 1,
+                    "\(flavor)'s app bundle is built by \(appsPerFlavor[flavor, default: 0]) targets rather than by one")
         }
     }
 
