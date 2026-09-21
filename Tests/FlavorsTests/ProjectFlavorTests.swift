@@ -7,8 +7,9 @@ private let repository = URL(fileURLWithPath: #filePath)
 
 /// project.yml builds one app bundle per flavor, under that flavor's own names.
 ///
-/// xcodegen cannot read a Swift constant, so the bundle identifier, the product name and
-/// the launchd plist are written again in project.yml, and this is what keeps those copies
+/// xcodegen cannot read a Swift constant, so every name `Flavor` decides that a target
+/// needs - the bundle identifier, the product name, the launchd plist, and the input
+/// method's three - is written again in project.yml, and this is what keeps those copies
 /// from drifting. [LAW:one-source-of-truth] The failure they would otherwise cause is
 /// silent in the worst way: two bundles that agree on an identifier are one installation
 /// as far as LaunchServices, TCC and Login Items are concerned, so the second copy would
@@ -21,7 +22,7 @@ private let repository = URL(fileURLWithPath: #filePath)
     /// Every `templateAttributes:` block in project.yml, as the names it sets.
     ///
     /// Read as blocks rather than as lines anywhere in the file, because that is the whole
-    /// question: three names that belong to one installation must be set on one target.
+    /// question: the names that belong to one installation must be set on one target.
     /// A `contains` over the file would pass on a project.yml that gave the release bundle
     /// the development plist.
     private static func installations() throws -> [[String: String]] {
@@ -38,6 +39,17 @@ private let repository = URL(fileURLWithPath: #filePath)
         }
     }
 
+    /// Every name a flavor owns, which is how a block in project.yml is recognised as
+    /// that flavor's. Exact strings, never prefixes: a development name contains its
+    /// release name, so matching loosely would file both blocks under `release`.
+    private static func names(of flavor: Flavor) -> Set<String> {
+        [
+            flavor.bundleIdentifier, flavor.displayName, flavor.launchdLabel,
+            flavor.inputMethodBundleIdentifier, flavor.inputSourceIdentifier,
+            flavor.inputMethodConnectionName,
+        ]
+    }
+
     @Test(arguments: Flavor.allCases)
     func theProjectBuildsABundleUnderEveryFlavorsOwnNames(flavor: Flavor) throws {
         let installations = try Self.installations()
@@ -47,14 +59,42 @@ private let repository = URL(fileURLWithPath: #filePath)
         )
         #expect(mine["displayName"] == flavor.displayName)
         #expect(mine["launchdLabel"] == flavor.launchdLabel)
+        #expect(mine["inputMethodBundleIdentifier"] == flavor.inputMethodBundleIdentifier)
+        #expect(mine["inputSourceIdentifier"] == flavor.inputSourceIdentifier)
+        #expect(mine["inputMethodConnectionName"] == flavor.inputMethodConnectionName)
     }
 
-    /// The count as well as the contents, so a third target copied from one of these -
-    /// carrying whichever names its author forgot to change - is not silently tolerated by
-    /// a check that only ever looks for flavors it already knows.
+    /// Every block belongs to one flavor and builds under a name that flavor owns, and
+    /// each flavor's app bundle is built by exactly one of them.
+    ///
+    /// The flat `installations.count == Flavor.allCases.count` this replaced would fail
+    /// the moment low-input-method-s71.0ae adds a *correct* input method target per
+    /// flavor, so what is counted is the blocks building a flavor's own app identifier -
+    /// and a block is read by the identifier it sets, never by which attributes it sets,
+    /// so that target may name its own `bundleIdentifier` like any other bundle does.
+    ///
+    /// Both failures the flat count caught outlive it. A target copied wholesale from
+    /// release still builds `ai.promptctl.low-talker`, the LaunchServices and TCC
+    /// collision this suite's header calls silent in the worst way: that is a second block
+    /// under one flavor's identifier. A copy whose author changed the identifier but not
+    /// the rest builds a stranger under release's other names: that is a block building
+    /// under no name its flavor owns. [LAW:behavior-not-structure]
     @Test func theProjectBuildsNothingThatIsNotAFlavor() throws {
-        let installations = try Self.installations()
-        #expect(installations.count == Flavor.allCases.count, "project.yml builds \(installations)")
+        var appsPerFlavor: [Flavor: Int] = [:]
+        for block in try Self.installations() {
+            let values = Set(block.values)
+            let owners = Flavor.allCases.filter { !Self.names(of: $0).isDisjoint(with: values) }
+            #expect(owners.count == 1, "a templateAttributes block names \(owners) rather than one flavor: \(block)")
+            guard owners.count == 1, let owner = owners.first else { continue }
+            guard let identifier = block["bundleIdentifier"] else { continue }
+            #expect(Self.names(of: owner).contains(identifier),
+                    "a target builds \(identifier), which is not one of \(owner)'s names: \(block)")
+            if identifier == owner.bundleIdentifier { appsPerFlavor[owner, default: 0] += 1 }
+        }
+        for flavor in Flavor.allCases {
+            #expect(appsPerFlavor[flavor, default: 0] == 1,
+                    "\(flavor)'s app bundle is built by \(appsPerFlavor[flavor, default: 0]) targets rather than by one")
+        }
     }
 
     /// The helper signs under the name the release copy's helper serves: one namespace for

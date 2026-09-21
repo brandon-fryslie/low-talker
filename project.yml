@@ -172,6 +172,10 @@ targetTemplates:
         DRIVER_PACKAGE_RESOURCE: Karabiner-DriverKit-VirtualHIDDevice.pkg
 
 targets:
+  # The three inputMethod* names are the text input system's namespaces, one set per
+  # installation, and they are `Flavor`'s: `ProjectFlavorTests` holds these copies to it.
+  # Nothing substitutes them yet - the bundle that carries them is low-input-method-s71.0ae's
+  # target - and they are written here now so that ticket cannot spell them by hand.
   LowTalker:
     templates: [Installation]
     templateAttributes:
@@ -179,6 +183,9 @@ targets:
       bundleIdentifier: ai.promptctl.low-talker
       serviceKey: "@"
       launchdLabel: ai.promptctl.low-talker.keyboardd
+      inputMethodBundleIdentifier: ai.promptctl.low-talker.inputmethod
+      inputSourceIdentifier: ai.promptctl.low-talker.inputmethod.dictation
+      inputMethodConnectionName: ai.promptctl.low-talker.inputmethod_Connection
 
   # The copy built from the working tree, installed and running beside the one above.
   LowTalkerDev:
@@ -188,6 +195,9 @@ targets:
       bundleIdentifier: ai.promptctl.low-talker.dev
       serviceKey: "!"
       launchdLabel: ai.promptctl.low-talker.keyboardd.dev
+      inputMethodBundleIdentifier: ai.promptctl.low-talker.dev.inputmethod
+      inputSourceIdentifier: ai.promptctl.low-talker.dev.inputmethod.dictation
+      inputMethodConnectionName: ai.promptctl.low-talker.dev.inputmethod_Connection
 
   # The root keyboard helper, built here from the same sources Package.swift builds it
   # from, because an Xcode app can embed an Xcode tool and cannot embed a package's
