@@ -56,7 +56,7 @@ public struct RegisteredHotKeys: KeyboardTap {
             // Carbon stamps an event in seconds on the clock the machine has been up on,
             // the one `HostTime` counts, so the press marks the audio where the key moved.
             let time = HostTime(uptime: .nanoseconds(Int64(GetEventTime(event) * 1_000_000_000)))
-            // The delivery is the event tap's question. A hot key reaches only its owner, so
+            // The passage is the event tap's question. A hot key reaches only its owner, so
             // there is nothing here to pass on or keep back.
             _ = handle(KeyEvent(key: .key(registration.key), direction: direction, modifiers: registration.chord.modifiers, time: time))
             return noErr
