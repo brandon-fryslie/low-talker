@@ -9,7 +9,7 @@ import Testing
     @Test func everyColumnCarriesItsOwnField() {
         let result = LatencyReport.FixtureResult(
             name: "say/greeting",
-            delivery: .streamed,
+            arrival: .streamed,
             audio: 2.0164,
             first: LatencyReport.Run(keyUpToTranscript: .milliseconds(900), holdToFirstText: .milliseconds(1_600)),
             later: [

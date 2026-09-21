@@ -24,8 +24,13 @@ struct BenchCommand: AsyncParsableCommand {
     @Option(name: .customLong("model"), help: "A model folder name in the whisperkit-coreml repo. Repeat for several.")
     var models: [ModelName] = [.default]
 
+    /// Still spelled `--delivery`, as is the column it prints, because the flag and the
+    /// header are what every bench run already recorded was taken under - in the README's
+    /// tables and in closed tickets - and a reading is only comparable to one named the
+    /// same way. The type behind them is `Arrival`, because `Delivery` is the choice a
+    /// user makes between the clipboard and the virtual keyboard. [LAW:one-source-of-truth]
     @Option(name: .customLong("delivery"), help: "How a hold's audio reaches the engine: batch (the whole clip at key-up) or streamed (a microphone buffer at a time). Repeat for both.")
-    var deliveries: [LatencyHarness.Delivery] = LatencyHarness.Delivery.allCases
+    var arrivals: [LatencyHarness.Arrival] = LatencyHarness.Arrival.allCases
 
     @Option(help: "How many times to hold each fixture, per delivery. The first hold after a load is reported apart from the median.")
     var runs: Int = 3
@@ -46,11 +51,11 @@ struct BenchCommand: AsyncParsableCommand {
         for model in models {
             let reporter = PhaseReporter()
             print("model \(model)", to: &stderr)
-            let report = try await LatencyHarness.measure(fixtures, deliveries: deliveries, reruns: UInt(runs - 1), expecting: expected.vocabulary) {
+            let report = try await LatencyHarness.measure(fixtures, arrivals: arrivals, reruns: UInt(runs - 1), expecting: expected.vocabulary) {
                 try await WhisperKitTranscriber.load(model, in: store, from: source.source, phase: reporter.report)
             }
             for result in report.fixtures {
-                print("  \(result.name) \(result.delivery.rawValue): heard \"\(result.transcript.text)\", \(result.wordErrorRate)", to: &stderr)
+                print("  \(result.name) \(result.arrival.rawValue): heard \"\(result.transcript.text)\", \(result.wordErrorRate)", to: &stderr)
                 let row = Self.row(model: model, load: report.load, result: result)
                 // [LAW:one-source-of-truth] The header is the first row's names, so a
                 // column cannot be titled one thing and filled with another.
@@ -70,7 +75,7 @@ struct BenchCommand: AsyncParsableCommand {
         return [
             ("model", model.description),
             ("fixture", result.name),
-            ("delivery", result.delivery.rawValue),
+            ("delivery", result.arrival.rawValue),
             ("audio_s", fixed(result.audio, places: 3)),
             ("load_s", load.seconds),
             ("first_s", result.first.keyUpToTranscript.seconds),
@@ -87,4 +92,4 @@ struct BenchCommand: AsyncParsableCommand {
 
 /// [LAW:parse-dont-validate] `--delivery` is parsed into a case at the command line,
 /// so a spelling that is neither is refused before any hold is simulated.
-extension LatencyHarness.Delivery: ExpressibleByArgument {}
+extension LatencyHarness.Arrival: ExpressibleByArgument {}
