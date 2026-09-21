@@ -112,14 +112,14 @@ public final class Hotkey {
     /// press it, and two spellings of one chord would be a hotkey the typist could type.
     /// [LAW:one-source-of-truth]
     ///
-    /// **A registered hot key cannot be a modifier alone**, so the clipboard method, which
+    /// **A registered hot key cannot be a modifier alone**, so the clipboard delivery, which
     /// hears its hotkey that way, gets a key: Control+Shift+D, and Command added for the
     /// development copy. Carbon matches modifiers exactly, so neither completes the other.
     /// Not Control+Option, which is VoiceOver's modifier: VoiceOver takes Control+Option+D
     /// as a move to the Dock.
-    nonisolated public static func defaultChord(for flavor: Flavor, heardBy method: InputMethod) -> KeyChord {
+    nonisolated public static func defaultChord(for flavor: Flavor, heardBy delivery: Delivery) -> KeyChord {
         let d = Key(rawValue: UInt16(kVK_ANSI_D))
-        return switch (method, flavor) {
+        return switch (delivery, flavor) {
         case (.virtualKeyboard, .release): KeyChord(modifiers: .rightOption)
         case (.virtualKeyboard, .development): KeyChord(modifiers: .rightOption, .rightCommand)
         case (.clipboard, .release): KeyChord(key: d, modifiers: [.leftControl, .leftShift])
@@ -144,10 +144,10 @@ public final class Hotkey {
     /// stale. The cost of refusing a chord nobody listens for is a keystroke the helper
     /// declines; the cost of the other mistake is two apps dictating at once.
     ///
-    /// Every method's too, for the same reason: which method the other copy is on is a
+    /// Every delivery's too, for the same reason: which delivery the other copy is on is a
     /// choice its user can change from its menu at any moment.
     nonisolated public static let everyInstallationsChord: Set<KeyChord> =
-        Set(Flavor.allCases.flatMap { flavor in InputMethod.allCases.map { defaultChord(for: flavor, heardBy: $0) } })
+        Set(Flavor.allCases.flatMap { flavor in Delivery.allCases.map { defaultChord(for: flavor, heardBy: $0) } })
 
     /// This chord's modifiers in the order a person must press them.
     ///
@@ -214,15 +214,15 @@ public final class Hotkey {
         detector = HotkeyDetector(chords: chords, tapThreshold: tapThreshold)
     }
 
-    /// An installation's hotkey as its input method hears it: that method's chord, through
-    /// that method's tap. [LAW:one-source-of-truth] The one place a method becomes the pair,
+    /// An installation's hotkey as its delivery hears it: that delivery's chord, through
+    /// that delivery's tap. [LAW:one-source-of-truth] The one place a delivery becomes the pair,
     /// so a chord can never be handed to a tap that cannot hear it.
-    public convenience init(for flavor: Flavor, heardBy method: InputMethod, tapThreshold: Duration = defaultTapThreshold) {
-        let tap: any KeyboardTap = switch method {
+    public convenience init(for flavor: Flavor, heardBy delivery: Delivery, tapThreshold: Duration = defaultTapThreshold) {
+        let tap: any KeyboardTap = switch delivery {
         case .virtualKeyboard: SystemKeyboardTap()
         case .clipboard: RegisteredHotKeys()
         }
-        self.init(chords: [Self.defaultChord(for: flavor, heardBy: method)], tapThreshold: tapThreshold, tap: tap)
+        self.init(chords: [Self.defaultChord(for: flavor, heardBy: delivery)], tapThreshold: tapThreshold, tap: tap)
     }
 
     public var phase: HotkeyDetector.Phase { detector.phase }
@@ -316,10 +316,10 @@ public final class Hotkey {
         DispatchQueue.main.async { MainActor.assumeIsolated(work) }
     }
 
-    private func handle(_ event: KeyEvent, _ onTransition: @escaping @MainActor (HotkeyDetector.Transition) -> Void) -> HotkeyDetector.Delivery {
+    private func handle(_ event: KeyEvent, _ onTransition: @escaping @MainActor (HotkeyDetector.Transition) -> Void) -> HotkeyDetector.Passage {
         let verdict = detector.handle(event)
         verdict.transition.map { transition in after { onTransition(transition) } }
-        return verdict.delivery
+        return verdict.passage
     }
 
     /// Counts this lapse, says whether the tap goes back on, and reports it.

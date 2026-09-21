@@ -19,7 +19,7 @@ import Synchronization
 /// harness times whatever stands behind `Transcriber`.
 public enum LatencyHarness {
     /// How a hold's audio reaches the engine.
-    public enum Delivery: String, CaseIterable, Sendable {
+    public enum Arrival: String, CaseIterable, Sendable {
         /// The whole clip, at key-up.
         case batch
         /// A microphone buffer at a time.
@@ -45,7 +45,7 @@ public enum LatencyHarness {
 
     public static func measure(
         _ fixtures: [Fixture],
-        deliveries: [Delivery],
+        arrivals: [Arrival],
         reruns: UInt,
         expecting vocabulary: Vocabulary,
         load: () async throws -> any Transcriber
@@ -56,8 +56,8 @@ public enum LatencyHarness {
         let load = clock.now - loading
         var results: [LatencyReport.FixtureResult] = []
         for fixture in fixtures {
-            for delivery in deliveries {
-                let chunks = fixture.clip.chunks(of: delivery.chunk(of: fixture.clip))
+            for arrival in arrivals {
+                let chunks = fixture.clip.chunks(of: arrival.chunk(of: fixture.clip))
                 let (first, firstTranscript) = try await hold(chunks, with: transcriber, expecting: vocabulary, clock: clock)
                 var transcript = firstTranscript
                 var later: [LatencyReport.Run] = []
@@ -68,7 +68,7 @@ public enum LatencyHarness {
                 }
                 results.append(LatencyReport.FixtureResult(
                     name: fixture.name,
-                    delivery: delivery,
+                    arrival: arrival,
                     audio: fixture.clip.duration,
                     first: first,
                     later: later,
@@ -134,7 +134,7 @@ public struct LatencyReport: Sendable {
 
     public struct FixtureResult: Sendable {
         public let name: String
-        public let delivery: LatencyHarness.Delivery
+        public let arrival: LatencyHarness.Arrival
         /// Seconds of speech in the clip.
         public let audio: Double
         /// The first hold is kept apart from the reruns that follow it.
@@ -144,9 +144,9 @@ public struct LatencyReport: Sendable {
         public let transcript: Transcript
         public let wordErrorRate: WordErrorRate
 
-        public init(name: String, delivery: LatencyHarness.Delivery, audio: Double, first: Run, later: [Run], transcript: Transcript, wordErrorRate: WordErrorRate) {
+        public init(name: String, arrival: LatencyHarness.Arrival, audio: Double, first: Run, later: [Run], transcript: Transcript, wordErrorRate: WordErrorRate) {
             self.name = name
-            self.delivery = delivery
+            self.arrival = arrival
             self.audio = audio
             self.first = first
             self.later = later

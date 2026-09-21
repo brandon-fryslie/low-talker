@@ -100,17 +100,17 @@ public struct HotkeyDetector: Sendable {
     }
 
     /// What the frontmost app gets: the event, or nothing.
-    public enum Delivery: Hashable, Sendable {
+    public enum Passage: Hashable, Sendable {
         case pass, swallow
     }
 
     public struct Verdict: Hashable, Sendable {
         public let transition: Transition?
-        public let delivery: Delivery
+        public let passage: Passage
 
-        public init(transition: Transition?, delivery: Delivery) {
+        public init(transition: Transition?, passage: Passage) {
             self.transition = transition
-            self.delivery = delivery
+            self.passage = passage
         }
     }
 
@@ -156,32 +156,32 @@ public struct HotkeyDetector: Sendable {
         case (.idle, let chord?):
             phase = .held(chord, since: event.time)
             swallowing.insert(event.key)
-            return Verdict(transition: .began(chord, at: event.time), delivery: .swallow)
+            return Verdict(transition: .began(chord, at: event.time), passage: .swallow)
         case (.latched(let chord), .some):
             phase = .idle
             swallowing.insert(event.key)
-            return Verdict(transition: .ended(chord, .released(.tap)), delivery: .swallow)
+            return Verdict(transition: .ended(chord, .released(.tap)), passage: .swallow)
         case (.held, _), (_, nil):
             // A key still swallowed repeats while held; the app sees none of the repeats.
-            return Verdict(transition: nil, delivery: swallowing.contains(event.key) ? .swallow : .pass)
+            return Verdict(transition: nil, passage: swallowing.contains(event.key) ? .swallow : .pass)
         }
     }
 
     private mutating func up(of event: KeyEvent) -> Verdict {
-        let delivery: Delivery = swallowing.remove(event.key) == nil ? .pass : .swallow
+        let passage: Passage = swallowing.remove(event.key) == nil ? .pass : .swallow
         switch phase {
         case .held(let chord, let since) where chord.contains(event.key):
             let press: PressKind = event.time - since < tapThreshold ? .tap : .hold
             switch press {
             case .tap:
                 phase = .latched(chord)
-                return Verdict(transition: nil, delivery: delivery)
+                return Verdict(transition: nil, passage: passage)
             case .hold:
                 phase = .idle
-                return Verdict(transition: .ended(chord, .released(.hold)), delivery: delivery)
+                return Verdict(transition: .ended(chord, .released(.hold)), passage: passage)
             }
         case .held, .latched, .idle:
-            return Verdict(transition: nil, delivery: delivery)
+            return Verdict(transition: nil, passage: passage)
         }
     }
 

@@ -25,11 +25,11 @@ public struct RegisteredHotKeys: KeyboardTap {
     @MainActor
     private final class Installed {
         let registrations: [Registration]
-        let handle: @MainActor (KeyEvent) -> HotkeyDetector.Delivery
+        let handle: @MainActor (KeyEvent) -> HotkeyDetector.Passage
         var handler: EventHandlerRef?
         var hotKeys: [EventHotKeyRef] = []
 
-        init(registrations: [Registration], handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery) {
+        init(registrations: [Registration], handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Passage) {
             self.registrations = registrations
             self.handle = handle
         }
@@ -56,7 +56,7 @@ public struct RegisteredHotKeys: KeyboardTap {
             // Carbon stamps an event in seconds on the clock the machine has been up on,
             // the one `HostTime` counts, so the press marks the audio where the key moved.
             let time = HostTime(uptime: .nanoseconds(Int64(GetEventTime(event) * 1_000_000_000)))
-            // The delivery is the event tap's question. A hot key reaches only its owner, so
+            // The passage is the event tap's question. A hot key reaches only its owner, so
             // there is nothing here to pass on or keep back.
             _ = handle(KeyEvent(key: .key(registration.key), direction: direction, modifiers: registration.chord.modifiers, time: time))
             return noErr
@@ -70,7 +70,7 @@ public struct RegisteredHotKeys: KeyboardTap {
     /// there is no tap for the system to switch off.
     public func install(
         listeningFor chords: Set<KeyChord>,
-        handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery,
+        handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Passage,
         onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse
     ) throws -> Disposal {
         // [LAW:parse-dont-validate] Every chord is proven registrable before anything is

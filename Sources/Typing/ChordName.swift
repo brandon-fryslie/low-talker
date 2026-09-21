@@ -13,8 +13,8 @@ public extension Hotkey {
     /// on Dvorak. [LAW:one-source-of-truth] The name is read off the layout's own map, not
     /// a table kept beside it.
     @MainActor
-    static func named(_ chord: KeyChord, heardBy method: InputMethod, on layout: KeyboardLayout) -> String {
-        switch method {
+    static func named(_ chord: KeyChord, heardBy delivery: Delivery, on layout: KeyboardLayout) -> String {
+        switch delivery {
         case .virtualKeyboard:
             return held(chord)
         case .clipboard:

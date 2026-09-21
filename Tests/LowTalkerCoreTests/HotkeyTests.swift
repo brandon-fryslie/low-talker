@@ -11,11 +11,11 @@ private struct Refused: Error, Equatable {}
 private final class FakeTap: KeyboardTap {
     final class Installation {
         let chords: Set<KeyChord>
-        let handle: @MainActor (KeyEvent) -> HotkeyDetector.Delivery
+        let handle: @MainActor (KeyEvent) -> HotkeyDetector.Passage
         let onLapse: @MainActor (HostTime, LapseCause) -> LapseResponse
         var disposed = false
 
-        init(chords: Set<KeyChord>, handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery, onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse) {
+        init(chords: Set<KeyChord>, handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Passage, onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse) {
             self.chords = chords
             self.handle = handle
             self.onLapse = onLapse
@@ -29,7 +29,7 @@ private final class FakeTap: KeyboardTap {
         self.refusal = refusal
     }
 
-    func install(listeningFor chords: Set<KeyChord>, handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery, onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse) throws -> Disposal {
+    func install(listeningFor chords: Set<KeyChord>, handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Passage, onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse) throws -> Disposal {
         if let refusal { throw refusal }
         let installation = Installation(chords: chords, handle: handle, onLapse: onLapse)
         installations.append(installation)
@@ -309,14 +309,14 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
     /// release app's tap takes it and dictates.
     @Test func everyFlavoursChordIsOneTheTypistRefuses() {
         for flavor in Flavor.allCases {
-            for method in InputMethod.allCases {
-                #expect(Hotkey.everyInstallationsChord.contains(Hotkey.defaultChord(for: flavor, heardBy: method)),
-                        "\(flavor)'s \(method) chord is not in the set a typist refuses")
+            for delivery in Delivery.allCases {
+                #expect(Hotkey.everyInstallationsChord.contains(Hotkey.defaultChord(for: flavor, heardBy: delivery)),
+                        "\(flavor)'s \(delivery) chord is not in the set a typist refuses")
             }
         }
     }
 
-    /// The clipboard method's chords are ones the window server can register, and no two
+    /// The clipboard delivery's chords are ones the window server can register, and no two
     /// installations' are one hot key to it.
     @Test func everyClipboardChordIsARegistrableHotKeyOfItsOwn() throws {
         let chords = Set(Flavor.allCases.map { Hotkey.defaultChord(for: $0, heardBy: .clipboard) })

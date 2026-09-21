@@ -53,7 +53,7 @@ public protocol KeyboardTap {
     /// ignore them; one that can only hear what it asked for registers exactly these.
     func install(
         listeningFor chords: Set<KeyChord>,
-        handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery,
+        handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Passage,
         onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse
     ) throws -> Disposal
 }
@@ -134,11 +134,11 @@ public struct SystemKeyboardTap: KeyboardTap {
     /// What the C callback reaches through its context pointer. It also keeps the
     /// port, which the callback needs to switch the tap back on.
     private final class Installed {
-        let handle: @MainActor (KeyEvent) -> HotkeyDetector.Delivery
+        let handle: @MainActor (KeyEvent) -> HotkeyDetector.Passage
         let onLapse: @MainActor (HostTime, LapseCause) -> LapseResponse
         var port: CFMachPort?
 
-        init(handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery, onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse) {
+        init(handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Passage, onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse) {
             self.handle = handle
             self.onLapse = onLapse
         }
@@ -155,7 +155,7 @@ public struct SystemKeyboardTap: KeyboardTap {
         /// lapse, so the clock here is the moment, and it cannot be wrong.
         /// [LAW:one-source-of-truth]
         @MainActor
-        func deliver(_ event: CGEvent, type: CGEventType) -> HotkeyDetector.Delivery {
+        func deliver(_ event: CGEvent, type: CGEventType) -> HotkeyDetector.Passage {
             switch type {
             case .tapDisabledByTimeout, .tapDisabledByUserInput:
                 let cause: LapseCause = type == .tapDisabledByTimeout ? .tooSlow : .userInput
@@ -178,7 +178,7 @@ public struct SystemKeyboardTap: KeyboardTap {
     /// Sees every key, so the chords are the detector's to find and not this tap's.
     public func install(
         listeningFor chords: Set<KeyChord>,
-        handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Delivery,
+        handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Passage,
         onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse
     ) throws -> Disposal {
         let installed = Unmanaged.passRetained(Installed(handle: handle, onLapse: onLapse))
