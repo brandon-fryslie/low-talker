@@ -67,6 +67,18 @@ private let repository = URL(fileURLWithPath: #filePath)
         ]
     }
 
+    /// Which flavor a block builds for: every flavor whose names appear among the values
+    /// the block sets.
+    ///
+    /// One reading, asked by both counts below, because "owns" is one rule and a second
+    /// copy of it would answer differently the day the rule changes. [LAW:single-enforcer]
+    /// It hands back all the matches rather than the single one: a block naming none, or
+    /// naming two, is a finding, and what to say about it is each caller's own.
+    private static func owners(of block: Target) -> [Flavor] {
+        let values = Set(block.sets.values)
+        return Flavor.allCases.filter { !names(of: $0).isDisjoint(with: values) }
+    }
+
     @Test(arguments: Flavor.allCases)
     func theProjectBuildsABundleUnderEveryFlavorsOwnNames(flavor: Flavor) throws {
         let installations = try Self.installations()
@@ -122,8 +134,7 @@ private let repository = URL(fileURLWithPath: #filePath)
     @Test func theProjectBuildsNothingThatIsNotAFlavor() throws {
         var appsPerFlavor: [Flavor: Int] = [:]
         for block in try Self.installations() {
-            let values = Set(block.sets.values)
-            let owners = Flavor.allCases.filter { !Self.names(of: $0).isDisjoint(with: values) }
+            let owners = Self.owners(of: block)
             #expect(owners.count == 1, "a templateAttributes block names \(owners) rather than one flavor: \(block)")
             guard owners.count == 1, let owner = owners.first else { continue }
             guard let identifier = block.sets["bundleIdentifier"] else { continue }
@@ -151,8 +162,7 @@ private let repository = URL(fileURLWithPath: #filePath)
     @Test func everyKindOfTargetIsBuiltOncePerFlavor() throws {
         var flavorsByKind: [Set<String>: [Flavor]] = [:]
         for block in try Self.installations() {
-            let values = Set(block.sets.values)
-            let owners = Flavor.allCases.filter { !Self.names(of: $0).isDisjoint(with: values) }
+            let owners = Self.owners(of: block)
             guard owners.count == 1, let owner = owners.first else { continue }
             flavorsByKind[Set(block.sets.keys), default: []].append(owner)
         }

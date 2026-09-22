@@ -20,11 +20,11 @@ settings:
     CODE_SIGN_STYLE: Manual
     CODE_SIGN_IDENTITY: LowTalker Dev
     # Notarization refuses a binary without it, and every target in this file is one a
-    # release carries: the app and the helper embedded in it.
+    # release carries: the app, the helper, and the input method bundle embedded in it.
     ENABLE_HARDENED_RUNTIME: YES
   # A build to hand to someone else: the Developer ID certificate, which Gatekeeper trusts
   # and notarization accepts, in place of the dev identity nobody trusts. The helper admits
-  # exactly the certificate that signed it, so the app and the helper embedded in it change
+  # exactly the certificate that signed it, so the app and everything embedded in it change
   # certificate together; a CLI signed with the dev identity is refused by this build's
   # helper, as it should be. scripts/sign-release builds this configuration.
   #
