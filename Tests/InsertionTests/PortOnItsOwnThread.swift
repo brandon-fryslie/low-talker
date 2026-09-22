@@ -135,6 +135,20 @@ private final class RawPort {
     }
 }
 
+/// Runs `body` on a thread of the test's own and awaits what it returned or threw.
+///
+/// For the cases that send by hand rather than through `Inserter`'s awaited overload: a test
+/// body runs on the cooperative pool, and a blocking send there holds one of its threads for
+/// the whole wait. `HelperKeyboardTests` and `ListenerTests` each keep a copy of this for the
+/// same reason and against the same measurement - four blocking calls held every thread of a
+/// three-core runner and no other test ran. Three copies of five lines is one copy too many
+/// twice over; unifying them is low-tests-ape's. [LAW:no-ambient-temporal-coupling]
+func onAThreadOfItsOwn<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
+    try await withCheckedThrowingContinuation { continuation in
+        Thread { continuation.resume(with: Result { try body() }) }.start()
+    }
+}
+
 /// A port name no other test, no repeat of this one, and no installed input method answers
 /// on.
 ///
