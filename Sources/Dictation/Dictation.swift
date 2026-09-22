@@ -51,8 +51,11 @@ public final class Dictation {
         /// dictated, and each surface decides for itself whether to show them.
         /// [LAW:one-source-of-truth] The app's log line and the CLI's are this, and
         /// where the words went is read off what was performed rather than off the app
-        /// that happened to be in front at key-down: a route may name its own target,
-        /// and then the two are different apps.
+        /// that happened to be in front at key-down: a route may name its own target, and
+        /// an insert is answered by the app whose cursor took the words, which the person
+        /// may have moved to while they were still speaking. Either way the two are
+        /// different apps, and each action already carries the one it is about, so this
+        /// line and the action lines under it cannot name different apps for one insert.
         public var description: String {
             let into = Set(performed.map(\.into)).map(\.rawValue).sorted().joined(separator: ", ")
             let destination = into.isEmpty ? "" : " into \(into)"

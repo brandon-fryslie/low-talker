@@ -1,4 +1,5 @@
 import Foundation
+import Insertion
 import KeyboardLayout
 import LowTalkerCore
 import os
@@ -30,6 +31,10 @@ public struct Executor {
         /// `hotkeys` are the chords the tap listens for, which no action may press.
         case devices(keyboard: Keyboards, mouse: Pointers, hotkeys: Set<KeyChord>)
         case clipboard(Clipboard)
+        /// The input method puts the words at the cursor itself; the clipboard is where
+        /// they go when the cursor certainly did not get them. Both, because a cursor that
+        /// did not take the words is not the words being gone. [LAW:no-silent-failure]
+        case insertion(any Inserter, clipboard: Clipboard)
     }
 
     private let output: Output
@@ -45,6 +50,29 @@ public struct Executor {
     /// clicked. Nothing here can press a key, so there is no hotkey to refuse.
     public init(copyingTo clipboard: Clipboard, log: Logger = Executor.log) {
         output = .clipboard(clipboard)
+        self.log = log
+    }
+
+    /// Text at the focus asked of the input method, which commits it at the cursor through
+    /// the text input system - no key posted, no pasteboard touched, and no grant asked of
+    /// an administrator.
+    ///
+    /// `clipboard` is not a fallback for everything that can go wrong, and the line it is
+    /// drawn on is whether the words certainly did not land. A refusal is that - the input
+    /// method looked and there was nowhere to put them - and so is the question never
+    /// reaching one to look, which covers an uninstalled bundle, an unselected source and
+    /// an input method that never took the request, and is the likeliest thing that goes
+    /// wrong here. Those go to the clipboard and the outcome says both halves, so the icon
+    /// shows words waiting and the Insert Dictation service can still place them.
+    ///
+    /// A channel that broke where this end cannot see which side of the commit it broke on
+    /// is thrown as it is, the way an unreachable helper is. Copying there would risk
+    /// delivering a second copy of a sentence already in the document, and it would hide a
+    /// broken channel behind a working-looking dictation. `Unreachable` carries that split
+    /// in its own shape, so this is a fact the compiler holds rather than a rule this
+    /// comment asks to be remembered. [LAW:no-silent-failure]
+    public init(insertingThrough inserter: any Inserter, orCopyingTo clipboard: Clipboard, log: Logger = Executor.log) {
+        output = .insertion(inserter, clipboard: clipboard)
         self.log = log
     }
 
@@ -67,9 +95,30 @@ public struct Executor {
             /// in front, not an app the text reached. The words themselves, because a copy is
             /// something the user can still ask for, through the Insert Dictation service.
             case copied(String)
+            /// Committed at the cursor by the input method. The app is `into`, which for
+            /// this case is the app the words actually reached and not necessarily the one
+            /// this route was decided in front of: the person can move between the chord and
+            /// the words being ready, and the input method commits where the cursor is then.
+            /// Less than a person seeing them, and more than `copied` can say.
+            /// [FRAMING:representation]
+            case inserted(characters: Int)
+            /// The cursor did not get them, so they are on the clipboard instead. Both halves
+            /// in one outcome, because why the cursor did not get the words and where they
+            /// are now are two facts and neither answers the other.
+            ///
+            /// The app is `into`, which here is the app remembered at key-down and never an
+            /// app the words reached - there is no such app in this case. The line says that
+            /// moment out loud, because a reason like `cursorIsInAnotherApp` is the far end
+            /// talking about what was in front when it looked, which is later.
+            case notInserted(NotAtTheCursor, copied: String)
         }
 
         public let what: What
+        /// The app this outcome is about, which each case above says its own relation to:
+        /// the app typed into, the app a click landed in, the app in front while words went
+        /// to the clipboard, the app whose cursor took an insert. One field and not one per
+        /// case, so a reader of a list of these - the session line - has one place to look
+        /// and cannot be handed two apps that disagree. [LAW:one-source-of-truth]
         public let into: BundleID
         public let acknowledged: Duration
 
@@ -80,6 +129,8 @@ public struct Executor {
             case .clicked(let at, let button, let times, let reports): "clicked \(button.rawValue) \(times.spelled) at \(at) after \(reports) move reports into \(into.rawValue)"
             case .scrolled(let at, let vertical, let horizontal): "scrolled vertical \(vertical.rawValue) horizontal \(horizontal.rawValue) at \(at) into \(into.rawValue)"
             case .copied(let text): "copied \(text.count) characters to the clipboard with \(into.rawValue) in front"
+            case .inserted(let characters): "inserted \(characters) characters at the cursor in \(into.rawValue)"
+            case .notInserted(let reason, let text): "\(reason), so \(text.count) characters went to the clipboard with \(into.rawValue) in front at key-down"
             }
             return "\(act), key-up to acknowledged \(Int(acknowledged / .milliseconds(1))) ms"
         }
@@ -108,13 +159,15 @@ public struct Executor {
             lowered = try actions.map { try lower($0, in: frontmost, on: layout, keyboard: keyboard, mouse: mouse, hotkeys: hotkeys) }
         case .clipboard(let clipboard):
             lowered = try actions.map { try copy($0, in: frontmost, to: clipboard) }
+        case .insertion(let inserter, let clipboard):
+            lowered = try actions.map { try insert($0, in: frontmost, through: inserter, orTo: clipboard) }
         }
         let clock = ContinuousClock()
         var performed: [Performed] = []
         for step in lowered {
-            let what: Performed.What
-            do { what = try await step.perform() } catch { throw RouteStopped(performed: performed, cause: error) }
-            let done = Performed(what: what, into: step.into, acknowledged: clock.now - keyUp)
+            let landed: (what: Performed.What, into: BundleID)
+            do { landed = try await step.perform() } catch { throw RouteStopped(performed: performed, cause: error) }
+            let done = Performed(what: landed.what, into: landed.into, acknowledged: clock.now - keyUp)
             log.info("\(done.description, privacy: .public)")
             performed.append(done)
         }
@@ -122,22 +175,82 @@ public struct Executor {
     }
 
     /// An action as reports on the device for its target, proven before any is posted.
+    ///
+    /// The app comes back with the outcome rather than being fixed when the step is built.
+    /// An insert only learns which app took the words when the input method names it, and a
+    /// step that carried the app it was aimed at would leave `Performed` holding that beside
+    /// the one it reached - two apps, free to disagree, with the session line reading one
+    /// and the action line the other. [LAW:one-source-of-truth] Every other step answers
+    /// with the app it was built for, which is the same shape and needs no case of its own.
+    /// [LAW:dataflow-not-control-flow]
     private struct Step {
-        let into: BundleID
-        let perform: @MainActor () async throws -> Performed.What
+        let perform: @MainActor () async throws -> (what: Performed.What, into: BundleID)
     }
 
     private func copy(_ action: Action, in frontmost: BundleID, to clipboard: Clipboard) throws -> Step {
         switch action {
         case .insertText(let text, .focus):
-            return Step(into: frontmost) {
+            return Step {
                 try clipboard.write(text)
-                return .copied(text)
+                return (.copied(text), frontmost)
             }
         // Text for a named app included: the clipboard reaches whatever the user pastes
         // into, so an action that names its app is one this output would only pretend to.
         case .insertText(_, .app), .sendKeys, .click, .scroll, .clickElement:
-            throw NeedsTheVirtualKeyboard(action: action)
+            throw NeedsTheVirtualKeyboard(action: action, instead: "puts dictation on the clipboard")
+        case .activateApp, .openURL, .runShortcut, .pipe:
+            throw NotAnInput(action: action)
+        }
+    }
+
+    private func insert(_ action: Action, in frontmost: BundleID, through inserter: any Inserter, orTo clipboard: Clipboard) throws -> Step {
+        switch action {
+        case .insertText(let text, .focus):
+            return Step {
+                // The one thing that ends at the cursor returns; everything else names why
+                // it did not and leaves by the single road to the clipboard below.
+                // [LAW:dataflow-not-control-flow]
+                let reason: NotAtTheCursor
+                do {
+                    // Awaited, so the round trip runs on a thread of its own: this is the
+                    // main actor, and `Inserter` says in its own contract that the blocking
+                    // call must not pump it. [LAW:no-ambient-temporal-coupling]
+                    switch try await inserter.insert(text) {
+                    case .inserted(let characters, let reached):
+                        return (.inserted(characters: characters), BundleID(rawValue: reached))
+                    // Not a failure to recover from but the other half of this output's job:
+                    // the input method looked and there was nowhere to put words.
+                    case .refused(let refusal):
+                        reason = .refused(refusal)
+                    }
+                } catch let unreachable as Unreachable {
+                    switch unreachable {
+                    // The channel saying the cursor never saw the words, whichever way it
+                    // says it - and the likeliest thing that goes wrong with this delivery
+                    // is in here, so the utterance goes where the person can still reach it
+                    // rather than existing only in a log line.
+                    case .didNotLand(let why):
+                        reason = .unreachable(why)
+                    // Thrown on untouched: here the far end may already have put the words
+                    // in the document, and words that may have landed must not be delivered
+                    // a second time. The type makes that the only thing this arm can do.
+                    // [LAW:no-silent-failure]
+                    case .mayHaveLanded:
+                        throw unreachable
+                    }
+                }
+                // Both facts or neither: a pasteboard that will not take the words would
+                // otherwise replace the reason with its own complaint, and the person would
+                // be told where the words are not without being told why the cursor did not
+                // get them. [LAW:no-silent-failure]
+                do { try clipboard.write(text) } catch { throw NotInsertedAndNotCopied(reason: reason, cause: error) }
+                return (.notInserted(reason, copied: text), frontmost)
+            }
+        // Text for a named app included: this output reaches the cursor the text input
+        // system is holding, which belongs to whatever is in front, so an action naming its
+        // own app is one it could only pretend to perform.
+        case .insertText(_, .app), .sendKeys, .click, .scroll, .clickElement:
+            throw NeedsTheVirtualKeyboard(action: action, instead: "asks the input method to put dictation at the cursor")
         case .activateApp, .openURL, .runShortcut, .pipe:
             throw NotAnInput(action: action)
         }
@@ -156,31 +269,31 @@ public struct Executor {
             }
             let typist = Typist(keyboard: keyboard(into), hotkeys: hotkeys)
             let lowered = try typist.lower(text, on: layout)
-            return Step(into: into) { .typed(characters: try await typist.type(lowered)) }
+            return Step { (.typed(characters: try await typist.type(lowered)), into) }
         case .sendKeys(let chord):
             let typist = Typist(keyboard: keyboard(frontmost), hotkeys: hotkeys)
             let lowered = try typist.lower(chord)
-            return Step(into: frontmost) {
+            return Step {
                 try await typist.press(lowered)
-                return .pressed(chord)
+                return (.pressed(chord), frontmost)
             }
         case .click(let at, let button, let times):
             let pointer = mouse(frontmost)
-            return Step(into: frontmost) {
+            return Step {
                 let click = try await pointer.click(at: at, button: button, times: times)
-                return .clicked(at: click.at, button: button, times: times, reports: click.reports)
+                return (.clicked(at: click.at, button: button, times: times, reports: click.reports), frontmost)
             }
         case .scroll(let at, let vertical, let horizontal):
             let pointer = mouse(frontmost)
-            return Step(into: frontmost) {
+            return Step {
                 try await pointer.scroll(at: at, vertical: vertical, horizontal: horizontal)
-                return .scrolled(at: at, vertical: vertical, horizontal: horizontal)
+                return (.scrolled(at: at, vertical: vertical, horizontal: horizontal), frontmost)
             }
         case .clickElement(let role, let title):
             let pointer = mouse(frontmost)
-            return Step(into: frontmost) {
+            return Step {
                 let click = try await pointer.click(element: role, title: title)
-                return .clicked(at: click.at, button: .left, times: .single, reports: click.reports)
+                return (.clicked(at: click.at, button: .left, times: .single, reports: click.reports), frontmost)
             }
         case .activateApp, .openURL, .runShortcut, .pipe:
             throw NotAnInput(action: action)
@@ -216,6 +329,17 @@ public struct RouteStopped: StoppedPartWay, CustomStringConvertible {
     }
 }
 
+/// The words did not reach the cursor and the clipboard would not take them either, which
+/// is two failures and one outcome: where the words could not go, and that they are now
+/// nowhere. Carried together because the reason is the half that says what to fix.
+/// [LAW:no-silent-failure]
+public struct NotInsertedAndNotCopied: Error, CustomStringConvertible {
+    public let reason: NotAtTheCursor
+    public let cause: any Error
+
+    public var description: String { "\(reason), and the words could not be copied either: \(cause)" }
+}
+
 /// An action neither device can perform. Activating an app, opening a URL, running a
 /// shortcut and piping are the command layer's work, and a route that emits one reaches
 /// an executor that does not have it yet. [LAW:no-silent-failure] Said by name rather
@@ -226,11 +350,16 @@ public struct NotAnInput: Error, CustomStringConvertible {
     public var description: String { "neither the keyboard nor the mouse can perform \(action); nothing was done" }
 }
 
-/// An action only the virtual keyboard or mouse can perform, reaching an executor that
-/// puts words on the clipboard. [LAW:no-silent-failure] Refused by name, so a route that
-/// needs the devices says so instead of leaving part of itself on the clipboard.
+/// An action only the virtual keyboard or mouse can perform, reaching an executor that has
+/// neither. [LAW:no-silent-failure] Refused by name, so a route that needs the devices says
+/// so instead of leaving part of itself somewhere the user did not ask for.
 public struct NeedsTheVirtualKeyboard: Error, CustomStringConvertible {
     public let action: Action
+    /// What this installation does with dictated words instead, in the words that output's
+    /// own line would use. A value rather than a second error type, because what differs
+    /// between the outputs is this sentence and not the refusal.
+    /// [LAW:dataflow-not-control-flow]
+    public let instead: String
 
-    public var description: String { "\(action) needs the virtual keyboard, and this installation puts dictation on the clipboard; nothing was done" }
+    public var description: String { "\(action) needs the virtual keyboard, and this installation \(instead); nothing was done" }
 }

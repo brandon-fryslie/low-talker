@@ -50,7 +50,7 @@ struct InsertCommand: AsyncParsableCommand {
 
     private func describe(_ answer: InsertionAnswer) -> String {
         switch answer {
-        case let .inserted(characters): "inserted \(characters) characters at the cursor"
+        case let .inserted(characters, app): "inserted \(characters) characters at the cursor in \(app)"
         case let .refused(refusal): "refused - \(refusal)"
         }
     }

@@ -10,8 +10,8 @@ import Testing
 /// way, and a test that pinned the JSON would fail on a change that broke nothing.
 @Suite struct WireTests {
     @Test(arguments: [
-        InsertionAnswer.inserted(characters: 0),
-        .inserted(characters: 12),
+        InsertionAnswer.inserted(characters: 0, into: "com.example.editor"),
+        .inserted(characters: 12, into: "com.example.editor"),
         .refused(.noClientHasFocus),
         .refused(.cursorIsInAnotherApp),
         .refused(.requestWasNotText),
@@ -35,6 +35,24 @@ import Testing
     @Test func nonsenseIsNotAnAnswer() {
         #expect(Wire.answer(of: Data("nonsense".utf8)) == nil)
     }
+
+    /// An insert that names no app is not an answer either. It reads as well-formed JSON, so
+    /// nothing else would stop it, and a caller renders it as a line ending in nothing at
+    /// all - worse than a line naming no app, which is the standard `Client.init?` sets at
+    /// the far border. Our own input method cannot send one; what can is whatever else holds
+    /// a port name anyone can derive. [LAW:parse-dont-validate]
+    @Test func anInsertThatNamesNoAppIsNotAnAnswer() {
+        let named = InsertionAnswer.inserted(characters: 11, into: "")
+        #expect(Wire.answer(of: Wire.answer(named)) == nil)
+    }
+
+    /// And the check is on the app rather than on the case: an insert that reports no
+    /// characters is a real answer - a zero-length request arrives as an empty request and
+    /// is answered honestly - so nothing here may turn it away.
+    @Test func anInsertOfNothingIntoARealAppStillCrosses() {
+        let nothing = InsertionAnswer.inserted(characters: 0, into: "com.example.editor")
+        #expect(Wire.answer(of: Wire.answer(nothing)) == nothing)
+    }
 }
 
 /// Long enough that the runner's own stall cannot spend it: `DirectoryChangesTests` records
@@ -43,6 +61,10 @@ import Testing
 /// fact about the machine rather than five. [LAW:one-source-of-truth] The cases that ARE
 /// timing under test set their own budget and say so.
 private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
+
+/// The app a hosted double says it committed into. Any name at all: what crosses the wire is
+/// what the far end said, and no case here is about which app that was.
+private let anEditor = "com.example.editor"
 
 /// The channel, end to end, against a port standing in for the input method.
 ///
@@ -58,13 +80,13 @@ private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
         let seen = Seen()
         let port = try PortOnItsOwnThread.insertion(name: name) { text in
             seen.record(text)
-            return .inserted(characters: text.count)
+            return .inserted(characters: text.count, into: anEditor)
         }
         defer { port.stop() }
 
         let answer = try await InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend)
             .insert("hello there")
-        #expect(answer == .inserted(characters: 11))
+        #expect(answer == .inserted(characters: 11, into: anEditor))
         #expect(seen.text == "hello there")
     }
 
@@ -76,11 +98,11 @@ private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
     /// empty `CFData`. [LAW:behavior-not-structure]
     @Test func anEmptyRequestCrossesAsAnEmptyRequest() async throws {
         let name = aPortNobodyElseUses()
-        let port = try PortOnItsOwnThread.insertion(name: name) { .inserted(characters: $0.count) }
+        let port = try PortOnItsOwnThread.insertion(name: name) { .inserted(characters: $0.count, into: anEditor) }
         defer { port.stop() }
 
         #expect(try await InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend).insert("")
-            == .inserted(characters: 0))
+            == .inserted(characters: 0, into: anEditor))
     }
 
     /// A refusal is an answer: it comes back, it does not throw, and it says which refusal
@@ -98,7 +120,7 @@ private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
     /// instead of waiting out its timeout. [LAW:no-silent-failure]
     @Test func bytesThatAreNotTextAreRefusedByName() async throws {
         let name = aPortNobodyElseUses()
-        let port = try PortOnItsOwnThread.insertion(name: name) { .inserted(characters: $0.count) }
+        let port = try PortOnItsOwnThread.insertion(name: name) { .inserted(characters: $0.count, into: anEditor) }
         defer { port.stop() }
 
         // On a thread of its own for the reason the suite doc gives: this one sends by hand
@@ -132,7 +154,7 @@ private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
         // being run. Hosted on the test's thread it would answer only while a blocking send
         // pumped that thread for it, which is the sender servicing the far end - and a far
         // end that only works while someone is waiting on it proves nothing about either.
-        let first = try PortOnItsOwnThread.insertion(name: name) { .inserted(characters: $0.count) }
+        let first = try PortOnItsOwnThread.insertion(name: name) { .inserted(characters: $0.count, into: anEditor) }
         defer { first.stop() }
 
         // Refused before any source is added, so the attempt leaves nothing behind on
@@ -142,7 +164,7 @@ private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
         }
         // The first is still the one answering, and answering with its own closure.
         #expect(try await InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend).insert("hello")
-            == .inserted(characters: 5))
+            == .inserted(characters: 5, into: anEditor))
     }
 }
 
@@ -152,12 +174,13 @@ private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
 /// Four of the five, and the fifth says why: `sendFailed` is the bucket for a status
 /// `CFMessagePort` hands out for reasons of its own - a channel that broke under us - and
 /// there is no way to ask it for one. What the cases below do cover is the distinction the
-/// module exists for: a request never taken and an answer never returned, which are opposite
-/// facts about whether the words landed.
+/// module exists for, and which half of `Unreachable` each one lands in: a request never
+/// taken and an answer never returned are opposite facts about whether the words landed,
+/// and only the first half lets a caller deliver them somewhere else.
 @Suite struct UnreachableTests {
     @Test func nothingListeningIsSaidByName() async {
         let name = aPortNobodyElseUses()
-        await #expect(throws: Unreachable.nothingIsListening(port: name)) {
+        await #expect(throws: Unreachable.didNotLand(.nothingIsListening(port: name))) {
             try await InputMethodInserter(portName: name, timeout: .seconds(1)).insert("hello")
         }
     }
@@ -192,7 +215,7 @@ private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
         }
         #expect(filled, "the queue behind the port never filled, so no send timeout can be asked for")
 
-        await #expect(throws: Unreachable.requestWasNotTaken(port: name, after: budget / 2)) {
+        await #expect(throws: Unreachable.didNotLand(.requestWasNotTaken(port: name, after: budget / 2))) {
             try await InputMethodInserter(portName: name, timeout: budget).insert("hello")
         }
     }
@@ -203,7 +226,7 @@ private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
         let name = aPortNobodyElseUses()
         let port = try PortOnItsOwnThread.insertion(name: name) { text in
             Thread.sleep(forTimeInterval: 30)
-            return .inserted(characters: text.count)
+            return .inserted(characters: text.count, into: anEditor)
         }
         defer { port.stop() }
 
@@ -214,7 +237,7 @@ private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
         // against would otherwise fail it as a send that never landed. The five seconds this
         // case does spend are the receive half, which is the wait under test.
         let timeout = Duration.seconds(10)
-        await #expect(throws: Unreachable.answerDidNotArrive(port: name, after: timeout / 2)) {
+        await #expect(throws: Unreachable.mayHaveLanded(.answerDidNotArrive(port: name, after: timeout / 2))) {
             try await InputMethodInserter(portName: name, timeout: timeout).insert("hello")
         }
     }
@@ -227,7 +250,7 @@ private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
         let port = try PortOnItsOwnThread.raw(name: name) { _ in Data("nonsense".utf8) }
         defer { port.stop() }
 
-        await #expect(throws: Unreachable.answerWasNotReadable(port: name, bytes: 8)) {
+        await #expect(throws: Unreachable.mayHaveLanded(.answerWasNotReadable(port: name, bytes: 8))) {
             try await InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend).insert("hello")
         }
     }

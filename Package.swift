@@ -100,10 +100,10 @@ let package = Package(
         // the layout and both vocabularies, and takes the keyboard and the mouse as values,
         // which is what lets each run against the helper in the app and against the
         // driver under sudo. [LAW:composability]
-        .target(name: "Typing", dependencies: ["LowTalkerCore", "KeyboardLayout", "Keystrokes", "Pointing", "Signals"]),
+        .target(name: "Typing", dependencies: ["LowTalkerCore", "KeyboardLayout", "Keystrokes", "Pointing", "Signals", "Insertion"]),
         // Driven against a keyboard the test plays, so a run can be stopped inside any
         // keystroke and its report read back.
-        .testTarget(name: "TypingTests", dependencies: ["Typing", "LowTalkerCore", "KeyboardLayout", "Keystrokes", "Pointing", "Signals", "TestProbes"]),
+        .testTarget(name: "TypingTests", dependencies: ["Typing", "LowTalkerCore", "KeyboardLayout", "Keystrokes", "Pointing", "Signals", "Insertion", "TestProbes"]),
         // The loop from a press to typed text, with every collaborator taken as a value.
         // Its own target rather than app code so the loop runs under `swift test`; the
         // app links it and hands over the real microphone, engine and keyboard.
