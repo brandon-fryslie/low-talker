@@ -72,4 +72,21 @@ private let repository = URL(fileURLWithPath: #filePath)
         #expect(plist["LSUIElement"] as? Bool == true)
         #expect(plist["TISIntendedLanguage"] as? String == "en")
     }
+
+    /// The Input menu draws a glyph beside the name, and the plist names the file it draws.
+    /// Held to a file that is actually in the tree, because a renamed asset leaves the key
+    /// pointing at nothing and the menu simply draws no icon - nothing fails, nothing says
+    /// so. [LAW:no-silent-failure]
+    @Test(arguments: Flavor.allCases)
+    func theBundleCarriesTheIconTheMenuDraws(flavor: Flavor) throws {
+        let plist = try Self.plist(for: flavor)
+        let named = try #require(plist["tsInputMethodIconFileKey"] as? String)
+        #expect(plist["TISIconIsTemplate"] as? Bool == true)
+        let modes = try #require(plist["ComponentInputModeDict"] as? [String: Any])
+        let list = try #require(modes["tsInputModeListKey"] as? [String: Any])
+        let mode = try #require(list[flavor.inputSourceIdentifier] as? [String: Any])
+        #expect(mode["tsInputModeMenuIconFileKey"] as? String == named)
+        #expect(FileManager.default.fileExists(atPath: repository.appending(path: "App/InputMethods/\(named)").path),
+                "the plist names \(named), which App/InputMethods does not hold")
+    }
 }

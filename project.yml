@@ -195,6 +195,11 @@ targetTemplates:
     platform: macOS
     sources:
       - Sources/lowtalker-inputmethod
+      # The glyph the Input menu shows beside the name. A template image, so macOS tints
+      # it to match the menu bar rather than the bundle carrying a light and a dark copy.
+      # One icon for both flavors: what tells the two copies apart in that menu is the
+      # name beside it, which is `Flavor.displayName`.
+      - App/InputMethods/InputMethod.tiff
     dependencies:
       - package: low-talker
         product: InputMethod
@@ -212,12 +217,15 @@ targetTemplates:
         InputMethodConnectionName: ${inputMethodConnectionName}
         InputMethodServerControllerClass: DictationInputController
         TISIntendedLanguage: en
+        TISIconIsTemplate: true
+        tsInputMethodIconFileKey: InputMethod.tiff
         ComponentInputModeDict:
           tsInputModeListKey:
             ${inputSourceIdentifier}:
               TISInputSourceID: ${inputSourceIdentifier}
               tsInputModeDefaultStateKey: true
               tsInputModeIsVisibleKey: true
+              tsInputModeMenuIconFileKey: InputMethod.tiff
               tsInputModePrimaryInScriptKey: true
               tsInputModeScriptKey: smUnicodeScript
           # Mode keys, not source identifiers - the two are the same string here, and a
