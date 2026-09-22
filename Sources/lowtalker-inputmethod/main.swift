@@ -70,10 +70,13 @@ let server: IMKServer = {
 ///
 /// A door that will not open is not the end of this process, unlike the server above it.
 /// The controller's whole promise is that every key passes through untouched, so a person
-/// with this source selected keeps a working keyboard even when nothing here can insert -
-/// and what is lost is said twice rather than guessed at: a fault in the log here, and on
-/// the app's side the named `nothingIsListening`, which is exactly what it means.
-/// [LAW:no-silent-failure]
+/// with this source selected keeps a working keyboard even when nothing here can insert.
+///
+/// What that case actually is, said exactly: `InsertionPort` throws only `NameIsTaken`, so
+/// the port failing means another instance of this input method is already answering on
+/// that name. The app's inserts are not lost - they reach that other process, which has its
+/// own cursor and its own view of what is in front - and the fault in the log is the only
+/// place the two copies are distinguishable. [LAW:no-silent-failure]
 let insertions: InsertionPort? = {
     do {
         return try InsertionPort(flavor: flavor) { text in
@@ -97,7 +100,8 @@ let insertions: InsertionPort? = {
         logger.fault("""
             no insert port on \(flavor.inputMethodPortName, privacy: .public): \
             \(String(describing: error), privacy: .public); \
-            keys still pass through, and the app's inserts will be told nothing is listening
+            keys still pass through, and inserts are answered by whichever instance holds \
+            that name, which is not this one
             """)
         return nil
     }

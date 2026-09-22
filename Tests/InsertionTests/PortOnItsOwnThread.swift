@@ -135,7 +135,14 @@ private final class RawPort {
     }
 }
 
-/// A port name no other test and no installed input method answers on.
+/// A port name no other test, no repeat of this one, and no installed input method answers
+/// on.
+///
+/// Unique per call and not per case, because `stop()` does not wait: a case whose far end is
+/// still inside an answer when the case returns leaves its name held until that answer
+/// finishes, and `#function` with `getpid()` are the same two values on the next pass through
+/// the same case in the same process. A rerun would then be refused `NameIsTaken` by its own
+/// previous run. [LAW:no-ambient-temporal-coupling]
 func aPortNobodyElseUses(_ note: String = #function) -> String {
-    "ai.promptctl.low-talker.test.insert.\(abs(note.hashValue)).\(getpid())"
+    "ai.promptctl.low-talker.test.insert.\(abs(note.hashValue)).\(getpid()).\(UUID().uuidString)"
 }
