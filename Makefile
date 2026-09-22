@@ -73,7 +73,13 @@ run: app
 # without this a green run leaves the next `lowtalker` refused with NSCocoaErrorDomain
 # 4097 - a failure reporting success. [LAW:no-silent-failure] Unconditional, because a
 # recipe cannot see what SwiftPM chose to link. [LAW:dataflow-not-control-flow]
+# Generating first is what lets `InputMethodPlistTests` read the plist xcodegen writes
+# without generating it itself: a test that rewrote LowTalker.xcodeproj and App/Generated
+# would be doing it underneath any build already running in this tree.
+# [LAW:effects-at-boundaries] Unconditional and idempotent, for the reason given above
+# `build_app`, and it is the same command.
 test:
+	xcodegen generate
 	swift build
 	$(MAKE) check-docs
 	scripts/virtual-hid-driver-test

@@ -94,39 +94,44 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
     public var launchdLabel: String { machServiceName }
 
     /// What `CFBundleIdentifier` holds inside this flavor's input method bundle, the one
-    /// the app carries and installs into `~/Library/Input Methods`, carrying the
-    /// `.inputmethod` segment that marks a text input source - Apple's own sit together in
-    /// a shared `com.apple.inputmethod.*` namespace, where this one nests under the app
-    /// bundle carrying it.
+    /// the app carries and installs into `~/Library/Input Methods`.
+    ///
+    /// The `.inputmethod` segment is load-bearing and its POSITION is load-bearing, which
+    /// is not a convention but a rule macOS enforces silently. Measured on macOS Tahoe
+    /// (low-input-method-s71.0ae) against bundles differing in nothing but this string:
+    /// an identifier ending in `.inputmethod` registers NOTHING, and so does one carrying
+    /// no such segment at all, while `…inputmethod.<leaf>` registers. `TISRegisterInputSource`
+    /// answers noErr in every one of those cases, so the source list is the only honest
+    /// reading of whether a bundle was taken. [LAW:no-silent-failure] Hence the leaf:
+    /// `.dictation` names what this input method does, and it is what keeps the segment
+    /// off the end.
     ///
     /// Grown from `bundleIdentifier` and not from the release seed the way the helper's
     /// names are, which is the one place this type departs from "suffix `.dev` onto the
     /// release name" - deliberately, because the input method is a *bundle nested inside
     /// the app bundle* where the helper is a plain tool, and a nested bundle's identifier
     /// belongs under the identifier of the bundle carrying it. Suffixing the release seed
-    /// instead would give the development copy `…low-talker.inputmethod.dev` sitting
-    /// inside `…low-talker.dev`, nested under the release app's namespace rather than its
-    /// own container's.
+    /// instead would give the development copy `…inputmethod.dictation.dev` sitting inside
+    /// the release app's namespace rather than its own container's.
     ///
     /// Doing it this way also means no flavor branches here at all: `bundleIdentifier` is
     /// the one switch, and all three input method names fall out of it.
     /// [LAW:dataflow-not-control-flow]
-    ///
-    /// One consequence belongs with the name that causes it: the input method runs as its
-    /// own process out of its own bundle, so `Flavor(bundleIdentifier:)` answers nil for
-    /// the identifier this property returns, by design. That process reads the flavor off
-    /// the app bundle it is nested inside, never off itself - low-input-method-s71.0ae is
-    /// where that reading is written.
-    public var inputMethodBundleIdentifier: String { bundleIdentifier + ".inputmethod" }
+    public var inputMethodBundleIdentifier: String { bundleIdentifier + ".inputmethod.dictation" }
 
-    /// What `TISSelectInputSource` selects this flavor's source by, and what the Input
-    /// menu files it under: the input mode the bundle declares, which is the identifier
-    /// the text input system reports back.
+    /// What `TISSelectInputSource` selects this flavor's source by: the input mode the
+    /// bundle declares, which is the identifier the text input system reports back.
     ///
     /// One mode and not a list, because there is one thing this input method does. It is
     /// namespaced under the bundle rather than spelled apart, so a source can never be
     /// filed under an installation that does not own the bundle serving it.
-    public var inputSourceIdentifier: String { inputMethodBundleIdentifier + ".dictation" }
+    ///
+    /// Distinct from `inputMethodBundleIdentifier` on purpose, though macOS accepts them
+    /// equal: a registered bundle yields TWO entries in the source list - the bundle's
+    /// own, which is not selectable, and the mode's, which is - and giving both one string
+    /// would leave low-input-method-s71.9ug selecting by an identifier that answers twice.
+    /// Every Apple input method keeps them apart the same way.
+    public var inputSourceIdentifier: String { inputMethodBundleIdentifier + ".text" }
 
     /// The name the text input system reaches this flavor's input method server on, which
     /// its `Info.plist` publishes as `InputMethodConnectionName` and `IMKServer` answers.
@@ -139,13 +144,16 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
     /// The name shown in the menu bar and in Login Items, where the whole point is that a
     /// person can tell the two apart at a glance.
     ///
-    /// It is the name the Input Sources list is to show for this flavor's input method
-    /// too - reused deliberately rather than coined a second time, because a person
-    /// choosing the source is choosing this app, and two spellings of that one fact could
-    /// disagree about which copy they had picked. [LAW:one-source-of-truth] macOS reads
-    /// that name off the input method bundle itself, not off anything here, so the reuse
-    /// holds only once low-input-method-s71.0ae builds that bundle's `CFBundleName` from
-    /// this property; until then it is a requirement on that ticket rather than a fact.
+    /// It is the name the Input Sources list shows for this flavor's input method too -
+    /// reused deliberately rather than coined a second time, because a person choosing the
+    /// source is choosing this app, and two spellings of that one fact could disagree
+    /// about which copy they had picked. [LAW:one-source-of-truth]
+    ///
+    /// macOS reads that name off the input method bundle rather than off anything here, so
+    /// the reuse is carried by the bundle's `en.lproj/InfoPlist.strings`, which maps both
+    /// `CFBundleName` and `inputSourceIdentifier` to this string. Measured, not assumed:
+    /// with no such file both entries come back from `kTISPropertyLocalizedName` as the
+    /// raw identifier, which is the same for nothing a person would recognise.
     public var displayName: String {
         switch self {
         case .release: "LowTalker"
@@ -173,6 +181,25 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
     /// the installed copy's. The caller fails loudly instead. [LAW:no-silent-failure]
     public init?(bundleIdentifier: String) {
         guard let flavor = Self.allCases.first(where: { $0.bundleIdentifier == bundleIdentifier }) else { return nil }
+        self = flavor
+    }
+
+    /// [LAW:parse-dont-validate] The one place the input method process learns which
+    /// installation it belongs to.
+    ///
+    /// It cannot use `init?(bundleIdentifier:)`: macOS launches an input method as its own
+    /// process out of its own bundle, so `Bundle.main.bundleIdentifier` there is the name
+    /// above, which that initialiser refuses by design. The fact still travels with the
+    /// bundle, though - the identifier macOS launched it under already says which flavor
+    /// it is - so this reads that rather than a second per-flavor string written beside it
+    /// [LAW:one-source-of-truth], and rather than the app bundle's identifier reached by
+    /// walking out of the enclosing directories, which would make the answer depend on
+    /// where the bundle happens to sit and low-input-method-s71.ssn is free to move it.
+    ///
+    /// Nil rather than a default, for the reason `init?(bundleIdentifier:)` gives.
+    public init?(inputMethodBundleIdentifier: String) {
+        guard let flavor = Self.allCases.first(where: { $0.inputMethodBundleIdentifier == inputMethodBundleIdentifier })
+        else { return nil }
         self = flavor
     }
 

@@ -19,23 +19,40 @@ private let repository = URL(fileURLWithPath: #filePath)
 /// [LAW:behavior-not-structure] Driven from `Flavor.allCases`, so a flavor added without a
 /// target fails here rather than at whatever later moment somebody tries to build it.
 @Suite struct ProjectFlavorTests {
-    /// Every `templateAttributes:` block in project.yml, as the names it sets.
+    /// A target in project.yml: the name it is declared under, and the names it sets.
+    private struct Target {
+        let name: String
+        let sets: [String: String]
+    }
+
+    /// Every `templateAttributes:` block in project.yml, as the target it belongs to.
     ///
     /// Read as blocks rather than as lines anywhere in the file, because that is the whole
     /// question: the names that belong to one installation must be set on one target.
     /// A `contains` over the file would pass on a project.yml that gave the release bundle
     /// the development plist.
-    private static func installations() throws -> [[String: String]] {
+    ///
+    /// The target's own name is carried too, and it is not decoration: an app names the
+    /// input method it embeds by TARGET name, so without it nothing can tell whether the
+    /// target an app carries is the one building that flavor's input method. The name is the
+    /// last two-space-indented `<name>:` line before the block - which is where xcodegen
+    /// reads it from as well.
+    private static func installations() throws -> [Target] {
         let yaml = try String(contentsOf: repository.appending(path: "project.yml"), encoding: .utf8)
-        return yaml.components(separatedBy: "templateAttributes:\n").dropFirst().map { block in
-            var names: [String: String] = [:]
+        let chunks = yaml.components(separatedBy: "templateAttributes:\n")
+        return chunks.dropFirst().enumerated().map { preceding, block in
+            var sets: [String: String] = [:]
             for line in block.split(separator: "\n", omittingEmptySubsequences: false) {
                 let name = line.trimmingCharacters(in: .whitespaces)
                 guard line.hasPrefix(" "), let colon = name.firstIndex(of: ":") else { break }
-                names[String(name[name.startIndex..<colon])] =
+                sets[String(name[name.startIndex..<colon])] =
                     String(name[name.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
             }
-            return names
+            let declaration = chunks[preceding].split(separator: "\n", omittingEmptySubsequences: false).last {
+                $0.hasPrefix("  ") && !$0.hasPrefix("   ") && $0.hasSuffix(":") && !$0.contains("#")
+            }
+            return Target(name: declaration.map { String($0.trimmingCharacters(in: .whitespaces).dropLast()) } ?? "",
+                          sets: sets)
         }
     }
 
@@ -50,18 +67,52 @@ private let repository = URL(fileURLWithPath: #filePath)
         ]
     }
 
+    /// Which flavor a block builds for: every flavor whose names appear among the values
+    /// the block sets.
+    ///
+    /// One reading, asked by both counts below, because "owns" is one rule and a second
+    /// copy of it would answer differently the day the rule changes. [LAW:single-enforcer]
+    /// It hands back all the matches rather than the single one: a block naming none, or
+    /// naming two, is a finding, and what to say about it is each caller's own.
+    private static func owners(of block: Target) -> [Flavor] {
+        let values = Set(block.sets.values)
+        return Flavor.allCases.filter { !names(of: $0).isDisjoint(with: values) }
+    }
+
     @Test(arguments: Flavor.allCases)
     func theProjectBuildsABundleUnderEveryFlavorsOwnNames(flavor: Flavor) throws {
         let installations = try Self.installations()
         let mine = try #require(
-            installations.first { $0["bundleIdentifier"] == flavor.bundleIdentifier },
+            installations.first { $0.sets["bundleIdentifier"] == flavor.bundleIdentifier },
             "project.yml builds nothing under \(flavor.bundleIdentifier); it builds \(installations)"
         )
-        #expect(mine["displayName"] == flavor.displayName)
-        #expect(mine["launchdLabel"] == flavor.launchdLabel)
-        #expect(mine["inputMethodBundleIdentifier"] == flavor.inputMethodBundleIdentifier)
-        #expect(mine["inputSourceIdentifier"] == flavor.inputSourceIdentifier)
-        #expect(mine["inputMethodConnectionName"] == flavor.inputMethodConnectionName)
+        #expect(mine.sets["displayName"] == flavor.displayName)
+        #expect(mine.sets["launchdLabel"] == flavor.launchdLabel)
+    }
+
+    /// Each app carries the target that builds its own flavor's input method.
+    ///
+    /// What those names ARE is read where xcodegen resolves them - the identifier and the
+    /// localized name by `InputMethodBuildSettingsTests`, the connection name and the mode
+    /// by `InputMethodPlistTests` - and a wrong attribute here cannot resolve right there.
+    /// [LAW:single-enforcer] What only project.yml can answer is which target each app
+    /// embeds, so that is what is left here.
+    @Test(arguments: Flavor.allCases)
+    func eachAppCarriesItsOwnFlavorsInputMethod(flavor: Flavor) throws {
+        let installations = try Self.installations()
+        let mine = try #require(
+            installations.first { $0.sets["inputMethodBundleIdentifier"] == flavor.inputMethodBundleIdentifier },
+            "project.yml builds no input method under \(flavor.inputMethodBundleIdentifier); it builds \(installations)"
+        )
+        // The app must carry THIS target and not the other flavor's. Compared by target name,
+        // because that is what the app actually names and the only thing that can be wrong
+        // independently of everything else here: swap the two `inputMethodTarget:` values and
+        // every other check in this suite still passes while each installation ships the
+        // other's input source. [LAW:no-silent-failure]
+        let app = try #require(installations.first { $0.sets["bundleIdentifier"] == flavor.bundleIdentifier })
+        let carried = try #require(app.sets["inputMethodTarget"], "\(flavor)'s app carries no input method target")
+        #expect(carried == mine.name,
+                "\(flavor)'s app carries the target \(carried), but \(flavor.inputMethodBundleIdentifier) is built by \(mine.name)")
     }
 
     /// Every block belongs to one flavor and builds under a name that flavor owns, and
@@ -82,11 +133,10 @@ private let repository = URL(fileURLWithPath: #filePath)
     @Test func theProjectBuildsNothingThatIsNotAFlavor() throws {
         var appsPerFlavor: [Flavor: Int] = [:]
         for block in try Self.installations() {
-            let values = Set(block.values)
-            let owners = Flavor.allCases.filter { !Self.names(of: $0).isDisjoint(with: values) }
+            let owners = Self.owners(of: block)
             #expect(owners.count == 1, "a templateAttributes block names \(owners) rather than one flavor: \(block)")
             guard owners.count == 1, let owner = owners.first else { continue }
-            guard let identifier = block["bundleIdentifier"] else { continue }
+            guard let identifier = block.sets["bundleIdentifier"] else { continue }
             #expect(Self.names(of: owner).contains(identifier),
                     "a target builds \(identifier), which is not one of \(owner)'s names: \(block)")
             if identifier == owner.bundleIdentifier { appsPerFlavor[owner, default: 0] += 1 }
@@ -94,6 +144,31 @@ private let repository = URL(fileURLWithPath: #filePath)
         for flavor in Flavor.allCases {
             #expect(appsPerFlavor[flavor, default: 0] == 1,
                     "\(flavor)'s app bundle is built by \(appsPerFlavor[flavor, default: 0]) targets rather than by one")
+        }
+    }
+
+    /// Every KIND of target is built once per flavor - not just the app.
+    ///
+    /// The count beside this one is of app blocks alone, which was right while an app was
+    /// the only bundle a flavor had. Now that the input method is a target of its own, that
+    /// count passes a project.yml carrying a release input method and no development one:
+    /// the development installation would build, install and run with no input source at
+    /// all, and nothing in the suite would say so. [LAW:no-silent-failure]
+    ///
+    /// A block's kind is the set of names it SETS, not which template it names: two blocks
+    /// setting the same attributes are the same kind of thing said twice, which is exactly
+    /// what "one per flavor" is about. [LAW:behavior-not-structure]
+    @Test func everyKindOfTargetIsBuiltOncePerFlavor() throws {
+        var flavorsByKind: [Set<String>: [Flavor]] = [:]
+        for block in try Self.installations() {
+            let owners = Self.owners(of: block)
+            guard owners.count == 1, let owner = owners.first else { continue }
+            flavorsByKind[Set(block.sets.keys), default: []].append(owner)
+        }
+        #expect(!flavorsByKind.isEmpty, "project.yml sets no templateAttributes at all")
+        for (kind, flavors) in flavorsByKind {
+            #expect(Set(flavors) == Set(Flavor.allCases) && flavors.count == Flavor.allCases.count,
+                    "the targets setting \(kind.sorted()) are built for \(flavors) rather than once for each flavor")
         }
     }
 
