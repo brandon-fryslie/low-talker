@@ -88,11 +88,12 @@ public struct Executor {
             /// in front, not an app the text reached. The words themselves, because a copy is
             /// something the user can still ask for, through the Insert Dictation service.
             case copied(String)
-            /// Committed at the cursor by the input method. `into` is an app the words
-            /// reached and not merely the one in front: the input method establishes that
-            /// much before it commits, which is more than `copied` can say and less than a
-            /// person seeing them.
-            case inserted(characters: Int)
+            /// Committed at the cursor by the input method, in the app it names - which is
+            /// the app the words actually reached, and not necessarily the one this route
+            /// was decided in front of. The person can move between the chord and the words
+            /// being ready, and the input method commits where the cursor is then. Less than
+            /// a person seeing them, and more than `copied` can say. [FRAMING:representation]
+            case inserted(characters: Int, into: BundleID)
             /// The input method would not take them, so they are on the clipboard instead.
             /// Both halves in one outcome, because why the cursor did not get the words and
             /// where they are now are two facts and neither answers the other.
@@ -110,7 +111,7 @@ public struct Executor {
             case .clicked(let at, let button, let times, let reports): "clicked \(button.rawValue) \(times.spelled) at \(at) after \(reports) move reports into \(into.rawValue)"
             case .scrolled(let at, let vertical, let horizontal): "scrolled vertical \(vertical.rawValue) horizontal \(horizontal.rawValue) at \(at) into \(into.rawValue)"
             case .copied(let text): "copied \(text.count) characters to the clipboard with \(into.rawValue) in front"
-            case .inserted(let characters): "inserted \(characters) characters at the cursor in \(into.rawValue)"
+            case .inserted(let characters, let reached): "inserted \(characters) characters at the cursor in \(reached.rawValue)"
             case .refused(let refusal, let text): "\(refusal), so \(text.count) characters went to the clipboard with \(into.rawValue) in front"
             }
             return "\(act), key-up to acknowledged \(Int(acknowledged / .milliseconds(1))) ms"
@@ -185,13 +186,17 @@ public struct Executor {
                 // actor, and `Inserter` says in its own contract that the blocking call must
                 // not pump it. [LAW:no-ambient-temporal-coupling]
                 switch try await inserter.insert(text) {
-                case .inserted(let characters):
-                    return .inserted(characters: characters)
+                case .inserted(let characters, let reached):
+                    return .inserted(characters: characters, into: BundleID(rawValue: reached))
                 // Not a failure to recover from but the other half of this output's job: the
                 // input method looked and there was nowhere to put words, so they go where
                 // the user can still reach them and the outcome carries the reason.
                 case .refused(let refusal):
-                    try clipboard.write(text)
+                    // Both facts or neither: a pasteboard that will not take the words would
+                    // otherwise replace the refusal with its own complaint, and the person
+                    // would be told where the words are not without being told why the
+                    // cursor did not get them. [LAW:no-silent-failure]
+                    do { try clipboard.write(text) } catch { throw RefusedAndNotCopied(refusal: refusal, cause: error) }
                     return .refused(refusal, copied: text)
                 }
             }
@@ -276,6 +281,17 @@ public struct RouteStopped: StoppedPartWay, CustomStringConvertible {
         let before = performed.isEmpty ? "" : ". Performed before it: " + performed.map(\.description).joined(separator: "; ")
         return "\(cause)\(before)"
     }
+}
+
+/// The input method would not take the words and the clipboard would not either, which is
+/// two failures and one outcome: where the words could not go, and that they are now
+/// nowhere. Carried together because the refusal is the half that says what to fix.
+/// [LAW:no-silent-failure]
+public struct RefusedAndNotCopied: Error, CustomStringConvertible {
+    public let refusal: Refusal
+    public let cause: any Error
+
+    public var description: String { "\(refusal), and the words could not be copied either: \(cause)" }
 }
 
 /// An action neither device can perform. Activating an app, opening a URL, running a

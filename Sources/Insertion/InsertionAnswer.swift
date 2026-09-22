@@ -9,7 +9,13 @@ import Foundation
 /// is a different fact and deserves a different shape. [LAW:types-are-the-program]
 public enum InsertionAnswer: Codable, Equatable, Sendable {
     /// Committed into the client in front, replacing nothing.
-    case inserted(characters: Int)
+    ///
+    /// `into` is the app whose client took it, which only this end knows: the app asked
+    /// seconds earlier, while the person was still speaking, and by the time the words are
+    /// ready the person may be somewhere else. An answer that left it out would leave the
+    /// caller to name the app from what it remembered, and a log line naming the wrong
+    /// window is worse than one naming none. [FRAMING:representation]
+    case inserted(characters: Int, into: String)
     /// Not committed, and why.
     case refused(Refusal)
 }
@@ -46,8 +52,11 @@ public enum Refusal: String, Codable, CaseIterable, Equatable, Sendable, CustomS
 /// Named cases and not a reason string, and in particular **the two timeouts are two
 /// cases**: a request that was never taken is words that certainly did not land, and an
 /// answer that never came back is words that may well have. Those are opposite facts, and
-/// low-input-method-s71.b26 decides whether to put the words on the clipboard by reading
-/// them - one case for both would be the conflation this whole module exists to prevent.
+/// the two are fixed differently and read differently. What reads them today is a person,
+/// in a log line, so the distinction lives in what each case says; low-input-method-s71.b26
+/// copies on a refusal and on no `Unreachable` at all, because words that may have landed
+/// must not be delivered a second time. One case for both would be the conflation this
+/// whole module exists to prevent.
 /// [LAW:types-are-the-program] [LAW:no-silent-failure] Nothing here is retried and nothing
 /// is guessed.
 public enum Unreachable: Error, Equatable, CustomStringConvertible {

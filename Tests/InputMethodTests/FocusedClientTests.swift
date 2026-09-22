@@ -34,7 +34,7 @@ import Testing
         let cursor = Cursor()
         client.took(cursor)
 
-        #expect(client.insert("hello there", whileInFrontIs: Self.inFront) == .inserted(characters: 11))
+        #expect(client.insert("hello there", whileInFrontIs: Self.inFront) == .inserted(characters: 11, into: Self.inFront))
         #expect(cursor.committed == ["hello there"])
     }
 
@@ -44,7 +44,7 @@ import Testing
         let client = FocusedClient()
         client.took(Cursor())
 
-        #expect(client.insert("🫠", whileInFrontIs: Self.inFront) == .inserted(characters: 1))
+        #expect(client.insert("🫠", whileInFrontIs: Self.inFront) == .inserted(characters: 1, into: Self.inFront))
     }
 
     /// Nothing in front is an answer, not a failure - it is the case
@@ -74,7 +74,7 @@ import Testing
         client.took(cursor)
         client.applicationQuit("com.apple.Safari")
 
-        #expect(client.insert("hello", whileInFrontIs: Self.inFront) == .inserted(characters: 5))
+        #expect(client.insert("hello", whileInFrontIs: Self.inFront) == .inserted(characters: 5, into: Self.inFront))
     }
 
     @Test func aCursorThatLeavesTakesTheFocusWithIt() {
@@ -113,7 +113,7 @@ import Testing
         client.took(new)
         client.left(old)
 
-        #expect(client.insert("hello", whileInFrontIs: Self.inFront) == .inserted(characters: 5))
+        #expect(client.insert("hello", whileInFrontIs: Self.inFront) == .inserted(characters: 5, into: Self.inFront))
         #expect(new.committed == ["hello"])
         #expect(old.committed.isEmpty)
     }

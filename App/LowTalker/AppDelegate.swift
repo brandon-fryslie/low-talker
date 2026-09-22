@@ -504,8 +504,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch outcome {
         case .success(let session):
             sessions.notice("\(session.description, privacy: .public): \(session.transcript.text, privacy: .private)")
-            // Only a copy leaves anything on the clipboard to say so about, or to insert.
-            lastDictation = session.performed.compactMap { if case .copied(let text) = $0.what { text } else { nil } }.last
+            // Whatever left the words on the clipboard, which is a copy and also an insert
+            // the input method refused: the icon says words are waiting and the Insert
+            // Dictation service can place them, and a refusal that did not say so would put
+            // the words there and tell nobody. [LAW:no-silent-failure]
+            lastDictation = session.performed.compactMap {
+                switch $0.what {
+                case .copied(let text), .refused(_, let text): text
+                default: nil
+                }
+            }.last
         case .failure(let error):
             // The kind of failure is public and its account is not: a TypingStopped
             // names the character left half typed, which is a character the user

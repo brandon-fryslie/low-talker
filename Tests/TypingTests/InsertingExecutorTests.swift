@@ -7,7 +7,7 @@ import Keystrokes
 import LowTalkerCore
 import Pointing
 import Testing
-import Typing
+@testable import Typing
 
 /// The executor's third output: the words are asked of the input method, and what it will
 /// not take goes to the clipboard instead.
@@ -19,8 +19,10 @@ import Typing
 /// thing to mock an answer to.
 @Suite @MainActor struct InsertingExecutorTests {
     static let us = try! KeyboardLayout.named("com.apple.keylayout.US")
-    static let textEdit = BundleID(rawValue: "com.apple.TextEdit")
-    static let slack = BundleID(rawValue: "com.tinyspeck.slackmacgap")
+    /// `nonisolated` where the suite is not: a bundle id is a value, and the double that
+    /// names one is asked on a thread of the executor's choosing rather than on this actor.
+    nonisolated static let textEdit = BundleID(rawValue: "com.apple.TextEdit")
+    nonisolated static let slack = BundleID(rawValue: "com.tinyspeck.slackmacgap")
 
     /// An input method that answers however the case needs and remembers what it was asked.
     ///
@@ -60,7 +62,7 @@ import Typing
     /// reason this delivery exists is that the person's own clipboard survives a dictation.
     @Test func wordsAtTheFocusAreInsertedAtTheCursor() async throws {
         try await withPasteboard { pasteboard in
-            let inputMethod = AnInputMethod { .inserted(characters: $0.count) }
+            let inputMethod = AnInputMethod { .inserted(characters: $0.count, into: Self.textEdit.rawValue) }
             let performed = try await Executor(insertingThrough: inputMethod, orCopyingTo: Clipboard(pasteboard))
                 .perform([.insertText(text: "héllo there", target: .focus)], in: Self.textEdit, on: Self.us, since: .now)
 
@@ -68,9 +70,27 @@ import Typing
             #expect(pasteboard.string(forType: .string) == "what was there")
             #expect(performed.count == 1)
             #expect(performed[0].into == Self.textEdit)
-            guard case .inserted(let characters) = performed[0].what else { Issue.record("not inserted"); return }
+            guard case .inserted(let characters, let reached) = performed[0].what else { Issue.record("not inserted"); return }
             #expect(characters == 11)
+            #expect(reached == Self.textEdit)
             #expect("\(performed[0])".hasPrefix("inserted 11 characters at the cursor in com.apple.TextEdit, key-up to acknowledged "))
+        }
+    }
+
+    /// The app the outcome names is the app the input method says it reached, which is not
+    /// always the one this route was decided in front of: the person holds the chord in one
+    /// window and is somewhere else by the time the words are ready, and the input method
+    /// commits where the cursor is then. Naming the remembered app would be a log line
+    /// pointing at the wrong window. [FRAMING:representation]
+    @Test func theAppNamedIsTheOneTheInputMethodReached() async throws {
+        try await withPasteboard { pasteboard in
+            let inputMethod = AnInputMethod { .inserted(characters: $0.count, into: Self.slack.rawValue) }
+            let performed = try await Executor(insertingThrough: inputMethod, orCopyingTo: Clipboard(pasteboard))
+                .perform([.insertText(text: "hi", target: .focus)], in: Self.textEdit, on: Self.us, since: .now)
+
+            guard case .inserted(_, let reached) = performed[0].what else { Issue.record("not inserted"); return }
+            #expect(reached == Self.slack)
+            #expect("\(performed[0])".hasPrefix("inserted 2 characters at the cursor in com.tinyspeck.slackmacgap, key-up to acknowledged "))
         }
     }
 
@@ -120,14 +140,34 @@ import Typing
     /// delivery of the same sentence.
     @Test func anAnswerThatNeverArrivedIsNotCopiedEither() async throws {
         try await withPasteboard { pasteboard in
-            let inputMethod = AnInputMethod { _ in
-                throw Unreachable.answerDidNotArrive(port: "ai.promptctl.low-talker.test.insert", after: .seconds(2))
+            let unanswered = Unreachable.answerDidNotArrive(port: "ai.promptctl.low-talker.test.insert", after: .seconds(2))
+            let inputMethod = AnInputMethod { _ in throw unanswered }
+            let stopped = try await #require(throws: RouteStopped.self) {
+                try await Executor(insertingThrough: inputMethod, orCopyingTo: Clipboard(pasteboard))
+                    .perform([.insertText(text: "héllo there", target: .focus)], in: Self.textEdit, on: Self.us, since: .now)
             }
-            _ = try? await Executor(insertingThrough: inputMethod, orCopyingTo: Clipboard(pasteboard))
-                .perform([.insertText(text: "héllo there", target: .focus)], in: Self.textEdit, on: Self.us, since: .now)
 
+            #expect(stopped.cause as? Unreachable == unanswered)
             #expect(pasteboard.string(forType: .string) == "what was there")
         }
+    }
+
+    /// A pasteboard that will not take the words leaves the person with neither the cursor
+    /// nor the clipboard, and both halves of that are said: the refusal is what there is to
+    /// fix, and it would otherwise be replaced by the pasteboard's own complaint.
+    /// [LAW:no-silent-failure]
+    @Test func aClipboardThatRefusesDoesNotSwallowTheRefusal() async throws {
+        let refusing = Clipboard { _ in throw ClipboardRefused(pasteboard: "a pasteboard that will not take them") }
+        let inputMethod = AnInputMethod { _ in .refused(.noClientHasFocus) }
+        let stopped = try await #require(throws: RouteStopped.self) {
+            try await Executor(insertingThrough: inputMethod, orCopyingTo: refusing)
+                .perform([.insertText(text: "héllo there", target: .focus)], in: Self.textEdit, on: Self.us, since: .now)
+        }
+
+        let both = try #require(stopped.cause as? RefusedAndNotCopied)
+        #expect(both.refusal == .noClientHasFocus)
+        #expect(both.cause is ClipboardRefused)
+        #expect("\(both)".hasPrefix("no client has focus, and the words could not be copied either: "))
     }
 
     /// Everything only the virtual devices can do is refused before anything is sent, so a
@@ -143,7 +183,7 @@ import Typing
         ]
         for action in refused {
             try await withPasteboard { pasteboard in
-                let inputMethod = AnInputMethod { .inserted(characters: $0.count) }
+                let inputMethod = AnInputMethod { .inserted(characters: $0.count, into: Self.textEdit.rawValue) }
                 let refusal = try await #require(throws: NeedsTheVirtualKeyboard.self) {
                     try await Executor(insertingThrough: inputMethod, orCopyingTo: Clipboard(pasteboard))
                         .perform([.insertText(text: "first", target: .focus), action], in: Self.textEdit, on: Self.us, since: .now)
@@ -160,7 +200,7 @@ import Typing
     /// opening a URL is not something a virtual keyboard would fix either.
     @Test func whatIsNoInputAtAllIsSaidTheOtherWay() async throws {
         try await withPasteboard { pasteboard in
-            let inputMethod = AnInputMethod { .inserted(characters: $0.count) }
+            let inputMethod = AnInputMethod { .inserted(characters: $0.count, into: Self.textEdit.rawValue) }
             await #expect(throws: NotAnInput.self) {
                 try await Executor(insertingThrough: inputMethod, orCopyingTo: Clipboard(pasteboard))
                     .perform([.activateApp(bundleID: Self.slack)], in: Self.textEdit, on: Self.us, since: .now)
@@ -175,7 +215,7 @@ import Typing
     @Test func insertingReadsNoLayout() async throws {
         struct UnreadableLayout: Error {}
         try await withPasteboard { pasteboard in
-            let inputMethod = AnInputMethod { .inserted(characters: $0.count) }
+            let inputMethod = AnInputMethod { .inserted(characters: $0.count, into: Self.textEdit.rawValue) }
             let performed = try await Executor(insertingThrough: inputMethod, orCopyingTo: Clipboard(pasteboard))
                 .perform([.insertText(text: "hi", target: .focus)], in: Self.textEdit,
                          on: { throw UnreadableLayout() }(), since: .now)

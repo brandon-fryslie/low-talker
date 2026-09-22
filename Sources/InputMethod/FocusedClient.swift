@@ -110,7 +110,7 @@ public final class FocusedClient {
         guard let focus else { return .refused(.noClientHasFocus) }
         guard focus.application == frontmost else { return .refused(.cursorIsInAnotherApp) }
         focus.commit(text)
-        return .inserted(characters: text.count)
+        return .inserted(characters: text.count, into: focus.application)
     }
 }
 

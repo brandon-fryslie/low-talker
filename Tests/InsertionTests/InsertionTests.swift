@@ -10,8 +10,8 @@ import Testing
 /// way, and a test that pinned the JSON would fail on a change that broke nothing.
 @Suite struct WireTests {
     @Test(arguments: [
-        InsertionAnswer.inserted(characters: 0),
-        .inserted(characters: 12),
+        InsertionAnswer.inserted(characters: 0, into: "com.example.editor"),
+        .inserted(characters: 12, into: "com.example.editor"),
         .refused(.noClientHasFocus),
         .refused(.cursorIsInAnotherApp),
         .refused(.requestWasNotText),
@@ -44,6 +44,10 @@ import Testing
 /// timing under test set their own budget and say so.
 private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
 
+/// The app a hosted double says it committed into. Any name at all: what crosses the wire is
+/// what the far end said, and no case here is about which app that was.
+private let anEditor = "com.example.editor"
+
 /// The channel, end to end, against a port standing in for the input method.
 ///
 /// Every case here awaits rather than calling the blocking `insert` on its own thread, and
@@ -58,13 +62,13 @@ private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
         let seen = Seen()
         let port = try PortOnItsOwnThread.insertion(name: name) { text in
             seen.record(text)
-            return .inserted(characters: text.count)
+            return .inserted(characters: text.count, into: anEditor)
         }
         defer { port.stop() }
 
         let answer = try await InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend)
             .insert("hello there")
-        #expect(answer == .inserted(characters: 11))
+        #expect(answer == .inserted(characters: 11, into: anEditor))
         #expect(seen.text == "hello there")
     }
 
@@ -76,11 +80,11 @@ private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
     /// empty `CFData`. [LAW:behavior-not-structure]
     @Test func anEmptyRequestCrossesAsAnEmptyRequest() async throws {
         let name = aPortNobodyElseUses()
-        let port = try PortOnItsOwnThread.insertion(name: name) { .inserted(characters: $0.count) }
+        let port = try PortOnItsOwnThread.insertion(name: name) { .inserted(characters: $0.count, into: anEditor) }
         defer { port.stop() }
 
         #expect(try await InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend).insert("")
-            == .inserted(characters: 0))
+            == .inserted(characters: 0, into: anEditor))
     }
 
     /// A refusal is an answer: it comes back, it does not throw, and it says which refusal
@@ -98,7 +102,7 @@ private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
     /// instead of waiting out its timeout. [LAW:no-silent-failure]
     @Test func bytesThatAreNotTextAreRefusedByName() async throws {
         let name = aPortNobodyElseUses()
-        let port = try PortOnItsOwnThread.insertion(name: name) { .inserted(characters: $0.count) }
+        let port = try PortOnItsOwnThread.insertion(name: name) { .inserted(characters: $0.count, into: anEditor) }
         defer { port.stop() }
 
         // On a thread of its own for the reason the suite doc gives: this one sends by hand
@@ -132,7 +136,7 @@ private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
         // being run. Hosted on the test's thread it would answer only while a blocking send
         // pumped that thread for it, which is the sender servicing the far end - and a far
         // end that only works while someone is waiting on it proves nothing about either.
-        let first = try PortOnItsOwnThread.insertion(name: name) { .inserted(characters: $0.count) }
+        let first = try PortOnItsOwnThread.insertion(name: name) { .inserted(characters: $0.count, into: anEditor) }
         defer { first.stop() }
 
         // Refused before any source is added, so the attempt leaves nothing behind on
@@ -142,7 +146,7 @@ private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
         }
         // The first is still the one answering, and answering with its own closure.
         #expect(try await InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend).insert("hello")
-            == .inserted(characters: 5))
+            == .inserted(characters: 5, into: anEditor))
     }
 }
 
@@ -203,7 +207,7 @@ private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
         let name = aPortNobodyElseUses()
         let port = try PortOnItsOwnThread.insertion(name: name) { text in
             Thread.sleep(forTimeInterval: 30)
-            return .inserted(characters: text.count)
+            return .inserted(characters: text.count, into: anEditor)
         }
         defer { port.stop() }
 
