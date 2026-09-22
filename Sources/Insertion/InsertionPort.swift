@@ -14,9 +14,14 @@ import Foundation
 /// [LAW:no-ambient-temporal-coupling]
 ///
 /// Held for the life of the process by whoever makes it. Released, the port closes and the
-/// app's next request finds nothing listening - and released from any thread at all, because
-/// the run loop it came off is the one it remembers rather than whichever one is asking.
-/// [LAW:types-are-the-program]
+/// app's next request finds nothing listening - from whichever thread happens to hold it
+/// last, because the run loop it came off is the one it remembers rather than whichever one
+/// is asking. [LAW:types-are-the-program] What it does NOT promise is release while a
+/// request is in flight: the callback reads the closure through a pointer this object owns,
+/// and teardown racing a dispatch already under way is a race no run loop arbitrates. Both
+/// holders settle that by construction rather than by care - the input method never releases
+/// it at all, and the suite's `PortOnItsOwnThread` drops it on the hosting thread after
+/// `CFRunLoopRun()` has returned, which is after any answer has.
 public final class InsertionPort {
     private let port: CFMessagePort
     private let source: CFRunLoopSource

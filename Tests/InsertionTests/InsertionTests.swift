@@ -78,6 +78,21 @@ private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
         #expect(seen.text == "hello there")
     }
 
+    /// Nothing to say is still something to send. `inserted(characters: 0)` is a modelled
+    /// outcome, and whether an empty request survives the transport is a fact about
+    /// `CFMessagePort` rather than about `Wire`: the callback is handed an optional, so a
+    /// zero-length payload arriving as nothing at all would be answered `requestWasNotText`
+    /// and the count would never be reached. Measured here rather than read: it arrives as an
+    /// empty `CFData`. [LAW:behavior-not-structure]
+    @Test func anEmptyRequestCrossesAsAnEmptyRequest() throws {
+        let name = aPortNobodyElseUses()
+        let port = try PortOnItsOwnThread.insertion(name: name) { .inserted(characters: $0.count) }
+        defer { port.stop() }
+
+        #expect(try InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend).insert("")
+            == .inserted(characters: 0))
+    }
+
     /// A refusal is an answer: it comes back, it does not throw, and it says which refusal
     /// it is - which is what low-input-method-s71.b26 switches on to reach the clipboard.
     @Test func aRefusalComesBackAsAnAnswer() throws {
@@ -145,17 +160,18 @@ private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
     @Test func anAnswerThatDoesNotArriveIsSaidByName() throws {
         let name = aPortNobodyElseUses()
         let port = try PortOnItsOwnThread.insertion(name: name) { text in
-            Thread.sleep(forTimeInterval: 6)
+            Thread.sleep(forTimeInterval: 30)
             return .inserted(characters: text.count)
         }
         defer { port.stop() }
 
-        // Halved, because the two phases of the round trip share the caller's budget and
-        // the error names the phase's own bound rather than a number nobody waited. A whole
-        // second for the send half rather than the least that works: what this case is about
-        // is which phase ran out, and a send that timed out first on a busy machine would
-        // fail it for a reason it is not asking about.
-        let timeout = Duration.seconds(2)
+        // Halved, because the two phases of the round trip share the caller's budget and the
+        // error names the phase's own bound rather than a number nobody waited. Five seconds
+        // for the send half rather than the least that works: which phase ran out is the
+        // whole of what this case asks, and the runner freeze the budget above is sized
+        // against would otherwise fail it as a send that never landed. The five seconds this
+        // case does spend are the receive half, which is the wait under test.
+        let timeout = Duration.seconds(10)
         #expect(throws: Unreachable.answerDidNotArrive(port: name, after: timeout / 2)) {
             try InputMethodInserter(portName: name, timeout: timeout).insert("hello")
         }
