@@ -510,7 +510,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // the words there and tell nobody. [LAW:no-silent-failure]
             lastDictation = session.performed.compactMap {
                 switch $0.what {
-                case .copied(let text), .refused(_, let text): text
+                case .copied(let text), .notInserted(_, let text): text
                 // Named rather than defaulted, so an outcome added later that also leaves
                 // words on the clipboard cannot compile past this and silently never reach
                 // the icon or the Service. [LAW:no-silent-failure]

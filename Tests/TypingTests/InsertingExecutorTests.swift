@@ -23,6 +23,9 @@ import Testing
     /// names one is asked on a thread of the executor's choosing rather than on this actor.
     nonisolated static let textEdit = BundleID(rawValue: "com.apple.TextEdit")
     nonisolated static let slack = BundleID(rawValue: "com.tinyspeck.slackmacgap")
+    /// A port nothing is on: every case that names one here is a channel that failed, and
+    /// none of them reaches a port at all.
+    nonisolated static let port = "ai.promptctl.low-talker.test.insert"
 
     /// An input method that answers however the case needs and remembers what it was asked.
     ///
@@ -70,9 +73,8 @@ import Testing
             #expect(pasteboard.string(forType: .string) == "what was there")
             #expect(performed.count == 1)
             #expect(performed[0].into == Self.textEdit)
-            guard case .inserted(let characters, let reached) = performed[0].what else { Issue.record("not inserted"); return }
+            guard case .inserted(let characters) = performed[0].what else { Issue.record("not inserted"); return }
             #expect(characters == 11)
-            #expect(reached == Self.textEdit)
             #expect("\(performed[0])".hasPrefix("inserted 11 characters at the cursor in com.apple.TextEdit, key-up to acknowledged "))
         }
     }
@@ -82,14 +84,18 @@ import Testing
     /// window and is somewhere else by the time the words are ready, and the input method
     /// commits where the cursor is then. Naming the remembered app would be a log line
     /// pointing at the wrong window. [FRAMING:representation]
+    ///
+    /// Asserted on `into` and not on a second app inside the outcome, because `into` is the
+    /// one the session line above these aggregates - `aSessionsLineNamesTheAppItsRouteTargeted`
+    /// in DictationTests holds that end. An insert that reached elsewhere used to leave the
+    /// two lines naming different apps for one action. [LAW:one-source-of-truth]
     @Test func theAppNamedIsTheOneTheInputMethodReached() async throws {
         try await withPasteboard { pasteboard in
             let inputMethod = AnInputMethod { .inserted(characters: $0.count, into: Self.slack.rawValue) }
             let performed = try await Executor(insertingThrough: inputMethod, orCopyingTo: Clipboard(pasteboard))
                 .perform([.insertText(text: "hi", target: .focus)], in: Self.textEdit, on: Self.us, since: .now)
 
-            guard case .inserted(_, let reached) = performed[0].what else { Issue.record("not inserted"); return }
-            #expect(reached == Self.slack)
+            #expect(performed[0].into == Self.slack)
             #expect("\(performed[0])".hasPrefix("inserted 2 characters at the cursor in com.tinyspeck.slackmacgap, key-up to acknowledged "))
         }
     }
@@ -109,45 +115,66 @@ import Testing
 
             #expect(pasteboard.string(forType: .string) == "héllo there")
             #expect(performed.count == 1)
-            guard case .refused(let said, let copied) = performed[0].what else { Issue.record("not refused"); return }
-            #expect(said == refusal)
+            guard case .notInserted(let said, let copied) = performed[0].what else { Issue.record("not refused"); return }
+            #expect(said == .refused(refusal))
             #expect(copied == "héllo there")
             #expect("\(performed[0])".hasPrefix("\(refusal), so 11 characters went to the clipboard with com.apple.TextEdit in front, key-up to acknowledged "))
         }
     }
 
-    /// A transport failure is not an answer about the cursor, so it is not answered like
-    /// one: it is thrown, and nothing is copied. Copying here too - "so the words are never
-    /// lost" - would leave a broken channel looking like a working dictation, and a failure
-    /// nobody sees is a failure nobody fixes. [LAW:no-silent-failure]
-    @Test func aTransportFailureThrowsAndCopiesNothing() async throws {
+    /// A channel that never carried the question is the likeliest thing that goes wrong
+    /// here - the bundle is not installed, or the source is not selected - and the whole
+    /// utterance would otherwise exist only in a log line. The words certainly did not reach
+    /// a cursor, so they go where the person can still reach them and the outcome says which
+    /// channel failure put them there.
+    ///
+    /// Over both cases, because what makes the clipboard safe is the half of `Unreachable`
+    /// they share and not either case on its own: a case added to `DidNotLand` later reaches
+    /// the same arm of the executor's switch and needs no line here. [LAW:types-are-the-program]
+    @Test(arguments: [
+        Unreachable.DidNotLand.nothingIsListening(port: Self.port),
+        .requestWasNotTaken(port: Self.port, after: .seconds(2)),
+    ])
+    func wordsThatCertainlyDidNotLandGoToTheClipboard(why: Unreachable.DidNotLand) async throws {
         try await withPasteboard { pasteboard in
-            let unreachable = Unreachable.nothingIsListening(port: "ai.promptctl.low-talker.test.insert")
-            let inputMethod = AnInputMethod { _ in throw unreachable }
-            let stopped = try await #require(throws: RouteStopped.self) {
-                try await Executor(insertingThrough: inputMethod, orCopyingTo: Clipboard(pasteboard))
-                    .perform([.insertText(text: "héllo there", target: .focus)], in: Self.textEdit, on: Self.us, since: .now)
-            }
+            let inputMethod = AnInputMethod { _ in throw Unreachable.didNotLand(why) }
+            let performed = try await Executor(insertingThrough: inputMethod, orCopyingTo: Clipboard(pasteboard))
+                .perform([.insertText(text: "héllo there", target: .focus)], in: Self.textEdit, on: Self.us, since: .now)
 
-            #expect(stopped.cause as? Unreachable == unreachable)
-            #expect(stopped.performed.isEmpty)
-            #expect(pasteboard.string(forType: .string) == "what was there")
+            #expect(pasteboard.string(forType: .string) == "héllo there")
+            #expect(performed.count == 1)
+            #expect(performed[0].into == Self.textEdit)
+            guard case .notInserted(let said, let copied) = performed[0].what else { Issue.record("not reported"); return }
+            #expect(said == .noInputMethod(why))
+            #expect(copied == "héllo there")
+            #expect("\(performed[0])".hasPrefix("\(why), so 11 characters went to the clipboard with com.apple.TextEdit in front, key-up to acknowledged "))
         }
     }
 
-    /// The two facts a transport failure and a refusal must never blur into one: the words
-    /// may have landed at the cursor, so they are not put on the clipboard for a second
-    /// delivery of the same sentence.
-    @Test func anAnswerThatNeverArrivedIsNotCopiedEither() async throws {
+    /// The fact a did-not-land and a may-have-landed must never blur into one: the far end
+    /// may already have put the words in the document, so they are thrown on and nothing is
+    /// copied. Copying here too - "so the words are never lost" - would risk a second
+    /// delivery of a sentence already typed, and would leave a broken channel looking like a
+    /// working dictation. [LAW:no-silent-failure]
+    ///
+    /// Over every one of them, including the answer that was not readable: an input method
+    /// left running from before an update answers in the shape it knew, which is bytes this
+    /// end cannot read about words that did land.
+    @Test(arguments: [
+        Unreachable.MayHaveLanded.answerDidNotArrive(port: Self.port, after: .seconds(2)),
+        .sendFailed(port: Self.port, status: -1),
+        .answerWasNotReadable(port: Self.port, bytes: 42),
+    ])
+    func wordsThatMayHaveLandedAreThrownOnAndNotCopied(why: Unreachable.MayHaveLanded) async throws {
         try await withPasteboard { pasteboard in
-            let unanswered = Unreachable.answerDidNotArrive(port: "ai.promptctl.low-talker.test.insert", after: .seconds(2))
-            let inputMethod = AnInputMethod { _ in throw unanswered }
+            let inputMethod = AnInputMethod { _ in throw Unreachable.mayHaveLanded(why) }
             let stopped = try await #require(throws: RouteStopped.self) {
                 try await Executor(insertingThrough: inputMethod, orCopyingTo: Clipboard(pasteboard))
                     .perform([.insertText(text: "héllo there", target: .focus)], in: Self.textEdit, on: Self.us, since: .now)
             }
 
-            #expect(stopped.cause as? Unreachable == unanswered)
+            #expect(stopped.cause as? Unreachable == .mayHaveLanded(why))
+            #expect(stopped.performed.isEmpty)
             #expect(pasteboard.string(forType: .string) == "what was there")
         }
     }
@@ -164,8 +191,8 @@ import Testing
                 .perform([.insertText(text: "héllo there", target: .focus)], in: Self.textEdit, on: Self.us, since: .now)
         }
 
-        let both = try #require(stopped.cause as? RefusedAndNotCopied)
-        #expect(both.refusal == .noClientHasFocus)
+        let both = try #require(stopped.cause as? NotInsertedAndNotCopied)
+        #expect(both.reason == .refused(.noClientHasFocus))
         #expect(both.cause is ClipboardRefused)
         #expect("\(both)".hasPrefix("no client has focus, and the words could not be copied either: "))
     }

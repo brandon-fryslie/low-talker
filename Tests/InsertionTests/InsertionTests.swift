@@ -156,12 +156,13 @@ private let anEditor = "com.example.editor"
 /// Four of the five, and the fifth says why: `sendFailed` is the bucket for a status
 /// `CFMessagePort` hands out for reasons of its own - a channel that broke under us - and
 /// there is no way to ask it for one. What the cases below do cover is the distinction the
-/// module exists for: a request never taken and an answer never returned, which are opposite
-/// facts about whether the words landed.
+/// module exists for, and which half of `Unreachable` each one lands in: a request never
+/// taken and an answer never returned are opposite facts about whether the words landed,
+/// and only the first half lets a caller deliver them somewhere else.
 @Suite struct UnreachableTests {
     @Test func nothingListeningIsSaidByName() async {
         let name = aPortNobodyElseUses()
-        await #expect(throws: Unreachable.nothingIsListening(port: name)) {
+        await #expect(throws: Unreachable.didNotLand(.nothingIsListening(port: name))) {
             try await InputMethodInserter(portName: name, timeout: .seconds(1)).insert("hello")
         }
     }
@@ -196,7 +197,7 @@ private let anEditor = "com.example.editor"
         }
         #expect(filled, "the queue behind the port never filled, so no send timeout can be asked for")
 
-        await #expect(throws: Unreachable.requestWasNotTaken(port: name, after: budget / 2)) {
+        await #expect(throws: Unreachable.didNotLand(.requestWasNotTaken(port: name, after: budget / 2))) {
             try await InputMethodInserter(portName: name, timeout: budget).insert("hello")
         }
     }
@@ -218,7 +219,7 @@ private let anEditor = "com.example.editor"
         // against would otherwise fail it as a send that never landed. The five seconds this
         // case does spend are the receive half, which is the wait under test.
         let timeout = Duration.seconds(10)
-        await #expect(throws: Unreachable.answerDidNotArrive(port: name, after: timeout / 2)) {
+        await #expect(throws: Unreachable.mayHaveLanded(.answerDidNotArrive(port: name, after: timeout / 2))) {
             try await InputMethodInserter(portName: name, timeout: timeout).insert("hello")
         }
     }
@@ -231,7 +232,7 @@ private let anEditor = "com.example.editor"
         let port = try PortOnItsOwnThread.raw(name: name) { _ in Data("nonsense".utf8) }
         defer { port.stop() }
 
-        await #expect(throws: Unreachable.answerWasNotReadable(port: name, bytes: 8)) {
+        await #expect(throws: Unreachable.mayHaveLanded(.answerWasNotReadable(port: name, bytes: 8))) {
             try await InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend).insert("hello")
         }
     }

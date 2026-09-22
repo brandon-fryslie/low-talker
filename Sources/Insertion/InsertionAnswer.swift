@@ -49,39 +49,92 @@ public enum Refusal: String, Codable, CaseIterable, Equatable, Sendable, CustomS
 
 /// The transport failing to carry the question, which is never an answer.
 ///
-/// Named cases and not a reason string, and in particular **the two timeouts are two
-/// cases**: a request that was never taken is words that certainly did not land, and an
-/// answer that never came back is words that may well have. Those are opposite facts, and
-/// the two are fixed differently and read differently. What reads them today is a person,
-/// in a log line, so the distinction lives in what each case says; low-input-method-s71.b26
-/// copies on a refusal and on no `Unreachable` at all, because words that may have landed
-/// must not be delivered a second time. One case for both would be the conflation this
-/// whole module exists to prevent.
+/// Cut at the one axis any caller acts on, so that the compiler carries the cut rather
+/// than a reader remembering it: **a request that was never taken is words that certainly
+/// did not land, and an answer that never came back is words that may well have.** Those
+/// are opposite facts, fixed differently and read differently, and the consumer that
+/// branches on them is low-input-method-s71.b26's executor - it puts the words on the
+/// clipboard when the cursor certainly did not get them, and touches nothing when it may
+/// have, because words that may have landed must not be delivered a second time. One flat
+/// list of five cases would leave that executor free to copy on the wrong one; nesting the
+/// five under the two makes copying on a may-have-landed a thing nobody can write.
 /// [LAW:types-are-the-program] [LAW:no-silent-failure] Nothing here is retried and nothing
 /// is guessed.
-public enum Unreachable: Error, Equatable, CustomStringConvertible {
-    case nothingIsListening(port: String)
-    case requestWasNotTaken(port: String, after: Duration)
-    case answerDidNotArrive(port: String, after: Duration)
-    /// A status none of the others names, and not a did-not-land: the invalid-port and
-    /// transport errors say the channel broke without saying whether it broke before or
-    /// after the far end took the request. So this reads with `answerDidNotArrive` and
-    /// never with `requestWasNotTaken`.
-    case sendFailed(port: String, status: Int32)
-    case answerWasNotReadable(port: String, bytes: Int)
+public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
+    case didNotLand(DidNotLand)
+    case mayHaveLanded(MayHaveLanded)
+
+    /// The question never reached the far end at all, so the cursor certainly did not get
+    /// the words and whoever asked is free to put them somewhere else.
+    public enum DidNotLand: Equatable, Sendable, CustomStringConvertible {
+        case nothingIsListening(port: String)
+        /// The send itself timed out, which is the message never entering the far end's
+        /// queue - not the far end taking it and staying quiet.
+        case requestWasNotTaken(port: String, after: Duration)
+
+        public var description: String {
+            switch self {
+            case let .nothingIsListening(port):
+                "no input method is answering on \(port); it is not installed, or not selected"
+            case let .requestWasNotTaken(port, after):
+                "the input method on \(port) did not take the request within \(after), so the words did not land"
+            }
+        }
+    }
+
+    /// The channel broke where nobody at this end can see which side of the commit it
+    /// broke on, so the far end may already have put the words in the document.
+    public enum MayHaveLanded: Equatable, Sendable, CustomStringConvertible {
+        case answerDidNotArrive(port: String, after: Duration)
+        /// A status none of the others names: the invalid-port and transport errors say the
+        /// channel broke without saying whether it broke before or after the far end took
+        /// the request.
+        case sendFailed(port: String, status: Int32)
+        /// Bytes came back that are not an answer, which is what an input method left
+        /// running from before an update says: it inserted the words and described it in
+        /// the shape it knew. Here, and not beside `nothingIsListening`, for exactly that
+        /// reason - the words are in the document.
+        case answerWasNotReadable(port: String, bytes: Int)
+
+        public var description: String {
+            switch self {
+            case let .answerDidNotArrive(port, after):
+                "the input method on \(port) took the request but did not answer within \(after), so the words may have landed"
+            case let .sendFailed(port, status):
+                "the request to \(port) failed: CFMessagePort status \(status), so the words may have landed"
+            case let .answerWasNotReadable(port, bytes):
+                "the input method on \(port) answered \(bytes) bytes that are not an answer, so the words may have landed"
+            }
+        }
+    }
 
     public var description: String {
         switch self {
-        case let .nothingIsListening(port):
-            "no input method is answering on \(port); it is not installed, or not selected"
-        case let .requestWasNotTaken(port, after):
-            "the input method on \(port) did not take the request within \(after), so the words did not land"
-        case let .answerDidNotArrive(port, after):
-            "the input method on \(port) took the request but did not answer within \(after), so the words may have landed"
-        case let .sendFailed(port, status):
-            "the request to \(port) failed: CFMessagePort status \(status), so the words may have landed"
-        case let .answerWasNotReadable(port, bytes):
-            "the input method on \(port) answered \(bytes) bytes that are not an answer"
+        case let .didNotLand(why): why.description
+        case let .mayHaveLanded(why): why.description
+        }
+    }
+}
+
+/// Why the words did not reach the cursor, for the caller that treats every reason here
+/// the same way: the input method answered that it would not take them, or there was no
+/// input method to ask. Both are certainly-did-not-land, and that is the whole membership
+/// rule - it is what makes putting the words somewhere else safe rather than a second
+/// delivery of a sentence already in the document.
+///
+/// `Unreachable.MayHaveLanded` is not among these and cannot be added to them, which is
+/// the reason this is a sum of two named halves and not a reason string. Nor is it a
+/// widened `Refusal`: a refusal crosses the wire from the far end, and `Refusal` stays
+/// exactly the set of things an input method can say about a cursor it looked at.
+/// [LAW:types-are-the-program]
+public enum NotAtTheCursor: Equatable, Sendable, CustomStringConvertible {
+    case refused(Refusal)
+    case noInputMethod(Unreachable.DidNotLand)
+
+    public var description: String {
+        switch self {
+        case let .refused(refusal): refusal.description
+        case let .noInputMethod(why): why.description
         }
     }
 }

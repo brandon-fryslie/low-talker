@@ -83,7 +83,7 @@ public struct InputMethodInserter: Inserter {
         // [LAW:parse-dont-validate] The boundary: past here there is a port or a thrown
         // reason, never a maybe-port that later code has to keep asking about.
         guard let port = CFMessagePortCreateRemote(nil, portName as CFString) else {
-            throw Unreachable.nothingIsListening(port: portName)
+            throw Unreachable.didNotLand(.nothingIsListening(port: portName))
         }
         var reply: Unmanaged<CFData>?
         let phase = timeout / 2
@@ -95,19 +95,19 @@ public struct InputMethodInserter: Inserter {
         case kCFMessagePortSuccess:
             break
         case kCFMessagePortSendTimeout:
-            throw Unreachable.requestWasNotTaken(port: portName, after: phase)
+            throw Unreachable.didNotLand(.requestWasNotTaken(port: portName, after: phase))
         case kCFMessagePortReceiveTimeout:
-            throw Unreachable.answerDidNotArrive(port: portName, after: phase)
+            throw Unreachable.mayHaveLanded(.answerDidNotArrive(port: portName, after: phase))
         // The far end went away between resolving the name and sending to it, which is the
         // same fact as never having found it and is said the same way.
         case kCFMessagePortIsInvalid:
-            throw Unreachable.nothingIsListening(port: portName)
+            throw Unreachable.didNotLand(.nothingIsListening(port: portName))
         default:
-            throw Unreachable.sendFailed(port: portName, status: status)
+            throw Unreachable.mayHaveLanded(.sendFailed(port: portName, status: status))
         }
         let data = reply.map { $0.takeRetainedValue() as Data } ?? Data()
         guard let answer = Wire.answer(of: data) else {
-            throw Unreachable.answerWasNotReadable(port: portName, bytes: data.count)
+            throw Unreachable.mayHaveLanded(.answerWasNotReadable(port: portName, bytes: data.count))
         }
         return answer
     }
