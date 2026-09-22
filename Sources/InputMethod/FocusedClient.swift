@@ -13,7 +13,15 @@ import Insertion
 public protocol TextCursor: AnyObject {
     /// The app this cursor belongs to, which is how a cursor left over from an app the
     /// person has since switched away from is told from the one in front of them.
-    var application: String? { get }
+    ///
+    /// A cursor has one, always. It is read when the cursor is made, while the client is
+    /// certainly alive, and never again: [FRAMING:representation] asking a client for its
+    /// bundle identifier later means asking a proxy whose process may since have quit, and
+    /// on the one path that must stay answerable - deciding whether to refuse - that is the
+    /// last thing to reach for. A client that will not name one is no cursor at all, which
+    /// its constructor establishes rather than leaving every reader of this to ask again.
+    /// [LAW:parse-dont-validate]
+    var application: String { get }
     /// Commits `text` at the insertion point, taking nothing away.
     func commit(_ text: String)
 }
@@ -34,13 +42,8 @@ public protocol TextCursor: AnyObject {
 public final class FocusedClient {
     public static let shared = FocusedClient()
 
-    /// The cursor in front and the app it belongs to, which are one fact and so one value.
-    ///
-    /// The app is read once, here, while the client is certainly alive, and never again.
-    /// [FRAMING:representation] Asking a client for its bundle identifier later means
-    /// asking a proxy whose process may since have quit, and on the one path that must
-    /// stay answerable - deciding whether to refuse - that is the last thing to reach for.
-    private var focus: (cursor: any TextCursor, application: String)?
+    /// The cursor in front, which carries the app it belongs to.
+    private var focus: (any TextCursor)?
 
     /// Whether this process currently has somewhere to put words. What
     /// low-input-method-s71.48t's readiness row will read.
@@ -48,22 +51,18 @@ public final class FocusedClient {
 
     /// The text input system gave this cursor focus.
     ///
-    /// A cursor that will not name its app neither takes focus nor clears it, the same way
-    /// `left` will not clear on anyone's word: this process serves several controllers, and
-    /// one of them failing to understand its own sender is no reason to take the cursor
-    /// away from another that is working. [LAW:no-silent-failure] One assignment, so the
-    /// operation runs every time and only the value differs.
-    /// [LAW:dataflow-not-control-flow]
-    public func took(_ cursor: any TextCursor) {
-        focus = cursor.application.map { (cursor, $0) } ?? focus
-    }
+    /// Unconditional, because there is no half-cursor left for it to sort out: a client that
+    /// will not name its app is refused by `Client.init`, so the rule lives at the one place
+    /// a cursor comes into being rather than at every place one is handled.
+    /// [LAW:parse-dont-validate] [LAW:single-enforcer]
+    public func took(_ cursor: any TextCursor) { focus = cursor }
 
     /// The text input system took focus away from this cursor.
     public func left(_ leaving: any TextCursor) {
         // Not unconditional: focus can move by activating the new client before
         // deactivating the old, and clearing on the old one's word would then drop the
         // client that just arrived and refuse the next insert for no reason.
-        focus = focus?.cursor === leaving ? nil : focus
+        focus = focus === leaving ? nil : focus
     }
 
     /// An app quit. Any cursor of its is gone with it, whatever the text input system did
@@ -75,6 +74,12 @@ public final class FocusedClient {
     /// process that no longer exists - so the app names match, the commit goes nowhere, and
     /// the answer claims it landed. Killing the cursor when the app dies is the only moment
     /// at which that is knowable. [LAW:no-silent-failure]
+    ///
+    /// By name and not by process, because a process is not something the text input system
+    /// hands over: it gives this one a client. So the other ordering is possible - a
+    /// termination notice delayed past a relaunched app taking focus clears a cursor that is
+    /// live - and it is the direction chosen, because a refusal is seen and answered while a
+    /// commit into a proxy for a dead process is answered `inserted` and vanishes.
     public func applicationQuit(_ application: String) {
         focus = focus?.application == application ? nil : focus
     }
@@ -108,7 +113,7 @@ public final class FocusedClient {
     public func insert(_ text: String, whileInFrontIs frontmost: String?) -> InsertionAnswer {
         guard let focus else { return .refused(.noClientHasFocus) }
         guard focus.application == frontmost else { return .refused(.cursorIsInAnotherApp) }
-        focus.cursor.commit(text)
+        focus.commit(text)
         return .inserted(characters: text.count)
     }
 }
@@ -122,10 +127,18 @@ public final class FocusedClient {
 @MainActor
 final class Client: TextCursor {
     private let client: IMKTextInput
+    let application: String
 
-    init(_ client: IMKTextInput) { self.client = client }
-
-    var application: String? { client.bundleIdentifier() }
+    /// Nothing at all when the client will not name its app. [LAW:parse-dont-validate] The
+    /// one place the question is asked, and past it there is a cursor whose app is known
+    /// rather than one every later reader has to keep asking about - which is also what
+    /// makes `activateServer` able to keep the cursor it last reported: a cursor that exists
+    /// is one `FocusedClient` will take.
+    init?(_ client: IMKTextInput) {
+        guard let application = client.bundleIdentifier() else { return nil }
+        self.client = client
+        self.application = application
+    }
 
     func commit(_ text: String) {
         client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))

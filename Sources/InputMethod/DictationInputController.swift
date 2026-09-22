@@ -10,9 +10,9 @@ import InputMethodKit
 /// would have seen under the person's own layout, dead keys and shortcuts included, because
 /// the text input system delivers them itself once the controller says it did not.
 ///
-/// [LAW:dataflow-not-control-flow] There is no key this looks at and no state it keeps, so
-/// there is no input for which it behaves differently - the answer is a constant, not a
-/// decision. What low-input-method-s71.31s adds is insertion the *app* asks for, which
+/// [LAW:dataflow-not-control-flow] There is no key this looks at, and the cursor it records
+/// for `FocusedClient` is never consulted to answer one, so there is no key for which the
+/// answer differs - it is a constant, not a decision. What low-input-method-s71.31s adds is insertion the *app* asks for, which
 /// arrives by a different door entirely; a key claimed here would be a broken keyboard, and
 /// the swallowed key is invisible - the person sees a letter that did not appear.
 /// [LAW:no-silent-failure]
@@ -49,15 +49,17 @@ public final class DictationInputController: IMKInputController {
         nonisolated(unsafe) let client = sender as? IMKTextInput
         nonisolated(unsafe) let controller = self
         MainActor.assumeIsolated {
-            // A sender that is no client at all changes nothing: not reported, because a
-            // sender THIS controller cannot understand is no reason to take the cursor away
-            // from another controller that can - and not forgotten either, because the
-            // cursor last reported is the one `deactivateServer` hands back, so dropping it
-            // here would leave `FocusedClient` holding a client nobody can retract. One
-            // assignment either way, the way `took` keeps its own.
-            // [LAW:dataflow-not-control-flow]
-            controller.cursor = client.map(Client.init) ?? controller.cursor
-            controller.cursor.map(FocusedClient.shared.took)
+            // A sender no cursor can be made of - no client at all, or a client that will
+            // not name its app - changes nothing here. Not reported, because a sender THIS
+            // controller cannot understand is no reason to take the cursor away from another
+            // controller that can; and not forgotten either, because the cursor last
+            // reported is the one `deactivateServer` hands back, so dropping it would leave
+            // `FocusedClient` holding a client nobody can retract. One rule, and it lives in
+            // `Client.init`: a cursor that exists is a cursor `took` accepts.
+            // [LAW:single-enforcer]
+            let arriving = client.flatMap(Client.init)
+            controller.cursor = arriving ?? controller.cursor
+            arriving.map(FocusedClient.shared.took)
         }
     }
 

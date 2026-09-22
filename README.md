@@ -342,6 +342,8 @@ The text goes on the pasteboard and the frontmost app is asked to paste through 
 
 Pressing another app's menu item needs Accessibility, charged to the terminal for this command; without it the command prints `Accessibility is off for the calling process; grant it in System Settings > Privacy & Security > Accessibility`.
 
+`scripts/live-paste-check` pastes into TextEdit and Terminal, checks what landed (the file TextEdit writes when its window is closed, the text Terminal echoes, read through Accessibility), and compares the pasteboard before and after. It needs an unlocked screen and uses no AppleScript, because an Automation prompt nobody answers becomes a denial.
+
 ## Insert
 
 Insert is the other hand-held delivery, and it needs no grant at all. It asks the input method to put text at the cursor through the text input system, the way a Japanese or Chinese input method commits a candidate, so nothing is posted as a key and the pasteboard is never touched. The LowTalker input source has to be selected for it, from the Input menu or System Settings; the input method process launches on demand.
@@ -353,8 +355,6 @@ Insert is the other hand-held delivery, and it needs no grant at all. It asks th
 The line printed says either how many characters the client in front accepted or, by name, why it refused: no client has focus, or the cursor is in an app that is not in front. A transport that could not carry the question at all is an error rather than an answer, and it says which failure it was, because a request the input method never took means the words did not land while an answer that never came back means they may have.
 
 What `inserted` claims is that the client belonging to the app in front accepted the commit, not that a person saw the words - the text input system offers no delivery report. The Finder's desktop, in particular, presents a full text client that accepts text into a buffer nobody can see.
-
-`scripts/live-paste-check` pastes into TextEdit and Terminal, checks what landed (the file TextEdit writes when its window is closed, the text Terminal echoes, read through Accessibility), and compares the pasteboard before and after. It needs an unlocked screen and uses no AppleScript, because an Automation prompt nobody answers becomes a denial.
 
 ## The virtual keyboard driver
 

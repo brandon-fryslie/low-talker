@@ -18,10 +18,10 @@ import Testing
 @Suite struct FocusedClientTests {
     /// A place words can land, which remembers what landed and which app it is in.
     private final class Cursor: TextCursor {
-        let application: String?
+        let application: String
         private(set) var committed: [String] = []
 
-        init(in application: String? = "com.example.editor") { self.application = application }
+        init(in application: String = "com.example.editor") { self.application = application }
 
         func commit(_ text: String) { committed.append(text) }
     }
@@ -52,31 +52,6 @@ import Testing
     @Test func nothingInFrontIsRefusedByName() {
         #expect(FocusedClient().insert("hello", whileInFrontIs: Self.inFront) == .refused(.noClientHasFocus))
         #expect(FocusedClient().hasFocus == false)
-    }
-
-    /// A cursor that will not name its app is not focus, and does not become it. One
-    /// controller failing to understand its sender must not speak for the others.
-    @Test func aCursorThatNamesNoAppNeverTakesFocus() {
-        let client = FocusedClient()
-        let nameless = Cursor(in: nil)
-        client.took(nameless)
-
-        #expect(client.hasFocus == false)
-        #expect(client.insert("hello", whileInFrontIs: Self.inFront) == .refused(.noClientHasFocus))
-        #expect(nameless.committed.isEmpty)
-    }
-
-    /// And it does not take focus AWAY from a cursor that has it, which is the half that
-    /// would otherwise refuse an insert with a live cursor sitting right there.
-    @Test func aCursorThatNamesNoAppDoesNotDisturbTheOneInFront() {
-        let client = FocusedClient()
-        let real = Cursor()
-        client.took(real)
-        client.took(Cursor(in: nil))
-
-        #expect(client.hasFocus)
-        #expect(client.insert("hello", whileInFrontIs: Self.inFront) == .inserted(characters: 5))
-        #expect(real.committed == ["hello"])
     }
 
     /// A cursor does not outlive the app it belongs to. Without this the person could

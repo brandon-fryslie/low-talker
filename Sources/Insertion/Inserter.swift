@@ -24,6 +24,25 @@ public protocol Inserter: Sendable {
     func insert(_ text: String) throws -> InsertionAnswer
 }
 
+public extension Inserter {
+    /// The same round trip asked for from inside a task, which is where the app asks from.
+    ///
+    /// The blocking call goes onto a thread of its own and the caller suspends, so nothing
+    /// holds a cooperative thread for the length of the timeout and no run loop anyone else
+    /// is using is pumped - which is the obligation stated above, kept here once rather than
+    /// by every caller that has to remember it. [LAW:single-enforcer]
+    ///
+    /// The `insert` inside is the blocking one: that closure is not async, so the overload
+    /// it names is the protocol's own. An async caller writing `try await insert(text)` gets
+    /// this; there is no spelling of the call that is both awaited and blocking.
+    /// [LAW:no-ambient-temporal-coupling]
+    func insert(_ text: String) async throws -> InsertionAnswer {
+        try await withCheckedThrowingContinuation { continuation in
+            Thread { continuation.resume(with: Result { try insert(text) }) }.start()
+        }
+    }
+}
+
 /// The app's end of the channel: one round trip to this flavor's input method.
 ///
 /// Synchronous, with the wait bounded by the transport's own timeouts rather than by a

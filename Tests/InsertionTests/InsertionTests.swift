@@ -60,6 +60,24 @@ private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
         #expect(seen.text == "hello there")
     }
 
+    /// The same round trip asked for from a task, which is where the app asks from: the
+    /// answer is the same one, and it arrives without the caller having run a run loop of
+    /// anyone else's. [LAW:behavior-not-structure]
+    @Test func theRoundTripAnsweredFromATaskIsTheSameRoundTrip() async throws {
+        let name = aPortNobodyElseUses()
+        let seen = Seen()
+        let port = try PortOnItsOwnThread.insertion(name: name) { text in
+            seen.record(text)
+            return .inserted(characters: text.count)
+        }
+        defer { port.stop() }
+
+        let answer = try await InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend)
+            .insert("hello there")
+        #expect(answer == .inserted(characters: 11))
+        #expect(seen.text == "hello there")
+    }
+
     /// A refusal is an answer: it comes back, it does not throw, and it says which refusal
     /// it is - which is what low-input-method-s71.b26 switches on to reach the clipboard.
     @Test func aRefusalComesBackAsAnAnswer() throws {
@@ -127,14 +145,17 @@ private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
     @Test func anAnswerThatDoesNotArriveIsSaidByName() throws {
         let name = aPortNobodyElseUses()
         let port = try PortOnItsOwnThread.insertion(name: name) { text in
-            Thread.sleep(forTimeInterval: 1)
+            Thread.sleep(forTimeInterval: 6)
             return .inserted(characters: text.count)
         }
         defer { port.stop() }
 
         // Halved, because the two phases of the round trip share the caller's budget and
-        // the error names the phase's own bound rather than a number nobody waited.
-        let timeout = Duration.milliseconds(400)
+        // the error names the phase's own bound rather than a number nobody waited. A whole
+        // second for the send half rather than the least that works: what this case is about
+        // is which phase ran out, and a send that timed out first on a busy machine would
+        // fail it for a reason it is not asking about.
+        let timeout = Duration.seconds(2)
         #expect(throws: Unreachable.answerDidNotArrive(port: name, after: timeout / 2)) {
             try InputMethodInserter(portName: name, timeout: timeout).insert("hello")
         }
