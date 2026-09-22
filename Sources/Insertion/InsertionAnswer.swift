@@ -125,10 +125,11 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
 }
 
 /// Why the words did not reach the cursor, for the caller that treats every reason here
-/// the same way: the input method answered that it would not take them, or there was no
-/// input method to ask. Both are certainly-did-not-land, and that is the whole membership
-/// rule - it is what makes putting the words somewhere else safe rather than a second
-/// delivery of a sentence already in the document.
+/// the same way. The membership rule is the whole of it: every reason here is one where
+/// the words certainly did not land, and that is what makes putting them somewhere else
+/// safe rather than a second delivery of a sentence already in the document. It is not a
+/// rule about what went wrong - an input method that looked and an input method that was
+/// never reached are both in here, because the words are equally not in the document.
 ///
 /// `Unreachable.MayHaveLanded` is not among these and cannot be added to them, which is
 /// the reason this is a sum of two named halves and not a reason string. Nor is it a
@@ -136,13 +137,21 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
 /// exactly the set of things an input method can say about a cursor it looked at.
 /// [LAW:types-are-the-program]
 public enum NotAtTheCursor: Equatable, Sendable, CustomStringConvertible {
+    /// An input method looked at the cursor and said what it would not do with it.
     case refused(Refusal)
-    case noInputMethod(Unreachable.DidNotLand)
+    /// The question never got to an input method for one to look at all.
+    ///
+    /// Not the same as there being none. Nothing may be listening, which is an uninstalled
+    /// bundle or an unselected source - or one may be running and simply never have taken
+    /// this request, its queue full behind a client that is not draining. The wrapped case
+    /// says which, and anything that wants to tell the person to install or select must
+    /// read that rather than the presence of this case. [FRAMING:representation]
+    case unreachable(Unreachable.DidNotLand)
 
     public var description: String {
         switch self {
         case let .refused(refusal): refusal.description
-        case let .noInputMethod(why): why.description
+        case let .unreachable(why): why.description
         }
     }
 }

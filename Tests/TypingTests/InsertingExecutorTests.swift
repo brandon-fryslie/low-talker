@@ -123,8 +123,9 @@ import Testing
     }
 
     /// A channel that never carried the question is the likeliest thing that goes wrong
-    /// here - the bundle is not installed, or the source is not selected - and the whole
-    /// utterance would otherwise exist only in a log line. The words certainly did not reach
+    /// here - the bundle is not installed, the source is not selected, or an input method
+    /// that is there never took the request - and the whole utterance would otherwise exist
+    /// only in a log line. The words certainly did not reach
     /// a cursor, so they go where the person can still reach them and the outcome says which
     /// channel failure put them there.
     ///
@@ -145,7 +146,7 @@ import Testing
             #expect(performed.count == 1)
             #expect(performed[0].into == Self.textEdit)
             guard case .notInserted(let said, let copied) = performed[0].what else { Issue.record("not reported"); return }
-            #expect(said == .noInputMethod(why))
+            #expect(said == .unreachable(why))
             #expect(copied == "héllo there")
             #expect("\(performed[0])".hasPrefix("\(why), so 11 characters went to the clipboard with com.apple.TextEdit in front at key-down, key-up to acknowledged "))
         }

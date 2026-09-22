@@ -59,11 +59,11 @@ public struct Executor {
     ///
     /// `clipboard` is not a fallback for everything that can go wrong, and the line it is
     /// drawn on is whether the words certainly did not land. A refusal is that - the input
-    /// method looked and there was nowhere to put them - and so is no input method
-    /// answering, which is what an uninstalled or unselected bundle looks like and the
-    /// likeliest thing that goes wrong here. Those go to the clipboard and the outcome says
-    /// both halves, so the icon shows words waiting and the Insert Dictation service can
-    /// still place them.
+    /// method looked and there was nowhere to put them - and so is the question never
+    /// reaching one to look, which covers an uninstalled bundle, an unselected source and
+    /// an input method that never took the request, and is the likeliest thing that goes
+    /// wrong here. Those go to the clipboard and the outcome says both halves, so the icon
+    /// shows words waiting and the Insert Dictation service can still place them.
     ///
     /// A channel that broke where this end cannot see which side of the commit it broke on
     /// is thrown as it is, the way an unreachable helper is. Copying there would risk
@@ -225,12 +225,12 @@ public struct Executor {
                     }
                 } catch let unreachable as Unreachable {
                     switch unreachable {
-                    // The channel saying the cursor never saw the words. Not installed and
-                    // not selected are this case, and they are the likeliest thing that goes
-                    // wrong here, so the utterance goes where the person can still reach it
+                    // The channel saying the cursor never saw the words, whichever way it
+                    // says it - and the likeliest thing that goes wrong with this delivery
+                    // is in here, so the utterance goes where the person can still reach it
                     // rather than existing only in a log line.
                     case .didNotLand(let why):
-                        reason = .noInputMethod(why)
+                        reason = .unreachable(why)
                     // Thrown on untouched: here the far end may already have put the words
                     // in the document, and words that may have landed must not be delivered
                     // a second time. The type makes that the only thing this arm can do.
