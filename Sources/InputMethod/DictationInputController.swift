@@ -49,11 +49,14 @@ public final class DictationInputController: IMKInputController {
         nonisolated(unsafe) let client = sender as? IMKTextInput
         nonisolated(unsafe) let controller = self
         MainActor.assumeIsolated {
-            // A sender that is no client at all is simply not reported: this process serves
-            // one controller per client, and a sender THIS controller cannot understand is
-            // no reason to take the cursor away from another controller that can.
+            // A sender that is no client at all changes nothing: not reported, because a
+            // sender THIS controller cannot understand is no reason to take the cursor away
+            // from another controller that can - and not forgotten either, because the
+            // cursor last reported is the one `deactivateServer` hands back, so dropping it
+            // here would leave `FocusedClient` holding a client nobody can retract. One
+            // assignment either way, the way `took` keeps its own.
             // [LAW:dataflow-not-control-flow]
-            controller.cursor = client.map(Client.init)
+            controller.cursor = client.map(Client.init) ?? controller.cursor
             controller.cursor.map(FocusedClient.shared.took)
         }
     }

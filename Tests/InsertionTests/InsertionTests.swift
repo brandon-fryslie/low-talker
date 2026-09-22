@@ -37,6 +37,13 @@ import Testing
     }
 }
 
+/// Long enough that the runner's own stall cannot spend it: `DirectoryChangesTests` records
+/// a CI machine that freezes this process for seconds at a time, and `InputMethodInserter`
+/// hands each phase of the round trip half of what it is given. Said once, because it is one
+/// fact about the machine rather than five. [LAW:one-source-of-truth] The cases that ARE
+/// timing under test set their own budget and say so.
+private let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
+
 /// The channel, end to end, against a port standing in for the input method.
 @Suite struct InserterTests {
     @Test func theTextArrivesAndTheAnswerComesBack() throws {
@@ -48,7 +55,7 @@ import Testing
         }
         defer { port.stop() }
 
-        let answer = try InputMethodInserter(portName: name, timeout: .seconds(5)).insert("hello there")
+        let answer = try InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend).insert("hello there")
         #expect(answer == .inserted(characters: 11))
         #expect(seen.text == "hello there")
     }
@@ -60,7 +67,7 @@ import Testing
         let port = try PortOnItsOwnThread.insertion(name: name) { _ in .refused(.noClientHasFocus) }
         defer { port.stop() }
 
-        #expect(try InputMethodInserter(portName: name, timeout: .seconds(5)).insert("hello")
+        #expect(try InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend).insert("hello")
             == .refused(.noClientHasFocus))
     }
 
@@ -74,7 +81,9 @@ import Testing
         let remote = try #require(CFMessagePortCreateRemote(nil, name as CFString))
         var reply: Unmanaged<CFData>?
         let status = CFMessagePortSendRequest(
-            remote, 0, Data([0xFF, 0xFE]) as CFData, 5, 5, CFRunLoopMode.defaultMode.rawValue, &reply
+            remote, 0, Data([0xFF, 0xFE]) as CFData,
+            aBudgetTheRunnerCannotSpend.seconds, aBudgetTheRunnerCannotSpend.seconds,
+            CFRunLoopMode.defaultMode.rawValue, &reply
         )
         #expect(status == kCFMessagePortSuccess)
         let data = try #require(reply?.takeRetainedValue() as Data?)
@@ -97,7 +106,7 @@ import Testing
             _ = try InsertionPort(portName: name) { _ in .refused(.noClientHasFocus) }
         }
         // The first is still the one answering, and answering with its own closure.
-        #expect(try InputMethodInserter(portName: name, timeout: .seconds(5)).insert("hello")
+        #expect(try InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend).insert("hello")
             == .inserted(characters: 5))
         withExtendedLifetime(first) {}
     }
@@ -140,7 +149,7 @@ import Testing
         defer { port.stop() }
 
         #expect(throws: Unreachable.answerWasNotReadable(port: name, bytes: 8)) {
-            try InputMethodInserter(portName: name, timeout: .seconds(5)).insert("hello")
+            try InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend).insert("hello")
         }
     }
 }

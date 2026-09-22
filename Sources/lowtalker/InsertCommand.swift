@@ -13,7 +13,7 @@ import Insertion
 /// process. The suite stands a port up in-process, which proves the codec and every named
 /// failure but cannot prove the claim the epic turns on - that a commit driven by a
 /// message, not a key, reaches the app in front. [LAW:verifiable-goals]
-struct InsertCommand: AsyncParsableCommand {
+struct InsertCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "insert",
         abstract: "Ask the input method to insert text at the cursor, and print its answer."
@@ -27,7 +27,7 @@ struct InsertCommand: AsyncParsableCommand {
     @Option(help: "Seconds to wait first, to bring the receiving app to the front.")
     var delay: Int = 0
 
-    @Option(help: "Seconds to wait for the input method's answer.")
+    @Option(help: "Seconds for the whole round trip: the request out and the answer back.")
     var timeout: Int = 5
 
     func validate() throws {
@@ -35,8 +35,12 @@ struct InsertCommand: AsyncParsableCommand {
         guard timeout > 0 else { throw ValidationError("--timeout must be at least one second.") }
     }
 
-    func run() async throws {
-        try await Task.sleep(for: .seconds(delay))
+    func run() throws {
+        // Synchronous, like the insert below it: `Inserter` runs a run loop while it waits
+        // and says in its own contract that no task may hold a cooperative thread for that
+        // long. An `async` command here would be exactly that task, and the worked example
+        // low-input-method-s71.b26 copies. [LAW:no-ambient-temporal-coupling]
+        Thread.sleep(forTimeInterval: Double(delay))
         let flavor = installation.flavor
         // Thrown, not printed as an outcome: a channel that could not carry the question
         // is not an answer about the cursor, and the two must never read alike.

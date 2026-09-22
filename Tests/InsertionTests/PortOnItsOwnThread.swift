@@ -24,17 +24,20 @@ final class PortOnItsOwnThread {
             let port: AnyObject
             do {
                 port = try host()
-                hosting.began(on: CFRunLoopGetCurrent())
             } catch {
                 hosting.failed(error)
                 ready.signal()
                 return
             }
-            ready.signal()
-            // The port is a local, so the thread that hosted it is the thread that drops
-            // it: `InsertionPort` takes its source back off "the current run loop", which
-            // is only the right one here. Released from the test's thread instead, the
-            // source would stay on a loop servicing an invalidated port.
+            let loop: CFRunLoop = CFRunLoopGetCurrent()
+            hosting.began(on: loop)
+            // Signalled from INSIDE the loop rather than before it, so that "ready" means
+            // running and not merely built. `stop()` is `CFRunLoopStop`, which does nothing
+            // to a loop that has not started yet; a caller that stopped in that window
+            // would leave this thread entering `CFRunLoopRun()` for the rest of the suite,
+            // holding the port name. [LAW:no-ambient-temporal-coupling]
+            CFRunLoopPerformBlock(loop, CFRunLoopMode.defaultMode.rawValue) { ready.signal() }
+            // The port is a local, so it lives exactly as long as the loop servicing it.
             withExtendedLifetime(port) { CFRunLoopRun() }
         }.start()
         ready.wait()

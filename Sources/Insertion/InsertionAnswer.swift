@@ -54,6 +54,10 @@ public enum Unreachable: Error, Equatable, CustomStringConvertible {
     case nothingIsListening(port: String)
     case requestWasNotTaken(port: String, after: Duration)
     case answerDidNotArrive(port: String, after: Duration)
+    /// A status none of the others names, and not a did-not-land: the invalid-port and
+    /// transport errors say the channel broke without saying whether it broke before or
+    /// after the far end took the request. So this reads with `answerDidNotArrive` and
+    /// never with `requestWasNotTaken`.
     case sendFailed(port: String, status: Int32)
     case answerWasNotReadable(port: String, bytes: Int)
 
@@ -66,7 +70,7 @@ public enum Unreachable: Error, Equatable, CustomStringConvertible {
         case let .answerDidNotArrive(port, after):
             "the input method on \(port) took the request but did not answer within \(after), so the words may have landed"
         case let .sendFailed(port, status):
-            "the request to \(port) was not delivered: CFMessagePort status \(status)"
+            "the request to \(port) failed: CFMessagePort status \(status), so the words may have landed"
         case let .answerWasNotReadable(port, bytes):
             "the input method on \(port) answered \(bytes) bytes that are not an answer"
         }

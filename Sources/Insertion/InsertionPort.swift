@@ -14,15 +14,17 @@ import Foundation
 /// [LAW:no-ambient-temporal-coupling]
 ///
 /// Held for the life of the process by whoever makes it. Released, the port closes and the
-/// app's next request finds nothing listening - and it must be released **on the thread
-/// that hosted it**, because taking the source back off a run loop is addressed to the run
-/// loop of whoever is asking. Released anywhere else, the source stays on a loop that is
-/// still servicing a port now invalidated underneath it. The input method never releases
-/// it at all; what keeps the obligation honest is that the only other holder, the suite's
-/// `PortOnItsOwnThread`, leaves it to the hosting thread to drop.
+/// app's next request finds nothing listening - and released from any thread at all, because
+/// the run loop it came off is the one it remembers rather than whichever one is asking.
+/// [LAW:types-are-the-program]
 public final class InsertionPort {
     private let port: CFMessagePort
     private let source: CFRunLoopSource
+    /// The loop the source went onto, kept because `deinit` has to name the same one. Asked
+    /// for again there it would be whichever loop released this object, and taking a source
+    /// off the wrong loop takes it off none - silently, leaving it on a loop still
+    /// servicing a port invalidated underneath it. [LAW:one-source-of-truth]
+    private let loop: CFRunLoop
     /// The closure, retained for the C callback that has no captures of its own. This
     /// object is the one pair of hands the pointer passes through.
     /// [LAW:no-shared-mutable-globals]
@@ -77,11 +79,12 @@ public final class InsertionPort {
         self.port = port
         self.held = held
         source = CFMessagePortCreateRunLoopSource(nil, port, 0)
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
+        loop = CFRunLoopGetCurrent()
+        CFRunLoopAddSource(loop, source, .commonModes)
     }
 
     deinit {
-        CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
+        CFRunLoopRemoveSource(loop, source, .commonModes)
         CFMessagePortInvalidate(port)
         held.release()
     }

@@ -348,7 +348,7 @@ Insert is the other hand-held delivery, and it needs no grant at all. It asks th
 
     swift run lowtalker insert "hello there"            # insert at the cursor now
     swift run lowtalker insert "hello there" --delay 3  # three seconds to bring the receiving app forward
-    swift run lowtalker insert "hello there" --timeout 2  # how long to wait for the input method's answer
+    swift run lowtalker insert "hello there" --timeout 2  # the whole round trip: the request out and the answer back
 
 The line printed says either how many characters the client in front accepted or, by name, why it refused: no client has focus, or the cursor is in an app that is not in front. A transport that could not carry the question at all is an error rather than an answer, and it says which failure it was, because a request the input method never took means the words did not land while an answer that never came back means they may have.
 
