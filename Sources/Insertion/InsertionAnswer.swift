@@ -19,7 +19,7 @@ public enum InsertionAnswer: Codable, Equatable, Sendable {
 /// A closed set rather than a string, so a caller can act on a reason and the compiler
 /// says which reasons it has not considered; each one is also what the log line says, so
 /// there is one spelling of each fact. [LAW:one-source-of-truth]
-public enum Refusal: String, Codable, Equatable, Sendable, CustomStringConvertible {
+public enum Refusal: String, Codable, CaseIterable, Equatable, Sendable, CustomStringConvertible {
     /// Nothing has focus, so there is no client to commit into. The desktop is the plain
     /// case: no text field, nowhere for words to go.
     case noClientHasFocus

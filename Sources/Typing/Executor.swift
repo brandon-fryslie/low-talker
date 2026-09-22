@@ -1,4 +1,5 @@
 import Foundation
+import Insertion
 import KeyboardLayout
 import LowTalkerCore
 import os
@@ -30,6 +31,10 @@ public struct Executor {
         /// `hotkeys` are the chords the tap listens for, which no action may press.
         case devices(keyboard: Keyboards, mouse: Pointers, hotkeys: Set<KeyChord>)
         case clipboard(Clipboard)
+        /// The input method puts the words at the cursor itself; the clipboard is where
+        /// they go when it will not. Both, because a refusal is the input method saying
+        /// where the words could not go and not that they are gone. [LAW:no-silent-failure]
+        case insertion(any Inserter, clipboard: Clipboard)
     }
 
     private let output: Output
@@ -45,6 +50,22 @@ public struct Executor {
     /// clicked. Nothing here can press a key, so there is no hotkey to refuse.
     public init(copyingTo clipboard: Clipboard, log: Logger = Executor.log) {
         output = .clipboard(clipboard)
+        self.log = log
+    }
+
+    /// Text at the focus asked of the input method, which commits it at the cursor through
+    /// the text input system - no key posted, no pasteboard touched, and no grant asked of
+    /// an administrator.
+    ///
+    /// `clipboard` is not a fallback for everything that can go wrong, and the difference is
+    /// the point: a refusal is an answer - the input method looked and there was nowhere to
+    /// put words - so the words go to the clipboard and the outcome says both. A transport
+    /// failure is not an answer about the cursor at all, and it is thrown the way an
+    /// unreachable helper is. Copying on that too would hide a broken channel behind a
+    /// working-looking dictation, and a failure nobody sees is a failure nobody fixes.
+    /// [LAW:no-silent-failure]
+    public init(insertingThrough inserter: any Inserter, orCopyingTo clipboard: Clipboard, log: Logger = Executor.log) {
+        output = .insertion(inserter, clipboard: clipboard)
         self.log = log
     }
 
@@ -67,6 +88,15 @@ public struct Executor {
             /// in front, not an app the text reached. The words themselves, because a copy is
             /// something the user can still ask for, through the Insert Dictation service.
             case copied(String)
+            /// Committed at the cursor by the input method. `into` is an app the words
+            /// reached and not merely the one in front: the input method establishes that
+            /// much before it commits, which is more than `copied` can say and less than a
+            /// person seeing them.
+            case inserted(characters: Int)
+            /// The input method would not take them, so they are on the clipboard instead.
+            /// Both halves in one outcome, because why the cursor did not get the words and
+            /// where they are now are two facts and neither answers the other.
+            case refused(Refusal, copied: String)
         }
 
         public let what: What
@@ -80,6 +110,8 @@ public struct Executor {
             case .clicked(let at, let button, let times, let reports): "clicked \(button.rawValue) \(times.spelled) at \(at) after \(reports) move reports into \(into.rawValue)"
             case .scrolled(let at, let vertical, let horizontal): "scrolled vertical \(vertical.rawValue) horizontal \(horizontal.rawValue) at \(at) into \(into.rawValue)"
             case .copied(let text): "copied \(text.count) characters to the clipboard with \(into.rawValue) in front"
+            case .inserted(let characters): "inserted \(characters) characters at the cursor in \(into.rawValue)"
+            case .refused(let refusal, let text): "\(refusal), so \(text.count) characters went to the clipboard with \(into.rawValue) in front"
             }
             return "\(act), key-up to acknowledged \(Int(acknowledged / .milliseconds(1))) ms"
         }
@@ -108,6 +140,8 @@ public struct Executor {
             lowered = try actions.map { try lower($0, in: frontmost, on: layout, keyboard: keyboard, mouse: mouse, hotkeys: hotkeys) }
         case .clipboard(let clipboard):
             lowered = try actions.map { try copy($0, in: frontmost, to: clipboard) }
+        case .insertion(let inserter, let clipboard):
+            lowered = try actions.map { try insert($0, in: frontmost, through: inserter, orTo: clipboard) }
         }
         let clock = ContinuousClock()
         var performed: [Performed] = []
@@ -137,7 +171,35 @@ public struct Executor {
         // Text for a named app included: the clipboard reaches whatever the user pastes
         // into, so an action that names its app is one this output would only pretend to.
         case .insertText(_, .app), .sendKeys, .click, .scroll, .clickElement:
-            throw NeedsTheVirtualKeyboard(action: action)
+            throw NeedsTheVirtualKeyboard(action: action, instead: "puts dictation on the clipboard")
+        case .activateApp, .openURL, .runShortcut, .pipe:
+            throw NotAnInput(action: action)
+        }
+    }
+
+    private func insert(_ action: Action, in frontmost: BundleID, through inserter: any Inserter, orTo clipboard: Clipboard) throws -> Step {
+        switch action {
+        case .insertText(let text, .focus):
+            return Step(into: frontmost) {
+                // Awaited, so the round trip runs on a thread of its own: this is the main
+                // actor, and `Inserter` says in its own contract that the blocking call must
+                // not pump it. [LAW:no-ambient-temporal-coupling]
+                switch try await inserter.insert(text) {
+                case .inserted(let characters):
+                    return .inserted(characters: characters)
+                // Not a failure to recover from but the other half of this output's job: the
+                // input method looked and there was nowhere to put words, so they go where
+                // the user can still reach them and the outcome carries the reason.
+                case .refused(let refusal):
+                    try clipboard.write(text)
+                    return .refused(refusal, copied: text)
+                }
+            }
+        // Text for a named app included: this output reaches the cursor the text input
+        // system is holding, which belongs to whatever is in front, so an action naming its
+        // own app is one it could only pretend to perform.
+        case .insertText(_, .app), .sendKeys, .click, .scroll, .clickElement:
+            throw NeedsTheVirtualKeyboard(action: action, instead: "asks the input method to put dictation at the cursor")
         case .activateApp, .openURL, .runShortcut, .pipe:
             throw NotAnInput(action: action)
         }
@@ -226,11 +288,16 @@ public struct NotAnInput: Error, CustomStringConvertible {
     public var description: String { "neither the keyboard nor the mouse can perform \(action); nothing was done" }
 }
 
-/// An action only the virtual keyboard or mouse can perform, reaching an executor that
-/// puts words on the clipboard. [LAW:no-silent-failure] Refused by name, so a route that
-/// needs the devices says so instead of leaving part of itself on the clipboard.
+/// An action only the virtual keyboard or mouse can perform, reaching an executor that has
+/// neither. [LAW:no-silent-failure] Refused by name, so a route that needs the devices says
+/// so instead of leaving part of itself somewhere the user did not ask for.
 public struct NeedsTheVirtualKeyboard: Error, CustomStringConvertible {
     public let action: Action
+    /// What this installation does with dictated words instead, in the words that output's
+    /// own line would use. A value rather than a second error type, because what differs
+    /// between the outputs is this sentence and not the refusal.
+    /// [LAW:dataflow-not-control-flow]
+    public let instead: String
 
-    public var description: String { "\(action) needs the virtual keyboard, and this installation puts dictation on the clipboard; nothing was done" }
+    public var description: String { "\(action) needs the virtual keyboard, and this installation \(instead); nothing was done" }
 }
