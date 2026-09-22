@@ -141,6 +141,19 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
     /// server unreachable rather than refused. [LAW:no-silent-failure]
     public var inputMethodConnectionName: String { inputMethodBundleIdentifier + "_Connection" }
 
+    /// The name the app reaches this flavor's input method on to ask it to insert text.
+    ///
+    /// A second port beside `inputMethodConnectionName` and not that one: the connection
+    /// name belongs to the text input system, which opens it, speaks its own protocol over
+    /// it and would not carry a message of ours. This one is ours end to end.
+    ///
+    /// Measured on 2026-09-22, and the reason this is a message port rather than the XPC
+    /// the helper uses: a process macOS launches from a bundle has no launchd job, so it
+    /// cannot check a Mach service name in. `NSXPCListener(machServiceName:)` resumes
+    /// without raising, logs nothing, and simply never receives, which would have made an
+    /// input method that looked installed and answered nothing. [LAW:no-silent-failure]
+    public var inputMethodPortName: String { inputMethodBundleIdentifier + ".insert" }
+
     /// The name shown in the menu bar and in Login Items, where the whole point is that a
     /// person can tell the two apart at a glance.
     ///

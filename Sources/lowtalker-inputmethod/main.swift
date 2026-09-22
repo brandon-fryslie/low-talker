@@ -2,6 +2,7 @@ import AppKit
 import Flavors
 import InputMethod
 import InputMethodKit
+import Insertion
 import os
 
 /// The input method process: macOS launches it out of its own bundle, it answers on its
@@ -59,5 +60,46 @@ let server: IMKServer = {
     return server
 }()
 
-logger.notice("\(flavor.description, privacy: .public) serving \(flavor.inputMethodConnectionName, privacy: .public)")
+/// The app's door, beside the text input system's. Held for the life of the process for
+/// the same reason the server is: released, the app's next request finds nothing listening.
+///
+/// Hosted on this thread, which is the main one, so its answers run where `FocusedClient`
+/// and every `IMKInputController` callback already run and the two never race.
+/// [LAW:no-ambient-temporal-coupling] `assumeIsolated` is that sentence made checkable: if
+/// this ever answered anywhere else it would stop here rather than corrupt a client.
+///
+/// An input method that cannot open this port still types nothing, so it ends the same way
+/// a missing server does rather than running on as a source that answers no insert.
+/// [LAW:no-silent-failure]
+let insertions: InsertionPort = {
+    do {
+        return try InsertionPort(flavor: flavor) { text in
+            MainActor.assumeIsolated {
+                // Read here, where the effects are, and handed to the decision as a value.
+                // [LAW:effects-at-boundaries]
+                let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+                let focused = FocusedClient.shared
+                let answer = focused.insert(text, whileInFrontIs: frontmost)
+                // Both apps by name, because the refusal that matters here is the one where
+                // they differ, and a line naming only the outcome leaves a reader with the
+                // question the line was written to answer.
+                logger.notice("""
+                    insert of \(text.count, privacy: .public) characters: \
+                    \(String(describing: answer), privacy: .public); \
+                    the cursor is in \(focused.application ?? "nothing", privacy: .public) \
+                    and \(frontmost ?? "nothing", privacy: .public) is in front
+                    """)
+                return answer
+            }
+        }
+    } catch {
+        logger.fault("will not start: \(String(describing: error), privacy: .public)")
+        exit(1)
+    }
+}()
+
+logger.notice("""
+    \(flavor.description, privacy: .public) serving \(flavor.inputMethodConnectionName, privacy: .public) \
+    and answering inserts on \(flavor.inputMethodPortName, privacy: .public)
+    """)
 NSApplication.shared.run()

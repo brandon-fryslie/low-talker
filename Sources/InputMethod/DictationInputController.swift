@@ -23,8 +23,57 @@ import InputMethodKit
 @objc(DictationInputController)
 public final class DictationInputController: IMKInputController {
     /// Every event, declined. The signature is `IMKInputController`'s; returning false is
-    /// how it says "not mine", which is the whole behaviour of this ticket's controller.
+    /// how it says "not mine", which is the whole behaviour this controller has toward
+    /// keys - low-input-method-s71.31s added insertion through a door of the app's, and
+    /// changed nothing here.
     override public func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
         false
     }
+
+    /// The text input system gave this controller's client focus, which is the only way
+    /// this process learns where words can go.
+    ///
+    /// Reported rather than kept, because the client that is in front is not this
+    /// controller's to know: `IMKServer` builds one controller per client, and the app's
+    /// insert arrives on a port that belongs to none of them. [LAW:one-source-of-truth]
+    ///
+    /// Focus, not a key: nothing here waits for the person to type, so an insert asked for
+    /// before any key has ever arrived is answered like any other. Reported now rather than
+    /// hopped onto the main actor for the same reason - a hop would report focus after the
+    /// insert that asked about it had already been refused, and the words would be on the
+    /// clipboard while the cursor sat waiting. [LAW:no-ambient-temporal-coupling]
+    override public func activateServer(_ sender: Any!) {
+        // The client is a main-thread object arriving through a signature written before
+        // the language could say so, so the compiler cannot see that it never leaves the
+        // thread it was made on. `assumeIsolated` is where that is asserted and checked.
+        nonisolated(unsafe) let client = sender as? IMKTextInput
+        nonisolated(unsafe) let controller = self
+        MainActor.assumeIsolated {
+            // A sender that is no client at all leaves focus nowhere, and the next insert
+            // says so by name rather than this deciding what it must have meant.
+            // [LAW:dataflow-not-control-flow] [LAW:no-silent-failure]
+            controller.cursor = client.map(Client.init)
+            FocusedClient.shared.took(controller.cursor)
+        }
+    }
+
+    /// Focus left this controller's client.
+    ///
+    /// The cursor made on the way in is the one handed back, so `FocusedClient` can tell
+    /// this client leaving from a different one arriving - a fresh wrapper around the same
+    /// client would be a different object and the comparison would always miss.
+    override public func deactivateServer(_: Any!) {
+        nonisolated(unsafe) let controller = self
+        MainActor.assumeIsolated {
+            controller.cursor.map(FocusedClient.shared.left)
+            controller.cursor = nil
+        }
+    }
+
+    /// This controller's client, as the one thing this process asks of it.
+    ///
+    /// Held here because `IMKServer` builds one controller per client, so this IS the one
+    /// place with a client's lifetime to hang it on. [LAW:one-source-of-truth] Touched only
+    /// inside the assumptions above, which is where its isolation is asserted.
+    private nonisolated(unsafe) var cursor: Client?
 }

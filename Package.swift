@@ -18,6 +18,7 @@ let package = Package(
         .library(name: "Typing", targets: ["Typing"]),
         .library(name: "Dictation", targets: ["Dictation"]),
         .library(name: "InputMethod", targets: ["InputMethod"]),
+        .library(name: "Insertion", targets: ["Insertion"]),
         .executable(name: "lowtalker", targets: ["lowtalker"]),
         .executable(name: "lowtalker-keyboardd", targets: ["lowtalker-keyboardd"]),
         .executable(name: "lowtalker-inputmethod", targets: ["lowtalker-inputmethod"]),
@@ -112,11 +113,17 @@ let package = Package(
         // What the input method process answers with, kept out of the process itself so the
         // suite compiles and exercises it: an Xcode-only target would be invisible to
         // `make test` the way App/LowTalker's sources are.
-        .target(name: "InputMethod"),
-        .testTarget(name: "InputMethodTests", dependencies: ["InputMethod", "Flavors"]),
+        .target(name: "InputMethod", dependencies: ["Insertion"]),
+        .testTarget(name: "InputMethodTests", dependencies: ["InputMethod", "Insertion", "Flavors"]),
+        // The one call that crosses between the app and the input method, and both ends of
+        // the port carrying it. It links Flavors for the port's name and nothing else - in
+        // particular no InputMethodKit, because the app is one of its two callers and the
+        // app has no business linking the text input system. [LAW:one-way-deps]
+        .target(name: "Insertion", dependencies: ["Flavors"]),
+        .testTarget(name: "InsertionTests", dependencies: ["Insertion", "Flavors"]),
         // The process macOS launches out of the input method bundle. It holds the effects -
         // reading the bundle, opening the port, running the loop - and nothing else.
-        .executableTarget(name: "lowtalker-inputmethod", dependencies: ["InputMethod", "Flavors"]),
+        .executableTarget(name: "lowtalker-inputmethod", dependencies: ["InputMethod", "Insertion", "Flavors"]),
         // The root daemon that owns the devices. It links VirtualKeyboard, both vocabularies,
         // the seam and the signal watch, DriverExtension for the identity the keyboard files
         // its Keyboard Setup Assistant answer under, and deliberately not KeyboardLayout:
@@ -144,6 +151,7 @@ let package = Package(
                 "Keystrokes",
                 "Typing",
                 "Dictation",
+                "Insertion",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
