@@ -17,8 +17,10 @@ let package = Package(
         .library(name: "Signals", targets: ["Signals"]),
         .library(name: "Typing", targets: ["Typing"]),
         .library(name: "Dictation", targets: ["Dictation"]),
+        .library(name: "InputMethod", targets: ["InputMethod"]),
         .executable(name: "lowtalker", targets: ["lowtalker"]),
         .executable(name: "lowtalker-keyboardd", targets: ["lowtalker-keyboardd"]),
+        .executable(name: "lowtalker-inputmethod", targets: ["lowtalker-inputmethod"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
@@ -107,6 +109,14 @@ let package = Package(
         // [LAW:decomposition]
         .target(name: "Dictation", dependencies: ["LowTalkerCore", "Typing", "KeyboardLayout"]),
         .testTarget(name: "DictationTests", dependencies: ["Dictation", "LowTalkerCore", "Typing", "KeyboardLayout", "Keystrokes", "Pointing", "TestProbes"]),
+        // What the input method process answers with, kept out of the process itself so the
+        // suite compiles and exercises it: an Xcode-only target would be invisible to
+        // `make test` the way App/LowTalker's sources are.
+        .target(name: "InputMethod", dependencies: ["Flavors"]),
+        .testTarget(name: "InputMethodTests", dependencies: ["InputMethod", "Flavors"]),
+        // The process macOS launches out of the input method bundle. It holds the effects -
+        // reading the bundle, opening the port, running the loop - and nothing else.
+        .executableTarget(name: "lowtalker-inputmethod", dependencies: ["InputMethod", "Flavors"]),
         // The root daemon that owns the devices. It links VirtualKeyboard, both vocabularies,
         // the seam and the signal watch, DriverExtension for the identity the keyboard files
         // its Keyboard Setup Assistant answer under, and deliberately not KeyboardLayout:

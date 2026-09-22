@@ -59,9 +59,29 @@ private let repository = URL(fileURLWithPath: #filePath)
         )
         #expect(mine["displayName"] == flavor.displayName)
         #expect(mine["launchdLabel"] == flavor.launchdLabel)
-        #expect(mine["inputMethodBundleIdentifier"] == flavor.inputMethodBundleIdentifier)
+    }
+
+    /// The input method bundle each app carries is built under its own flavor's names.
+    ///
+    /// They sit on this target and not on the app's, so the app carries only the name of
+    /// the target it embeds; a block is found here by the identifier it builds, which is
+    /// the same way the app's is found above.
+    @Test(arguments: Flavor.allCases)
+    func theProjectBuildsAnInputMethodUnderEveryFlavorsOwnNames(flavor: Flavor) throws {
+        let installations = try Self.installations()
+        let mine = try #require(
+            installations.first { $0["inputMethodBundleIdentifier"] == flavor.inputMethodBundleIdentifier },
+            "project.yml builds no input method under \(flavor.inputMethodBundleIdentifier); it builds \(installations)"
+        )
+        #expect(mine["displayName"] == flavor.displayName)
         #expect(mine["inputSourceIdentifier"] == flavor.inputSourceIdentifier)
         #expect(mine["inputMethodConnectionName"] == flavor.inputMethodConnectionName)
+        // The app must carry THIS target and not the other flavor's, which is the one way
+        // a correct pair of input method targets still ships one installation the other's.
+        let app = try #require(installations.first { $0["bundleIdentifier"] == flavor.bundleIdentifier })
+        let carried = try #require(app["inputMethodTarget"], "\(flavor)'s app carries no input method target")
+        #expect(installations.contains { $0["inputMethodBundleIdentifier"] == flavor.inputMethodBundleIdentifier },
+                "\(flavor)'s app carries \(carried), which builds no input method under \(flavor.inputMethodBundleIdentifier)")
     }
 
     /// Every block belongs to one flavor and builds under a name that flavor owns, and
@@ -94,6 +114,32 @@ private let repository = URL(fileURLWithPath: #filePath)
         for flavor in Flavor.allCases {
             #expect(appsPerFlavor[flavor, default: 0] == 1,
                     "\(flavor)'s app bundle is built by \(appsPerFlavor[flavor, default: 0]) targets rather than by one")
+        }
+    }
+
+    /// Every KIND of target is built once per flavor - not just the app.
+    ///
+    /// The count beside this one is of app blocks alone, which was right while an app was
+    /// the only bundle a flavor had. Now that the input method is a target of its own, that
+    /// count passes a project.yml carrying a release input method and no development one:
+    /// the development installation would build, install and run with no input source at
+    /// all, and nothing in the suite would say so. [LAW:no-silent-failure]
+    ///
+    /// A block's kind is the set of names it SETS, not which template it names: two blocks
+    /// setting the same attributes are the same kind of thing said twice, which is exactly
+    /// what "one per flavor" is about. [LAW:behavior-not-structure]
+    @Test func everyKindOfTargetIsBuiltOncePerFlavor() throws {
+        var flavorsByKind: [Set<String>: [Flavor]] = [:]
+        for block in try Self.installations() {
+            let values = Set(block.values)
+            let owners = Flavor.allCases.filter { !Self.names(of: $0).isDisjoint(with: values) }
+            guard owners.count == 1, let owner = owners.first else { continue }
+            flavorsByKind[Set(block.keys), default: []].append(owner)
+        }
+        #expect(!flavorsByKind.isEmpty, "project.yml sets no templateAttributes at all")
+        for (kind, flavors) in flavorsByKind {
+            #expect(Set(flavors) == Set(Flavor.allCases) && flavors.count == Flavor.allCases.count,
+                    "the targets setting \(kind.sorted()) are built for \(flavors) rather than once for each flavor")
         }
     }
 

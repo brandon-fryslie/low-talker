@@ -102,13 +102,31 @@ struct FlavorTests {
     /// on somebody's Mac. Changing one is not a rename: it orphans what an installed copy
     /// already registered, and that copy is not here to be recompiled. So the test exists
     /// to make that change loud rather than to describe the code.
+    ///
+    /// The `.inputmethod` segment is followed by `.dictation` and not left at the end, and
+    /// that is the load-bearing part: measured on macOS Tahoe, a bundle whose identifier
+    /// ENDS in `.inputmethod` registers nothing at all while `TISRegisterInputSource` still
+    /// answers noErr. [LAW:no-silent-failure] A "tidy-up" that dropped the leaf would be
+    /// silently uninstallable, which is exactly what pinning is for.
     @Test func theseAreTheExactNamesMacOSFiles() {
-        #expect(Flavor.release.inputMethodBundleIdentifier == "ai.promptctl.low-talker.inputmethod")
-        #expect(Flavor.release.inputSourceIdentifier == "ai.promptctl.low-talker.inputmethod.dictation")
-        #expect(Flavor.release.inputMethodConnectionName == "ai.promptctl.low-talker.inputmethod_Connection")
-        #expect(Flavor.development.inputMethodBundleIdentifier == "ai.promptctl.low-talker.dev.inputmethod")
-        #expect(Flavor.development.inputSourceIdentifier == "ai.promptctl.low-talker.dev.inputmethod.dictation")
-        #expect(Flavor.development.inputMethodConnectionName == "ai.promptctl.low-talker.dev.inputmethod_Connection")
+        #expect(Flavor.release.inputMethodBundleIdentifier == "ai.promptctl.low-talker.inputmethod.dictation")
+        #expect(Flavor.release.inputSourceIdentifier == "ai.promptctl.low-talker.inputmethod.dictation.text")
+        #expect(Flavor.release.inputMethodConnectionName == "ai.promptctl.low-talker.inputmethod.dictation_Connection")
+        #expect(Flavor.development.inputMethodBundleIdentifier == "ai.promptctl.low-talker.dev.inputmethod.dictation")
+        #expect(Flavor.development.inputSourceIdentifier == "ai.promptctl.low-talker.dev.inputmethod.dictation.text")
+        #expect(Flavor.development.inputMethodConnectionName == "ai.promptctl.low-talker.dev.inputmethod.dictation_Connection")
+    }
+
+    /// The rule the names above exist to satisfy, stated as a property rather than as four
+    /// more literals: macOS takes an input method only if `inputmethod` is a dot-delimited
+    /// segment of its bundle identifier AND something follows it.
+    @Test(arguments: Flavor.allCases)
+    func theInputMethodSegmentIsNeverTheLastOne(flavor: Flavor) {
+        let segments = flavor.inputMethodBundleIdentifier.split(separator: ".").map(String.init)
+        let at = segments.firstIndex(of: "inputmethod")
+        #expect(at != nil, "\(flavor)'s input method identifier carries no `inputmethod` segment: \(flavor.inputMethodBundleIdentifier)")
+        #expect(at.map { $0 < segments.count - 1 } == true,
+                "\(flavor)'s `inputmethod` segment is the last one, which macOS refuses: \(flavor.inputMethodBundleIdentifier)")
     }
 
     /// [LAW:parse-dont-validate] What the app reads off its own bundle comes back as the

@@ -93,6 +93,15 @@ targetTemplates:
         copy:
           destination: wrapper
           subpath: Contents/MacOS
+      # The input method bundle, carried the way the helper is so a copy of the app has
+      # everything it delivers with. Unlike the helper, it is a bundle of its own with its
+      # own identifier, so there is one target per flavor rather than one tool embedded
+      # twice: macOS keys a registered input source by that identifier.
+      - target: ${inputMethodTarget}
+        embed: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Library/InputMethods
     # Every entitlement here is named with the failure that required it, read off a
     # Hardened Runtime build rather than guessed; one nobody can name is removed.
     # xcodegen writes the plist from these properties on every generate, so the file
@@ -171,11 +180,87 @@ targetTemplates:
         # when the pin does; scripts/virtual-hid-driver checks the bytes against the pin.
         DRIVER_PACKAGE_RESOURCE: Karabiner-DriverKit-VirtualHIDDevice.pkg
 
+  # [LAW:one-type-per-behavior] One input method, built once per installation. What
+  # separates the two copies is what separates the apps - the names macOS files them under
+  # - so this is one template with two sets of attributes, and every name in it is
+  # `Flavor`'s.
+  #
+  # The `.inputmethod` segment in the identifier is not decoration and its position is not
+  # free: measured on macOS Tahoe, a bundle whose identifier ENDS in `.inputmethod`, or
+  # carries no such segment, registers nothing at all, while `…inputmethod.dictation` is
+  # taken - and `TISRegisterInputSource` answers noErr either way. `Flavor` is where that
+  # rule is written down; this file only spends the names it decides.
+  InputMethod:
+    type: application
+    platform: macOS
+    sources:
+      - Sources/lowtalker-inputmethod
+    dependencies:
+      - package: low-talker
+        product: InputMethod
+      - package: low-talker
+        product: Flavors
+    # macOS resolves `InputMethodServerControllerClass` through the Objective-C runtime at
+    # launch, so this string and the class's `@objc` name are one fact in two places;
+    # `InputMethodPlistTests` holds them equal.
+    info:
+      path: App/Generated/${displayName}-InputMethod-Info.plist
+      properties:
+        LSUIElement: true
+        NSPrincipalClass: NSApplication
+        NSSupportsSuddenTermination: true
+        InputMethodConnectionName: ${inputMethodConnectionName}
+        InputMethodServerControllerClass: DictationInputController
+        TISIntendedLanguage: en
+        ComponentInputModeDict:
+          tsInputModeListKey:
+            ${inputSourceIdentifier}:
+              TISInputSourceID: ${inputSourceIdentifier}
+              tsInputModeDefaultStateKey: true
+              tsInputModeIsVisibleKey: true
+              tsInputModePrimaryInScriptKey: true
+              tsInputModeScriptKey: smUnicodeScript
+          # Mode keys, not source identifiers - the two are the same string here, and a
+          # wrong one is a source that silently never appears in the Input menu.
+          # [LAW:no-silent-failure]
+          tsVisibleInputModeOrderedArrayKey:
+            - ${inputSourceIdentifier}
+    settings:
+      base:
+        # The bundle and the process are named for what they are, so a person reading
+        # Activity Monitor or a log line can tell this apart from the app carrying it.
+        # `CFBundleName` follows PRODUCT_NAME - Xcode synthesises it and its value beats
+        # anything the plist file says, measured - and that is left alone: what a person
+        # reads in the Input Sources list is the LOCALIZED name, which the script below
+        # writes from `Flavor.displayName`, and which macOS prefers over this.
+        PRODUCT_NAME: ${displayName} Input Method
+        PRODUCT_BUNDLE_IDENTIFIER: ${inputMethodBundleIdentifier}
+        GENERATE_INFOPLIST_FILE: true
+        # Read by the script below, which is the only way this bundle's one localized
+        # string can be written from the same names the plist above uses.
+        INPUT_SOURCE_ID: ${inputSourceIdentifier}
+        INPUT_METHOD_NAME: ${displayName}
+    # The name a person reads in the Input Sources list and the Input menu. macOS takes it
+    # from the bundle's localized strings, keyed by the source identifier, and NOT from
+    # `CFBundleName` alone: measured, a bundle without this file shows the raw identifier
+    # for the mode. Written here rather than checked in so no input method name is spelled
+    # anywhere but `Flavor` and this file. [LAW:one-source-of-truth]
+    postBuildScripts:
+      - name: The name the Input Sources list shows
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          strings="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/en.lproj/InfoPlist.strings"
+          mkdir -p "$(dirname "${strings}")"
+          printf '"CFBundleName" = "%s";\n"%s" = "%s";\n' \
+            "${INPUT_METHOD_NAME}" "${INPUT_SOURCE_ID}" "${INPUT_METHOD_NAME}" > "${strings}"
+
 targets:
-  # The three inputMethod* names are the text input system's namespaces, one set per
-  # installation, and they are `Flavor`'s: `ProjectFlavorTests` holds these copies to it.
-  # Nothing substitutes them yet - the bundle that carries them is low-input-method-s71.0ae's
-  # target - and they are written here now so that ticket cannot spell them by hand.
+  # Every name below is `Flavor`'s, written again because xcodegen cannot read Swift, and
+  # `ProjectFlavorTests` is what holds these copies to it. The input method's names sit on
+  # its own target rather than on the app's: the app needs only the name of the target it
+  # carries, and a name written in both places is one that can come to disagree.
+  # [LAW:one-source-of-truth]
   LowTalker:
     templates: [Installation]
     templateAttributes:
@@ -183,9 +268,7 @@ targets:
       bundleIdentifier: ai.promptctl.low-talker
       serviceKey: "@"
       launchdLabel: ai.promptctl.low-talker.keyboardd
-      inputMethodBundleIdentifier: ai.promptctl.low-talker.inputmethod
-      inputSourceIdentifier: ai.promptctl.low-talker.inputmethod.dictation
-      inputMethodConnectionName: ai.promptctl.low-talker.inputmethod_Connection
+      inputMethodTarget: LowTalkerInputMethod
 
   # The copy built from the working tree, installed and running beside the one above.
   LowTalkerDev:
@@ -195,9 +278,24 @@ targets:
       bundleIdentifier: ai.promptctl.low-talker.dev
       serviceKey: "!"
       launchdLabel: ai.promptctl.low-talker.keyboardd.dev
-      inputMethodBundleIdentifier: ai.promptctl.low-talker.dev.inputmethod
-      inputSourceIdentifier: ai.promptctl.low-talker.dev.inputmethod.dictation
-      inputMethodConnectionName: ai.promptctl.low-talker.dev.inputmethod_Connection
+      inputMethodTarget: LowTalkerDevInputMethod
+
+  # The input method each app above carries, one bundle per installation.
+  LowTalkerInputMethod:
+    templates: [InputMethod]
+    templateAttributes:
+      displayName: LowTalker
+      inputMethodBundleIdentifier: ai.promptctl.low-talker.inputmethod.dictation
+      inputSourceIdentifier: ai.promptctl.low-talker.inputmethod.dictation.text
+      inputMethodConnectionName: ai.promptctl.low-talker.inputmethod.dictation_Connection
+
+  LowTalkerDevInputMethod:
+    templates: [InputMethod]
+    templateAttributes:
+      displayName: LowTalker Dev
+      inputMethodBundleIdentifier: ai.promptctl.low-talker.dev.inputmethod.dictation
+      inputSourceIdentifier: ai.promptctl.low-talker.dev.inputmethod.dictation.text
+      inputMethodConnectionName: ai.promptctl.low-talker.dev.inputmethod.dictation_Connection
 
   # The root keyboard helper, built here from the same sources Package.swift builds it
   # from, because an Xcode app can embed an Xcode tool and cannot embed a package's
