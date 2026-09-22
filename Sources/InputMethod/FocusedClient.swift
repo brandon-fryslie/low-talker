@@ -131,7 +131,11 @@ final class Client: TextCursor {
     /// makes `activateServer` able to keep the cursor it last reported: a cursor that exists
     /// is one `FocusedClient` will take.
     init?(_ client: IMKTextInput) {
-        guard let application = client.bundleIdentifier() else { return nil }
+        // Empty counts as unnamed: an app the answer names as "" would be printed by the
+        // caller as a line ending in nothing at all, which is worse than a line naming no
+        // app - and a cursor whose app cannot be compared against the one in front could
+        // never be refused for being somewhere else. [LAW:parse-dont-validate]
+        guard let application = client.bundleIdentifier(), !application.isEmpty else { return nil }
         self.client = client
         self.application = application
     }

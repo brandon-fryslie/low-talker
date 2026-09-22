@@ -511,7 +511,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             lastDictation = session.performed.compactMap {
                 switch $0.what {
                 case .copied(let text), .refused(_, let text): text
-                default: nil
+                // Named rather than defaulted, so an outcome added later that also leaves
+                // words on the clipboard cannot compile past this and silently never reach
+                // the icon or the Service. [LAW:no-silent-failure]
+                case .typed, .pressed, .clicked, .scrolled, .inserted: nil
                 }
             }.last
         case .failure(let error):
