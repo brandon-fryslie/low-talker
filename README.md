@@ -20,7 +20,7 @@ You need Xcode 16 or later plus `xcodegen` and `jq`, both from Homebrew.
 - `make install` builds the release copy and puts it in `/Applications`, which is where it is launched from at login and so the path its approvals are recorded against. The development copy is deliberately not installed: it runs from `DerivedData/`, and it is not a login item.
 - `make cli` builds the command-line tool into `.build/debug/lowtalker` and signs it; "Trying the engine" below uses it.
 - `make helper` builds the root keyboard helper into `.build/debug/lowtalker-keyboardd` and signs it; "The keyboard helper" below says what it is.
-- `make test` runs `swift build`, then `make check-docs`, `scripts/virtual-hid-driver-test`, `swift test`, and finally `make cli helper`. The build comes first because everything after it needs the CLI; the signing comes last because every link ad-hoc signs the product and drops the dev identity the helper admits callers by.
+- `make test` runs `xcodegen generate` and `swift build`, then `make check-docs`, `scripts/virtual-hid-driver-test`, `swift test`, and finally `make cli helper`. Generating comes first because the suite reads the project and the plists XcodeGen writes rather than generating them itself, so a bare `swift test` on a fresh clone fails those cases; the build comes next because everything after it needs the CLI; the signing comes last because every link ad-hoc signs the product and drops the dev identity the helper admits callers by.
 - `make clean` removes the generated project, `DerivedData/`, and `.build/`.
 
 CI runs `make signing-identity`, `make test`, and `make app` on a macos-15 runner for every pull request to master and every push to master; the workflow is `.github/workflows/ci.yml`.

@@ -90,21 +90,20 @@ private let repository = URL(fileURLWithPath: #filePath)
         #expect(mine.sets["launchdLabel"] == flavor.launchdLabel)
     }
 
-    /// The input method bundle each app carries is built under its own flavor's names.
+    /// Each app carries the target that builds its own flavor's input method.
     ///
-    /// They sit on this target and not on the app's, so the app carries only the name of
-    /// the target it embeds; a block is found here by the identifier it builds, which is
-    /// the same way the app's is found above.
+    /// What those names ARE is read where xcodegen resolves them - the identifier and the
+    /// localized name by `InputMethodBuildSettingsTests`, the connection name and the mode
+    /// by `InputMethodPlistTests` - and a wrong attribute here cannot resolve right there.
+    /// [LAW:single-enforcer] What only project.yml can answer is which target each app
+    /// embeds, so that is what is left here.
     @Test(arguments: Flavor.allCases)
-    func theProjectBuildsAnInputMethodUnderEveryFlavorsOwnNames(flavor: Flavor) throws {
+    func eachAppCarriesItsOwnFlavorsInputMethod(flavor: Flavor) throws {
         let installations = try Self.installations()
         let mine = try #require(
             installations.first { $0.sets["inputMethodBundleIdentifier"] == flavor.inputMethodBundleIdentifier },
             "project.yml builds no input method under \(flavor.inputMethodBundleIdentifier); it builds \(installations)"
         )
-        #expect(mine.sets["displayName"] == flavor.displayName)
-        #expect(mine.sets["inputSourceIdentifier"] == flavor.inputSourceIdentifier)
-        #expect(mine.sets["inputMethodConnectionName"] == flavor.inputMethodConnectionName)
         // The app must carry THIS target and not the other flavor's. Compared by target name,
         // because that is what the app actually names and the only thing that can be wrong
         // independently of everything else here: swap the two `inputMethodTarget:` values and

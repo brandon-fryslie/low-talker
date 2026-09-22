@@ -38,9 +38,9 @@ private let repository = URL(fileURLWithPath: #filePath)
     @Test(arguments: Flavor.allCases)
     func theBundleIsNamedByItsFlavor(flavor: Flavor) throws {
         let plist = try Self.plist(for: flavor)
-        // Xcode substitutes the identifier from PRODUCT_BUNDLE_IDENTIFIER, which
-        // `ProjectFlavorTests` holds to `Flavor`; what this file decides is the rest.
-        #expect(plist["CFBundleIdentifier"] as? String == "$(PRODUCT_BUNDLE_IDENTIFIER)")
+        // The identifier is absent here on purpose: this key holds the literal
+        // `$(PRODUCT_BUNDLE_IDENTIFIER)`, and the value Xcode substitutes for it is read
+        // where it resolves, by `InputMethodBuildSettingsTests`. [LAW:single-enforcer]
         #expect(plist["InputMethodConnectionName"] as? String == flavor.inputMethodConnectionName)
 
         let modes = try #require(plist["ComponentInputModeDict"] as? [String: Any])
