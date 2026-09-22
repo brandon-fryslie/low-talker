@@ -51,7 +51,7 @@ import Testing
     /// low-input-method-s71.b26 puts on the clipboard instead.
     @Test func nothingInFrontIsRefusedByName() {
         #expect(FocusedClient().insert("hello", whileInFrontIs: Self.inFront) == .refused(.noClientHasFocus))
-        #expect(FocusedClient().hasFocus == false)
+        #expect(FocusedClient().hasCursor == false)
     }
 
     /// A cursor does not outlive the app it belongs to. Without this the person could
@@ -64,7 +64,7 @@ import Testing
         client.took(cursor)
         client.applicationQuit("com.apple.TextEdit")
 
-        #expect(client.hasFocus == false)
+        #expect(client.hasCursor == false)
         #expect(client.insert("hello", whileInFrontIs: "com.apple.TextEdit") == .refused(.noClientHasFocus))
         #expect(cursor.committed.isEmpty)
     }
@@ -76,7 +76,7 @@ import Testing
         client.took(cursor)
         client.applicationQuit("com.apple.Safari")
 
-        #expect(client.hasFocus)
+        #expect(client.hasCursor)
         #expect(client.insert("hello", whileInFrontIs: Self.inFront) == .inserted(characters: 5))
     }
 
@@ -86,7 +86,7 @@ import Testing
         client.took(cursor)
         client.left(cursor)
 
-        #expect(client.hasFocus == false)
+        #expect(client.hasCursor == false)
         #expect(client.insert("hello", whileInFrontIs: Self.inFront) == .refused(.noClientHasFocus))
         #expect(cursor.committed.isEmpty)
     }
@@ -117,7 +117,7 @@ import Testing
         client.took(new)
         client.left(old)
 
-        #expect(client.hasFocus)
+        #expect(client.hasCursor)
         #expect(client.insert("hello", whileInFrontIs: Self.inFront) == .inserted(characters: 5))
         #expect(new.committed == ["hello"])
         #expect(old.committed.isEmpty)

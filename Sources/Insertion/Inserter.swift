@@ -36,6 +36,12 @@ public extension Inserter {
     /// it names is the protocol's own. An async caller writing `try await insert(text)` gets
     /// this; there is no spelling of the call that is both awaited and blocking.
     /// [LAW:no-ambient-temporal-coupling]
+    ///
+    /// **Not cancellable**, deliberately. A round trip already on the wire is a commit that
+    /// may already have happened, so resuming a cancelled caller early would tell it the
+    /// words did not land when they may have - the one conflation this module exists to
+    /// prevent. What bounds the wait is the timeout, which is also the bound the answer
+    /// names. [LAW:no-silent-failure]
     func insert(_ text: String) async throws -> InsertionAnswer {
         try await withCheckedThrowingContinuation { continuation in
             Thread { continuation.resume(with: Result { try insert(text) }) }.start()

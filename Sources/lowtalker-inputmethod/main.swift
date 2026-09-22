@@ -68,10 +68,13 @@ let server: IMKServer = {
 /// [LAW:no-ambient-temporal-coupling] `assumeIsolated` is that sentence made checkable: if
 /// this ever answered anywhere else it would stop here rather than corrupt a client.
 ///
-/// An input method that cannot open this port still types nothing, so it ends the same way
-/// a missing server does rather than running on as a source that answers no insert.
+/// A door that will not open is not the end of this process, unlike the server above it.
+/// The controller's whole promise is that every key passes through untouched, so a person
+/// with this source selected keeps a working keyboard even when nothing here can insert -
+/// and what is lost is said twice rather than guessed at: a fault in the log here, and on
+/// the app's side the named `nothingIsListening`, which is exactly what it means.
 /// [LAW:no-silent-failure]
-let insertions: InsertionPort = {
+let insertions: InsertionPort? = {
     do {
         return try InsertionPort(flavor: flavor) { text in
             MainActor.assumeIsolated {
@@ -91,8 +94,12 @@ let insertions: InsertionPort = {
             }
         }
     } catch {
-        logger.fault("will not start: \(String(describing: error), privacy: .public)")
-        exit(1)
+        logger.fault("""
+            no insert port on \(flavor.inputMethodPortName, privacy: .public): \
+            \(String(describing: error), privacy: .public); \
+            keys still pass through, and the app's inserts will be told nothing is listening
+            """)
+        return nil
     }
 }()
 
@@ -106,8 +113,12 @@ let quits = NSWorkspace.shared.notificationCenter.addObserver(
     MainActor.assumeIsolated { quit.map(FocusedClient.shared.applicationQuit) }
 }
 
+// What this process opened, rather than what it set out to open: the startup line is where
+// a reader looks first, and one that named the insert port whether or not it exists would
+// send them looking for a fault that is already in the log above. [LAW:no-silent-failure]
+let inserts = insertions.map { _ in "answering inserts on \(flavor.inputMethodPortName)" } ?? "answering no inserts"
 logger.notice("""
-    \(flavor.description, privacy: .public) serving \(flavor.inputMethodConnectionName, privacy: .public) \
-    and answering inserts on \(flavor.inputMethodPortName, privacy: .public)
+    \(flavor.description, privacy: .public) serving \(flavor.inputMethodConnectionName, privacy: .public), \
+    \(inserts, privacy: .public)
     """)
 NSApplication.shared.run()

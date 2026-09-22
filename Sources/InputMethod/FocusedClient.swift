@@ -45,9 +45,14 @@ public final class FocusedClient {
     /// The cursor in front, which carries the app it belongs to.
     private var focus: (any TextCursor)?
 
-    /// Whether this process currently has somewhere to put words. What
-    /// low-input-method-s71.48t's readiness row will read.
-    public var hasFocus: Bool { focus != nil }
+    /// Whether the text input system has given this process a cursor at all.
+    ///
+    /// Not the same question as whether an insert would land: a cursor whose app the
+    /// person has switched away from is still a cursor, and `insert` refuses it by name.
+    /// Named for what it reports rather than for what low-input-method-s71.48t's readiness
+    /// row wants, which has to compare the app in front as well and is that ticket's to
+    /// assemble from this and the workspace. [FRAMING:representation]
+    public var hasCursor: Bool { focus != nil }
 
     /// The text input system gave this cursor focus.
     ///
