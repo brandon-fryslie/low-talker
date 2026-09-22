@@ -13,6 +13,14 @@ public protocol Inserter: Sendable {
     ///
     /// Throws `Unreachable` only when the question could not be carried at all. A refusal
     /// is an answer and comes back as one.
+    ///
+    /// **Blocking, and not to be called on the main actor or from a task.** The one that
+    /// crosses to the input method runs a run loop while it waits, so on the main thread it
+    /// would pump that thread's timers, URL session callbacks and UI events re-entrantly for
+    /// the whole timeout, and on a task it would hold a cooperative thread for the same.
+    /// Said here rather than at the one implementation because this is the seam
+    /// low-input-method-s71.b26's executor consumes, and the obligation belongs to whatever
+    /// satisfies it. [LAW:no-ambient-temporal-coupling]
     func insert(_ text: String) throws -> InsertionAnswer
 }
 
@@ -20,7 +28,9 @@ public protocol Inserter: Sendable {
 ///
 /// Synchronous, with the wait bounded by the transport's own timeouts rather than by a
 /// deadline this type keeps. `CFMessagePortSendRequest` is a send and a receive with a
-/// timeout each, so the bound is where the waiting actually happens.
+/// timeout each, and it is handed HALF of `timeout` for each: the two phases share the
+/// budget, so the call returns within `timeout` rather than within twice it, and the error
+/// for a phase names that phase's own bound rather than a number nobody waited.
 /// [LAW:no-ambient-temporal-coupling]
 ///
 /// Nothing is retried. An input method that did not answer is one whose state nobody here
@@ -51,15 +61,24 @@ public struct InputMethodInserter: Inserter {
             throw Unreachable.nothingIsListening(port: portName)
         }
         var reply: Unmanaged<CFData>?
-        let seconds = timeout.seconds
+        let phase = timeout / 2
         let status = CFMessagePortSendRequest(
-            port, 0, Wire.request(text) as CFData, seconds, seconds,
+            port, 0, Wire.request(text) as CFData, phase.seconds, phase.seconds,
             CFRunLoopMode.defaultMode.rawValue, &reply
         )
-        guard status == kCFMessagePortSuccess else {
-            throw status == kCFMessagePortReceiveTimeout || status == kCFMessagePortSendTimeout
-                ? Unreachable.answerDidNotArrive(port: portName, after: timeout)
-                : Unreachable.sendFailed(port: portName, status: status)
+        switch status {
+        case kCFMessagePortSuccess:
+            break
+        case kCFMessagePortSendTimeout:
+            throw Unreachable.requestWasNotTaken(port: portName, after: phase)
+        case kCFMessagePortReceiveTimeout:
+            throw Unreachable.answerDidNotArrive(port: portName, after: phase)
+        // The far end went away between resolving the name and sending to it, which is the
+        // same fact as never having found it and is said the same way.
+        case kCFMessagePortIsInvalid:
+            throw Unreachable.nothingIsListening(port: portName)
+        default:
+            throw Unreachable.sendFailed(port: portName, status: status)
         }
         let data = reply.map { $0.takeRetainedValue() as Data } ?? Data()
         guard let answer = Wire.answer(of: data) else {

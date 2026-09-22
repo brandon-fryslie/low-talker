@@ -13,6 +13,7 @@ import Testing
         InsertionAnswer.inserted(characters: 0),
         .inserted(characters: 12),
         .refused(.noClientHasFocus),
+        .refused(.cursorIsInAnotherApp),
         .refused(.requestWasNotText),
     ])
     func everyAnswerSurvivesTheCrossing(answer: InsertionAnswer) {
@@ -80,21 +81,25 @@ import Testing
         #expect(Wire.answer(of: data) == .refused(.requestWasNotText))
     }
 
-    /// One name is one port, so a second `InsertionPort` here is not a second listener.
+    /// A second port on one name is refused rather than built onto nothing.
     ///
-    /// Measured 2026-09-22, because the documented "returns NULL if the name is taken" is
-    /// only half the story: within ONE process `CFMessagePortCreateLocal` is get-or-create
-    /// and hands back the identical object. It refuses across processes, which is the case
-    /// `NameIsTaken` exists for and the one no in-process test can stage.
-    ///
-    /// Held here because the design rests on it: the input method makes exactly one port,
-    /// and if a second ever appeared it would share this one's lifetime, not compete with
-    /// it - invalidating either would close the door for both. [LAW:one-source-of-truth]
-    @Test func oneNameIsOnePort() throws {
+    /// The documented "returns NULL if the name is taken" is only half the story, measured
+    /// 2026-09-22: within ONE process `CFMessagePortCreateLocal` is get-or-create, hands
+    /// back the identical object, and that object carries the FIRST creator's callback
+    /// context. So the second `InsertionPort` would construct without complaint while its
+    /// `answer` could never once be called - a door reporting itself open onto nothing.
+    /// [LAW:no-silent-failure]
+    @Test func aSecondPortOnOneNameIsRefused() throws {
         let name = aPortNobodyElseUses()
         let first = try InsertionPort(portName: name) { .inserted(characters: $0.count) }
-        let second = try InsertionPort(portName: name) { _ in .refused(.noClientHasFocus) }
-        #expect(first.hosts(second))
+
+        #expect(throws: InsertionPort.NameIsTaken.self) {
+            _ = try InsertionPort(portName: name) { _ in .refused(.noClientHasFocus) }
+        }
+        // The first is still the one answering, and answering with its own closure.
+        #expect(try InputMethodInserter(portName: name, timeout: .seconds(5)).insert("hello")
+            == .inserted(characters: 5))
+        withExtendedLifetime(first) {}
     }
 }
 
@@ -113,13 +118,15 @@ import Testing
     @Test func anAnswerThatDoesNotArriveIsSaidByName() throws {
         let name = aPortNobodyElseUses()
         let port = try PortOnItsOwnThread.insertion(name: name) { text in
-            Thread.sleep(forTimeInterval: 2)
+            Thread.sleep(forTimeInterval: 1)
             return .inserted(characters: text.count)
         }
         defer { port.stop() }
 
-        let timeout = Duration.milliseconds(200)
-        #expect(throws: Unreachable.answerDidNotArrive(port: name, after: timeout)) {
+        // Halved, because the two phases of the round trip share the caller's budget and
+        // the error names the phase's own bound rather than a number nobody waited.
+        let timeout = Duration.milliseconds(400)
+        #expect(throws: Unreachable.answerDidNotArrive(port: name, after: timeout / 2)) {
             try InputMethodInserter(portName: name, timeout: timeout).insert("hello")
         }
     }

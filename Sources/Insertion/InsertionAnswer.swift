@@ -43,12 +43,16 @@ public enum Refusal: String, Codable, Equatable, Sendable, CustomStringConvertib
 
 /// The transport failing to carry the question, which is never an answer.
 ///
-/// Named cases and not a reason string: each one is a different thing to do about it - a
-/// missing input method is not installed or not selected, a timeout is a live input method
-/// that did not finish, and an unreadable answer is a version skew between the two halves.
-/// [LAW:no-silent-failure] Nothing here is retried and nothing is guessed.
+/// Named cases and not a reason string, and in particular **the two timeouts are two
+/// cases**: a request that was never taken is words that certainly did not land, and an
+/// answer that never came back is words that may well have. Those are opposite facts, and
+/// low-input-method-s71.b26 decides whether to put the words on the clipboard by reading
+/// them - one case for both would be the conflation this whole module exists to prevent.
+/// [LAW:types-are-the-program] [LAW:no-silent-failure] Nothing here is retried and nothing
+/// is guessed.
 public enum Unreachable: Error, Equatable, CustomStringConvertible {
     case nothingIsListening(port: String)
+    case requestWasNotTaken(port: String, after: Duration)
     case answerDidNotArrive(port: String, after: Duration)
     case sendFailed(port: String, status: Int32)
     case answerWasNotReadable(port: String, bytes: Int)
@@ -57,8 +61,10 @@ public enum Unreachable: Error, Equatable, CustomStringConvertible {
         switch self {
         case let .nothingIsListening(port):
             "no input method is answering on \(port); it is not installed, or not selected"
+        case let .requestWasNotTaken(port, after):
+            "the input method on \(port) did not take the request within \(after), so the words did not land"
         case let .answerDidNotArrive(port, after):
-            "the input method on \(port) did not answer within \(after)"
+            "the input method on \(port) took the request but did not answer within \(after), so the words may have landed"
         case let .sendFailed(port, status):
             "the request to \(port) was not delivered: CFMessagePort status \(status)"
         case let .answerWasNotReadable(port, bytes):

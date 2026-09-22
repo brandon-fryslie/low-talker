@@ -54,12 +54,55 @@ import Testing
         #expect(FocusedClient().hasFocus == false)
     }
 
-    @Test func focusGoingNowhereIsTheSameAsNoFocus() {
+    /// A cursor that will not name its app is not focus, and does not become it. One
+    /// controller failing to understand its sender must not speak for the others.
+    @Test func aCursorThatNamesNoAppNeverTakesFocus() {
         let client = FocusedClient()
-        client.took(nil)
+        let nameless = Cursor(in: nil)
+        client.took(nameless)
 
         #expect(client.hasFocus == false)
         #expect(client.insert("hello", whileInFrontIs: Self.inFront) == .refused(.noClientHasFocus))
+        #expect(nameless.committed.isEmpty)
+    }
+
+    /// And it does not take focus AWAY from a cursor that has it, which is the half that
+    /// would otherwise refuse an insert with a live cursor sitting right there.
+    @Test func aCursorThatNamesNoAppDoesNotDisturbTheOneInFront() {
+        let client = FocusedClient()
+        let real = Cursor()
+        client.took(real)
+        client.took(Cursor(in: nil))
+
+        #expect(client.hasFocus)
+        #expect(client.insert("hello", whileInFrontIs: Self.inFront) == .inserted(characters: 5))
+        #expect(real.committed == ["hello"])
+    }
+
+    /// A cursor does not outlive the app it belongs to. Without this the person could
+    /// dictate into TextEdit, quit it, launch it again, and have the words answered
+    /// `inserted` into a client whose process no longer exists - the app names would match
+    /// and nothing else would object. [LAW:no-silent-failure]
+    @Test func aCursorDiesWithItsApp() {
+        let client = FocusedClient()
+        let cursor = Cursor(in: "com.apple.TextEdit")
+        client.took(cursor)
+        client.applicationQuit("com.apple.TextEdit")
+
+        #expect(client.hasFocus == false)
+        #expect(client.insert("hello", whileInFrontIs: "com.apple.TextEdit") == .refused(.noClientHasFocus))
+        #expect(cursor.committed.isEmpty)
+    }
+
+    /// Some other app quitting is not this cursor's business.
+    @Test func anotherAppQuittingLeavesTheCursorAlone() {
+        let client = FocusedClient()
+        let cursor = Cursor()
+        client.took(cursor)
+        client.applicationQuit("com.apple.Safari")
+
+        #expect(client.hasFocus)
+        #expect(client.insert("hello", whileInFrontIs: Self.inFront) == .inserted(characters: 5))
     }
 
     @Test func aCursorThatLeavesTakesTheFocusWithIt() {
@@ -84,17 +127,6 @@ import Testing
         client.took(cursor)
 
         #expect(client.insert("hello", whileInFrontIs: "com.apple.finder") == .refused(.cursorIsInAnotherApp))
-        #expect(cursor.committed.isEmpty)
-    }
-
-    /// A cursor that cannot say which app it is in cannot be shown to be the one in front,
-    /// and is refused rather than written into on the chance that it is.
-    @Test func aCursorThatNamesNoAppIsRefused() {
-        let client = FocusedClient()
-        let cursor = Cursor(in: nil)
-        client.took(cursor)
-
-        #expect(client.insert("hello", whileInFrontIs: nil) == .refused(.cursorIsInAnotherApp))
         #expect(cursor.committed.isEmpty)
     }
 

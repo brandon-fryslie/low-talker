@@ -14,7 +14,12 @@ import Foundation
 /// [LAW:no-ambient-temporal-coupling]
 ///
 /// Held for the life of the process by whoever makes it. Released, the port closes and the
-/// app's next request finds nothing listening.
+/// app's next request finds nothing listening - and it must be released **on the thread
+/// that hosted it**, because taking the source back off a run loop is addressed to the run
+/// loop of whoever is asking. Released anywhere else, the source stays on a loop that is
+/// still servicing a port now invalidated underneath it. The input method never releases
+/// it at all; what keeps the obligation honest is that the only other holder, the suite's
+/// `PortOnItsOwnThread`, leaves it to the hosting thread to drop.
 public final class InsertionPort {
     private let port: CFMessagePort
     private let source: CFRunLoopSource
@@ -23,12 +28,12 @@ public final class InsertionPort {
     /// [LAW:no-shared-mutable-globals]
     private let held: Unmanaged<Answering>
 
-    /// No port could be opened under this name, which on a message port means another
-    /// process already answers there - a second copy of this input method, running.
+    /// Someone is already answering on this name: another copy of this input method in
+    /// another process, or another `InsertionPort` in this one.
     public struct NameIsTaken: Error, CustomStringConvertible {
         public let name: String
         public var description: String {
-            "no port could be hosted on \(name); another process is already answering there"
+            "no port could be hosted on \(name); something is already answering there"
         }
     }
 
@@ -56,6 +61,19 @@ public final class InsertionPort {
             held.release()
             throw NameIsTaken(name: portName)
         }
+        // Across processes a taken name comes back as nil, caught above. WITHIN one it does
+        // not: `CFMessagePortCreateLocal` is get-or-create, and the port it hands back
+        // carries the FIRST creator's callback context - measured 2026-09-22, the second
+        // caller's closure is never invoked and its `answer` is dead code that reports
+        // success. A door that opens onto nothing is the failure this file is written
+        // against, so it is refused here rather than discovered by a caller whose inserts
+        // vanish. [LAW:no-silent-failure]
+        var carried = CFMessagePortContext()
+        CFMessagePortGetContext(port, &carried)
+        guard carried.info == held.toOpaque() else {
+            held.release()
+            throw NameIsTaken(name: portName)
+        }
         self.port = port
         self.held = held
         source = CFMessagePortCreateRunLoopSource(nil, port, 0)
@@ -67,14 +85,6 @@ public final class InsertionPort {
         CFMessagePortInvalidate(port)
         held.release()
     }
-
-    /// Whether `other` is this same port under the skin.
-    ///
-    /// Only a test asks. It exists because the answer is surprising and the design rests
-    /// on it: `CFMessagePortCreateLocal` refuses a taken name only across processes, and
-    /// within one it is get-or-create - so two of these in one process are one door with
-    /// two owners, and the first to be released closes it for both.
-    func hosts(_ other: InsertionPort) -> Bool { port === other.port }
 
     /// The closure, as something with an address the C callback can be handed.
     private final class Answering {

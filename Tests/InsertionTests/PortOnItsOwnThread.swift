@@ -21,12 +21,21 @@ final class PortOnItsOwnThread {
         let hosting = Hosting()
         let ready = DispatchSemaphore(value: 0)
         Thread {
-            do { hosting.began(on: CFRunLoopGetCurrent(), holding: try host()) } catch { hosting.failed(error) }
+            let port: AnyObject
+            do {
+                port = try host()
+                hosting.began(on: CFRunLoopGetCurrent())
+            } catch {
+                hosting.failed(error)
+                ready.signal()
+                return
+            }
             ready.signal()
-            // Only when there is something to answer with: a loop with no sources returns
-            // at once, and a thread that fell out of its loop still looks alive.
-            guard hosting.isHosted else { return }
-            CFRunLoopRun()
+            // The port is a local, so the thread that hosted it is the thread that drops
+            // it: `InsertionPort` takes its source back off "the current run loop", which
+            // is only the right one here. Released from the test's thread instead, the
+            // source would stay on a loop servicing an invalidated port.
+            withExtendedLifetime(port) { CFRunLoopRun() }
         }.start()
         ready.wait()
         try hosting.rethrow()
@@ -42,12 +51,11 @@ final class PortOnItsOwnThread {
     private final class Hosting: @unchecked Sendable {
         private let lock = NSLock()
         private var loop: CFRunLoop?
-        private var port: AnyObject?
         private var failure: Error?
 
-        func began(on loop: CFRunLoop, holding port: AnyObject) {
+        func began(on loop: CFRunLoop) {
             lock.lock()
-            (self.loop, self.port) = (loop, port)
+            self.loop = loop
             lock.unlock()
         }
 
@@ -57,22 +65,18 @@ final class PortOnItsOwnThread {
             lock.unlock()
         }
 
-        var isHosted: Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            return port != nil
-        }
-
         func rethrow() throws {
             lock.lock()
             defer { lock.unlock() }
             if let failure { throw failure }
         }
 
+        /// Asks the hosting thread to leave its loop, which it does once it is not inside
+        /// an answer - so a handler still running finishes before its port goes away.
         func stop() {
             lock.lock()
             let loop = self.loop
-            (self.loop, port) = (nil, nil)
+            self.loop = nil
             lock.unlock()
             loop.map(CFRunLoopStop)
         }

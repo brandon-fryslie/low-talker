@@ -78,16 +78,14 @@ let insertions: InsertionPort = {
                 // Read here, where the effects are, and handed to the decision as a value.
                 // [LAW:effects-at-boundaries]
                 let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-                let focused = FocusedClient.shared
-                let answer = focused.insert(text, whileInFrontIs: frontmost)
-                // Both apps by name, because the refusal that matters here is the one where
-                // they differ, and a line naming only the outcome leaves a reader with the
-                // question the line was written to answer.
+                let answer = FocusedClient.shared.insert(text, whileInFrontIs: frontmost)
+                // The app in front is named because the refusal that matters here is the
+                // one where it is not the app holding the cursor, and a line saying only
+                // the outcome leaves a reader with the question it was written to answer.
                 logger.notice("""
                     insert of \(text.count, privacy: .public) characters: \
-                    \(String(describing: answer), privacy: .public); \
-                    the cursor is in \(focused.application ?? "nothing", privacy: .public) \
-                    and \(frontmost ?? "nothing", privacy: .public) is in front
+                    \(String(describing: answer), privacy: .public), \
+                    with \(frontmost ?? "nothing", privacy: .public) in front
                     """)
                 return answer
             }
@@ -97,6 +95,16 @@ let insertions: InsertionPort = {
         exit(1)
     }
 }()
+
+/// A cursor outlives its app unless someone says otherwise, and the text input system does
+/// not always say. This is where the workspace is watched for it. [LAW:effects-at-boundaries]
+/// Held for the life of the process, like everything else opened here.
+let quits = NSWorkspace.shared.notificationCenter.addObserver(
+    forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main
+) { note in
+    let quit = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
+    MainActor.assumeIsolated { quit.map(FocusedClient.shared.applicationQuit) }
+}
 
 logger.notice("""
     \(flavor.description, privacy: .public) serving \(flavor.inputMethodConnectionName, privacy: .public) \

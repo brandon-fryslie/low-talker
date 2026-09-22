@@ -34,27 +34,49 @@ public protocol TextCursor: AnyObject {
 public final class FocusedClient {
     public static let shared = FocusedClient()
 
-    private var cursor: (any TextCursor)?
+    /// The cursor in front and the app it belongs to, which are one fact and so one value.
+    ///
+    /// The app is read once, here, while the client is certainly alive, and never again.
+    /// [FRAMING:representation] Asking a client for its bundle identifier later means
+    /// asking a proxy whose process may since have quit, and on the one path that must
+    /// stay answerable - deciding whether to refuse - that is the last thing to reach for.
+    private var focus: (cursor: any TextCursor, application: String)?
 
     /// Whether this process currently has somewhere to put words. What
     /// low-input-method-s71.48t's readiness row will read.
-    public var hasFocus: Bool { cursor != nil }
+    public var hasFocus: Bool { focus != nil }
 
-    /// The app the cursor in front belongs to, for whoever is writing down what happened.
-    public var application: String? { cursor?.application }
-
-    /// The text input system gave this cursor focus. `nil` is focus going nowhere, which
-    /// the next insert answers by name rather than by guessing. [LAW:no-silent-failure]
-    public func took(_ cursor: (any TextCursor)?) { self.cursor = cursor }
+    /// The text input system gave this cursor focus.
+    ///
+    /// A cursor that will not name its app neither takes focus nor clears it, the same way
+    /// `left` will not clear on anyone's word: this process serves several controllers, and
+    /// one of them failing to understand its own sender is no reason to take the cursor
+    /// away from another that is working. [LAW:no-silent-failure] One assignment, so the
+    /// operation runs every time and only the value differs.
+    /// [LAW:dataflow-not-control-flow]
+    public func took(_ cursor: any TextCursor) {
+        focus = cursor.application.map { (cursor, $0) } ?? focus
+    }
 
     /// The text input system took focus away from this cursor.
     public func left(_ leaving: any TextCursor) {
         // Not unconditional: focus can move by activating the new client before
         // deactivating the old, and clearing on the old one's word would then drop the
         // client that just arrived and refuse the next insert for no reason.
-        // Written as one assignment rather than a guard, so the operation runs every time
-        // and only the value differs. [LAW:dataflow-not-control-flow]
-        cursor = cursor === leaving ? nil : cursor
+        focus = focus?.cursor === leaving ? nil : focus
+    }
+
+    /// An app quit. Any cursor of its is gone with it, whatever the text input system did
+    /// or did not say about it.
+    ///
+    /// The case this closes, which no comparison against the app in front can: the person
+    /// dictates into TextEdit, quits it, and launches it again. TextEdit is in front, its
+    /// new client has not reported focus yet, and the cursor still held is a proxy for a
+    /// process that no longer exists - so the app names match, the commit goes nowhere, and
+    /// the answer claims it landed. Killing the cursor when the app dies is the only moment
+    /// at which that is knowable. [LAW:no-silent-failure]
+    public func applicationQuit(_ application: String) {
+        focus = focus?.application == application ? nil : focus
     }
 
     /// Commits `text` at the cursor in front, replacing nothing, provided the cursor is in
@@ -84,11 +106,9 @@ public final class FocusedClient {
     /// of this decision is testable without a window server and the one reading of the
     /// workspace happens where the other effects are. [LAW:effects-at-boundaries]
     public func insert(_ text: String, whileInFrontIs frontmost: String?) -> InsertionAnswer {
-        guard let cursor else { return .refused(.noClientHasFocus) }
-        guard let application = cursor.application, application == frontmost else {
-            return .refused(.cursorIsInAnotherApp)
-        }
-        cursor.commit(text)
+        guard let focus else { return .refused(.noClientHasFocus) }
+        guard focus.application == frontmost else { return .refused(.cursorIsInAnotherApp) }
+        focus.cursor.commit(text)
         return .inserted(characters: text.count)
     }
 }
