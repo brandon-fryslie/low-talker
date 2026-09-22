@@ -105,6 +105,11 @@ public struct Executor {
             /// The cursor did not get them, so they are on the clipboard instead. Both halves
             /// in one outcome, because why the cursor did not get the words and where they
             /// are now are two facts and neither answers the other.
+            ///
+            /// The app is `into`, which here is the app remembered at key-down and never an
+            /// app the words reached - there is no such app in this case. The line says that
+            /// moment out loud, because a reason like `cursorIsInAnotherApp` is the far end
+            /// talking about what was in front when it looked, which is later.
             case notInserted(NotAtTheCursor, copied: String)
         }
 
@@ -125,7 +130,7 @@ public struct Executor {
             case .scrolled(let at, let vertical, let horizontal): "scrolled vertical \(vertical.rawValue) horizontal \(horizontal.rawValue) at \(at) into \(into.rawValue)"
             case .copied(let text): "copied \(text.count) characters to the clipboard with \(into.rawValue) in front"
             case .inserted(let characters): "inserted \(characters) characters at the cursor in \(into.rawValue)"
-            case .notInserted(let reason, let text): "\(reason), so \(text.count) characters went to the clipboard with \(into.rawValue) in front"
+            case .notInserted(let reason, let text): "\(reason), so \(text.count) characters went to the clipboard with \(into.rawValue) in front at key-down"
             }
             return "\(act), key-up to acknowledged \(Int(acknowledged / .milliseconds(1))) ms"
         }

@@ -35,6 +35,24 @@ import Testing
     @Test func nonsenseIsNotAnAnswer() {
         #expect(Wire.answer(of: Data("nonsense".utf8)) == nil)
     }
+
+    /// An insert that names no app is not an answer either. It reads as well-formed JSON, so
+    /// nothing else would stop it, and a caller renders it as a line ending in nothing at
+    /// all - worse than a line naming no app, which is the standard `Client.init?` sets at
+    /// the far border. Our own input method cannot send one; what can is whatever else holds
+    /// a port name anyone can derive. [LAW:parse-dont-validate]
+    @Test func anInsertThatNamesNoAppIsNotAnAnswer() {
+        let named = InsertionAnswer.inserted(characters: 11, into: "")
+        #expect(Wire.answer(of: Wire.answer(named)) == nil)
+    }
+
+    /// And the check is on the app rather than on the case: an insert that reports no
+    /// characters is a real answer - a zero-length request arrives as an empty request and
+    /// is answered honestly - so nothing here may turn it away.
+    @Test func anInsertOfNothingIntoARealAppStillCrosses() {
+        let nothing = InsertionAnswer.inserted(characters: 0, into: "com.example.editor")
+        #expect(Wire.answer(of: Wire.answer(nothing)) == nothing)
+    }
 }
 
 /// Long enough that the runner's own stall cannot spend it: `DirectoryChangesTests` records

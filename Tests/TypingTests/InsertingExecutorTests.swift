@@ -118,7 +118,7 @@ import Testing
             guard case .notInserted(let said, let copied) = performed[0].what else { Issue.record("not refused"); return }
             #expect(said == .refused(refusal))
             #expect(copied == "héllo there")
-            #expect("\(performed[0])".hasPrefix("\(refusal), so 11 characters went to the clipboard with com.apple.TextEdit in front, key-up to acknowledged "))
+            #expect("\(performed[0])".hasPrefix("\(refusal), so 11 characters went to the clipboard with com.apple.TextEdit in front at key-down, key-up to acknowledged "))
         }
     }
 
@@ -147,7 +147,7 @@ import Testing
             guard case .notInserted(let said, let copied) = performed[0].what else { Issue.record("not reported"); return }
             #expect(said == .noInputMethod(why))
             #expect(copied == "héllo there")
-            #expect("\(performed[0])".hasPrefix("\(why), so 11 characters went to the clipboard with com.apple.TextEdit in front, key-up to acknowledged "))
+            #expect("\(performed[0])".hasPrefix("\(why), so 11 characters went to the clipboard with com.apple.TextEdit in front at key-down, key-up to acknowledged "))
         }
     }
 

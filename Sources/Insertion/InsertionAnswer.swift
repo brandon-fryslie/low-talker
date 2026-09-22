@@ -86,9 +86,17 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
     /// broke on, so the far end may already have put the words in the document.
     public enum MayHaveLanded: Equatable, Sendable, CustomStringConvertible {
         case answerDidNotArrive(port: String, after: Duration)
-        /// A status none of the others names: the invalid-port and transport errors say the
-        /// channel broke without saying whether it broke before or after the far end took
-        /// the request.
+        /// A status none of the others names, which is the arm every unknown status takes.
+        /// Here, and not beside `nothingIsListening`, because a status this end cannot read
+        /// says nothing about which side of the commit the channel broke on, and the only
+        /// safe reading of that silence is that the far end may already hold the words. The
+        /// cost of reading it that way is an utterance neither inserted nor copied whenever
+        /// the status did in fact mean the request never left; the cost of reading it the
+        /// other way is the same sentence in the document twice, which is worse.
+        ///
+        /// The invalid-port status is NOT one of these. It is answered as
+        /// `DidNotLand.nothingIsListening`, because a port that went invalid between being
+        /// resolved and being sent to never took the request.
         case sendFailed(port: String, status: Int32)
         /// Bytes came back that are not an answer, which is what an input method left
         /// running from before an update says: it inserted the words and described it in
@@ -161,7 +169,19 @@ enum Wire {
         try! JSONEncoder().encode(answer)
     }
 
+    /// [LAW:parse-dont-validate] An answer or nothing at all - and an answer naming its app
+    /// with an empty string is nothing at all, because a caller renders that as a line
+    /// ending in nothing, which is worse than a line naming no app.
+    ///
+    /// The far half refuses the same thing at its own border, in `Client.init?`, so our own
+    /// input method cannot send one. This is the near half, where what answers is whatever
+    /// holds a port name anyone can derive from the public bundle id. Two checks of one
+    /// rule, standing at two borders in two processes, and neither is the other's duplicate.
+    /// A far end that answers a plausible but wrong app name is not caught here and cannot
+    /// be: that needs a sender this end can identify, which is low-input-method-s71.6tk.
     static func answer(of data: Data) -> InsertionAnswer? {
-        try? JSONDecoder().decode(InsertionAnswer.self, from: data)
+        guard let answer = try? JSONDecoder().decode(InsertionAnswer.self, from: data) else { return nil }
+        if case .inserted(_, let into) = answer, into.isEmpty { return nil }
+        return answer
     }
 }
