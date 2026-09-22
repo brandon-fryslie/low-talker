@@ -2,6 +2,7 @@ import AppKit
 import Flavors
 import InputMethod
 import InputMethodKit
+import Insertion
 import os
 
 /// The input method process: macOS launches it out of its own bundle, it answers on its
@@ -59,5 +60,69 @@ let server: IMKServer = {
     return server
 }()
 
-logger.notice("\(flavor.description, privacy: .public) serving \(flavor.inputMethodConnectionName, privacy: .public)")
+/// The app's door, beside the text input system's. Held for the life of the process for
+/// the same reason the server is: released, the app's next request finds nothing listening.
+///
+/// Hosted on this thread, which is the main one, so its answers run where `FocusedClient`
+/// and every `IMKInputController` callback already run and the two never race.
+/// [LAW:no-ambient-temporal-coupling] `assumeIsolated` is that sentence made checkable: if
+/// this ever answered anywhere else it would stop here rather than corrupt a client.
+///
+/// A door that will not open is not the end of this process, unlike the server above it.
+/// The controller's whole promise is that every key passes through untouched, so a person
+/// with this source selected keeps a working keyboard even when nothing here can insert.
+///
+/// What that case actually is, said exactly: `InsertionPort` throws only `NameIsTaken`, so
+/// the port failing means another instance of this input method is already answering on
+/// that name. The app's inserts are not lost - they reach that other process, which has its
+/// own cursor and its own view of what is in front - and the fault in the log is the only
+/// place the two copies are distinguishable. [LAW:no-silent-failure]
+let insertions: InsertionPort? = {
+    do {
+        return try InsertionPort(flavor: flavor) { text in
+            MainActor.assumeIsolated {
+                // Read here, where the effects are, and handed to the decision as a value.
+                // [LAW:effects-at-boundaries]
+                let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+                let answer = FocusedClient.shared.insert(text, whileInFrontIs: frontmost)
+                // The app in front is named because the refusal that matters here is the
+                // one where it is not the app holding the cursor, and a line saying only
+                // the outcome leaves a reader with the question it was written to answer.
+                logger.notice("""
+                    insert of \(text.count, privacy: .public) characters: \
+                    \(String(describing: answer), privacy: .public), \
+                    with \(frontmost ?? "nothing", privacy: .public) in front
+                    """)
+                return answer
+            }
+        }
+    } catch {
+        logger.fault("""
+            no insert port on \(flavor.inputMethodPortName, privacy: .public): \
+            \(String(describing: error), privacy: .public); \
+            keys still pass through, and inserts are answered by whichever instance holds \
+            that name, which is not this one
+            """)
+        return nil
+    }
+}()
+
+/// A cursor outlives its app unless someone says otherwise, and the text input system does
+/// not always say. This is where the workspace is watched for it. [LAW:effects-at-boundaries]
+/// Held for the life of the process, like everything else opened here.
+let quits = NSWorkspace.shared.notificationCenter.addObserver(
+    forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main
+) { note in
+    let quit = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
+    MainActor.assumeIsolated { quit.map(FocusedClient.shared.applicationQuit) }
+}
+
+// What this process opened, rather than what it set out to open: the startup line is where
+// a reader looks first, and one that named the insert port whether or not it exists would
+// send them looking for a fault that is already in the log above. [LAW:no-silent-failure]
+let inserts = insertions.map { _ in "answering inserts on \(flavor.inputMethodPortName)" } ?? "answering no inserts"
+logger.notice("""
+    \(flavor.description, privacy: .public) serving \(flavor.inputMethodConnectionName, privacy: .public), \
+    \(inserts, privacy: .public)
+    """)
 NSApplication.shared.run()

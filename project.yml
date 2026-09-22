@@ -205,6 +205,11 @@ targetTemplates:
         product: InputMethod
       - package: low-talker
         product: Flavors
+      # Declared because main.swift imports it, the same reason `Flavors` is here. It
+      # builds without this line today only because Xcode leaves a transitive package
+      # module importable, which is not a promise this target should rest on.
+      - package: low-talker
+        product: Insertion
     # macOS resolves `InputMethodServerControllerClass` through the Objective-C runtime at
     # launch, so this string and the class's `@objc` name are one fact in two places;
     # `InputMethodPlistTests` holds them equal.
