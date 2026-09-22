@@ -1,5 +1,4 @@
 import AppKit
-import Flavors
 import InputMethod
 import Testing
 
