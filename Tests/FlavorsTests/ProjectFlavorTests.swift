@@ -19,23 +19,40 @@ private let repository = URL(fileURLWithPath: #filePath)
 /// [LAW:behavior-not-structure] Driven from `Flavor.allCases`, so a flavor added without a
 /// target fails here rather than at whatever later moment somebody tries to build it.
 @Suite struct ProjectFlavorTests {
-    /// Every `templateAttributes:` block in project.yml, as the names it sets.
+    /// A target in project.yml: the name it is declared under, and the names it sets.
+    private struct Target {
+        let name: String
+        let sets: [String: String]
+    }
+
+    /// Every `templateAttributes:` block in project.yml, as the target it belongs to.
     ///
     /// Read as blocks rather than as lines anywhere in the file, because that is the whole
     /// question: the names that belong to one installation must be set on one target.
     /// A `contains` over the file would pass on a project.yml that gave the release bundle
     /// the development plist.
-    private static func installations() throws -> [[String: String]] {
+    ///
+    /// The target's own name is carried too, and it is not decoration: an app names the
+    /// input method it embeds by TARGET name, so without it nothing can tell whether the
+    /// target an app carries is the one building that flavor's input method. The name is the
+    /// last two-space-indented `<name>:` line before the block - which is where xcodegen
+    /// reads it from as well.
+    private static func installations() throws -> [Target] {
         let yaml = try String(contentsOf: repository.appending(path: "project.yml"), encoding: .utf8)
-        return yaml.components(separatedBy: "templateAttributes:\n").dropFirst().map { block in
-            var names: [String: String] = [:]
+        let chunks = yaml.components(separatedBy: "templateAttributes:\n")
+        return chunks.dropFirst().enumerated().map { preceding, block in
+            var sets: [String: String] = [:]
             for line in block.split(separator: "\n", omittingEmptySubsequences: false) {
                 let name = line.trimmingCharacters(in: .whitespaces)
                 guard line.hasPrefix(" "), let colon = name.firstIndex(of: ":") else { break }
-                names[String(name[name.startIndex..<colon])] =
+                sets[String(name[name.startIndex..<colon])] =
                     String(name[name.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
             }
-            return names
+            let declaration = chunks[preceding].split(separator: "\n", omittingEmptySubsequences: false).last {
+                $0.hasPrefix("  ") && !$0.hasPrefix("   ") && $0.hasSuffix(":") && !$0.contains("#")
+            }
+            return Target(name: declaration.map { String($0.trimmingCharacters(in: .whitespaces).dropLast()) } ?? "",
+                          sets: sets)
         }
     }
 
@@ -54,11 +71,11 @@ private let repository = URL(fileURLWithPath: #filePath)
     func theProjectBuildsABundleUnderEveryFlavorsOwnNames(flavor: Flavor) throws {
         let installations = try Self.installations()
         let mine = try #require(
-            installations.first { $0["bundleIdentifier"] == flavor.bundleIdentifier },
+            installations.first { $0.sets["bundleIdentifier"] == flavor.bundleIdentifier },
             "project.yml builds nothing under \(flavor.bundleIdentifier); it builds \(installations)"
         )
-        #expect(mine["displayName"] == flavor.displayName)
-        #expect(mine["launchdLabel"] == flavor.launchdLabel)
+        #expect(mine.sets["displayName"] == flavor.displayName)
+        #expect(mine.sets["launchdLabel"] == flavor.launchdLabel)
     }
 
     /// The input method bundle each app carries is built under its own flavor's names.
@@ -70,18 +87,21 @@ private let repository = URL(fileURLWithPath: #filePath)
     func theProjectBuildsAnInputMethodUnderEveryFlavorsOwnNames(flavor: Flavor) throws {
         let installations = try Self.installations()
         let mine = try #require(
-            installations.first { $0["inputMethodBundleIdentifier"] == flavor.inputMethodBundleIdentifier },
+            installations.first { $0.sets["inputMethodBundleIdentifier"] == flavor.inputMethodBundleIdentifier },
             "project.yml builds no input method under \(flavor.inputMethodBundleIdentifier); it builds \(installations)"
         )
-        #expect(mine["displayName"] == flavor.displayName)
-        #expect(mine["inputSourceIdentifier"] == flavor.inputSourceIdentifier)
-        #expect(mine["inputMethodConnectionName"] == flavor.inputMethodConnectionName)
-        // The app must carry THIS target and not the other flavor's, which is the one way
-        // a correct pair of input method targets still ships one installation the other's.
-        let app = try #require(installations.first { $0["bundleIdentifier"] == flavor.bundleIdentifier })
-        let carried = try #require(app["inputMethodTarget"], "\(flavor)'s app carries no input method target")
-        #expect(installations.contains { $0["inputMethodBundleIdentifier"] == flavor.inputMethodBundleIdentifier },
-                "\(flavor)'s app carries \(carried), which builds no input method under \(flavor.inputMethodBundleIdentifier)")
+        #expect(mine.sets["displayName"] == flavor.displayName)
+        #expect(mine.sets["inputSourceIdentifier"] == flavor.inputSourceIdentifier)
+        #expect(mine.sets["inputMethodConnectionName"] == flavor.inputMethodConnectionName)
+        // The app must carry THIS target and not the other flavor's. Compared by target name,
+        // because that is what the app actually names and the only thing that can be wrong
+        // independently of everything else here: swap the two `inputMethodTarget:` values and
+        // every other check in this suite still passes while each installation ships the
+        // other's input source. [LAW:no-silent-failure]
+        let app = try #require(installations.first { $0.sets["bundleIdentifier"] == flavor.bundleIdentifier })
+        let carried = try #require(app.sets["inputMethodTarget"], "\(flavor)'s app carries no input method target")
+        #expect(carried == mine.name,
+                "\(flavor)'s app carries the target \(carried), but \(flavor.inputMethodBundleIdentifier) is built by \(mine.name)")
     }
 
     /// Every block belongs to one flavor and builds under a name that flavor owns, and
@@ -102,11 +122,11 @@ private let repository = URL(fileURLWithPath: #filePath)
     @Test func theProjectBuildsNothingThatIsNotAFlavor() throws {
         var appsPerFlavor: [Flavor: Int] = [:]
         for block in try Self.installations() {
-            let values = Set(block.values)
+            let values = Set(block.sets.values)
             let owners = Flavor.allCases.filter { !Self.names(of: $0).isDisjoint(with: values) }
             #expect(owners.count == 1, "a templateAttributes block names \(owners) rather than one flavor: \(block)")
             guard owners.count == 1, let owner = owners.first else { continue }
-            guard let identifier = block["bundleIdentifier"] else { continue }
+            guard let identifier = block.sets["bundleIdentifier"] else { continue }
             #expect(Self.names(of: owner).contains(identifier),
                     "a target builds \(identifier), which is not one of \(owner)'s names: \(block)")
             if identifier == owner.bundleIdentifier { appsPerFlavor[owner, default: 0] += 1 }
@@ -131,10 +151,10 @@ private let repository = URL(fileURLWithPath: #filePath)
     @Test func everyKindOfTargetIsBuiltOncePerFlavor() throws {
         var flavorsByKind: [Set<String>: [Flavor]] = [:]
         for block in try Self.installations() {
-            let values = Set(block.values)
+            let values = Set(block.sets.values)
             let owners = Flavor.allCases.filter { !Self.names(of: $0).isDisjoint(with: values) }
             guard owners.count == 1, let owner = owners.first else { continue }
-            flavorsByKind[Set(block.keys), default: []].append(owner)
+            flavorsByKind[Set(block.sets.keys), default: []].append(owner)
         }
         #expect(!flavorsByKind.isEmpty, "project.yml sets no templateAttributes at all")
         for (kind, flavors) in flavorsByKind {
