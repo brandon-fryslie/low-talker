@@ -88,10 +88,18 @@ scripts/virtual-hid-driver check "$app/Contents/Resources/$driver" \
   || fail "$app does not carry the pinned driver package"
 check "$app"
 check "$app/Contents/MacOS/lowtalker-keyboardd"
-# The input method bundle the app carries, and the executable inside it. Embedded content is
-# signed on copy by Xcode rather than by its own target's codesign step, which is exactly why
-# the helper above is named here too - and the notary service refuses the whole upload for a
-# nested binary, long after this script has printed the path as success.
+# The input method bundle the app carries. Embedded content is signed on copy by Xcode
+# rather than by its own target's codesign step, and the notary service refuses the whole
+# upload for one nested bundle it dislikes, long after this script has printed the path as
+# success.
+#
+# The bundle is asked, and its main executable is not, because they answer with one
+# signature: `codesign -dvv` on `X.app/Contents/MacOS/X` resolves the path back to the
+# bundle and prints byte-for-byte what `codesign -dvv X.app` prints - measured. A second
+# `check` there is a second checkpoint for one rule that can never disagree with the first.
+# [LAW:single-enforcer] `lowtalker-keyboardd` above is the opposite case and stays: it is a
+# separate Mach-O beside the app's own executable, with its own identifier and its own
+# signature, which nothing else here reads.
 #
 # Found by looking rather than by name: the bundle is called after PRODUCT_NAME, which is
 # project.yml's to decide, and a name spelled here is one more copy to keep in step. An app
@@ -100,9 +108,6 @@ check "$app/Contents/MacOS/lowtalker-keyboardd"
 methods=("$app"/Contents/Library/InputMethods/*.app)
 [ -e "${methods[0]}" ] || fail "$app carries no input method bundle"
 for method in "${methods[@]}"; do
-  executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$method/Contents/Info.plist") \
-    || fail "$method names no CFBundleExecutable"
   check "$method"
-  check "$method/Contents/MacOS/$executable"
 done
 echo "$app"

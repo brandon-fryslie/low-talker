@@ -112,7 +112,7 @@ let package = Package(
         // What the input method process answers with, kept out of the process itself so the
         // suite compiles and exercises it: an Xcode-only target would be invisible to
         // `make test` the way App/LowTalker's sources are.
-        .target(name: "InputMethod", dependencies: ["Flavors"]),
+        .target(name: "InputMethod"),
         .testTarget(name: "InputMethodTests", dependencies: ["InputMethod", "Flavors"]),
         // The process macOS launches out of the input method bundle. It holds the effects -
         // reading the bundle, opening the port, running the loop - and nothing else.

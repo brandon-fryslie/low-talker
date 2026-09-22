@@ -226,7 +226,12 @@ targetTemplates:
               tsInputModeDefaultStateKey: true
               tsInputModeIsVisibleKey: true
               tsInputModeMenuIconFileKey: InputMethod.tiff
-              tsInputModePrimaryInScriptKey: true
+              # Not the primary mode for the Unicode script: that says "select me when the
+              # user switches to this script", and the script here is everyone's. Of the
+              # eighteen input methods in /System/Library/Input Methods only TamilIM claims
+              # it, on one of its two modes, in a script it owns; AinuIM - the one-mode
+              # server this bundle is shaped after - claims false.
+              tsInputModePrimaryInScriptKey: false
               tsInputModeScriptKey: smUnicodeScript
           # Mode keys, not source identifiers - the two are the same string here, and a
           # wrong one is a source that silently never appears in the Input menu.

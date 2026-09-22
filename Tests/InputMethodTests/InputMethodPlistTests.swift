@@ -15,43 +15,24 @@ private let repository = URL(fileURLWithPath: #filePath)
 /// [LAW:behavior-not-structure] A test that asserted the template mentions
 /// `${inputSourceIdentifier}` would pass on a project.yml that put it under the wrong key.
 ///
-/// Generating costs a second and writes only build output, which is the price of reading
-/// the real artifact; `make helper` already shells out to xcodegen the same way.
+/// Writing that plist is the build's job and not this suite's. [LAW:effects-at-boundaries]
+/// A case that generated it would be a unit test deleting `App/Generated` and rewriting
+/// `LowTalker.xcodeproj` in the working tree - underneath whatever build is already running
+/// there, and leaving the directory deleted on a machine with no xcodegen on PATH. `make
+/// test` runs xcodegen first, the way `make app` does, and the cases here only read.
+///
+/// So a stale plist for a target since deleted from project.yml is not this suite's to
+/// catch, and it does not try: `ProjectFlavorTests.everyKindOfTargetIsBuiltOncePerFlavor`
+/// is the one checkpoint for "every flavor builds every kind of target", and a second one
+/// here would be a second rulebook to keep in step. [LAW:single-enforcer]
 @Suite struct InputMethodPlistTests {
     private static func plist(for flavor: Flavor) throws -> [String: Any] {
-        try #require(generated == 0, "xcodegen generate exited \(generated)")
         let url = repository.appending(path: "App/Generated/\(flavor.displayName)-InputMethod-Info.plist")
+        try #require(FileManager.default.fileExists(atPath: url.path),
+                     "\(url.lastPathComponent) has not been generated; run `make test`, which runs xcodegen - `swift test` alone does not")
         let data = try Data(contentsOf: url)
         return try #require(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
     }
-
-    /// Run once however many cases ask for a plist: a `static let`'s initialiser is lazy and
-    /// runs exactly once, which is what keeps parallel cases from generating the project on
-    /// top of each other.
-    ///
-    /// The directory is removed first, so what the cases read is what THIS run wrote.
-    /// `App/Generated` is build output and xcodegen does not prune it, so a plist left by a
-    /// previous run - for a target since renamed or deleted - would satisfy the read and the
-    /// suite would pass on a project.yml that no longer builds it. [LAW:no-silent-failure]
-    ///
-    /// Output goes to the null device rather than to pipes nobody reads: a `Pipe` that fills
-    /// its buffer blocks the child in `write`, and `waitUntilExit` would then never return -
-    /// a hang, not a failure, and worst in the very case worth seeing, since a generate that
-    /// fails is the one that prints the most. The exit status is what this needs, and the
-    /// message a failure deserves is the missing file the cases then report.
-    private static let generated: Int32 = {
-        let generated = repository.appending(path: "App/Generated")
-        try? FileManager.default.removeItem(at: generated)
-        let xcodegen = Process()
-        xcodegen.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        xcodegen.arguments = ["xcodegen", "generate", "--quiet"]
-        xcodegen.currentDirectoryURL = repository
-        xcodegen.standardOutput = FileHandle.nullDevice
-        xcodegen.standardError = FileHandle.nullDevice
-        do { try xcodegen.run() } catch { return -1 }
-        xcodegen.waitUntilExit()
-        return xcodegen.terminationStatus
-    }()
 
     /// The three names `Flavor` decides, in the three keys macOS reads them from.
     @Test(arguments: Flavor.allCases)
