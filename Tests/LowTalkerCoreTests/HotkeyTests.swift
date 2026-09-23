@@ -316,11 +316,11 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         }
     }
 
-    /// The input method delivery's chords are ones the window server can register, and no
+    /// The registered hot key's chords are ones the window server can register, and no
     /// two installations' are one hot key to it. None holds Control: the chord is held over
     /// whatever has focus while the person speaks, and Control+D over a terminal is
     /// end-of-file, which closed the shell it was held in.
-    @Test func everyInputMethodChordIsARegistrableHotKeyOfItsOwn() throws {
+    @Test func everyRegisteredHotKeyChordIsARegistrableHotKeyOfItsOwn() throws {
         let chords = Set(Flavor.allCases.map { Hotkey.defaultChord(for: $0, heardBy: .registeredHotKey) })
         #expect(chords.count == Flavor.allCases.count)
         for chord in chords {

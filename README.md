@@ -177,9 +177,9 @@ Which chord that is depends on the installation, and the CLI defaults to the dev
 
 The tap needs Input Monitoring and Accessibility. macOS charges a terminal command's tap to the terminal, so the command fails with `the session refused an event tap` until the terminal has both under System Settings > Privacy & Security; the app asks on its own behalf.
 
-    .build/debug/lowtalker hotkey --heard-by clipboard   # the clipboard delivery's hotkey, needing neither
+    .build/debug/lowtalker hotkey --heard-by registeredHotKey   # the registered hot key, needing neither
 
-`--heard-by clipboard` watches the chord the clipboard delivery uses (see "Deliveries" below), registered as a Carbon hot key instead of read off a tap, so it needs no permission at all. Each `began` line also says how long after its own stamp the press was delivered; on this Mac that is 100 to 300 µs, which is how the hot key's clock is known to be the one the microphone's buffers are stamped on. A chord another app has already registered is refused by name.
+`--heard-by registeredHotKey` watches the registered hot key's chord (see "The hotkey source" below), registered as a Carbon hot key instead of read off a tap, so it needs no permission at all. Each `began` line also says how long after its own stamp the press was delivered; on this Mac that is 100 to 300 µs, which is how the hot key's clock is known to be the one the microphone's buffers are stamped on. A chord another app has already registered is refused by name.
 
 ## The config file
 
@@ -302,10 +302,19 @@ The exit code says what went wrong, so a script can act on it without reading st
 
 The app gives you what you dictate one of two ways, and asks which the first time an installation runs. It is called the delivery and not the input method because macOS has an input method of its own — a text input source, the way Pinyin or Kotoeri is one — and one word could not mean both here.
 
-- **Clipboard.** Press Control+Shift+D (Control+Shift+Command+D for the development copy) to start listening and again to stop, or hold it while you speak, then paste with ⌘V. The hotkey is a registered hot key and the words go on the clipboard, replacing what was there, so nothing is installed and nothing asks for an administrator. The menu-bar icon turns into a clipboard when words are waiting, and back into a microphone at the next press. A route that needs the keyboard or the mouse, anything beyond text at the focus, is refused by name.
-- **Virtual keyboard.** Hold Right Option (Right Command, then Right Option, for the development copy) while you speak, and the words are typed where you are. This is the driver extension and the root helper described under "The virtual keyboard driver", and the approvals under "What is left to set up".
+- **Input method.** The words are committed where your cursor is by this app's own macOS input method, through the text input system, so nothing is posted as a key and nothing asks for an administrator.
+- **Virtual keyboard.** The words are typed where you are. This is the driver extension and the root helper described under "The virtual keyboard driver", and the approvals under "What is left to set up".
 
-The status menu lists both under "Delivery" with the current one checked, and choosing the other takes effect at once: a press still open is ended, sessions in flight finish, and the new delivery's hotkey comes up. Choosing the virtual keyboard registers the helper, and when the driver, the helper or Keyboard Setup Assistant still needs something, an alert lists the steps. On the clipboard the helper is never registered and the onboarding rows are not read. The choice is kept per installation in its defaults, under `inputMethod` — the spelling from before the rename, kept because the word on disk is every installed copy's stored answer; `defaults delete ai.promptctl.low-talker.dev inputMethod` makes the development copy ask again at its next launch. The app logs `delivery: asked, answered clipboard` or `delivery: remembered virtualKeyboard` at launch.
+The status menu lists both under "Delivery" with the current one checked, and choosing the other takes effect at once: a press still open is ended, sessions in flight finish, and a loop with the new delivery comes up behind the same hotkey. Choosing the virtual keyboard registers the helper, and when the driver, the helper or Keyboard Setup Assistant still needs something, an alert lists the steps. Choosing the input method installs it. The choice is kept per installation in its defaults, under `inputMethod` — the spelling from before the rename, kept because the word on disk is every installed copy's stored answer; `defaults delete ai.promptctl.low-talker.dev inputMethod` makes the development copy ask again at its next launch.
+
+### The hotkey source
+
+How the hotkey is heard is a second choice, asked beside the delivery and independent of it: any source goes with any delivery.
+
+- **Event tap.** Right Option (Right Command, then Right Option, for the development copy). A chord of modifiers alone, which only a tap on every key can hear, so it needs Input Monitoring.
+- **Registered hot key.** Shift+Command+Option+X (Command+Option+X for the development copy), registered with the window server, so it needs nothing. macOS registers only a chord with a key in it.
+
+Either way, hold the chord while you speak, or tap it to start and again to stop. The menu lists both under "Hotkey source", each named by its chord on your keyboard layout and what macOS asks for it. The choice is kept under `hotkeySource`; `defaults delete ai.promptctl.low-talker.dev hotkeySource` makes the development copy ask again. The app logs `setup: delivery inputMethod, hotkey source registeredHotKey` at launch, and `Delivery: asked, answered …` or `HotkeySource: asked, answered …` when it asked.
 
 ### Insert Dictation, a Service that needs no grant
 

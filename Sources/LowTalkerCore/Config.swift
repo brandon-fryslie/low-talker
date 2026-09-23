@@ -87,8 +87,8 @@ public struct Mode: Hashable, Sendable {
         self.router = router
     }
 
-    /// Hold the hotkey, speak, and the words are typed wherever the focus is. The
-    /// virtual keyboard's chord, because typing at the focus is that delivery's.
+    /// Hold the hotkey, speak, and the words are typed wherever the focus is. The event
+    /// tap's chord, which is the hearing `lowtalker dictate` listens with.
     public static func dictation(for flavor: Flavor) -> Mode {
         Mode(name: "dictation", chord: Hotkey.defaultChord(for: flavor, heardBy: .eventTap), vocabulary: .empty, router: .dictation)
     }

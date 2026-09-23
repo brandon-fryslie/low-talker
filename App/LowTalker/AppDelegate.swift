@@ -161,15 +161,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// reports to this delegate's menu; touching it is what starts the load.
     private lazy var engine: Task<WhisperKitTranscriber, any Error> = Task { try await loadEngine() }
 
-    // MARK: - the delivery
+    // MARK: - the delivery and the hotkey source
 
-    /// Where this installation's choice is kept: its own defaults domain, so the two
+    /// Where this installation's delivery is kept: its own defaults domain, so the two
     /// installations choose apart. [LAW:one-source-of-truth] The menu and the first-launch
     /// question write it, launch reads it, and nothing else holds a copy.
     ///
     /// Still spelled `inputMethod`, which the type no longer is, because the word on disk
     /// is every installed copy's stored answer and renaming it would ask them all again.
     private static let deliveryKey = "inputMethod"
+    /// Where this installation's hotkey source is kept, beside the delivery and apart from it.
+    private static let hotkeySourceKey = "hotkeySource"
 
     /// The delivery the user chose, or nil for an installation that has never been asked.
     /// A stored word that names no delivery reads as never asked, and the question comes
@@ -179,13 +181,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         set { UserDefaults.standard.set(newValue?.rawValue, forKey: Self.deliveryKey) }
     }
 
-    /// The loop that is listening now, and the delivery it was built for.
+    /// The hotkey source the user chose, or nil for an installation that has never been
+    /// asked, read the way `chosenDelivery` is.
+    private var chosenSource: HotkeySource? {
+        get { UserDefaults.standard.string(forKey: Self.hotkeySourceKey).flatMap(HotkeySource.init(rawValue:)) }
+        set { UserDefaults.standard.set(newValue?.rawValue, forKey: Self.hotkeySourceKey) }
+    }
+
+    /// What a loop is built from: how the words arrive and how the chord is heard.
     ///
-    /// [LAW:types-are-the-program] The three are one value because they are only ever
-    /// right together: a clipboard hotkey feeding a typing executor is a chord nobody
-    /// could have pressed for the output it reaches.
-    private struct Listening {
+    /// [LAW:locality-or-seam] Two independent choices. Every pairing is a loop, the source
+    /// decides only the hotkey and the delivery only the executor, so nothing here reads
+    /// one to decide anything about the other.
+    private struct Setup: Equatable {
         let delivery: Delivery
+        let source: HotkeySource
+    }
+
+    /// Both kept choices, or nil while either has never been made.
+    private var chosenSetup: Setup? {
+        guard let delivery = chosenDelivery, let source = chosenSource else { return nil }
+        return Setup(delivery: delivery, source: source)
+    }
+
+    /// The loop that is listening now, and the setup it was built from.
+    private struct Listening {
+        let setup: Setup
         let hotkey: Hotkey
         let dictation: Dictation
     }
@@ -225,23 +246,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             accessibilityDescription: engineReadiness.iconDescription(for: Self.flavor.displayName, wordsOnClipboard: wordsOnClipboard))
     }
 
-    /// Takes `delivery` down to the loop: the old loop's hotkey comes down first, ending any
-    /// press it had open, its sessions are waited out, and then the new delivery's hotkey
-    /// goes up in front of a loop whose output is that delivery's.
+    /// Takes `setup` down to the loop: the old loop's hotkey comes down first, ending any
+    /// press it had open, its sessions are waited out, and then the source's hotkey goes up
+    /// in front of a loop whose output is the delivery's.
     ///
     /// Queued behind any switch still in progress; see `switching`.
-    private func choose(_ delivery: Delivery) async {
+    private func choose(_ setup: Setup) async {
         let before = switching
         let this = Task {
             await before?.value
-            await adopt(delivery)
+            await adopt(setup)
         }
         switching = this
         await this.value
     }
 
-    private func adopt(_ delivery: Delivery) async {
-        chosenDelivery = delivery
+    private func adopt(_ setup: Setup) async {
         if let previous = listening {
             listening = nil
             await previous.hotkey.stopAndDeliver()
@@ -251,32 +271,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         // `lastDictation` is left as it stands: a session the wait let finish may just
         // have copied, and words on the clipboard stay there whichever delivery comes next.
-        let hotkey = Hotkey(for: Self.flavor, heardBy: delivery)
+        let hotkey = Hotkey(for: Self.flavor, heardBy: setup.source)
         let dictation = Dictation(
             capture: capture,
             transcriber: { [unowned self] in try await engine.value },
             router: Router(routes: [.dictation]),
-            executor: executor(for: delivery),
+            executor: executor(for: setup.delivery),
             report: { [unowned self] in report($0) }
         )
-        listening = Listening(delivery: delivery, hotkey: hotkey, dictation: dictation)
-        let chord = chordName(heardBy: delivery)
+        listening = Listening(setup: setup, hotkey: hotkey, dictation: dictation)
         do {
             try hotkey.start({ [unowned self] transition in
                 if case .began = transition { lastDictation = nil }
                 dictation.press(transition)
             }, onLapse: { [unowned self] in report($0) })
-            let status = switch delivery {
-            case .virtualKeyboard: "hold \(chord) to dictate"
-            case .inputMethod: "hold \(chord), or tap it to start and again to stop"
-            }
-            showHotkeyStatus(status)
+            // [LAW:dataflow-not-control-flow] One sentence for every pairing: every source
+            // feeds the same detector, which hears a hold and a tap alike.
+            showHotkeyStatus("hold \(chordName(heardBy: setup.source)), or tap it to start and again to stop")
         } catch {
             // [LAW:no-silent-failure] An app that cannot listen must say so on the one
             // surface it has, in the words the user can act on.
             showHotkeyStatus("off — \(error)")
         }
-        switch delivery {
+        switch setup.delivery {
         case .virtualKeyboard: registerKeyboardHelper()
         case .inputMethod: await installInputMethod()
         }
@@ -314,47 +331,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Asked when an installation has never chosen, which is its first launch.
+    /// Asked when an installation has never made `choices`' choice, which is its first
+    /// launch; the delivery and the hotkey source are each asked this way, apart.
     ///
-    /// The buttons are the deliveries in `Delivery.allCases`' order, and the answer is read
-    /// back by that same order, so a button can never pick a delivery it does not name.
-    /// [LAW:one-source-of-truth]
-    private func askForDelivery() -> Delivery {
+    /// The buttons are `choices` in order, and the answer is read back by that same order,
+    /// so a button can never pick a choice it does not name. [LAW:one-source-of-truth]
+    private func ask<Choice: CustomStringConvertible>(
+        _ question: String, explaining details: String, among choices: [Choice], titled title: (Choice) -> String
+    ) -> Choice {
         let alert = NSAlert()
-        alert.messageText = "How should \(Self.flavor.displayName) give you what you say?"
-        alert.informativeText = Delivery.allCases.map { "\($0.title): \(explanation(of: $0))" }.joined(separator: "\n\n")
-            + "\n\nYou can change this at any time from the menu bar."
-        Delivery.allCases.forEach { alert.addButton(withTitle: $0.title) }
+        alert.messageText = question
+        alert.informativeText = details + "\n\nYou can change this at any time from the menu bar."
+        choices.forEach { alert.addButton(withTitle: title($0)) }
         NSApp.activate()
         let response = alert.runModal()
-        let answer = Delivery.allCases[response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue]
+        let answer = choices[response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue]
         // [LAW:verifiable-goals] The question has no other trace: an agent checking that a
         // first launch asked, and what it was told, reads it here.
-        log.notice("delivery: asked, answered \(answer, privacy: .public) (modal response \(response.rawValue, privacy: .public))")
+        log.notice("\(String(describing: Choice.self), privacy: .public): asked, answered \(answer, privacy: .public) (modal response \(response.rawValue, privacy: .public))")
         return answer
     }
 
-    /// This installation's chord for `delivery`, named on the layout the user types on now.
+    private func askForDelivery() -> Delivery {
+        ask("How should \(Self.flavor.displayName) give you what you say?",
+            explaining: Delivery.allCases.map { "\($0.title): \($0.explanation)" }.joined(separator: "\n\n"),
+            among: Delivery.allCases, titled: \.title)
+    }
+
+    private func askForHotkeySource() -> HotkeySource {
+        ask("Which hotkey should \(Self.flavor.displayName) listen for?",
+            explaining: "Hold it while you speak, or tap it to start and again to stop.",
+            among: HotkeySource.allCases, titled: title(of:))
+    }
+
+    /// A source as the menu and the first-launch question name it: its chord on the layout
+    /// the user types on, and what macOS asks for it. [LAW:one-source-of-truth] Both halves
+    /// are read off the source, so no second spelling of either is kept here.
+    private func title(of source: HotkeySource) -> String {
+        "\(chordName(heardBy: source)) — \(source.asks)"
+    }
+
+    /// This installation's chord for `source`, named on the layout the user types on now.
     /// Read at each use rather than kept, since the user can switch layouts at any moment.
-    private func chordName(heardBy delivery: Delivery) -> String {
-        let chord = Hotkey.defaultChord(for: Self.flavor, heardBy: delivery)
+    private func chordName(heardBy source: HotkeySource) -> String {
+        let chord = Hotkey.defaultChord(for: Self.flavor, heardBy: source)
         do {
-            return Hotkey.named(chord, heardBy: delivery, on: try KeyboardLayout.current())
+            return Hotkey.named(chord, heardBy: source, on: try KeyboardLayout.current())
         } catch {
             // [LAW:no-silent-failure] A layout that cannot be read still leaves the reader a
             // chord to press, in the spelling `held` gives every chord, and the log says why.
             log.error("keyboard layout: \(String(describing: error), privacy: .public); naming \(chord, privacy: .public) by its codes")
             return Hotkey.held(chord)
-        }
-    }
-
-    private func explanation(of delivery: Delivery) -> String {
-        let chord = chordName(heardBy: delivery)
-        return switch delivery {
-        case .inputMethod:
-            "press \(chord) to start and again to stop, and the words are committed where your cursor is. Nothing for an administrator to approve."
-        case .virtualKeyboard:
-            "hold \(chord) while you speak, and the words are typed where you are. Needs a driver extension and a helper, which an administrator approves once."
         }
     }
 
@@ -382,26 +409,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let spelling = item.representedObject as? String, let chosen = Delivery(rawValue: spelling) else {
             preconditionFailure("a delivery item carries its delivery's raw value")
         }
-        // Before `listen` has the microphone - its prompt still open, or refused - the choice
-        // is only kept: `listen` takes it up once the microphone is held, and a hotkey put
-        // up now would hear presses no capture could open for, over the status that says
-        // why. `switching` is set only by a choice taken down to a loop, which `listen`
-        // makes first. [LAW:no-ambient-temporal-coupling]
-        //
-        // The delivery already chosen is not chosen again while its hotkey is up: rebuilding
-        // the loop would end a latched press as lapsed and throw its recording away.
-        // A hotkey that has come down has no press to lose and nothing listening, so
-        // choosing its delivery again is how the user starts it - and is what the status
-        // line tells them to do. Only that one case: a loop still being built has no
-        // hotkey to read yet, and letting the absence pass for a come-down would chain a
-        // second teardown and rebuild behind the first, alert and all.
+        take { $0.chosenDelivery = chosen }
+    }
+
+    @objc private func chooseHotkeySource(_ item: NSMenuItem) {
+        guard let spelling = item.representedObject as? String, let chosen = HotkeySource(rawValue: spelling) else {
+            preconditionFailure("a hotkey source item carries its source's raw value")
+        }
+        take { $0.chosenSource = chosen }
+    }
+
+    /// Keeps a choice made from the menu, and takes the setup it leaves down to the loop.
+    ///
+    /// Before `listen` has the microphone - its prompt still open, or refused - the choice
+    /// is only kept: `listen` takes it up once the microphone is held, and a hotkey put
+    /// up now would hear presses no capture could open for, over the status that says
+    /// why. `switching` is set only by a choice taken down to a loop, which `listen`
+    /// makes first. [LAW:no-ambient-temporal-coupling]
+    ///
+    /// The setup already chosen is not chosen again while its hotkey is up: rebuilding
+    /// the loop would end a latched press as lapsed and throw its recording away.
+    /// A hotkey that has come down has no press to lose and nothing listening, so
+    /// choosing its source again is how the user starts it - and is what the status
+    /// line tells them to do. Only that one case: a loop still being built has no
+    /// hotkey to read yet, and letting the absence pass for a come-down would chain a
+    /// second teardown and rebuild behind the first, alert and all.
+    private func take(_ keep: (AppDelegate) -> Void) {
+        let before = chosenSetup
         let cameDown = listening?.hotkey.isWatching == false
-        let rebuilding = chosenDelivery == chosen && !cameDown
-        chosenDelivery = chosen
-        guard switching != nil, !rebuilding, !quitting else { return }
+        keep(self)
+        guard let setup = chosenSetup, switching != nil, setup != before || cameDown, !quitting else { return }
         Task {
-            await choose(chosen)
-            showWhatIsMissing(for: chosen)
+            await choose(setup)
+            showWhatIsMissing(for: setup.delivery)
         }
     }
 
@@ -450,14 +490,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             showHotkeyStatus("off — \(error)")
             return
         }
-        if let remembered = chosenDelivery {
-            log.notice("delivery: remembered \(remembered, privacy: .public)")
-            await choose(remembered)
-        } else {
-            let asked = askForDelivery()
-            await choose(asked)
-            showWhatIsMissing(for: asked)
-        }
+        // Each choice is remembered or asked on its own, so an installation that has made
+        // one is asked only the other.
+        let asked = chosenDelivery == nil
+        let delivery = chosenDelivery ?? askForDelivery()
+        let source = chosenSource ?? askForHotkeySource()
+        chosenDelivery = delivery
+        chosenSource = source
+        log.notice("setup: delivery \(delivery, privacy: .public), hotkey source \(source, privacy: .public)")
+        await choose(Setup(delivery: delivery, source: source))
+        if asked { showWhatIsMissing(for: delivery) }
     }
 
     /// Quitting waits for the sessions, the way `lowtalker dictate` waits on its
@@ -570,7 +612,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // open, which is no use to someone whose keyboard has just started misbehaving
         // and who is trying to work out which app is doing it.
         case .comeDown:
-            showHotkeyStatus("off — kept lapsing; choose a delivery below to start it again")
+            showHotkeyStatus("off — kept lapsing; choose a hotkey below to start it again")
         }
     }
 
@@ -635,10 +677,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// to re-read. `menuNeedsUpdate` rather than `menuWillOpen`: AppKit calls this one
     /// before the menu is laid out, so the items are in place when it is measured.
     func menuNeedsUpdate(_ menu: NSMenu) {
-        // The kept choice while nothing listens yet, so a choice made then is shown as made.
-        let delivery = listening?.delivery ?? chosenDelivery
+        // The kept choices while nothing listens yet, so a choice made then is shown as made.
+        let delivery = listening?.setup.delivery ?? chosenDelivery
+        let source = listening?.setup.source ?? chosenSource
         // The virtual keyboard's requirements are read only while it is the delivery: on the
-        // clipboard nothing is missing, and a list of driver steps would be a list of
+        // input method nothing is missing, and a list of driver steps would be a list of
         // things to install for an output nobody is using.
         let requirements = switch delivery {
         case .virtualKeyboard: readVirtualKeyboardReadiness().requirements
@@ -677,6 +720,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item.state = choice == delivery ? .on : .off
             menu.addItem(item)
         }
+        menu.addItem(readout("Hotkey source"))
+        for choice in HotkeySource.allCases {
+            let item = NSMenuItem(title: "    \(title(of: choice))", action: #selector(chooseHotkeySource(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = choice.rawValue
+            item.state = choice == source ? .on : .off
+            menu.addItem(item)
+        }
         menu.addItem(.separator())
         // Where every step that asks for a click sends a reader, one click closer.
         if delivery == .virtualKeyboard {
@@ -698,6 +749,17 @@ private extension Delivery {
         switch self {
         case .inputMethod: "Input Method"
         case .virtualKeyboard: "Virtual Keyboard"
+        }
+    }
+
+    /// What it does and what it costs to install. No chord: which one is heard is the
+    /// hotkey source's to say.
+    var explanation: String {
+        switch self {
+        case .inputMethod:
+            "the words are committed where your cursor is. Nothing for an administrator to approve."
+        case .virtualKeyboard:
+            "the words are typed where you are. Needs a driver extension and a helper, which an administrator approves once."
         }
     }
 }
