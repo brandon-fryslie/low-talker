@@ -100,7 +100,7 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
     /// A tap that can hear only what it asks for is told what the detector looks for.
     @Test func theTapIsToldTheChordsTheDetectorListensFor() throws {
         let tap = FakeTap()
-        let chord = Hotkey.defaultChord(for: .release, heardBy: .clipboard)
+        let chord = Hotkey.defaultChord(for: .release, heardBy: .registeredHotKey)
         try Hotkey(chords: [chord], tap: tap).start({ _ in }, onLapse: { _ in })
         #expect(tap.installations.first?.chords == [chord])
     }
@@ -108,7 +108,7 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
     /// A registered hot key reports the chord going down and coming up as its key moving
     /// under its modifiers, and the detector tells a hold from a tap from those two alone.
     @Test func aChordWithAKeyIsHeldAndTappedFromItsKeyAlone() async throws {
-        let chord = Hotkey.defaultChord(for: .release, heardBy: .clipboard)
+        let chord = Hotkey.defaultChord(for: .release, heardBy: .registeredHotKey)
         let key = try #require(chord.key)
         func moved(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEvent {
             KeyEvent(key: .key(key), direction: direction, modifiers: chord.modifiers, time: at(ms))
@@ -309,21 +309,24 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
     /// release app's tap takes it and dictates.
     @Test func everyFlavoursChordIsOneTheTypistRefuses() {
         for flavor in Flavor.allCases {
-            for delivery in Delivery.allCases {
-                #expect(Hotkey.everyInstallationsChord.contains(Hotkey.defaultChord(for: flavor, heardBy: delivery)),
-                        "\(flavor)'s \(delivery) chord is not in the set a typist refuses")
+            for hearing in HotkeySource.allCases {
+                #expect(Hotkey.everyInstallationsChord.contains(Hotkey.defaultChord(for: flavor, heardBy: hearing)),
+                        "\(flavor)'s \(hearing) chord is not in the set a typist refuses")
             }
         }
     }
 
-    /// The clipboard delivery's chords are ones the window server can register, and no two
-    /// installations' are one hot key to it.
-    @Test func everyClipboardChordIsARegistrableHotKeyOfItsOwn() throws {
-        let chords = Set(Flavor.allCases.map { Hotkey.defaultChord(for: $0, heardBy: .clipboard) })
+    /// The registered hot key's chords are ones the window server can register, and no
+    /// two installations' are one hot key to it. None holds Control: the chord is held over
+    /// whatever has focus while the person speaks, and Control+D over a terminal is
+    /// end-of-file, which closed the shell it was held in.
+    @Test func everyRegisteredHotKeyChordIsARegistrableHotKeyOfItsOwn() throws {
+        let chords = Set(Flavor.allCases.map { Hotkey.defaultChord(for: $0, heardBy: .registeredHotKey) })
         #expect(chords.count == Flavor.allCases.count)
         for chord in chords {
             #expect(chord.key != nil, "\(chord) has no key")
             #expect(!chord.modifiers.contains(.function), "\(chord) holds function")
+            #expect(chord.modifiers.isDisjoint(with: [.leftControl, .rightControl]), "\(chord) holds Control")
         }
     }
 
@@ -334,8 +337,8 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
     /// rightCommand at 7, so the order came straight from the enum's declaration order -
     /// a fact about how the cases were typed, being read as a fact about the keyboard.
     @Test func theDevelopmentChordIsPrintedInTheOrderThatDoesNotStartTheOtherCopy() {
-        #expect(Hotkey.held(Hotkey.defaultChord(for: .development, heardBy: .virtualKeyboard)) == "rightCommand+rightOption")
-        #expect(Hotkey.held(Hotkey.defaultChord(for: .release, heardBy: .virtualKeyboard)) == "rightOption")
+        #expect(Hotkey.held(Hotkey.defaultChord(for: .development, heardBy: .eventTap)) == "rightCommand+rightOption")
+        #expect(Hotkey.held(Hotkey.defaultChord(for: .release, heardBy: .eventTap)) == "rightOption")
     }
 
     /// **The order printed is an order that works.** A chord completes on whichever

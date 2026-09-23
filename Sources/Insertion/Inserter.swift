@@ -9,10 +9,8 @@ import Foundation
 /// methods or macOS - the caller's question is "did these words land", and that question
 /// outlives whatever carries it.
 public protocol Inserter: Sendable {
-    /// Inserts `text` at the cursor, or says why it did not.
-    ///
-    /// Throws `Unreachable` only when the question could not be carried at all. A refusal
-    /// is an answer and comes back as one.
+    /// Inserts `text` at the cursor, or throws why it did not: a `Refusal` when the input
+    /// method looked and would not, `Unreachable` when the question never got an answer.
     ///
     /// **Blocking, and not to be called on the main actor or from a task.** The one that
     /// crosses to the input method runs a run loop while it waits, so on the main thread it
@@ -21,7 +19,7 @@ public protocol Inserter: Sendable {
     /// Said here rather than at the one implementation because this is the seam
     /// low-input-method-s71.b26's executor consumes, and the obligation belongs to whatever
     /// satisfies it. [LAW:no-ambient-temporal-coupling]
-    func insert(_ text: String) throws -> InsertionAnswer
+    func insert(_ text: String) throws -> Inserted
 }
 
 public extension Inserter {
@@ -42,7 +40,7 @@ public extension Inserter {
     /// words did not land when they may have - the one conflation this module exists to
     /// prevent. What bounds the wait is the timeout, which is also the bound the answer
     /// names. [LAW:no-silent-failure]
-    func insert(_ text: String) async throws -> InsertionAnswer {
+    func insert(_ text: String) async throws -> Inserted {
         try await withCheckedThrowingContinuation { continuation in
             Thread { continuation.resume(with: Result { try insert(text) }) }.start()
         }
@@ -79,11 +77,11 @@ public struct InputMethodInserter: Inserter {
         self.timeout = timeout
     }
 
-    public func insert(_ text: String) throws -> InsertionAnswer {
+    public func insert(_ text: String) throws -> Inserted {
         // [LAW:parse-dont-validate] The boundary: past here there is a port or a thrown
         // reason, never a maybe-port that later code has to keep asking about.
         guard let port = CFMessagePortCreateRemote(nil, portName as CFString) else {
-            throw Unreachable.didNotLand(.nothingIsListening(port: portName))
+            throw Unreachable.nothingIsListening(port: portName)
         }
         var reply: Unmanaged<CFData>?
         let phase = timeout / 2
@@ -95,21 +93,26 @@ public struct InputMethodInserter: Inserter {
         case kCFMessagePortSuccess:
             break
         case kCFMessagePortSendTimeout:
-            throw Unreachable.didNotLand(.requestWasNotTaken(port: portName, after: phase))
+            throw Unreachable.requestWasNotTaken(port: portName, after: phase)
         case kCFMessagePortReceiveTimeout:
-            throw Unreachable.mayHaveLanded(.answerDidNotArrive(port: portName, after: phase))
+            throw Unreachable.answerDidNotArrive(port: portName, after: phase)
         // The far end went away between resolving the name and sending to it, which is the
         // same fact as never having found it and is said the same way.
         case kCFMessagePortIsInvalid:
-            throw Unreachable.didNotLand(.nothingIsListening(port: portName))
+            throw Unreachable.nothingIsListening(port: portName)
         default:
-            throw Unreachable.mayHaveLanded(.sendFailed(port: portName, status: status))
+            throw Unreachable.sendFailed(port: portName, status: status)
         }
         let data = reply.map { $0.takeRetainedValue() as Data } ?? Data()
         guard let answer = Wire.answer(of: data) else {
-            throw Unreachable.mayHaveLanded(.answerWasNotReadable(port: portName, bytes: data.count))
+            throw Unreachable.answerWasNotReadable(port: portName, bytes: data.count)
         }
-        return answer
+        // [LAW:parse-dont-validate] The wire's sum ends here: past this line a refusal is a
+        // failure thrown like the others, and a caller holds words inserted or nothing.
+        switch answer {
+        case .inserted(let characters, let into): return Inserted(characters: characters, into: into)
+        case .refused(let refusal): throw refusal
+        }
     }
 }
 

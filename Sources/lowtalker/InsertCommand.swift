@@ -38,20 +38,12 @@ struct InsertCommand: AsyncParsableCommand {
     func run() async throws {
         try await Task.sleep(for: .seconds(delay))
         let flavor = installation.flavor
-        // Thrown, not printed as an outcome: a channel that could not carry the question
-        // is not an answer about the cursor, and the two must never read alike.
-        // [LAW:no-silent-failure]
+        // A refusal and a channel failure are both thrown and printed by name, the way the
+        // app reports them: either way the words are not at the cursor. [LAW:no-silent-failure]
         // Awaited, so the blocking round trip runs on a thread of its own: this command is
         // a task, and `Inserter` says in its own contract that a task must not hold a
         // cooperative thread for the length of the timeout.
-        let answer = try await InputMethodInserter(flavor: flavor, timeout: .seconds(timeout)).insert(text)
-        print("\(flavor) input method: \(describe(answer))")
-    }
-
-    private func describe(_ answer: InsertionAnswer) -> String {
-        switch answer {
-        case let .inserted(characters, app): "inserted \(characters) characters at the cursor in \(app)"
-        case let .refused(refusal): "refused - \(refusal)"
-        }
+        let inserted = try await InputMethodInserter(flavor: flavor, timeout: .seconds(timeout)).insert(text)
+        print("\(flavor) input method: inserted \(inserted.characters) characters at the cursor in \(inserted.into)")
     }
 }

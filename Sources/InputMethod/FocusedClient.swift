@@ -84,7 +84,7 @@ public final class FocusedClient {
     /// the app that is actually in front.
     ///
     /// Absence is not a mistake to guard against but the answer itself: nowhere to put
-    /// words is exactly the case low-input-method-s71.b26 puts on the clipboard instead.
+    /// words is a refusal the app reports by name, and the words go nowhere else.
     ///
     /// **What `inserted` claims, exactly: the client belonging to the app in front accepted
     /// the commit.** Not that a person saw the words. The text input system offers no
@@ -106,7 +106,13 @@ public final class FocusedClient {
     /// Which app is in front arrives as a value rather than being read here, so the whole
     /// of this decision is testable without a window server and the one reading of the
     /// workspace happens where the other effects are. [LAW:effects-at-boundaries]
-    public func insert(_ text: String, whileInFrontIs frontmost: String?) -> InsertionAnswer {
+    ///
+    /// `secureInputIsOn` is read at the same boundary and asked first: while any app holds
+    /// Secure Event Input macOS hands no input method a client, and a cursor still held from
+    /// before it came on is one the text input system has stopped routing to - so no commit
+    /// is attempted and the refusal names the thing to fix. [LAW:no-silent-failure]
+    public func insert(_ text: String, whileInFrontIs frontmost: String?, secureInputIsOn: Bool) -> InsertionAnswer {
+        guard !secureInputIsOn else { return .refused(.secureInputIsOn) }
         guard let focus else { return .refused(.noClientHasFocus) }
         guard focus.application == frontmost else { return .refused(.cursorIsInAnotherApp) }
         focus.commit(text)

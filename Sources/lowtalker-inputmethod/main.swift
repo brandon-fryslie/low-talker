@@ -60,6 +60,25 @@ let server: IMKServer = {
     return server
 }()
 
+/// The app holding Secure Event Input, by name, or nil when nobody holds it.
+///
+/// Read from the window server's session, which names the holder's process rather than only
+/// saying that someone holds it - the name is what the log line needs, since the fix is in
+/// that app's own menu. A holder whose process has no name is still a holder, and is named
+/// by its pid rather than read as none. [LAW:no-silent-failure]
+@MainActor
+func secureInputHolder() -> String? {
+    // A session that cannot be read says nothing about secure input, which is not the same
+    // as saying nobody holds it: said by name, and the insert goes ahead, since the client's
+    // own answer is still the account of whether the words landed. [LAW:no-silent-failure]
+    guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else {
+        logger.error("the window server's session could not be read, so whether an app holds secure keyboard entry is unknown")
+        return nil
+    }
+    guard let pid = session["kCGSSessionSecureInputPID"] as? pid_t, pid != 0 else { return nil }
+    return NSRunningApplication(processIdentifier: pid)?.localizedName ?? "process \(pid)"
+}
+
 /// The app's door, beside the text input system's. Held for the life of the process for
 /// the same reason the server is: released, the app's next request finds nothing listening.
 ///
@@ -84,14 +103,16 @@ let insertions: InsertionPort? = {
                 // Read here, where the effects are, and handed to the decision as a value.
                 // [LAW:effects-at-boundaries]
                 let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-                let answer = FocusedClient.shared.insert(text, whileInFrontIs: frontmost)
+                let securing = secureInputHolder()
+                let answer = FocusedClient.shared.insert(text, whileInFrontIs: frontmost, secureInputIsOn: securing != nil)
                 // The app in front is named because the refusal that matters here is the
                 // one where it is not the app holding the cursor, and a line saying only
                 // the outcome leaves a reader with the question it was written to answer.
                 logger.notice("""
                     insert of \(text.count, privacy: .public) characters: \
                     \(String(describing: answer), privacy: .public), \
-                    with \(frontmost ?? "nothing", privacy: .public) in front
+                    with \(frontmost ?? "nothing", privacy: .public) in front\
+                    \(securing.map { ", secure input held by \($0)" } ?? "", privacy: .public)
                     """)
                 return answer
             }

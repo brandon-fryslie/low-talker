@@ -13,20 +13,23 @@ import Typing
     /// the layout prints it.
     @Test func aRegisteredChordNamesNoSidesAndTheLayoutsKey() {
         let chord = KeyChord(key: Key(rawValue: UInt16(kVK_ANSI_D)), modifiers: [.leftCommand, .rightOption, .leftControl])
-        #expect(Hotkey.named(chord, heardBy: .clipboard, on: Self.us) == "Control+Option+Command+D")
+        #expect(Hotkey.named(chord, heardBy: .registeredHotKey, on: Self.us) == "Control+Option+Command+D")
         // The same physical key is E on Dvorak, which is what that user sees on it.
-        #expect(Hotkey.named(chord, heardBy: .clipboard, on: Self.dvorak) == "Control+Option+Command+E")
+        #expect(Hotkey.named(chord, heardBy: .registeredHotKey, on: Self.dvorak) == "Control+Option+Command+E")
     }
 
     /// A key that types nothing alone keeps the code, which still says which key it is.
     @Test func aKeyWithNoCharacterIsNamedByItsCode() {
         let chord = KeyChord(key: Key(rawValue: UInt16(kVK_F5)), modifiers: [.leftControl])
-        #expect(Hotkey.named(chord, heardBy: .clipboard, on: Self.us) == "Control+key 0x60")
+        #expect(Hotkey.named(chord, heardBy: .registeredHotKey, on: Self.us) == "Control+key 0x60")
     }
 
-    /// The event tap hears sides and order, so its chord is spelled the way `held` spells it.
-    @Test func aTappedChordIsSpelledWithItsSides() {
-        let chord = Hotkey.defaultChord(for: .development, heardBy: .virtualKeyboard)
-        #expect(Hotkey.named(chord, heardBy: .virtualKeyboard, on: Self.us) == Hotkey.held(chord))
+    /// The event tap hears sides, so its chord names them, in words and in the order that
+    /// works: Right Command first, since Right Option alone is the release copy's chord.
+    @Test func aTappedChordIsSpelledWithItsSidesInPressOrder() {
+        let chord = Hotkey.defaultChord(for: .development, heardBy: .eventTap)
+        #expect(Hotkey.named(chord, heardBy: .eventTap, on: Self.us) == "Right Command+Right Option")
+        let keyed = KeyChord(key: Key(rawValue: UInt16(kVK_ANSI_D)), modifiers: [.leftShift])
+        #expect(Hotkey.named(keyed, heardBy: .eventTap, on: Self.dvorak) == "Left Shift+E")
     }
 }

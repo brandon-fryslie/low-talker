@@ -17,7 +17,7 @@ import Typing
     /// Which installation's chord is beside the point here - these are about what the
     /// executor types, not about who held what - so one of them is named once, for the
     /// guard to refuse. TextEdit is the app in front throughout.
-    static let held = Hotkey.defaultChord(for: .release, heardBy: .virtualKeyboard)
+    static let held = Hotkey.defaultChord(for: .release, heardBy: .eventTap)
 
     /// One keyboard per app, made on first ask and kept, so the log of every action into
     /// an app is one log.

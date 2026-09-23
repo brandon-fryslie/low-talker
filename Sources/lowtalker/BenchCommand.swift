@@ -28,7 +28,7 @@ struct BenchCommand: AsyncParsableCommand {
     /// header are what every bench run already recorded was taken under - in the README's
     /// tables and in closed tickets - and a reading is only comparable to one named the
     /// same way. The type behind them is `Arrival`, because `Delivery` is the choice a
-    /// user makes between the clipboard and the virtual keyboard. [LAW:one-source-of-truth]
+    /// user makes between the input method and the virtual keyboard. [LAW:one-source-of-truth]
     @Option(name: .customLong("delivery"), help: "How a hold's audio reaches the engine: batch (the whole clip at key-up) or streamed (a microphone buffer at a time). Repeat for both.")
     var arrivals: [LatencyHarness.Arrival] = LatencyHarness.Arrival.allCases
 

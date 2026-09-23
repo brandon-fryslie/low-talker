@@ -34,8 +34,32 @@ import Testing
         let cursor = Cursor()
         client.took(cursor)
 
-        #expect(client.insert("hello there", whileInFrontIs: Self.inFront) == .inserted(characters: 11, into: Self.inFront))
+        #expect(client.insert("hello there", whileInFrontIs: Self.inFront, secureInputIsOn: false) == .inserted(characters: 11, into: Self.inFront))
         #expect(cursor.committed == ["hello there"])
+    }
+
+    /// A cursor held from before secure input came on is not committed into: macOS has
+    /// stopped routing to input methods, and the refusal names what to fix instead of
+    /// asking the person to click into a text field they are already in.
+    @Test func secureInputIsRefusedByNameAndCommitsNothing() {
+        let client = FocusedClient()
+        let cursor = Cursor()
+        client.took(cursor)
+
+        #expect(client.insert("hello", whileInFrontIs: Self.inFront, secureInputIsOn: true) == .refused(.secureInputIsOn))
+        #expect(cursor.committed.isEmpty)
+    }
+
+    /// Secure input is asked first, so it is the reason given even where another refusal
+    /// also holds: the fix is in the app holding it, and naming the other would send the
+    /// person to click into a text field that cannot help.
+    @Test func secureInputIsTheReasonOverEveryOtherRefusal() {
+        #expect(FocusedClient().insert("hello", whileInFrontIs: Self.inFront, secureInputIsOn: true) == .refused(.secureInputIsOn))
+        let client = FocusedClient()
+        let cursor = Cursor()
+        client.took(cursor)
+        #expect(client.insert("hello", whileInFrontIs: "com.example.elsewhere", secureInputIsOn: true) == .refused(.secureInputIsOn))
+        #expect(cursor.committed.isEmpty)
     }
 
     /// The count is what a person would count, not what a buffer would: an emoji is one
@@ -44,13 +68,12 @@ import Testing
         let client = FocusedClient()
         client.took(Cursor())
 
-        #expect(client.insert("🫠", whileInFrontIs: Self.inFront) == .inserted(characters: 1, into: Self.inFront))
+        #expect(client.insert("🫠", whileInFrontIs: Self.inFront, secureInputIsOn: false) == .inserted(characters: 1, into: Self.inFront))
     }
 
-    /// Nothing in front is an answer, not a failure - it is the case
-    /// low-input-method-s71.b26 puts on the clipboard instead.
+    /// Nothing in front is an answer, not a failure, and it is said by name.
     @Test func nothingInFrontIsRefusedByName() {
-        #expect(FocusedClient().insert("hello", whileInFrontIs: Self.inFront) == .refused(.noClientHasFocus))
+        #expect(FocusedClient().insert("hello", whileInFrontIs: Self.inFront, secureInputIsOn: false) == .refused(.noClientHasFocus))
     }
 
     /// A cursor does not outlive the app it belongs to. Without this the person could
@@ -63,7 +86,7 @@ import Testing
         client.took(cursor)
         client.applicationQuit("com.apple.TextEdit")
 
-        #expect(client.insert("hello", whileInFrontIs: "com.apple.TextEdit") == .refused(.noClientHasFocus))
+        #expect(client.insert("hello", whileInFrontIs: "com.apple.TextEdit", secureInputIsOn: false) == .refused(.noClientHasFocus))
         #expect(cursor.committed.isEmpty)
     }
 
@@ -74,7 +97,7 @@ import Testing
         client.took(cursor)
         client.applicationQuit("com.apple.Safari")
 
-        #expect(client.insert("hello", whileInFrontIs: Self.inFront) == .inserted(characters: 5, into: Self.inFront))
+        #expect(client.insert("hello", whileInFrontIs: Self.inFront, secureInputIsOn: false) == .inserted(characters: 5, into: Self.inFront))
     }
 
     @Test func aCursorThatLeavesTakesTheFocusWithIt() {
@@ -83,7 +106,7 @@ import Testing
         client.took(cursor)
         client.left(cursor)
 
-        #expect(client.insert("hello", whileInFrontIs: Self.inFront) == .refused(.noClientHasFocus))
+        #expect(client.insert("hello", whileInFrontIs: Self.inFront, secureInputIsOn: false) == .refused(.noClientHasFocus))
         #expect(cursor.committed.isEmpty)
     }
 
@@ -97,7 +120,7 @@ import Testing
         let cursor = Cursor(in: "com.apple.TextEdit")
         client.took(cursor)
 
-        #expect(client.insert("hello", whileInFrontIs: "com.apple.finder") == .refused(.cursorIsInAnotherApp))
+        #expect(client.insert("hello", whileInFrontIs: "com.apple.finder", secureInputIsOn: false) == .refused(.cursorIsInAnotherApp))
         #expect(cursor.committed.isEmpty)
     }
 
@@ -113,7 +136,7 @@ import Testing
         client.took(new)
         client.left(old)
 
-        #expect(client.insert("hello", whileInFrontIs: Self.inFront) == .inserted(characters: 5, into: Self.inFront))
+        #expect(client.insert("hello", whileInFrontIs: Self.inFront, secureInputIsOn: false) == .inserted(characters: 5, into: Self.inFront))
         #expect(new.committed == ["hello"])
         #expect(old.committed.isEmpty)
     }

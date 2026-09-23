@@ -40,8 +40,8 @@ public final class DictationInputController: IMKInputController {
     /// Focus, not a key: nothing here waits for the person to type, so an insert asked for
     /// before any key has ever arrived is answered like any other. Reported now rather than
     /// hopped onto the main actor for the same reason - a hop would report focus after the
-    /// insert that asked about it had already been refused, and the words would be on the
-    /// clipboard while the cursor sat waiting. [LAW:no-ambient-temporal-coupling]
+    /// insert that asked about it had already been refused, and the words would be lost
+    /// while the cursor sat waiting. [LAW:no-ambient-temporal-coupling]
     override public func activateServer(_ sender: Any!) {
         // The client is a main-thread object arriving through a signature written before
         // the language could say so, so the compiler cannot see that it never leaves the

@@ -19,8 +19,9 @@ struct HotkeyCommand: AsyncParsableCommand {
 
     @OptionGroup var installation: FlavorOption
 
-    @Option(help: "Which delivery's hotkey to watch: virtualKeyboard, an event tap needing Input Monitoring and Accessibility, or clipboard, a registered hot key needing neither.")
-    var heardBy: Delivery = .virtualKeyboard
+    // [LAW:one-source-of-truth] Each hearing's asks is read off it, as the app's menu reads it.
+    @Option(help: ArgumentHelp("How to hear the hotkey: " + HotkeySource.allCases.map { "\($0), which \($0.asks)" }.joined(separator: "; ") + "."))
+    var heardBy: HotkeySource = .eventTap
 
     // Whole milliseconds, for the same reason as `mic watch --interval`.
     @Option(help: "Milliseconds a press must stay under to be a tap.")
@@ -63,4 +64,4 @@ struct HotkeyCommand: AsyncParsableCommand {
     }
 }
 
-extension Delivery: ExpressibleByArgument {}
+extension HotkeySource: ExpressibleByArgument {}

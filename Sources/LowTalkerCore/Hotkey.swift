@@ -112,18 +112,19 @@ public final class Hotkey {
     /// press it, and two spellings of one chord would be a hotkey the typist could type.
     /// [LAW:one-source-of-truth]
     ///
-    /// **A registered hot key cannot be a modifier alone**, so the clipboard delivery, which
-    /// hears its hotkey that way, gets a key: Control+Shift+D, and Command added for the
-    /// development copy. Carbon matches modifiers exactly, so neither completes the other.
-    /// Not Control+Option, which is VoiceOver's modifier: VoiceOver takes Control+Option+D
-    /// as a move to the Dock.
-    nonisolated public static func defaultChord(for flavor: Flavor, heardBy delivery: Delivery) -> KeyChord {
-        let d = Key(rawValue: UInt16(kVK_ANSI_D))
-        return switch (delivery, flavor) {
-        case (.virtualKeyboard, .release): KeyChord(modifiers: .rightOption)
-        case (.virtualKeyboard, .development): KeyChord(modifiers: .rightOption, .rightCommand)
-        case (.clipboard, .release): KeyChord(key: d, modifiers: [.leftControl, .leftShift])
-        case (.clipboard, .development): KeyChord(key: d, modifiers: [.leftControl, .leftShift, .leftCommand])
+    /// **A registered hot key cannot be a modifier alone**, so that hearing gets a key: Command+Option+X for the development copy, and
+    /// Shift added for the release. Carbon matches modifiers exactly, so neither completes
+    /// the other. No Control: the chord is held while the person speaks, and a Control chord
+    /// held over a terminal is a control character sent to the shell (an earlier chord's
+    /// Control+D was end-of-file, and closed the shell it was pressed in). Not Control+Option
+    /// either, which is VoiceOver's modifier.
+    nonisolated public static func defaultChord(for flavor: Flavor, heardBy hearing: HotkeySource) -> KeyChord {
+        let x = Key(rawValue: UInt16(kVK_ANSI_X))
+        return switch (hearing, flavor) {
+        case (.eventTap, .release): KeyChord(modifiers: .rightOption)
+        case (.eventTap, .development): KeyChord(modifiers: .rightOption, .rightCommand)
+        case (.registeredHotKey, .release): KeyChord(key: x, modifiers: [.leftShift, .leftCommand, .leftOption])
+        case (.registeredHotKey, .development): KeyChord(key: x, modifiers: [.leftCommand, .leftOption])
         }
     }
 
@@ -147,7 +148,7 @@ public final class Hotkey {
     /// Every delivery's too, for the same reason: which delivery the other copy is on is a
     /// choice its user can change from its menu at any moment.
     nonisolated public static let everyInstallationsChord: Set<KeyChord> =
-        Set(Flavor.allCases.flatMap { flavor in Delivery.allCases.map { defaultChord(for: flavor, heardBy: $0) } })
+        Set(Flavor.allCases.flatMap { flavor in HotkeySource.allCases.map { defaultChord(for: flavor, heardBy: $0) } })
 
     /// This chord's modifiers in the order a person must press them.
     ///
@@ -214,15 +215,15 @@ public final class Hotkey {
         detector = HotkeyDetector(chords: chords, tapThreshold: tapThreshold)
     }
 
-    /// An installation's hotkey as its delivery hears it: that delivery's chord, through
-    /// that delivery's tap. [LAW:one-source-of-truth] The one place a delivery becomes the pair,
-    /// so a chord can never be handed to a tap that cannot hear it.
-    public convenience init(for flavor: Flavor, heardBy delivery: Delivery, tapThreshold: Duration = defaultTapThreshold) {
-        let tap: any KeyboardTap = switch delivery {
-        case .virtualKeyboard: SystemKeyboardTap()
-        case .clipboard: RegisteredHotKeys()
+    /// An installation's hotkey as `hearing` hears it: that hearing's chord, through that
+    /// hearing's tap. [LAW:one-source-of-truth] The one place a hearing becomes the pair, so
+    /// a chord can never be handed to a tap that cannot hear it.
+    public convenience init(for flavor: Flavor, heardBy hearing: HotkeySource, tapThreshold: Duration = defaultTapThreshold) {
+        let tap: any KeyboardTap = switch hearing {
+        case .eventTap: SystemKeyboardTap()
+        case .registeredHotKey: RegisteredHotKeys()
         }
-        self.init(chords: [Self.defaultChord(for: flavor, heardBy: delivery)], tapThreshold: tapThreshold, tap: tap)
+        self.init(chords: [Self.defaultChord(for: flavor, heardBy: hearing)], tapThreshold: tapThreshold, tap: tap)
     }
 
     public var phase: HotkeyDetector.Phase { detector.phase }
