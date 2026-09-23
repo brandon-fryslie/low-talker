@@ -27,7 +27,15 @@ public final class DictationInputController: IMKInputController {
     /// keys - low-input-method-s71.31s added insertion through a door of the app's, and
     /// changed nothing here.
     override public func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
-        false
+        if event.type == .flagsChanged {
+            let bundle = (sender as? IMKTextInput)?.bundleIdentifier() ?? "?"
+            NSLog("PROBE-YVL flagsChanged keyCode=%u flags=0x%llx client=%@", event.keyCode, UInt64(event.modifierFlags.rawValue), bundle)
+        }
+        return false
+    }
+
+    override public func recognizedEvents(_ sender: Any!) -> Int {
+        Int(NSEvent.EventTypeMask([.keyDown, .flagsChanged]).rawValue)
     }
 
     /// The text input system gave this controller's client focus, which is the only way
@@ -48,6 +56,7 @@ public final class DictationInputController: IMKInputController {
         // thread it was made on. `assumeIsolated` is where that is asserted and checked.
         nonisolated(unsafe) let client = sender as? IMKTextInput
         nonisolated(unsafe) let controller = self
+        NSLog("PROBE-YVL activate client=%@", client?.bundleIdentifier() ?? "?")
         MainActor.assumeIsolated {
             // A sender no cursor can be made of - no client at all, or a client that will
             // not name its app - changes nothing here. Not reported, because a sender THIS

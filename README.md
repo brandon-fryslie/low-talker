@@ -361,7 +361,7 @@ Insert is the other hand-held delivery, and it needs no grant at all. It asks th
     swift run lowtalker insert "hello there" --delay 3  # three seconds to bring the receiving app forward
     swift run lowtalker insert "hello there" --timeout 2  # the whole round trip: the request out and the answer back
 
-The line printed says either how many characters the client in front accepted or, by name, why it refused: no client has focus, or the cursor is in an app that is not in front. A transport that could not carry the question at all is an error rather than an answer, and it says which failure it was, because a request the input method never took means the words did not land while an answer that never came back means they may have.
+On success the line printed says how many characters the client in front accepted. Anything else is an error, printed by name with a non-zero exit, because either way the words are not at the cursor: a refusal says why (no client has focus, the cursor is in an app that is not in front, or an app has secure keyboard entry on), and a transport that could not carry the question at all says which failure it was, because a request the input method never took means the words did not land while an answer that never came back means they may have.
 
 What `inserted` claims is that the client belonging to the app in front accepted the commit, not that a person saw the words - the text input system offers no delivery report. The Finder's desktop, in particular, presents a full text client that accepts text into a buffer nobody can see.
 
