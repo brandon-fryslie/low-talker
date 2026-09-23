@@ -111,7 +111,7 @@ public final class FocusedClient {
     /// Secure Event Input macOS hands no input method a client, and a cursor still held from
     /// before it came on is one the text input system has stopped routing to - so no commit
     /// is attempted and the refusal names the thing to fix. [LAW:no-silent-failure]
-    public func insert(_ text: String, whileInFrontIs frontmost: String?, secureInputIsOn: Bool = false) -> InsertionAnswer {
+    public func insert(_ text: String, whileInFrontIs frontmost: String?, secureInputIsOn: Bool) -> InsertionAnswer {
         guard !secureInputIsOn else { return .refused(.secureInputIsOn) }
         guard let focus else { return .refused(.noClientHasFocus) }
         guard focus.application == frontmost else { return .refused(.cursorIsInAnotherApp) }
