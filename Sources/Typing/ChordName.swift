@@ -17,7 +17,7 @@ public extension Hotkey {
         switch delivery {
         case .virtualKeyboard:
             return held(chord)
-        case .clipboard:
+        case .inputMethod:
             let sides: [(name: String, either: Set<Modifier>)] = [
                 ("Control", [.leftControl, .rightControl]), ("Option", [.leftOption, .rightOption]),
                 ("Shift", [.leftShift, .rightShift]), ("Command", [.leftCommand, .rightCommand]),

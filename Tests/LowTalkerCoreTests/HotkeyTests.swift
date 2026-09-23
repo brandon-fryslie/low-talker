@@ -100,7 +100,7 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
     /// A tap that can hear only what it asks for is told what the detector looks for.
     @Test func theTapIsToldTheChordsTheDetectorListensFor() throws {
         let tap = FakeTap()
-        let chord = Hotkey.defaultChord(for: .release, heardBy: .clipboard)
+        let chord = Hotkey.defaultChord(for: .release, heardBy: .inputMethod)
         try Hotkey(chords: [chord], tap: tap).start({ _ in }, onLapse: { _ in })
         #expect(tap.installations.first?.chords == [chord])
     }
@@ -108,7 +108,7 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
     /// A registered hot key reports the chord going down and coming up as its key moving
     /// under its modifiers, and the detector tells a hold from a tap from those two alone.
     @Test func aChordWithAKeyIsHeldAndTappedFromItsKeyAlone() async throws {
-        let chord = Hotkey.defaultChord(for: .release, heardBy: .clipboard)
+        let chord = Hotkey.defaultChord(for: .release, heardBy: .inputMethod)
         let key = try #require(chord.key)
         func moved(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEvent {
             KeyEvent(key: .key(key), direction: direction, modifiers: chord.modifiers, time: at(ms))
@@ -316,14 +316,17 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         }
     }
 
-    /// The clipboard delivery's chords are ones the window server can register, and no two
-    /// installations' are one hot key to it.
-    @Test func everyClipboardChordIsARegistrableHotKeyOfItsOwn() throws {
-        let chords = Set(Flavor.allCases.map { Hotkey.defaultChord(for: $0, heardBy: .clipboard) })
+    /// The input method delivery's chords are ones the window server can register, and no
+    /// two installations' are one hot key to it. None holds Control: the chord is held over
+    /// whatever has focus while the person speaks, and Control+D over a terminal is
+    /// end-of-file, which closed the shell it was held in.
+    @Test func everyInputMethodChordIsARegistrableHotKeyOfItsOwn() throws {
+        let chords = Set(Flavor.allCases.map { Hotkey.defaultChord(for: $0, heardBy: .inputMethod) })
         #expect(chords.count == Flavor.allCases.count)
         for chord in chords {
             #expect(chord.key != nil, "\(chord) has no key")
             #expect(!chord.modifiers.contains(.function), "\(chord) holds function")
+            #expect(chord.modifiers.isDisjoint(with: [.leftControl, .rightControl]), "\(chord) holds Control")
         }
     }
 

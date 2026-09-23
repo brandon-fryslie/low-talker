@@ -1,6 +1,8 @@
 import AppKit
 import Dictation
 import Flavors
+import InputSource
+import Insertion
 import KeyboardLayout
 import KeyboardService
 import LowTalkerCore
@@ -124,7 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let capture = AudioCapture()
     /// Kept for the app's life so the XPC connection to the helper stays open: launchd
     /// starts the job on the first call, and that is a cost to pay once, not per press.
-    /// Lazy, so an installation on the clipboard never dials a helper it never registered.
+    /// Lazy, so an installation on the input method never dials a helper it never registered.
     private lazy var helper = HelperConnection(flavor: AppDelegate.flavor)
     /// Raised on the way out, so a session still typing stops short of its remaining
     /// keys rather than being waited out in full.
@@ -266,7 +268,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }, onLapse: { [unowned self] in report($0) })
             let status = switch delivery {
             case .virtualKeyboard: "hold \(chord) to dictate"
-            case .clipboard: "hold \(chord), or tap it to start and again to stop; then paste"
+            case .inputMethod: "hold \(chord), or tap it to start and again to stop"
             }
             showHotkeyStatus(status)
         } catch {
@@ -276,7 +278,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         switch delivery {
         case .virtualKeyboard: registerKeyboardHelper()
-        case .clipboard: break
+        case .inputMethod: await installInputMethod()
+        }
+    }
+
+    /// Puts this installation's input method where macOS looks for one, registered, switched
+    /// on and selected - the input method delivery's counterpart to registering the helper, and
+    /// run at the same moment for the same reason: choosing a delivery is what installs it.
+    ///
+    /// [LAW:no-silent-failure] An install that fails leaves a hotkey that would hear every
+    /// press and insert nothing, so the failure takes the status line the hotkey's success
+    /// wrote, in the words of the step that refused.
+    private func installInputMethod() async {
+        do {
+            let state = try await InputSourceInstaller(flavor: Self.flavor).install()
+            log.notice("input method: \(state, privacy: .public)")
+        } catch {
+            log.error("input method: \(String(describing: error), privacy: .public)")
+            showHotkeyStatus("off — the input method could not be installed: \(error)")
         }
     }
 
@@ -288,8 +307,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // never activates itself around a session; `LSUIElement` is what keeps its own
             // menu from taking focus.
             .guarding(keyboard: helper.keyboard, mouse: helper.mouse, interrupt: interrupt)
-        case .clipboard:
-            Executor(copyingTo: .general)
+        case .inputMethod:
+            // The words cross to this flavor's own input method, which commits them at the
+            // cursor through the text input system.
+            Executor(insertingThrough: InputMethodInserter(flavor: Self.flavor))
         }
     }
 
@@ -330,8 +351,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func explanation(of delivery: Delivery) -> String {
         let chord = chordName(heardBy: delivery)
         return switch delivery {
-        case .clipboard:
-            "press \(chord) to start and again to stop, then paste what you said with ⌘V. Nothing to install and nothing for an administrator to approve."
+        case .inputMethod:
+            "press \(chord) to start and again to stop, and the words are committed where your cursor is. Nothing for an administrator to approve."
         case .virtualKeyboard:
             "hold \(chord) while you speak, and the words are typed where you are. Needs a driver extension and a helper, which an administrator approves once."
         }
@@ -342,7 +363,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// the menu already answers every time it opens.
     private func showWhatIsMissing(for delivery: Delivery) {
         switch delivery {
-        case .clipboard:
+        case .inputMethod:
             return
         case .virtualKeyboard:
             let readiness = readVirtualKeyboardReadiness()
@@ -468,24 +489,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// run on WhisperKit's own threads, and only the status text comes back here.
     private func loadEngine() async throws -> WhisperKitTranscriber {
         do {
-            // [LAW:decomposition] Two operations, not one with a flag: a release loads the
-            // store it carries in place — read-only, verified whole where the code signature
-            // sealed it, written to never — while a development build, carrying none,
-            // downloads into Application Support. A read-only store cannot be installed into,
-            // only confirmed and loaded, so a carried store that lacks the model fails with
-            // its reason rather than a permission error from a lock it could not take.
+            // One operation and not two: the bundle carries a store and this loads it in
+            // place — read-only, verified whole where the code signature sealed it, written
+            // to never. A read-only store cannot be installed into, only confirmed and
+            // loaded, so a carried store that lacks the model fails with its reason rather
+            // than a permission error from a lock it could not take.
+            //
+            // There is deliberately no other way to reach a model from here, and a bundle
+            // carrying none is a build error reported at launch rather than a download.
+            // The branch that used to stand here fetched from Hugging Face when the bundle
+            // carried nothing, which made a development build that had silently shipped
+            // without its model look launchable and then reach the network from an app that
+            // has no business doing so. Every bundle carries its model - `make app` fills
+            // the store the same way scripts/sign-release does - so the case that branch
+            // existed for is now a Makefile that did not run, which is worth being told
+            // about in the words below. [LAW:types-are-the-program] [LAW:no-silent-failure]
             let report: @Sendable (WhisperKitTranscriber.LoadPhase) -> Void = { phase in
                 Task { @MainActor in
                     let next = self.engineReadiness.reporting(phase)
                     if next != self.engineReadiness { self.show(next) }
                 }
             }
-            let transcriber: WhisperKitTranscriber
-            if let carried = ModelStore.carried(by: .main) {
-                transcriber = try await WhisperKitTranscriber.loadInPlace(in: carried, phase: report)
-            } else {
-                transcriber = try await WhisperKitTranscriber.load(in: ModelStore.applicationSupport(), from: .huggingFace, phase: report)
-            }
+            guard let carried = ModelStore.carried(by: .main) else { throw BundleCarriesNoModel() }
+            let transcriber = try await WhisperKitTranscriber.loadInPlace(in: carried, phase: report)
             show(.ready(transcriber.model, after: launched.duration(to: .now)))
             return transcriber
         } catch {
@@ -504,13 +530,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch outcome {
         case .success(let session):
             sessions.notice("\(session.description, privacy: .public): \(session.transcript.text, privacy: .private)")
-            // Whatever left the words on the clipboard, which is a copy and also an insert
-            // the input method refused: the icon says words are waiting and the Insert
-            // Dictation service can place them, and a refusal that did not say so would put
-            // the words there and tell nobody. [LAW:no-silent-failure]
+            // Whatever left the words on the clipboard: the icon says words are waiting and
+            // the Insert Dictation service can place them. [LAW:no-silent-failure]
             lastDictation = session.performed.compactMap {
                 switch $0.what {
-                case .copied(let text), .notInserted(_, let text): text
+                case .copied(let text): text
                 // Named rather than defaulted, so an outcome added later that also leaves
                 // words on the clipboard cannot compile past this and silently never reach
                 // the icon or the Service. [LAW:no-silent-failure]
@@ -618,7 +642,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // things to install for an output nobody is using.
         let requirements = switch delivery {
         case .virtualKeyboard: readVirtualKeyboardReadiness().requirements
-        case .clipboard, nil: [Requirement]()
+        case .inputMethod, nil: [Requirement]()
         }
 
         // What the user's microphone is doing, on the surface the epic exists for: the
@@ -672,8 +696,20 @@ private extension Delivery {
     /// The name a person picks it by, in the menu and in the first-launch question.
     var title: String {
         switch self {
-        case .clipboard: "Clipboard"
+        case .inputMethod: "Input Method"
         case .virtualKeyboard: "Virtual Keyboard"
         }
+    }
+}
+
+/// A bundle built without the model it is supposed to carry.
+///
+/// [LAW:no-silent-failure] Not a state this app recovers from and not one it downloads its
+/// way out of: the model is put in at build time, so a bundle without one was built wrong
+/// and the only thing to do about it is say so where the person running it will read it.
+struct BundleCarriesNoModel: Error, CustomStringConvertible {
+    var description: String {
+        "this build carries no model in Contents/Resources/\(ModelStore.carriedResourceName); "
+            + "it was built without one. Build it with `make app`, which puts the model in."
     }
 }

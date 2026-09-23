@@ -86,7 +86,7 @@ private let anEditor = "com.example.editor"
 
         let answer = try await InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend)
             .insert("hello there")
-        #expect(answer == .inserted(characters: 11, into: anEditor))
+        #expect(answer == Inserted(characters: 11, into: anEditor))
         #expect(seen.text == "hello there")
     }
 
@@ -102,18 +102,19 @@ private let anEditor = "com.example.editor"
         defer { port.stop() }
 
         #expect(try await InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend).insert("")
-            == .inserted(characters: 0, into: anEditor))
+            == Inserted(characters: 0, into: anEditor))
     }
 
-    /// A refusal is an answer: it comes back, it does not throw, and it says which refusal
-    /// it is - which is what low-input-method-s71.b26 switches on to reach the clipboard.
-    @Test func aRefusalComesBackAsAnAnswer() async throws {
+    /// A refusal crosses the wire as an answer and is thrown past it, by name: to the caller
+    /// it is a failure like any other, since the words are not at the cursor.
+    @Test func aRefusalIsThrownByName() async throws {
         let name = aPortNobodyElseUses()
         let port = try PortOnItsOwnThread.insertion(name: name) { _ in .refused(.noClientHasFocus) }
         defer { port.stop() }
 
-        #expect(try await InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend).insert("hello")
-            == .refused(.noClientHasFocus))
+        await #expect(throws: Refusal.noClientHasFocus) {
+            try await InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend).insert("hello")
+        }
     }
 
     /// Bytes that are not text are answered rather than dropped, so a sender learns why
@@ -164,7 +165,7 @@ private let anEditor = "com.example.editor"
         }
         // The first is still the one answering, and answering with its own closure.
         #expect(try await InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend).insert("hello")
-            == .inserted(characters: 5, into: anEditor))
+            == Inserted(characters: 5, into: anEditor))
     }
 }
 
@@ -173,21 +174,18 @@ private let anEditor = "com.example.editor"
 ///
 /// Four of the five, and the fifth says why: `sendFailed` is the bucket for a status
 /// `CFMessagePort` hands out for reasons of its own - a channel that broke under us - and
-/// there is no way to ask it for one. What the cases below do cover is the distinction the
-/// module exists for, and which half of `Unreachable` each one lands in: a request never
-/// taken and an answer never returned are opposite facts about whether the words landed,
-/// and only the first half lets a caller deliver them somewhere else.
+/// there is no way to ask it for one. What the cases below do cover is that each way the
+/// channel fails is said by its own name.
 @Suite struct UnreachableTests {
     @Test func nothingListeningIsSaidByName() async {
         let name = aPortNobodyElseUses()
-        await #expect(throws: Unreachable.didNotLand(.nothingIsListening(port: name))) {
+        await #expect(throws: Unreachable.nothingIsListening(port: name)) {
             try await InputMethodInserter(portName: name, timeout: .seconds(1)).insert("hello")
         }
     }
 
-    /// A request nobody ever takes, which is the case the module's shape rests on: of the
-    /// two timeouts this is the one that means the words certainly did not land, and
-    /// low-input-method-s71.b26 reaches for the clipboard by reading it.
+    /// A request nobody ever takes, which is a different failure from an answer that never
+    /// comes back, and is said as one.
     ///
     /// The far end is a port with no run loop behind it - the name resolves, so this is not
     /// "nothing is listening", and nothing ever dequeues, so the queue behind it fills and
@@ -215,13 +213,13 @@ private let anEditor = "com.example.editor"
         }
         #expect(filled, "the queue behind the port never filled, so no send timeout can be asked for")
 
-        await #expect(throws: Unreachable.didNotLand(.requestWasNotTaken(port: name, after: budget / 2))) {
+        await #expect(throws: Unreachable.requestWasNotTaken(port: name, after: budget / 2)) {
             try await InputMethodInserter(portName: name, timeout: budget).insert("hello")
         }
     }
 
     /// A live input method that does not finish in time is not a missing one, and the two
-    /// are not answered the same way: this one may have inserted the words.
+    /// are not said the same way.
     @Test func anAnswerThatDoesNotArriveIsSaidByName() async throws {
         let name = aPortNobodyElseUses()
         let port = try PortOnItsOwnThread.insertion(name: name) { text in
@@ -237,7 +235,7 @@ private let anEditor = "com.example.editor"
         // against would otherwise fail it as a send that never landed. The five seconds this
         // case does spend are the receive half, which is the wait under test.
         let timeout = Duration.seconds(10)
-        await #expect(throws: Unreachable.mayHaveLanded(.answerDidNotArrive(port: name, after: timeout / 2))) {
+        await #expect(throws: Unreachable.answerDidNotArrive(port: name, after: timeout / 2)) {
             try await InputMethodInserter(portName: name, timeout: timeout).insert("hello")
         }
     }
@@ -250,7 +248,7 @@ private let anEditor = "com.example.editor"
         let port = try PortOnItsOwnThread.raw(name: name) { _ in Data("nonsense".utf8) }
         defer { port.stop() }
 
-        await #expect(throws: Unreachable.mayHaveLanded(.answerWasNotReadable(port: name, bytes: 8))) {
+        await #expect(throws: Unreachable.answerWasNotReadable(port: name, bytes: 8)) {
             try await InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend).insert("hello")
         }
     }

@@ -38,6 +38,18 @@ import Testing
         #expect(cursor.committed == ["hello there"])
     }
 
+    /// A cursor held from before secure input came on is not committed into: macOS has
+    /// stopped routing to input methods, and the refusal names what to fix instead of
+    /// asking the person to click into a text field they are already in.
+    @Test func secureInputIsRefusedByNameAndCommitsNothing() {
+        let client = FocusedClient()
+        let cursor = Cursor()
+        client.took(cursor)
+
+        #expect(client.insert("hello", whileInFrontIs: Self.inFront, secureInputIsOn: true) == .refused(.secureInputIsOn))
+        #expect(cursor.committed.isEmpty)
+    }
+
     /// The count is what a person would count, not what a buffer would: an emoji is one
     /// character to whoever dictated it.
     @Test func theCountIsOfCharactersAndNotOfBytes() {

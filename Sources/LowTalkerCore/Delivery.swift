@@ -7,13 +7,14 @@
 ///
 /// [LAW:no-mode-explosion] One choice and not two flags. What a delivery costs to install
 /// is the sum of what its hotkey and its output need, and the only reason to pick
-/// `clipboard` is that it needs nothing an administrator has to approve - so a
-/// clipboard output behind an event tap, which needs Input Monitoring, is a combination
-/// nobody would choose, and it is not one this type can say.
+/// `inputMethod` is that it asks no grant of an administrator - so its output behind an
+/// event tap, which needs Input Monitoring, is a combination nobody would choose, and it
+/// is not one this type can say.
 public enum Delivery: String, CaseIterable, Sendable, CustomStringConvertible {
-    /// The hotkey is a registered hot key and the words go on the clipboard for the user
-    /// to paste. Nothing is installed and nothing asks for an administrator.
-    case clipboard
+    /// The hotkey is a registered hot key and the words are committed at the cursor by
+    /// this app's own macOS input method, through the text input system. Nothing asks for
+    /// an administrator.
+    case inputMethod
     /// The hotkey is an event tap and the words are typed on the virtual keyboard, through
     /// the driver extension and the root helper.
     case virtualKeyboard

@@ -19,7 +19,7 @@ struct HotkeyCommand: AsyncParsableCommand {
 
     @OptionGroup var installation: FlavorOption
 
-    @Option(help: "Which delivery's hotkey to watch: virtualKeyboard, an event tap needing Input Monitoring and Accessibility, or clipboard, a registered hot key needing neither.")
+    @Option(help: "Which delivery's hotkey to watch: virtualKeyboard, an event tap needing Input Monitoring and Accessibility, or inputMethod, a registered hot key needing neither.")
     var heardBy: Delivery = .virtualKeyboard
 
     // Whole milliseconds, for the same reason as `mic watch --interval`.

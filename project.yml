@@ -84,6 +84,12 @@ targetTemplates:
         product: KeyboardLayout
       - package: low-talker
         product: Dictation
+      # The input method delivery: the channel that asks the input method to insert, and
+      # the install that puts that input method where macOS looks for one.
+      - package: low-talker
+        product: Insertion
+      - package: low-talker
+        product: InputSource
       # The helper rides inside the bundle, where the plist above names it, signed on
       # copy with the app's own identity. One tool target embedded in both bundles: the
       # binary is the same program either way, and which installation it serves is the

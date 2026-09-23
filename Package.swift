@@ -19,6 +19,7 @@ let package = Package(
         .library(name: "Dictation", targets: ["Dictation"]),
         .library(name: "InputMethod", targets: ["InputMethod"]),
         .library(name: "Insertion", targets: ["Insertion"]),
+        .library(name: "InputSource", targets: ["InputSource"]),
         .executable(name: "lowtalker", targets: ["lowtalker"]),
         .executable(name: "lowtalker-keyboardd", targets: ["lowtalker-keyboardd"]),
         .executable(name: "lowtalker-inputmethod", targets: ["lowtalker-inputmethod"]),
@@ -38,6 +39,12 @@ let package = Package(
         // [LAW:one-way-deps]
         .target(name: "Flavors"),
         .testTarget(name: "FlavorsTests", dependencies: ["Flavors"]),
+        // The Text Input Sources framework as this program uses it: where this flavor's
+        // input source stands on this Mac, and the steps that put it there. It links only
+        // Flavors, so the app reaches it without the input method process linking anything
+        // of the app's. [LAW:one-way-deps]
+        .target(name: "InputSource", dependencies: ["Flavors"]),
+        .testTarget(name: "InputSourceTests", dependencies: ["InputSource", "Flavors"]),
         .target(
             name: "LowTalkerCore",
             dependencies: [

@@ -31,10 +31,8 @@ public struct Executor {
         /// `hotkeys` are the chords the tap listens for, which no action may press.
         case devices(keyboard: Keyboards, mouse: Pointers, hotkeys: Set<KeyChord>)
         case clipboard(Clipboard)
-        /// The input method puts the words at the cursor itself; the clipboard is where
-        /// they go when the cursor certainly did not get them. Both, because a cursor that
-        /// did not take the words is not the words being gone. [LAW:no-silent-failure]
-        case insertion(any Inserter, clipboard: Clipboard)
+        /// The input method puts the words at the cursor itself.
+        case insertion(any Inserter)
     }
 
     private let output: Output
@@ -57,22 +55,11 @@ public struct Executor {
     /// the text input system - no key posted, no pasteboard touched, and no grant asked of
     /// an administrator.
     ///
-    /// `clipboard` is not a fallback for everything that can go wrong, and the line it is
-    /// drawn on is whether the words certainly did not land. A refusal is that - the input
-    /// method looked and there was nowhere to put them - and so is the question never
-    /// reaching one to look, which covers an uninstalled bundle, an unselected source and
-    /// an input method that never took the request, and is the likeliest thing that goes
-    /// wrong here. Those go to the clipboard and the outcome says both halves, so the icon
-    /// shows words waiting and the Insert Dictation service can still place them.
-    ///
-    /// A channel that broke where this end cannot see which side of the commit it broke on
-    /// is thrown as it is, the way an unreachable helper is. Copying there would risk
-    /// delivering a second copy of a sentence already in the document, and it would hide a
-    /// broken channel behind a working-looking dictation. `Unreachable` carries that split
-    /// in its own shape, so this is a fact the compiler holds rather than a rule this
-    /// comment asks to be remembered. [LAW:no-silent-failure]
-    public init(insertingThrough inserter: any Inserter, orCopyingTo clipboard: Clipboard, log: Logger = Executor.log) {
-        output = .insertion(inserter, clipboard: clipboard)
+    /// Words that do not reach the cursor are a failure and are thrown as one: the input
+    /// method's refusal or the channel's, by name. Nothing puts them anywhere else.
+    /// [LAW:no-silent-failure]
+    public init(insertingThrough inserter: any Inserter, log: Logger = Executor.log) {
+        output = .insertion(inserter)
         self.log = log
     }
 
@@ -99,18 +86,8 @@ public struct Executor {
             /// this case is the app the words actually reached and not necessarily the one
             /// this route was decided in front of: the person can move between the chord and
             /// the words being ready, and the input method commits where the cursor is then.
-            /// Less than a person seeing them, and more than `copied` can say.
             /// [FRAMING:representation]
             case inserted(characters: Int)
-            /// The cursor did not get them, so they are on the clipboard instead. Both halves
-            /// in one outcome, because why the cursor did not get the words and where they
-            /// are now are two facts and neither answers the other.
-            ///
-            /// The app is `into`, which here is the app remembered at key-down and never an
-            /// app the words reached - there is no such app in this case. The line says that
-            /// moment out loud, because a reason like `cursorIsInAnotherApp` is the far end
-            /// talking about what was in front when it looked, which is later.
-            case notInserted(NotAtTheCursor, copied: String)
         }
 
         public let what: What
@@ -130,7 +107,6 @@ public struct Executor {
             case .scrolled(let at, let vertical, let horizontal): "scrolled vertical \(vertical.rawValue) horizontal \(horizontal.rawValue) at \(at) into \(into.rawValue)"
             case .copied(let text): "copied \(text.count) characters to the clipboard with \(into.rawValue) in front"
             case .inserted(let characters): "inserted \(characters) characters at the cursor in \(into.rawValue)"
-            case .notInserted(let reason, let text): "\(reason), so \(text.count) characters went to the clipboard with \(into.rawValue) in front at key-down"
             }
             return "\(act), key-up to acknowledged \(Int(acknowledged / .milliseconds(1))) ms"
         }
@@ -159,8 +135,8 @@ public struct Executor {
             lowered = try actions.map { try lower($0, in: frontmost, on: layout, keyboard: keyboard, mouse: mouse, hotkeys: hotkeys) }
         case .clipboard(let clipboard):
             lowered = try actions.map { try copy($0, in: frontmost, to: clipboard) }
-        case .insertion(let inserter, let clipboard):
-            lowered = try actions.map { try insert($0, in: frontmost, through: inserter, orTo: clipboard) }
+        case .insertion(let inserter):
+            lowered = try actions.map { try insert($0, through: inserter) }
         }
         let clock = ContinuousClock()
         var performed: [Performed] = []
@@ -203,48 +179,16 @@ public struct Executor {
         }
     }
 
-    private func insert(_ action: Action, in frontmost: BundleID, through inserter: any Inserter, orTo clipboard: Clipboard) throws -> Step {
+    private func insert(_ action: Action, through inserter: any Inserter) throws -> Step {
         switch action {
         case .insertText(let text, .focus):
             return Step {
-                // The one thing that ends at the cursor returns; everything else names why
-                // it did not and leaves by the single road to the clipboard below.
-                // [LAW:dataflow-not-control-flow]
-                let reason: NotAtTheCursor
-                do {
-                    // Awaited, so the round trip runs on a thread of its own: this is the
-                    // main actor, and `Inserter` says in its own contract that the blocking
-                    // call must not pump it. [LAW:no-ambient-temporal-coupling]
-                    switch try await inserter.insert(text) {
-                    case .inserted(let characters, let reached):
-                        return (.inserted(characters: characters), BundleID(rawValue: reached))
-                    // Not a failure to recover from but the other half of this output's job:
-                    // the input method looked and there was nowhere to put words.
-                    case .refused(let refusal):
-                        reason = .refused(refusal)
-                    }
-                } catch let unreachable as Unreachable {
-                    switch unreachable {
-                    // The channel saying the cursor never saw the words, whichever way it
-                    // says it - and the likeliest thing that goes wrong with this delivery
-                    // is in here, so the utterance goes where the person can still reach it
-                    // rather than existing only in a log line.
-                    case .didNotLand(let why):
-                        reason = .unreachable(why)
-                    // Thrown on untouched: here the far end may already have put the words
-                    // in the document, and words that may have landed must not be delivered
-                    // a second time. The type makes that the only thing this arm can do.
-                    // [LAW:no-silent-failure]
-                    case .mayHaveLanded:
-                        throw unreachable
-                    }
-                }
-                // Both facts or neither: a pasteboard that will not take the words would
-                // otherwise replace the reason with its own complaint, and the person would
-                // be told where the words are not without being told why the cursor did not
-                // get them. [LAW:no-silent-failure]
-                do { try clipboard.write(text) } catch { throw NotInsertedAndNotCopied(reason: reason, cause: error) }
-                return (.notInserted(reason, copied: text), frontmost)
+                // Awaited, so the round trip runs on a thread of its own: this is the main
+                // actor, and `Inserter` says in its own contract that the blocking call must
+                // not pump it. [LAW:no-ambient-temporal-coupling] A refusal or a channel
+                // failure is thrown on as it is, and stops the route by name.
+                let inserted = try await inserter.insert(text)
+                return (.inserted(characters: inserted.characters), BundleID(rawValue: inserted.into))
             }
         // Text for a named app included: this output reaches the cursor the text input
         // system is holding, which belongs to whatever is in front, so an action naming its
@@ -327,17 +271,6 @@ public struct RouteStopped: StoppedPartWay, CustomStringConvertible {
         let before = performed.isEmpty ? "" : ". Performed before it: " + performed.map(\.description).joined(separator: "; ")
         return "\(cause)\(before)"
     }
-}
-
-/// The words did not reach the cursor and the clipboard would not take them either, which
-/// is two failures and one outcome: where the words could not go, and that they are now
-/// nowhere. Carried together because the reason is the half that says what to fix.
-/// [LAW:no-silent-failure]
-public struct NotInsertedAndNotCopied: Error, CustomStringConvertible {
-    public let reason: NotAtTheCursor
-    public let cause: any Error
-
-    public var description: String { "\(reason), and the words could not be copied either: \(cause)" }
 }
 
 /// An action neither device can perform. Activating an app, opening a URL, running a

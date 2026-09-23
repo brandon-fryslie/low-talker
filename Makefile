@@ -3,11 +3,24 @@ SHELL := /bin/bash
 DERIVED_DATA := DerivedData
 CONFIGURATION := Debug
 PRODUCTS := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)
-# A store holding the model and the pinned driver package, for the bundle to carry;
-# scripts/sign-release names both and every other build leaves them empty, so it carries
-# neither.
-BUNDLED_MODEL_STORE :=
+# A store holding the model and the pinned driver package, for the bundle to carry.
+#
+# Every bundle carries its model, the development copy included. It is not an optimisation:
+# `AppDelegate.loadEngine` has no other way to reach one, so a bundle built without a store
+# here launches and says it carries no model rather than reaching the network. A build-time
+# copy is the only door, which is what keeps a running app off the network entirely.
+# [LAW:types-are-the-program] [LAW:no-silent-failure]
+#
+# scripts/sign-release overrides this with a store it fetched itself, pinned to the release
+# it is signing; a plain `make app` fills the one below from this Mac's own store.
+CARRIED_MODEL_STORE := $(abspath $(DERIVED_DATA)/model-store)
+BUNDLED_MODEL_STORE := $(CARRIED_MODEL_STORE)
 BUNDLED_DRIVER_PACKAGE :=
+
+# Where `make app` takes the model from, which is where `lowtalker model download` puts it.
+# A local copy, never a fetch: the CLI is what talks to Hugging Face, on purpose and by
+# name, and `make app` only ever copies out of what it left behind. [LAW:one-way-deps]
+MODEL_SOURCE := $(HOME)/Library/Application Support/low-talker/hub
 
 # The two installations, as the scheme that builds each and the bundle it leaves behind.
 # [LAW:one-source-of-truth] project.yml names these; they are written once here and every
@@ -23,7 +36,7 @@ RELEASE_SCHEME := LowTalker
 RELEASE_APP := $(PRODUCTS)/LowTalker.app
 INSTALLED := /Applications/LowTalker.app
 
-.PHONY: app release install run test check-docs cli helper clean signing-identity
+.PHONY: app release install run test check-docs cli helper clean signing-identity model-store
 
 # Regeneration is unconditional: xcodegen is idempotent and sub-second, and a
 # timestamp rule cannot see removed sources or in-place rewrites of the project.
@@ -38,7 +51,25 @@ define build_app
 		BUNDLED_DRIVER_PACKAGE="$(BUNDLED_DRIVER_PACKAGE)" build
 endef
 
-app:
+# The store the bundle carries, copied out of this Mac's own. Two stores and not one,
+# the way `model pack` works: a store filled from Hugging Face also holds the hub client's
+# own metadata, and a copy out of it takes only the files the manifests list, so the bundle
+# carries exactly what an install certifies. [LAW:one-source-of-truth]
+#
+# Idempotent and cheap on the second run: `model download --from` is an install, and an
+# install of a model already whole copies nothing. It is a directory rather than a file, so
+# it is phony and asks the CLI rather than asking make to compare timestamps on 632 MB.
+.PHONY: model-store
+model-store:
+	@test -d "$(MODEL_SOURCE)" || { \
+		echo "no model store at $(MODEL_SOURCE)."; \
+		echo "Run '$(CLI) model download' once; it is the only thing here that reaches the network."; \
+		exit 1; \
+	}
+	$(MAKE) --no-print-directory cli >/dev/null
+	"$(CLI)" model download --models-dir "$(CARRIED_MODEL_STORE)" --from "$(MODEL_SOURCE)"
+
+app: model-store
 	$(call build_app,$(DEV_SCHEME))
 	@echo "$(DEV_APP)"
 
