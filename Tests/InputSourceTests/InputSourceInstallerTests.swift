@@ -98,7 +98,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: directory) }
         let embedded = try signedBundle(in: directory, build: "1")
         let installed = directory.appending(components: "Input Methods", "Input.app")
-        let staging = try #require(try InputSourceInstaller.place(embedded, at: installed))
+        let staging = try #require(try InputSourceInstaller.place(embedded, at: installed)).previous
         #expect(try isDirectory(installed))
         #expect(try InputSourceInstaller.seal(of: installed) == InputSourceInstaller.seal(of: embedded))
         // Nothing stood there, so the staging directory holds nothing to keep.
@@ -117,7 +117,7 @@ import Testing
         let installed = directory.appending(path: "Input.app")
         try FileManager.default.createSymbolicLink(at: installed, withDestinationURL: embedded)
         #expect(!InputSourceInstaller.isCopy(installed, of: try InputSourceInstaller.seal(of: embedded)))
-        let staging = try #require(try InputSourceInstaller.place(embedded, at: installed))
+        let staging = try #require(try InputSourceInstaller.place(embedded, at: installed)).previous
         #expect(try isDirectory(installed))
         // The link was swapped out as a link, and its target was never touched.
         let old = staging.appending(path: "Input.app")
@@ -133,6 +133,54 @@ import Testing
         let rebuilt = try signedBundle(in: directory, build: "2")
         #expect(try InputSourceInstaller.place(rebuilt, at: installed) != nil)
         #expect(try InputSourceInstaller.seal(of: installed) == InputSourceInstaller.seal(of: rebuilt))
+    }
+
+    /// The moment `install` stops processes before is the swap itself, not the start of the
+    /// copy: a process launched while the copy was being made ran the old bundle, and a stamp
+    /// taken before the copy would read it as launched from the new one and leave it running.
+    @Test func theSwapIsStampedOnceTheNewCopyStands() throws {
+        let directory = try scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let installed = directory.appending(path: "Input.app")
+        _ = try InputSourceInstaller.place(try signedBundle(in: directory, build: "1"), at: installed)
+        let rebuilt = try signedBundle(in: directory, build: "2")
+        let replacement = try #require(try InputSourceInstaller.place(rebuilt, at: installed))
+        // The rename is the last change to the installed name, so its status-change time
+        // is when the new copy began to stand there.
+        var status = stat()
+        try #require(lstat(installed.path, &status) == 0)
+        let stood = Date(timeIntervalSince1970: TimeInterval(status.st_ctimespec.tv_sec) + TimeInterval(status.st_ctimespec.tv_nsec) / 1e9)
+        #expect(replacement.swappedAt >= stood)
+    }
+
+    /// An install runs at every launch, so a copy that cannot be swapped in must not leave
+    /// its staged bundle behind each time it fails.
+    @Test func aFailedSwapLeavesNothingStaged() throws {
+        let directory = try scratch()
+        let target = directory.appending(path: "Input Methods")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: target.path)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let embedded = try signedBundle(in: directory, build: "1")
+        let name = "Input-\(UUID().uuidString).app"
+        let installed = target.appending(path: name)
+        // Where this volume's staging directories are made, found by making one.
+        let probe = try FileManager.default.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: installed, create: true)
+        try FileManager.default.removeItem(at: probe)
+        let stagingRoot = probe.deletingLastPathComponent()
+        // A directory nobody may add a name to: the copy is staged, and the rename refused.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: target.path)
+        #expect {
+            _ = try InputSourceInstaller.place(embedded, at: installed)
+        } throws: { error in
+            guard case .cannotCopy = error as? InputSourceInstallFailure else { return false }
+            return true
+        }
+        let staged = try FileManager.default.contentsOfDirectory(atPath: stagingRoot.path)
+            .filter { FileManager.default.fileExists(atPath: stagingRoot.appending(components: $0, name).path) }
+        #expect(staged.isEmpty)
     }
 
     /// A copy whose files changed after it was signed still carries the same code directory

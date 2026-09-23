@@ -2,6 +2,7 @@ import AppKit
 import Carbon
 import Flavors
 import Foundation
+import os
 import Security
 
 /// Where this flavor's input source stands on this Mac, as the text input system reports it.
@@ -149,10 +150,9 @@ public struct InputSourceInstaller: Sendable {
         // copy. A copy left alone leaves them alone: stopping an input method that is already
         // running the right code only disconnects every app from it, and imklaunchagent stops
         // relaunching one that keeps dying.
-        let placing = Date()
-        if let replaced = try Self.place(embedded, at: installed) {
-            stopRunning(launchedBefore: placing)
-            try FileManager.default.removeItem(at: replaced)
+        if let replacement = try Self.place(embedded, at: installed) {
+            stopRunning(launchedBefore: replacement.swappedAt)
+            discard(replacement.previous)
         }
         // Registered unconditionally rather than only when `notRegistered`: registering a
         // source already known is how the text input system is told the bundle behind it
@@ -187,22 +187,36 @@ public struct InputSourceInstaller: Sendable {
         return .selected
     }
 
-    /// Puts a copy of `embedded` at `installed` unless what stands there already is one.
-    ///
-    /// Answers nil when it left things alone, and otherwise the staging directory, which
-    /// now holds whatever stood there before - still whole, because a process may be
-    /// running from it - and is the caller's to delete once nothing is.
+    /// A copy `place` swapped in: the moment it began to stand, and the staging directory
+    /// now holding whatever stood there before - still whole, because a process may be
+    /// running from it - which is the caller's to delete once nothing is.
+    struct Replacement: Equatable {
+        /// Read after the swap, so every process launched before it may be running the old
+        /// copy and every process launched after it is running the new one.
+        let swappedAt: Date
+        let previous: URL
+    }
+
+    /// Puts a copy of `embedded` at `installed` unless what stands there already is one,
+    /// answering nil when it left things alone.
     ///
     /// Staged in the system's replacement directory for this volume and swapped in with one
     /// rename, so the text input system finds the old bundle or the new one and never half
-    /// of either, and a crash mid-copy leaves nothing in `~/Library/Input Methods`.
-    static func place(_ embedded: URL, at installed: URL) throws -> URL? {
+    /// of either, and a crash mid-copy leaves nothing in `~/Library/Input Methods`. A copy
+    /// that fails takes its staging directory with it, since an install runs at every launch
+    /// and a lasting failure would otherwise leave one more copy behind each time.
+    static func place(_ embedded: URL, at installed: URL) throws -> Replacement? {
         let wanted = try seal(of: embedded)
         if isCopy(installed, of: wanted) { return nil }
+        let staging: URL
         do {
             try FileManager.default.createDirectory(at: installed.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let staging = try FileManager.default.url(
+            staging = try FileManager.default.url(
                 for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: installed, create: true)
+        } catch {
+            throw InputSourceInstallFailure.cannotCopy(from: embedded, to: installed, reason: "\(error)")
+        }
+        do {
             let staged = staging.appending(path: installed.lastPathComponent)
             try FileManager.default.copyItem(at: embedded, to: staged)
             // `RENAME_SWAP` exchanges the two names when both exist - a link is swapped as
@@ -212,9 +226,29 @@ public struct InputSourceInstaller: Sendable {
             guard swapped || (errno == ENOENT && rename(staged.path, installed.path) == 0) else {
                 throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
             }
-            return staging
+            return Replacement(swappedAt: Date(), previous: staging)
         } catch {
-            throw InputSourceInstallFailure.cannotCopy(from: embedded, to: installed, reason: "\(error)")
+            // [LAW:no-silent-failure] A staging directory that will not go is said in the
+            // same refusal, where the person reading it is already looking.
+            var reason = "\(error)"
+            do { try FileManager.default.removeItem(at: staging) } catch {
+                reason += "; the staged copy is left at \(staging.path): \(error)"
+            }
+            throw InputSourceInstallFailure.cannotCopy(from: embedded, to: installed, reason: reason)
+        }
+    }
+
+    /// Deletes the copy a swap put aside, once the processes running it are stopped.
+    ///
+    /// Said and not thrown when it fails: the new copy already stands, so refusing here would
+    /// leave the input method unregistered and unselected for the sake of a folder in the
+    /// system's temporary items. [LAW:no-silent-failure]
+    private func discard(_ previous: URL) {
+        do { try FileManager.default.removeItem(at: previous) } catch {
+            Logger(subsystem: flavor.bundleIdentifier, category: "engine").error("""
+                input method: the replaced copy is left at \(previous.path, privacy: .public): \
+                \(String(describing: error), privacy: .public)
+                """)
         }
     }
 
