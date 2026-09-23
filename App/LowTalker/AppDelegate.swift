@@ -285,7 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if case .began = transition { lastDictation = nil }
                 dictation.press(transition)
             }, onLapse: { [unowned self] in report($0) })
-        }.mapError { "\($0)" }
+        }.mapError { Refusal(stringLiteral: "\($0)") }
         let delivering = await install(setup.delivery)
         // [LAW:no-silent-failure] Either half can refuse, and with any source beside any
         // delivery both can at once: every refusal is on the one surface this app has, in
