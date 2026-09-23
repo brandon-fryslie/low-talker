@@ -113,11 +113,10 @@ public struct InputSourceInstaller: Sendable {
     /// only where the one below it already held: a source list queried for a bundle that is
     /// not installed would answer about somebody else's leftovers.
     public func state() throws -> InputSourceState {
-        let installed = try installed()
-        // `fileExists` follows a link, which is the question being asked: a link left by an
-        // older install whose target a `make clean` took away is not an installed input
-        // method, and reading it as one would leave `install` with nothing to repair.
-        guard FileManager.default.fileExists(atPath: installed.path) else { return .bundleNotInstalled }
+        // Installed means the copy this app carries, which is what `install` would leave: a
+        // link, another build or a damaged copy reads as not installed, because each is
+        // one `install` replaces. [LAW:single-enforcer]
+        guard Self.isCopy(try installed(), of: try Self.seal(of: try embedded())) else { return .bundleNotInstalled }
         guard let source = Self.source(named: flavor.inputSourceIdentifier) else { return .notRegistered }
         guard Self.isEnabled(source) else { return .disabled }
         return Self.isSelected(source) ? .selected : .enabled
@@ -150,7 +149,11 @@ public struct InputSourceInstaller: Sendable {
         // copy. A copy left alone leaves them alone: stopping an input method that is already
         // running the right code only disconnects every app from it, and imklaunchagent stops
         // relaunching one that keeps dying.
-        if try Self.place(embedded, at: installed) { stopRunning() }
+        let placing = Date()
+        if let replaced = try Self.place(embedded, at: installed) {
+            stopRunning(launchedBefore: placing)
+            try FileManager.default.removeItem(at: replaced)
+        }
         // Registered unconditionally rather than only when `notRegistered`: registering a
         // source already known is how the text input system is told the bundle behind it
         // changed, which is exactly what a rebuilt development copy needs and costs nothing
@@ -184,44 +187,65 @@ public struct InputSourceInstaller: Sendable {
         return .selected
     }
 
-    /// Puts a copy of `embedded` at `installed` unless what stands there already is one,
-    /// and answers whether it did.
+    /// Puts a copy of `embedded` at `installed` unless what stands there already is one.
     ///
-    /// A copy is its signature: two bundles with the same code directory hash are the same
-    /// sealed files. A link stands in for nothing, whatever it points at, because a link is
-    /// what a sandboxed app cannot follow. [LAW:single-enforcer] This is the one place that
-    /// decides whether the installed input method is the one this app carries.
+    /// Answers nil when it left things alone, and otherwise the staging directory, which
+    /// now holds whatever stood there before - still whole, because a process may be
+    /// running from it - and is the caller's to delete once nothing is.
     ///
-    /// Copied beside the installed bundle first and moved over it second, so the text input
-    /// system never finds half a bundle where the input method should be.
-    static func place(_ embedded: URL, at installed: URL) throws -> Bool {
+    /// Staged in the system's replacement directory for this volume and swapped in with one
+    /// rename, so the text input system finds the old bundle or the new one and never half
+    /// of either, and a crash mid-copy leaves nothing in `~/Library/Input Methods`.
+    static func place(_ embedded: URL, at installed: URL) throws -> URL? {
         let wanted = try seal(of: embedded)
-        let standing = try? FileManager.default.attributesOfItem(atPath: installed.path)[.type] as? FileAttributeType
-        if standing == .typeDirectory, (try? seal(of: installed)) == wanted { return false }
-        let staged = installed.deletingLastPathComponent().appending(path: ".\(UUID().uuidString)-\(installed.lastPathComponent)")
+        if isCopy(installed, of: wanted) { return nil }
         do {
             try FileManager.default.createDirectory(at: installed.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let staging = try FileManager.default.url(
+                for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: installed, create: true)
+            let staged = staging.appending(path: installed.lastPathComponent)
             try FileManager.default.copyItem(at: embedded, to: staged)
-            // `removeItem` on a link removes the link and not its target, which is what makes
-            // replacing a link into a DerivedData build safe.
-            if standing != nil { try FileManager.default.removeItem(at: installed) }
-            try FileManager.default.moveItem(at: staged, to: installed)
+            // `RENAME_SWAP` exchanges the two names when both exist - a link is swapped as
+            // the link, never followed - and a plain rename moves the copy in when nothing
+            // stood there.
+            let swapped = renamex_np(staged.path, installed.path, UInt32(RENAME_SWAP)) == 0
+            guard swapped || (errno == ENOENT && rename(staged.path, installed.path) == 0) else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            return staging
         } catch {
-            try? FileManager.default.removeItem(at: staged)
             throw InputSourceInstallFailure.cannotCopy(from: embedded, to: installed, reason: "\(error)")
         }
-        return true
     }
 
-    /// The code directory hash of a bundle's signature: one value standing for every file
-    /// the signature seals.
+    /// Whether what stands at `installed` is a whole copy of the bundle sealed as `seal`.
+    ///
+    /// A copy is its signature: the code directory hash stands for every file the
+    /// signature seals, and validating the copy is what makes that true of the files as
+    /// they are now rather than as they were signed. A link is no copy, whatever it points
+    /// at, because a link is what a sandboxed app cannot follow. [LAW:single-enforcer] The
+    /// one place that decides whether the installed input method is the one this app
+    /// carries; `state` and `place` both ask it.
+    static func isCopy(_ installed: URL, of seal: Data) -> Bool {
+        let standing = try? FileManager.default.attributesOfItem(atPath: installed.path)[.type] as? FileAttributeType
+        return standing == .typeDirectory && (try? Self.seal(of: installed)) == seal
+    }
+
+    /// The code directory hash of a bundle whose signature holds for every file it seals:
+    /// one value standing for the whole bundle.
     static func seal(of bundle: URL) throws -> Data {
         var code: SecStaticCode?
         var status = SecStaticCodeCreateWithPath(bundle as CFURL, [], &code)
         var information: CFDictionary?
-        if let code { status = SecCodeCopySigningInformation(code, [], &information) }
-        guard status == errSecSuccess, let hash = (information as? [String: Any])?[kSecCodeInfoUnique as String] as? Data else {
-            throw InputSourceInstallFailure.unsigned(bundle: bundle, status: status)
+        if let code {
+            status = SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSStrictValidate), nil)
+            if status == errSecSuccess { status = SecCodeCopySigningInformation(code, [], &information) }
+        }
+        guard status == errSecSuccess else { throw InputSourceInstallFailure.unsigned(bundle: bundle, status: status) }
+        // Signing information with no hash in it is what an unsigned bundle reads as, and
+        // is said as that rather than as the success status that carried it.
+        guard let hash = (information as? [String: Any])?[kSecCodeInfoUnique as String] as? Data else {
+            throw InputSourceInstallFailure.unsigned(bundle: bundle, status: errSecCSUnsigned)
         }
         return hash
     }
@@ -237,13 +261,19 @@ public struct InputSourceInstaller: Sendable {
         return sources?.first
     }
 
-    /// Ends every running process of this flavor's input method.
+    /// Ends every running process of this flavor's input method that started before
+    /// `moment`, which is when the copy they were running was replaced.
     ///
-    /// Forced, because an input method is never asked to quit by anyone and does not answer
-    /// the request, and it holds nothing to lose: the client is the document.
+    /// Told apart by when they started and not by their path, because every path now
+    /// resolves to the new copy: a process the text input system launched from it between
+    /// the swap and this call is already running the right code, and stopping it would be a
+    /// death for nothing. Forced, because an input method is never asked to quit by anyone
+    /// and does not answer the request, and it holds nothing to lose: the client is the
+    /// document.
     @MainActor
-    private func stopRunning() {
-        for process in NSRunningApplication.runningApplications(withBundleIdentifier: flavor.inputMethodBundleIdentifier) {
+    private func stopRunning(launchedBefore moment: Date) {
+        for process in NSRunningApplication.runningApplications(withBundleIdentifier: flavor.inputMethodBundleIdentifier)
+        where (process.launchDate ?? .distantPast) < moment {
             process.forceTerminate()
         }
     }
@@ -302,7 +332,7 @@ public enum InputSourceInstallFailure: Error, Equatable, CustomStringConvertible
         case let .appCarriesNoInputMethod(identifier, looked):
             "this build carries no input method with identifier \(identifier) in \(looked.path); it was built without one"
         case let .unsigned(bundle, status):
-            "the input method at \(bundle.path) has no readable code signature (OSStatus \(status)); it was built without one"
+            "the input method at \(bundle.path) has no valid code signature (OSStatus \(status)); it was built without one or has been changed since"
         case let .cannotCopy(from, to, reason):
             "cannot copy \(from.path) to \(to.path): \(reason)"
         case let .registrationRefused(bundle, status):

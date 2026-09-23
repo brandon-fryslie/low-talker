@@ -49,21 +49,27 @@ import Testing
     @Test func aBundleNothingHasInstalledReadsAsNotInstalled() throws {
         // A name no install has ever used, so the reading comes from the file system alone
         // and never reaches the source list.
-        let app = try carrier([(name: "Never-\(UUID().uuidString).app", identifier: Flavor.development.inputMethodBundleIdentifier)])
+        let app = FileManager.default.temporaryDirectory.appending(path: "carrier-\(UUID().uuidString).app")
         defer { try? FileManager.default.removeItem(at: app) }
+        let carried = app.appending(path: InputSourceInstaller.carriedSubpath)
+        try FileManager.default.createDirectory(at: carried, withIntermediateDirectories: true)
+        _ = try signedBundle(in: carried, build: "1", name: "Never-\(UUID().uuidString).app",
+                             identifier: Flavor.development.inputMethodBundleIdentifier)
         #expect(try InputSourceInstaller(flavor: .development, carrier: app).state() == .bundleNotInstalled)
     }
 
     /// A signed bundle on disk, the shape `place` copies: an executable, an Info.plist
     /// naming it, and an ad-hoc signature sealing both. `build` goes into the Info.plist, so
     /// two builds differ in exactly the way a rebuild does - in what the signature seals.
-    private func signedBundle(in directory: URL, build: String) throws -> URL {
-        let bundle = directory.appending(path: "Input-\(UUID().uuidString).app")
+    private func signedBundle(
+        in directory: URL, build: String, name: String = "Input-\(UUID().uuidString).app", identifier: String = "com.example.input"
+    ) throws -> URL {
+        let bundle = directory.appending(path: name)
         let macOS = bundle.appending(components: "Contents", "MacOS")
         try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
         try FileManager.default.copyItem(at: URL(fileURLWithPath: "/usr/bin/true"), to: macOS.appending(path: "input"))
         let plist: [String: Any] = [
-            "CFBundleIdentifier": "com.example.input", "CFBundleExecutable": "input",
+            "CFBundleIdentifier": identifier, "CFBundleExecutable": "input",
             "CFBundlePackageType": "APPL", "CFBundleVersion": build,
         ]
         try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
@@ -92,10 +98,14 @@ import Testing
         defer { try? FileManager.default.removeItem(at: directory) }
         let embedded = try signedBundle(in: directory, build: "1")
         let installed = directory.appending(components: "Input Methods", "Input.app")
-        #expect(try InputSourceInstaller.place(embedded, at: installed))
+        let staging = try #require(try InputSourceInstaller.place(embedded, at: installed))
         #expect(try isDirectory(installed))
         #expect(try InputSourceInstaller.seal(of: installed) == InputSourceInstaller.seal(of: embedded))
-        #expect(try !InputSourceInstaller.place(embedded, at: installed))
+        // Nothing stood there, so the staging directory holds nothing to keep.
+        #expect(try FileManager.default.contentsOfDirectory(atPath: staging.path).isEmpty)
+        #expect(try InputSourceInstaller.place(embedded, at: installed) == nil)
+        // Only the copy is left in the install directory: no staged bundle beside it.
+        #expect(try FileManager.default.contentsOfDirectory(atPath: installed.deletingLastPathComponent().path) == ["Input.app"])
     }
 
     /// The case that kept sandboxed apps from ever reaching the input method: a link to the
@@ -106,9 +116,13 @@ import Testing
         let embedded = try signedBundle(in: directory, build: "1")
         let installed = directory.appending(path: "Input.app")
         try FileManager.default.createSymbolicLink(at: installed, withDestinationURL: embedded)
-        #expect(try InputSourceInstaller.place(embedded, at: installed))
+        #expect(!InputSourceInstaller.isCopy(installed, of: try InputSourceInstaller.seal(of: embedded)))
+        let staging = try #require(try InputSourceInstaller.place(embedded, at: installed))
         #expect(try isDirectory(installed))
-        #expect(FileManager.default.fileExists(atPath: embedded.path))
+        // The link was swapped out as a link, and its target was never touched.
+        let old = staging.appending(path: "Input.app")
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: old.path) == embedded.path)
+        #expect(FileManager.default.fileExists(atPath: embedded.appending(components: "Contents", "Info.plist").path))
     }
 
     @Test func aCopyOfAnotherBuildIsReplaced() throws {
@@ -117,8 +131,22 @@ import Testing
         let installed = directory.appending(path: "Input.app")
         _ = try InputSourceInstaller.place(try signedBundle(in: directory, build: "1"), at: installed)
         let rebuilt = try signedBundle(in: directory, build: "2")
-        #expect(try InputSourceInstaller.place(rebuilt, at: installed))
+        #expect(try InputSourceInstaller.place(rebuilt, at: installed) != nil)
         #expect(try InputSourceInstaller.seal(of: installed) == InputSourceInstaller.seal(of: rebuilt))
+    }
+
+    /// A copy whose files changed after it was signed still carries the same code directory
+    /// hash, so the hash alone would call it current and never repair it.
+    @Test func aDamagedCopyIsReplaced() throws {
+        let directory = try scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let embedded = try signedBundle(in: directory, build: "1")
+        let installed = directory.appending(path: "Input.app")
+        _ = try InputSourceInstaller.place(embedded, at: installed)
+        try Data("damaged".utf8).write(to: installed.appending(components: "Contents", "Info.plist"))
+        #expect(!InputSourceInstaller.isCopy(installed, of: try InputSourceInstaller.seal(of: embedded)))
+        #expect(try InputSourceInstaller.place(embedded, at: installed) != nil)
+        #expect(InputSourceInstaller.isCopy(installed, of: try InputSourceInstaller.seal(of: embedded)))
     }
 
     @Test func anUnsignedBundleIsRefusedByName() throws {
