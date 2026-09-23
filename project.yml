@@ -258,6 +258,18 @@ targetTemplates:
           # [LAW:no-silent-failure]
           tsVisibleInputModeOrderedArrayKey:
             - ${inputSourceIdentifier}
+    # Sandboxed, so the input method a person selects can reach no more than it needs: the
+    # sandbox is what keeps a process handed every key typed from reading the disk or the
+    # network. It registers two names and nothing else - the text input system's connection
+    # and the insert port the app sends to - and a sandboxed process may register only the
+    # names listed here. `InputMethodEntitlementsTests` holds both to `Flavor`'s.
+    entitlements:
+      path: App/Generated/${displayName}-InputMethod.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.temporary-exception.mach-register.global-name:
+          - ${inputMethodConnectionName}
+          - ${inputMethodPortName}
     settings:
       base:
         # The bundle and the process are named for what they are, so a person reading
@@ -321,6 +333,7 @@ targets:
       inputMethodBundleIdentifier: ai.promptctl.low-talker.inputmethod.dictation
       inputSourceIdentifier: ai.promptctl.low-talker.inputmethod.dictation.text
       inputMethodConnectionName: ai.promptctl.low-talker.inputmethod.dictation_Connection
+      inputMethodPortName: ai.promptctl.low-talker.inputmethod.dictation.insert
 
   LowTalkerDevInputMethod:
     templates: [InputMethod]
@@ -329,6 +342,7 @@ targets:
       inputMethodBundleIdentifier: ai.promptctl.low-talker.dev.inputmethod.dictation
       inputSourceIdentifier: ai.promptctl.low-talker.dev.inputmethod.dictation.text
       inputMethodConnectionName: ai.promptctl.low-talker.dev.inputmethod.dictation_Connection
+      inputMethodPortName: ai.promptctl.low-talker.dev.inputmethod.dictation.insert
 
   # The root keyboard helper, built here from the same sources Package.swift builds it
   # from, because an Xcode app can embed an Xcode tool and cannot embed a package's

@@ -2,6 +2,8 @@ import AppKit
 import Carbon
 import Flavors
 import Foundation
+import os
+import Security
 
 /// Where this flavor's input source stands on this Mac, as the text input system reports it.
 ///
@@ -53,12 +55,14 @@ public enum InputSourceState: Equatable, Sendable, CustomStringConvertible {
 /// nothing about dictation: what it is handed is a flavor and the app bundle carrying that
 /// flavor's input method, and what it answers is where that flavor's source stands.
 ///
-/// A link and not a copy, measured on 2026-09-22: macOS registers, selects and runs a bundle
-/// reached through a symbolic link in `~/Library/Input Methods`, and dictation reached
-/// Safari's cursor through one. The link is what keeps the two from drifting - a
-/// rebuilt app is a rebuilt input method with no second install - and it is why the
-/// development copy under DerivedData and a release copy under /Applications can each be
-/// installed without either overwriting the other's bundle. [LAW:one-source-of-truth]
+/// A copy and not a link, measured on 2026-09-23: a sandboxed app - TextEdit, Safari - reads
+/// the input method's bundle before it connects to it, and the sandbox refuses that read
+/// wherever a link in `~/Library/Input Methods` points outside it, so a linked input method
+/// is selected everywhere and reaches only the apps that run unsandboxed. System Settings
+/// lists only a bundle that is really there for the same reason. The copy is derived from the
+/// bundle this app carries, and its code signature is what says whether it still matches:
+/// the signature seals every file in the bundle, so a rebuild, another checkout's build and
+/// an older install all read as a different copy and are replaced. [LAW:one-source-of-truth]
 public struct InputSourceInstaller: Sendable {
     public let flavor: Flavor
     /// The app bundle carrying the input method, which is this app unless a test says
@@ -110,11 +114,10 @@ public struct InputSourceInstaller: Sendable {
     /// only where the one below it already held: a source list queried for a bundle that is
     /// not installed would answer about somebody else's leftovers.
     public func state() throws -> InputSourceState {
-        let installed = try installed()
-        // `fileExists` follows the link, which is the question being asked: a link whose
-        // target a `make clean` took away is not an installed input method, and reading it
-        // as one would leave `install` with nothing to repair.
-        guard FileManager.default.fileExists(atPath: installed.path) else { return .bundleNotInstalled }
+        // Installed means the copy this app carries, which is what `install` would leave: a
+        // link, another build or a damaged copy reads as not installed, because each is
+        // one `install` replaces. [LAW:single-enforcer]
+        guard Self.isCopy(try installed(), of: try Self.seal(of: try embedded())) else { return .bundleNotInstalled }
         guard let source = Self.source(named: flavor.inputSourceIdentifier) else { return .notRegistered }
         guard Self.isEnabled(source) else { return .disabled }
         return Self.isSelected(source) ? .selected : .enabled
@@ -141,16 +144,16 @@ public struct InputSourceInstaller: Sendable {
     public func install(settling: Duration = .seconds(3)) async throws -> InputSourceState {
         let embedded = try embedded()
         let installed = try installed()
-        // Linked unless what stands there is already a link to this app's own bundle: a copy
-        // from an older install or a link to another checkout is the wrong input method for
-        // this app, and reading only "is something there" would leave it in place for good.
-        let relinked = (try? FileManager.default.destinationOfSymbolicLink(atPath: installed.path)) != embedded.path
-        if relinked { try link(embedded, to: installed) }
-        // A process of this input method is running the bundle now installed only if it
-        // started after that bundle was built and after the link last changed; any other is
-        // running replaced code, and answers the insert port with it for as long as it lives.
-        // A rebuild in place is the common case: the link is unchanged, the binary is not.
-        stopRunning(launchedBefore: relinked ? .distantFuture : try builtAt(embedded))
+        // A process of this input method started from the copy that stood there before, so
+        // once that copy is replaced every one of them answers the insert port with replaced
+        // code for as long as it lives; the text input system launches the next from the new
+        // copy. A copy left alone leaves them alone: stopping an input method that is already
+        // running the right code only disconnects every app from it, and imklaunchagent stops
+        // relaunching one that keeps dying.
+        if let replacement = try Self.place(embedded, at: installed) {
+            stopRunning(launchedBefore: replacement.swappedAt)
+            discard(replacement.previous)
+        }
         // Registered unconditionally rather than only when `notRegistered`: registering a
         // source already known is how the text input system is told the bundle behind it
         // changed, which is exactly what a rebuilt development copy needs and costs nothing
@@ -184,40 +187,140 @@ public struct InputSourceInstaller: Sendable {
         return .selected
     }
 
-    /// When the embedded bundle's executable was last written, which is when the build a
-    /// process ought to be running was made.
-    private func builtAt(_ embedded: URL) throws -> Date {
-        guard let executable = Bundle(url: embedded)?.executableURL else {
-            throw InputSourceInstallFailure.appCarriesNoInputMethod(identifier: flavor.inputMethodBundleIdentifier, looked: embedded)
-        }
-        return try executable.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate ?? .distantFuture
+    /// A copy `place` swapped in: the moment it began to stand, and the staging directory,
+    /// which holds whatever stood there before - still whole, because a process may be
+    /// running from it - or nothing on a first install. The caller deletes it once no
+    /// process runs from it.
+    struct Replacement: Equatable {
+        /// Read after the swap, so every process launched before it may be running the old
+        /// copy and every process launched after it is running the new one.
+        let swappedAt: Date
+        let previous: URL
     }
 
-    /// The link itself, replacing whatever stood there.
+    /// The two renames `place` makes: an atomic exchange of two names, and a plain move.
+    /// Anything but `system` is a test standing in for a volume or a race it cannot stage.
+    struct Renaming: Sendable {
+        let swap: @Sendable (URL, URL) -> Int32
+        let move: @Sendable (URL, URL) -> Int32
+        static let system = Renaming(
+            swap: { renamex_np($0.path, $1.path, UInt32(RENAME_SWAP)) }, move: { rename($0.path, $1.path) })
+    }
+
+    /// Puts a copy of `embedded` at `installed` unless what stands there already is one,
+    /// answering nil when it left things alone.
     ///
-    /// Replaced rather than left alone, because what stands there may be a link to another
-    /// checkout, a copy from an older install, or a link whose target is gone - and all
-    /// three are "the wrong input method for this app", which is the one thing an install
-    /// exists to fix. [LAW:single-enforcer]
-    private func link(_ embedded: URL, to installed: URL) throws {
+    /// Staged in the system's replacement directory for this volume and swapped in with one
+    /// rename where the volume can swap, so the text input system finds the old bundle or
+    /// the new one and never half of either, and a crash mid-copy leaves nothing in
+    /// `~/Library/Input Methods`. A copy that fails takes its staged copy with it, since an
+    /// install runs at every launch and a lasting failure would otherwise leave one more
+    /// copy behind each time.
+    static func place(_ embedded: URL, at installed: URL, renaming: Renaming = .system) throws -> Replacement? {
+        let wanted = try seal(of: embedded)
+        if isCopy(installed, of: wanted) { return nil }
+        let staging: URL
         do {
-            try FileManager.default.createDirectory(at: Self.installDirectory, withIntermediateDirectories: true)
-            // `removeItem` on a symbolic link removes the link and not its target, which is
-            // what makes replacing a link to a DerivedData build safe.
-            if FileManager.default.fileExists(atPath: installed.path) || (try? installed.checkResourceIsReachable()) != nil {
-                try? FileManager.default.removeItem(at: installed)
-            }
-            try FileManager.default.createSymbolicLink(at: installed, withDestinationURL: embedded)
+            try FileManager.default.createDirectory(at: installed.deletingLastPathComponent(), withIntermediateDirectories: true)
+            staging = try FileManager.default.url(
+                for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: installed, create: true)
         } catch {
-            throw InputSourceInstallFailure.cannotLink(from: embedded, to: installed, reason: "\(error)")
+            throw InputSourceInstallFailure.cannotCopy(from: embedded, to: installed, reason: "\(error)")
         }
+        let staged = staging.appending(path: installed.lastPathComponent)
+        let aside = staging.appending(path: "previous")
+        do {
+            try FileManager.default.copyItem(at: embedded, to: staged)
+            // The swap exchanges the two names when both exist - a link is swapped as the
+            // link, never followed. When it fails, the copy is renamed in: straight away if
+            // nothing stood there (ENOENT), and otherwise - as on HFS+, which answers
+            // ENOTSUP - after what stood there is moved, whole, to `aside`.
+            let swapFailure = failure(of: renaming.swap(staged, installed))
+            if swapFailure != 0 {
+                // ENOENT from either call means nothing stands at `installed` to move aside.
+                let asideFailure = swapFailure == ENOENT ? ENOENT : failure(of: renaming.move(installed, aside))
+                guard asideFailure == 0 || asideFailure == ENOENT else { throw posixError(asideFailure) }
+                let moveInFailure = failure(of: renaming.move(staged, installed))
+                guard moveInFailure == 0 else {
+                    // What was moved aside goes back; if it cannot, the refusal says where it is.
+                    _ = renaming.move(aside, installed)
+                    throw posixError(moveInFailure)
+                }
+            }
+            return Replacement(swappedAt: Date(), previous: staging)
+        } catch {
+            // [LAW:no-silent-failure] A copy moved aside and not put back is the only one
+            // left, and a process may be running from it, so it is kept and named; otherwise
+            // the whole staging directory goes.
+            var reason = "\(error)"
+            let kept = (try? FileManager.default.attributesOfItem(atPath: aside.path)) != nil
+            let leftover = kept ? staged : staging
+            do { try FileManager.default.removeItem(at: leftover) } catch {
+                reason += "; the staged copy is left at \(leftover.path): \(error)"
+            }
+            if kept { reason += "; what stood at \(installed.path) is now at \(aside.path)" }
+            throw InputSourceInstallFailure.cannotCopy(from: embedded, to: installed, reason: reason)
+        }
+    }
+
+    /// 0 when a system call answered 0, and otherwise the errno it set, read before
+    /// anything else can overwrite it.
+    private static func failure(of result: Int32) -> Int32 { result == 0 ? 0 : errno }
+
+    private static func posixError(_ code: Int32) -> POSIXError { POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO) }
+
+    /// Deletes the copy a swap put aside, once the processes running it are stopped.
+    ///
+    /// Said and not thrown when it fails: the new copy already stands, so refusing here would
+    /// leave the input method unregistered and unselected for the sake of a folder in the
+    /// system's temporary items. [LAW:no-silent-failure]
+    private func discard(_ previous: URL) {
+        do { try FileManager.default.removeItem(at: previous) } catch {
+            Logger(subsystem: flavor.bundleIdentifier, category: "engine").error("""
+                input method: the replaced copy is left at \(previous.path, privacy: .public): \
+                \(String(describing: error), privacy: .public)
+                """)
+        }
+    }
+
+    /// Whether what stands at `installed` is a whole copy of the bundle sealed as `seal`.
+    ///
+    /// A copy is its signature: the code directory hash stands for every file the
+    /// signature seals, and validating the copy is what makes that true of the files as
+    /// they are now rather than as they were signed. A link is no copy, whatever it points
+    /// at, because a link is what a sandboxed app cannot follow. [LAW:single-enforcer] The
+    /// one place that decides whether the installed input method is the one this app
+    /// carries; `state` and `place` both ask it.
+    static func isCopy(_ installed: URL, of seal: Data) -> Bool {
+        let standing = try? FileManager.default.attributesOfItem(atPath: installed.path)[.type] as? FileAttributeType
+        return standing == .typeDirectory && (try? Self.seal(of: installed)) == seal
+    }
+
+    /// The code directory hash of a bundle whose signature holds for every file it seals:
+    /// one value standing for the whole bundle.
+    static func seal(of bundle: URL) throws -> Data {
+        var code: SecStaticCode?
+        var status = SecStaticCodeCreateWithPath(bundle as CFURL, [], &code)
+        var information: CFDictionary?
+        if let code {
+            status = SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSStrictValidate), nil)
+            if status == errSecSuccess { status = SecCodeCopySigningInformation(code, [], &information) }
+        }
+        guard status == errSecSuccess else { throw InputSourceInstallFailure.unsigned(bundle: bundle, status: status) }
+        // Signing information with no hash in it is what an unsigned bundle reads as, and
+        // is said as that rather than as the success status that carried it.
+        guard let hash = (information as? [String: Any])?[kSecCodeInfoUnique as String] as? Data else {
+            throw InputSourceInstallFailure.unsigned(bundle: bundle, status: errSecCSUnsigned)
+        }
+        return hash
     }
 
     /// The one source with this identifier, including sources that are switched off.
     ///
     /// `includeAllInstalled` is what makes a disabled source visible at all: the default
-    /// list holds only what is enabled, so a registered-but-off input method would read as
-    /// never registered and `install` would relink a bundle that was already in place.
+    /// list holds only what is enabled, so without it a registered-but-off input method
+    /// would read as `notRegistered` to `state`, and `install` would register it and then
+    /// refuse with `notInSourceListAfterRegistering` instead of switching it on.
     static func source(named identifier: String) -> TISInputSource? {
         let query = [kTISPropertyInputSourceID as String: identifier] as CFDictionary
         let sources = TISCreateInputSourceList(query, true)?.takeRetainedValue() as? [TISInputSource]
@@ -225,11 +328,12 @@ public struct InputSourceInstaller: Sendable {
     }
 
     /// Ends every running process of this flavor's input method that started before
-    /// `moment`, which the text input system launches again from the bundle now installed.
+    /// `moment`, which is when the copy they were running was replaced.
     ///
-    /// Told apart by when they started and not by their path: after a relink every path
-    /// resolves through the new link to the new bundle, so a path cannot say which code a
-    /// process is running. Forced, because an input method is never asked to quit by anyone
+    /// Told apart by when they started and not by their path, because every path now
+    /// resolves to the new copy: a process the text input system launched from it between
+    /// the swap and this call is already running the right code, and stopping it would be a
+    /// death for nothing. Forced, because an input method is never asked to quit by anyone
     /// and does not answer the request, and it holds nothing to lose: the client is the
     /// document.
     @MainActor
@@ -272,13 +376,15 @@ public struct InputSourceInstaller: Sendable {
 /// A step of the install that refused, named as the step it was.
 ///
 /// [LAW:no-silent-failure] One case per step rather than one message, because what a person
-/// does about each is different: an app carrying no input method was built wrong, a link
-/// that would not be made is a permissions or disk problem in their home folder, and a
+/// does about each is different: an app carrying no input method, or one carrying it unsigned,
+/// was built wrong, a copy that would not be made is a permissions or disk problem in their
+/// home folder, and a
 /// bundle the text input system would not take is the identifier rule in
 /// `Flavor.inputMethodBundleIdentifier` being broken by a rename.
 public enum InputSourceInstallFailure: Error, Equatable, CustomStringConvertible {
     case appCarriesNoInputMethod(identifier: String, looked: URL)
-    case cannotLink(from: URL, to: URL, reason: String)
+    case unsigned(bundle: URL, status: OSStatus)
+    case cannotCopy(from: URL, to: URL, reason: String)
     case registrationRefused(bundle: URL, status: OSStatus)
     /// The register step answered `noErr` and the source is still not in the list, which is
     /// what a bundle macOS silently declines looks like from here.
@@ -291,8 +397,10 @@ public enum InputSourceInstallFailure: Error, Equatable, CustomStringConvertible
         switch self {
         case let .appCarriesNoInputMethod(identifier, looked):
             "this build carries no input method with identifier \(identifier) in \(looked.path); it was built without one"
-        case let .cannotLink(from, to, reason):
-            "cannot link \(to.path) to \(from.path): \(reason)"
+        case let .unsigned(bundle, status):
+            "the input method at \(bundle.path) has no valid code signature (OSStatus \(status)); it was built without one or has been changed since"
+        case let .cannotCopy(from, to, reason):
+            "cannot copy \(from.path) to \(to.path): \(reason)"
         case let .registrationRefused(bundle, status):
             "the text input system refused to register \(bundle.path): OSStatus \(status)"
         case let .notInSourceListAfterRegistering(identifier, bundle):

@@ -84,3 +84,24 @@ private let repository = URL(fileURLWithPath: #filePath)
                 "the plist names \(named), which App/InputMethods does not hold")
     }
 }
+
+/// The input method is sandboxed, and a sandboxed process registers only the names its
+/// entitlements list - so each name it answers on is listed, and is that flavor's.
+///
+/// Read off the entitlements xcodegen writes, for the reason `InputMethodPlistTests` reads
+/// the plist: what ships is the substitution. A name missing here is an input method that
+/// launches and never answers - the text input system's connection unopened, or the app's
+/// inserts refused as no input method running. [LAW:no-silent-failure]
+@Suite struct InputMethodEntitlementsTests {
+    @Test(arguments: Flavor.allCases)
+    func theSandboxAdmitsExactlyTheNamesTheInputMethodRegisters(flavor: Flavor) throws {
+        let url = repository.appending(path: "App/Generated/\(flavor.displayName)-InputMethod.entitlements")
+        try #require(FileManager.default.fileExists(atPath: url.path),
+                     "\(url.lastPathComponent) has not been generated; run `make test`, which runs xcodegen - `swift test` alone does not")
+        let entitlements = try #require(
+            PropertyListSerialization.propertyList(from: Data(contentsOf: url), format: nil) as? [String: Any])
+        #expect(entitlements["com.apple.security.app-sandbox"] as? Bool == true)
+        #expect(entitlements["com.apple.security.temporary-exception.mach-register.global-name"] as? [String]
+            == [flavor.inputMethodConnectionName, flavor.inputMethodPortName])
+    }
+}
