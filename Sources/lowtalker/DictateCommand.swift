@@ -2,6 +2,7 @@ import ArgumentParser
 import Flavors
 import Dictation
 import Foundation
+import KeyboardLayout
 import KeyboardService
 import LowTalkerCore
 import Typing
@@ -74,7 +75,7 @@ struct DictateCommand: AsyncParsableCommand {
             print("\(lapse)")
             if case .comeDown = lapse.response { cameDown.lapse = lapse }
         }
-        print("ready: hold \(Hotkey.held(chord)) to dictate")
+        print("ready: hold \(Hotkey.named(chord, heardBy: .eventTap, on: try KeyboardLayout.current())) to dictate")
         // The tap runs on the main run loop; this keeps the command on it until the
         // operator's interrupt, which is read rather than let end the process, so a
         // session it lands in still releases its keys.
