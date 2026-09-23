@@ -5,27 +5,35 @@ import LowTalkerCore
 public extension Hotkey {
     /// An installation's chord in the words a person presses it by.
     ///
-    /// The event tap hears sides, so its chord is `held`, sides and order included. A
-    /// registered hot key does not: Carbon matches Control, Option, Shift and Command
-    /// whichever side is down, so naming a side would tell the reader something false. Its
-    /// key is named by the layout the user types on, because the chord is a physical key
-    /// and the letter printed on it is the layout's to say - key code 2 is D on US and E
-    /// on Dvorak. [LAW:one-source-of-truth] The name is read off the layout's own map, not
-    /// a table kept beside it.
+    /// A hearing that tells sides apart names them, in the order `pressOrder` says to hold
+    /// them. One that does not - Carbon matches Control, Option, Shift and Command whichever
+    /// side is down - is named without sides, since naming one would tell the reader
+    /// something false. The key is named by the layout the user types on, because the chord
+    /// is a physical key and the letter printed on it is the layout's to say - key code 2 is
+    /// D on US and E on Dvorak. [LAW:one-source-of-truth] The name is read off the layout's
+    /// own map, not a table kept beside it.
     @MainActor
     static func named(_ chord: KeyChord, heardBy hearing: HotkeySource, on layout: KeyboardLayout) -> String {
-        switch hearing {
-        case .eventTap:
-            return held(chord)
-        case .registeredHotKey:
-            let sides: [(name: String, either: Set<Modifier>)] = [
-                ("Control", [.leftControl, .rightControl]), ("Option", [.leftOption, .rightOption]),
-                ("Shift", [.leftShift, .rightShift]), ("Command", [.leftCommand, .rightCommand]),
-            ]
-            let modifiers = sides.filter { !chord.modifiers.isDisjoint(with: $0.either) }.map(\.name)
-            let key = chord.key.map { name(of: $0, on: layout) }
-            return (modifiers + (key.map { [$0] } ?? [])).joined(separator: "+")
+        let modifiers = hearing.hearsSides ? pressOrder(of: chord).map(spoken) : sideless(chord.modifiers)
+        let key = chord.key.map { name(of: $0, on: layout) }
+        return (modifiers + (key.map { [$0] } ?? [])).joined(separator: "+")
+    }
+
+    /// `rightOption` as "Right Option": the case's own name split at its capitals, so no
+    /// table of names stands beside the cases to fall out of step with them.
+    private static func spoken(_ modifier: Modifier) -> String {
+        modifier.rawValue.reduce(into: "") { name, letter in
+            name += name.isEmpty ? letter.uppercased() : letter.isUppercase ? " \(letter)" : String(letter)
         }
+    }
+
+    /// The modifiers as a hearing that matches either side hears them.
+    private static func sideless(_ modifiers: Set<Modifier>) -> [String] {
+        let sides: [(name: String, either: Set<Modifier>)] = [
+            ("Control", [.leftControl, .rightControl]), ("Option", [.leftOption, .rightOption]),
+            ("Shift", [.leftShift, .rightShift]), ("Command", [.leftCommand, .rightCommand]),
+        ]
+        return sides.filter { !modifiers.isDisjoint(with: $0.either) }.map(\.name)
     }
 
     /// A key as the layout prints it. A key whose character is not one a person reads - an

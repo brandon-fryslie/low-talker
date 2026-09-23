@@ -24,9 +24,12 @@ import Typing
         #expect(Hotkey.named(chord, heardBy: .registeredHotKey, on: Self.us) == "Control+key 0x60")
     }
 
-    /// The event tap hears sides and order, so its chord is spelled the way `held` spells it.
-    @Test func aTappedChordIsSpelledWithItsSides() {
+    /// The event tap hears sides, so its chord names them, in words and in the order that
+    /// works: Right Command first, since Right Option alone is the release copy's chord.
+    @Test func aTappedChordIsSpelledWithItsSidesInPressOrder() {
         let chord = Hotkey.defaultChord(for: .development, heardBy: .eventTap)
-        #expect(Hotkey.named(chord, heardBy: .eventTap, on: Self.us) == Hotkey.held(chord))
+        #expect(Hotkey.named(chord, heardBy: .eventTap, on: Self.us) == "Right Command+Right Option")
+        let keyed = KeyChord(key: Key(rawValue: UInt16(kVK_ANSI_D)), modifiers: [.leftShift])
+        #expect(Hotkey.named(keyed, heardBy: .eventTap, on: Self.dvorak) == "Left Shift+E")
     }
 }
