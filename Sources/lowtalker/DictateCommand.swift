@@ -2,12 +2,13 @@ import ArgumentParser
 import Flavors
 import Dictation
 import Foundation
+import KeyboardLayout
 import KeyboardService
 import LowTalkerCore
 import Typing
 
-/// The whole loop from the terminal: hold Right Option, speak, release, and what was
-/// said is typed into the app in front.
+/// The whole loop from the terminal: hold this installation's chord, speak, release, and
+/// what was said is typed into the app in front.
 ///
 /// The CLI is not the app: macOS charges a terminal command's event tap to the
 /// terminal, so this runs under the terminal's Accessibility and Input Monitoring and
@@ -17,7 +18,7 @@ import Typing
 struct DictateCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "dictate",
-        abstract: "Hold Right Option, speak, release: type what was said into the app in front, until interrupted."
+        abstract: "Hold this installation's chord, speak, release: type what was said into the app in front, until interrupted."
     )
 
     @OptionGroup var options: ModelOptions
@@ -42,13 +43,16 @@ struct DictateCommand: AsyncParsableCommand {
         // Watched before the tap goes up, so no key can be down when an interrupt lands.
         let interrupt = Interrupt.watched()
         let helper = HelperConnection(flavor: installation.flavor)
-        let chord = Hotkey.defaultChord(for: installation.flavor, heardBy: .eventTap)
+        // Heard by the event tap, named once here: the chord, the tap that hears it and the
+        // words it is printed in all read this one value. [LAW:one-source-of-truth]
+        let hearing = HotkeySource.eventTap
+        let chord = Hotkey.defaultChord(for: installation.flavor, heardBy: hearing)
         // [LAW:decomposition] What this installation listens for and what its typist must
         // refuse to press are two sets that happened to be equal while there was one
         // installation. Listening is this copy's own chord - hearing the other's would be
         // dictating on somebody else's hotkey - while refusing has to cover every chord
-        // any copy listens for, because the keystrokes reach macOS as hardware.
-        let listening: Set<KeyChord> = [chord]
+        // any copy listens for, because the keystrokes reach macOS as hardware. The hotkey
+        // below hears this copy's chord alone.
         let dictation = Dictation(
             capture: capture,
             transcriber: { transcriber },
@@ -64,7 +68,7 @@ struct DictateCommand: AsyncParsableCommand {
                 }
             }
         )
-        let hotkey = Hotkey(chords: listening)
+        let hotkey = Hotkey(for: installation.flavor, heardBy: hearing)
         // A tap that has come down will never hear another press, and a command that goes
         // on polling looks ready while being deaf - with the one line that said otherwise
         // long scrolled away. [LAW:no-silent-failure] The loop below ends on it, so the
@@ -74,7 +78,7 @@ struct DictateCommand: AsyncParsableCommand {
             print("\(lapse)")
             if case .comeDown = lapse.response { cameDown.lapse = lapse }
         }
-        print("ready: hold \(Hotkey.held(chord)) to dictate")
+        print("ready: hold \(try Hotkey.named(chord, heardBy: hearing, on: KeyboardLayout.current())) to dictate")
         // The tap runs on the main run loop; this keeps the command on it until the
         // operator's interrupt, which is read rather than let end the process, so a
         // session it lands in still releases its keys.

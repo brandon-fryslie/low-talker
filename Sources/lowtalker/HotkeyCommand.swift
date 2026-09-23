@@ -54,7 +54,7 @@ struct HotkeyCommand: AsyncParsableCommand {
         // Named from the chord rather than spelled here, because the two installations
         // do not watch the same keys, and in the app's words for how it is heard.
         // [LAW:one-source-of-truth]
-        print("watching \(Hotkey.named(chord, heardBy: heardBy, on: try KeyboardLayout.current()))")
+        print("watching \(try Hotkey.named(chord, heardBy: heardBy, on: KeyboardLayout.current()))")
         // A registered hot key reaches its owner through the application's event loop, and
         // a command with no loop registers it and hears nothing. The tap needs no loop but
         // runs under this one the same, so both are watched one way. The app has no Dock

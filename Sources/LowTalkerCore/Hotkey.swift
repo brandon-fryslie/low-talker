@@ -92,7 +92,7 @@ public final class Hotkey {
     /// time base in a decision `HostTime` already answers, and hand it one that can jump
     /// under it. [LAW:one-source-of-truth]
     nonisolated public static let lapseWindow: Duration = .seconds(60)
-    /// The chord an installation listens for until its config file says otherwise.
+    /// The chord an installation listens for, as `hearing` hears it.
     ///
     /// Right Option for the installed copy, and Right Option held together with Right
     /// Command for the development one. The development chord is a superset of the
@@ -145,8 +145,8 @@ public final class Hotkey {
     /// stale. The cost of refusing a chord nobody listens for is a keystroke the helper
     /// declines; the cost of the other mistake is two apps dictating at once.
     ///
-    /// Every delivery's too, for the same reason: which delivery the other copy is on is a
-    /// choice its user can change from its menu at any moment.
+    /// Every hotkey source's too, for the same reason: which source the other copy hears
+    /// by is a choice its user can change from its menu at any moment.
     nonisolated public static let everyInstallationsChord: Set<KeyChord> =
         Set(Flavor.allCases.flatMap { flavor in HotkeySource.allCases.map { defaultChord(for: flavor, heardBy: $0) } })
 
@@ -181,12 +181,10 @@ public final class Hotkey {
             .map(\.element)
     }
 
-    /// The chord in words: what to hold, in the order to hold it, then the key to strike.
-    ///
-    /// [LAW:one-source-of-truth] The one spelling of a chord for every place one is named,
-    /// an instruction or a refusal. An instruction needs the order that works; a refusal
-    /// needs only a stable one, and the order that works is stable. Two spellings are how
-    /// the menu came to print the order that starts the other installation dictating.
+    /// The chord in the grammar `KeyChord.init(spelled:on:)` reads back: modifiers by their case names in
+    /// the order `pressOrder` gives, then the key by its code. It needs no keyboard layout,
+    /// so it can always be printed; `named(_:heardBy:on:)` is the spelling in a person's
+    /// words where a layout can be read. [LAW:one-source-of-truth]
     nonisolated public static func held(_ chord: KeyChord) -> String {
         let struck = chord.key.map { ["key 0x" + String($0.rawValue, radix: 16)] } ?? []
         return (pressOrder(of: chord).map(\.rawValue) + struck).joined(separator: "+")

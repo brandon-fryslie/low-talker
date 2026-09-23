@@ -12,10 +12,13 @@ public extension Hotkey {
     /// is a physical key and the letter printed on it is the layout's to say - key code 2 is
     /// D on US and E on Dvorak. [LAW:one-source-of-truth] The name is read off the layout's
     /// own map, not a table kept beside it.
+    ///
+    /// The layout is read only for a chord with a key: a chord of modifiers alone has no
+    /// letter to name, so naming it neither asks the layout nor fails when it cannot be read.
     @MainActor
-    static func named(_ chord: KeyChord, heardBy hearing: HotkeySource, on layout: KeyboardLayout) -> String {
+    static func named(_ chord: KeyChord, heardBy hearing: HotkeySource, on layout: @autoclosure () throws -> KeyboardLayout) rethrows -> String {
         let modifiers = hearing.hearsSides ? pressOrder(of: chord).map(spoken) : sideless(chord.modifiers)
-        let key = chord.key.map { name(of: $0, on: layout) }
+        let key = try chord.key.map { name(of: $0, on: try layout()) }
         return (modifiers + (key.map { [$0] } ?? [])).joined(separator: "+")
     }
 

@@ -32,4 +32,17 @@ import Typing
         let keyed = KeyChord(key: Key(rawValue: UInt16(kVK_ANSI_D)), modifiers: [.leftShift])
         #expect(Hotkey.named(keyed, heardBy: .eventTap, on: Self.dvorak) == "Left Shift+E")
     }
+
+    /// A chord of modifiers alone has no letter to name, so it is named without asking the
+    /// layout, and a layout that cannot be read does not stop it: `dictate` names such a
+    /// chord after its tap is up, where a failure would end the command. A chord with a key
+    /// does ask, and says why it could not be named.
+    @Test func onlyAChordWithAKeyReadsTheLayout() throws {
+        struct Unreadable: Error {}
+        func unreadable() throws -> KeyboardLayout { throw Unreadable() }
+        let modifiersAlone = Hotkey.defaultChord(for: .development, heardBy: .eventTap)
+        #expect(try Hotkey.named(modifiersAlone, heardBy: .eventTap, on: unreadable()) == "Right Command+Right Option")
+        let keyed = Hotkey.defaultChord(for: .development, heardBy: .registeredHotKey)
+        #expect(throws: Unreadable.self) { try Hotkey.named(keyed, heardBy: .registeredHotKey, on: unreadable()) }
+    }
 }

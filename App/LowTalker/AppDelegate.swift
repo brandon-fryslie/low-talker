@@ -408,7 +408,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func chordName(heardBy source: HotkeySource) -> String {
         let chord = Hotkey.defaultChord(for: Self.flavor, heardBy: source)
         do {
-            return Hotkey.named(chord, heardBy: source, on: try KeyboardLayout.current())
+            return try Hotkey.named(chord, heardBy: source, on: KeyboardLayout.current())
         } catch {
             // [LAW:no-silent-failure] A layout that cannot be read still leaves the reader a
             // chord to press, in the spelling `held` gives every chord, and the log says why.
