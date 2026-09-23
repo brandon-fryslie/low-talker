@@ -40,7 +40,7 @@ import Typing
         let chords = [
             KeyChord(key: Key(rawValue: 0x24), modifiers: [.rightShift, .leftControl]),
             KeyChord(key: Key(rawValue: UInt16(kVK_ANSI_Keypad1))),
-            Hotkey.defaultChord(for: .development, heardBy: .virtualKeyboard),
+            Hotkey.defaultChord(for: .development, heardBy: .eventTap),
         ]
         for chord in chords {
             #expect(try KeyChord(spelled: Hotkey.held(chord), on: Self.us) == chord)

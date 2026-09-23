@@ -120,7 +120,7 @@ import Testing
     @Test(arguments: Flavor.allCases) func theDefaultsAreTheValuesTheirOwnersName(_ flavor: Flavor) {
         #expect(Config.default(for: flavor).model == ModelName.default)
         #expect(Config.default(for: flavor).modes == [Mode.dictation(for: flavor)])
-        #expect(Mode.dictation(for: flavor).chord == Hotkey.defaultChord(for: flavor, heardBy: .virtualKeyboard))
+        #expect(Mode.dictation(for: flavor).chord == Hotkey.defaultChord(for: flavor, heardBy: .eventTap))
         #expect(Mode.dictation(for: flavor).vocabulary == .empty)
         #expect(Mode.dictation(for: flavor).router.routes == [Route.dictation])
     }

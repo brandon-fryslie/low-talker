@@ -13,11 +13,11 @@ public extension Hotkey {
     /// on Dvorak. [LAW:one-source-of-truth] The name is read off the layout's own map, not
     /// a table kept beside it.
     @MainActor
-    static func named(_ chord: KeyChord, heardBy delivery: Delivery, on layout: KeyboardLayout) -> String {
-        switch delivery {
-        case .virtualKeyboard:
+    static func named(_ chord: KeyChord, heardBy hearing: HotkeySource, on layout: KeyboardLayout) -> String {
+        switch hearing {
+        case .eventTap:
             return held(chord)
-        case .inputMethod:
+        case .registeredHotKey:
             let sides: [(name: String, either: Set<Modifier>)] = [
                 ("Control", [.leftControl, .rightControl]), ("Option", [.leftOption, .rightOption]),
                 ("Shift", [.leftShift, .rightShift]), ("Command", [.leftCommand, .rightCommand]),
