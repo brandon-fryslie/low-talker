@@ -84,7 +84,7 @@ public final class FocusedClient {
     /// the app that is actually in front.
     ///
     /// Absence is not a mistake to guard against but the answer itself: nowhere to put
-    /// words is exactly the case low-input-method-s71.b26 puts on the clipboard instead.
+    /// words is a refusal the app reports by name, and the words go nowhere else.
     ///
     /// **What `inserted` claims, exactly: the client belonging to the app in front accepted
     /// the commit.** Not that a person saw the words. The text input system offers no

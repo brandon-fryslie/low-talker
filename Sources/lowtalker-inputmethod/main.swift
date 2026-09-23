@@ -68,8 +68,14 @@ let server: IMKServer = {
 /// by its pid rather than read as none. [LAW:no-silent-failure]
 @MainActor
 func secureInputHolder() -> String? {
-    let session = CGSessionCopyCurrentDictionary() as? [String: Any]
-    guard let pid = session?["kCGSSessionSecureInputPID"] as? pid_t, pid != 0 else { return nil }
+    // A session that cannot be read says nothing about secure input, which is not the same
+    // as saying nobody holds it: said by name, and the insert goes ahead, since the client's
+    // own answer is still the account of whether the words landed. [LAW:no-silent-failure]
+    guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else {
+        logger.error("the window server's session could not be read, so whether an app holds secure keyboard entry is unknown")
+        return nil
+    }
+    guard let pid = session["kCGSSessionSecureInputPID"] as? pid_t, pid != 0 else { return nil }
     return NSRunningApplication(processIdentifier: pid)?.localizedName ?? "process \(pid)"
 }
 

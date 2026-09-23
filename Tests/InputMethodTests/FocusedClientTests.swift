@@ -50,6 +50,18 @@ import Testing
         #expect(cursor.committed.isEmpty)
     }
 
+    /// Secure input is asked first, so it is the reason given even where another refusal
+    /// also holds: the fix is in the app holding it, and naming the other would send the
+    /// person to click into a text field that cannot help.
+    @Test func secureInputIsTheReasonOverEveryOtherRefusal() {
+        #expect(FocusedClient().insert("hello", whileInFrontIs: Self.inFront, secureInputIsOn: true) == .refused(.secureInputIsOn))
+        let client = FocusedClient()
+        let cursor = Cursor()
+        client.took(cursor)
+        #expect(client.insert("hello", whileInFrontIs: "com.example.elsewhere", secureInputIsOn: true) == .refused(.secureInputIsOn))
+        #expect(cursor.committed.isEmpty)
+    }
+
     /// The count is what a person would count, not what a buffer would: an emoji is one
     /// character to whoever dictated it.
     @Test func theCountIsOfCharactersAndNotOfBytes() {
@@ -59,8 +71,7 @@ import Testing
         #expect(client.insert("🫠", whileInFrontIs: Self.inFront) == .inserted(characters: 1, into: Self.inFront))
     }
 
-    /// Nothing in front is an answer, not a failure - it is the case
-    /// low-input-method-s71.b26 puts on the clipboard instead.
+    /// Nothing in front is an answer, not a failure, and it is said by name.
     @Test func nothingInFrontIsRefusedByName() {
         #expect(FocusedClient().insert("hello", whileInFrontIs: Self.inFront) == .refused(.noClientHasFocus))
     }
