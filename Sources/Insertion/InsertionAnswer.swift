@@ -84,13 +84,13 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
         case let .nothingIsListening(port):
             "no input method is answering on \(port); it is not installed, or not selected"
         case let .requestWasNotTaken(port, after):
-            "the input method on \(port) did not take the request within \(after)"
+            "the input method on \(port) did not take the request within \(after), so the words did not land"
         case let .answerDidNotArrive(port, after):
-            "the input method on \(port) took the request but did not answer within \(after)"
+            "the input method on \(port) took the request but did not answer within \(after), so the words may have landed"
         case let .sendFailed(port, status):
-            "the request to \(port) failed: CFMessagePort status \(status)"
+            "the request to \(port) failed: CFMessagePort status \(status), so the words may have landed"
         case let .answerWasNotReadable(port, bytes):
-            "the input method on \(port) answered \(bytes) bytes that are not an answer"
+            "the input method on \(port) answered \(bytes) bytes that are not an answer, so the words may have landed"
         }
     }
 }
