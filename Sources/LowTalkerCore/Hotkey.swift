@@ -184,10 +184,12 @@ public final class Hotkey {
     /// The chord in the grammar `ChordSpelling` reads back: modifiers by their case names in
     /// the order to hold them, then the key by its code.
     ///
-    /// For logs, refusals and anything a program reads. A person is told a chord by
-    /// `named(_:heardBy:on:)`, which names the key on their layout. Both take the order from
-    /// `pressOrder`, so neither can print the order that starts the other installation
-    /// dictating. [LAW:one-source-of-truth]
+    /// For refusals and anything a program reads back. A person is told a chord by
+    /// `named(_:heardBy:on:)`, which names the key on their layout. Where a hearing tells
+    /// sides apart, both take the order from `pressOrder`, so neither can print the order
+    /// that starts the other installation dictating; a registered hot key is named without
+    /// sides, and its chords have a key, which no order of holding modifiers can complete.
+    /// [LAW:one-source-of-truth]
     nonisolated public static func held(_ chord: KeyChord) -> String {
         let struck = chord.key.map { ["key 0x" + String($0.rawValue, radix: 16)] } ?? []
         return (pressOrder(of: chord).map(\.rawValue) + struck).joined(separator: "+")

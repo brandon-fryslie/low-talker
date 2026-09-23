@@ -330,8 +330,8 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         }
     }
 
-    /// The development chord as a person reads it, spelled out, because this is the exact
-    /// string that shipped wrong: the menu bar and `dictate` both printed
+    /// The development chord in `held`'s order, spelled out, because this is the order that
+    /// once shipped wrong: the menu bar and `dictate` both printed
     /// `hold rightOption+rightCommand to dictate`, and a reader following it literally
     /// completed the release chord first. `Modifier.allCases` puts rightOption at 5 and
     /// rightCommand at 7, so the order came straight from the enum's declaration order -
