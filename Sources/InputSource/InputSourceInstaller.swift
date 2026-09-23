@@ -144,10 +144,13 @@ public struct InputSourceInstaller: Sendable {
         // Linked unless what stands there is already a link to this app's own bundle: a copy
         // from an older install or a link to another checkout is the wrong input method for
         // this app, and reading only "is something there" would leave it in place for good.
-        if (try? FileManager.default.destinationOfSymbolicLink(atPath: installed.path)) != embedded.path {
-            try link(embedded, to: installed)
-            stopRunning()
-        }
+        let relinked = (try? FileManager.default.destinationOfSymbolicLink(atPath: installed.path)) != embedded.path
+        if relinked { try link(embedded, to: installed) }
+        // A process of this input method is running the bundle now installed only if it
+        // started after that bundle was built and after the link last changed; any other is
+        // running replaced code, and answers the insert port with it for as long as it lives.
+        // A rebuild in place is the common case: the link is unchanged, the binary is not.
+        stopRunning(launchedBefore: relinked ? .distantFuture : try builtAt(embedded))
         // Registered unconditionally rather than only when `notRegistered`: registering a
         // source already known is how the text input system is told the bundle behind it
         // changed, which is exactly what a rebuilt development copy needs and costs nothing
@@ -156,7 +159,7 @@ public struct InputSourceInstaller: Sendable {
         guard status == noErr else {
             throw InputSourceInstallFailure.registrationRefused(bundle: installed, status: status)
         }
-        guard let source = try await Self.source(named: flavor.inputSourceIdentifier, appearingWithin: settling) else {
+        guard let source = try await Self.source(named: flavor.inputSourceIdentifier, within: settling) else {
             throw InputSourceInstallFailure.notInSourceListAfterRegistering(
                 identifier: flavor.inputSourceIdentifier, bundle: installed)
         }
@@ -172,7 +175,22 @@ public struct InputSourceInstaller: Sendable {
                 throw InputSourceInstallFailure.selectRefused(identifier: flavor.inputSourceIdentifier, status: selected)
             }
         }
-        return try state()
+        // Read back rather than believed, for the reason the lookup above is: the select is
+        // answered `noErr` before this process's list says so, and it can be answered
+        // `noErr` and not take, as it does while an app holds Secure Event Input.
+        guard try await Self.source(named: flavor.inputSourceIdentifier, within: settling, where: Self.isSelected) != nil else {
+            throw InputSourceInstallFailure.notSelectedAfterSelecting(identifier: flavor.inputSourceIdentifier)
+        }
+        return .selected
+    }
+
+    /// When the embedded bundle's executable was last written, which is when the build a
+    /// process ought to be running was made.
+    private func builtAt(_ embedded: URL) throws -> Date {
+        guard let executable = Bundle(url: embedded)?.executableURL else {
+            throw InputSourceInstallFailure.appCarriesNoInputMethod(identifier: flavor.inputMethodBundleIdentifier, looked: embedded)
+        }
+        return try executable.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate ?? .distantFuture
     }
 
     /// The link itself, replacing whatever stood there.
@@ -206,34 +224,36 @@ public struct InputSourceInstaller: Sendable {
         return sources?.first
     }
 
-    /// Ends every running process of this flavor's input method, which the text input system
-    /// launches again from the bundle now installed.
+    /// Ends every running process of this flavor's input method that started before
+    /// `moment`, which the text input system launches again from the bundle now installed.
     ///
-    /// Every one and not only those running from some other path: called only after a relink,
-    /// so each is by definition running the bundle that was replaced - and its path cannot
-    /// say so, since that path now resolves through the new link to the new bundle. Left
-    /// running, the old process answers the insert port with the old code for as long as it
-    /// lives. Forced, because an input method is never asked to quit by anyone and does not
-    /// answer the request, and it holds nothing to lose: the client is the document.
+    /// Told apart by when they started and not by their path: after a relink every path
+    /// resolves through the new link to the new bundle, so a path cannot say which code a
+    /// process is running. Forced, because an input method is never asked to quit by anyone
+    /// and does not answer the request, and it holds nothing to lose: the client is the
+    /// document.
     @MainActor
-    private func stopRunning() {
-        for process in NSRunningApplication.runningApplications(withBundleIdentifier: flavor.inputMethodBundleIdentifier) {
+    private func stopRunning(launchedBefore moment: Date) {
+        for process in NSRunningApplication.runningApplications(withBundleIdentifier: flavor.inputMethodBundleIdentifier)
+        where (process.launchDate ?? .distantPast) < moment {
             process.forceTerminate()
         }
     }
 
-    /// The source, looked for until it appears or `deadline` passes.
+    /// The source, looked for until it appears reading as `holds` says, or `deadline` passes.
     ///
     /// Each miss suspends rather than blocks, which is the point: suspended, the main actor's
     /// run loop is free to deliver the refresh that makes the next look succeed. A blocking
     /// wait here would hold off the very notification it was waiting for.
     /// [LAW:no-ambient-temporal-coupling]
     @MainActor
-    static func source(named identifier: String, appearingWithin deadline: Duration) async throws -> TISInputSource? {
+    static func source(
+        named identifier: String, within deadline: Duration, where holds: (TISInputSource) -> Bool = { _ in true }
+    ) async throws -> TISInputSource? {
         let clock = ContinuousClock()
         let giveUp = clock.now + deadline
         while true {
-            if let found = source(named: identifier) { return found }
+            if let found = source(named: identifier), holds(found) { return found }
             if clock.now >= giveUp { return nil }
             try await Task.sleep(for: .milliseconds(50))
         }
@@ -265,6 +285,7 @@ public enum InputSourceInstallFailure: Error, Equatable, CustomStringConvertible
     case notInSourceListAfterRegistering(identifier: String, bundle: URL)
     case enableRefused(identifier: String, status: OSStatus)
     case selectRefused(identifier: String, status: OSStatus)
+    case notSelectedAfterSelecting(identifier: String)
 
     public var description: String {
         switch self {
@@ -281,6 +302,8 @@ public enum InputSourceInstallFailure: Error, Equatable, CustomStringConvertible
             "the text input system refused to switch on \(identifier): OSStatus \(status)"
         case let .selectRefused(identifier, status):
             "the text input system refused to select \(identifier): OSStatus \(status)"
+        case let .notSelectedAfterSelecting(identifier):
+            "\(identifier) was selected and is not the current input source; an app holding secure keyboard entry keeps input methods off"
         }
     }
 }

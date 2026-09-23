@@ -237,6 +237,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var wordsOnClipboard: Bool { lastDictation != nil }
 
+    /// Why the last press's words reached no cursor, while no press has begun since.
+    private var lastFailure: String?
+
     private func drawStatusIcon() {
         // Named from the flavor, because with both copies installed there are two of
         // these icons in the menu bar and this label is what tells them apart - to a
@@ -271,6 +274,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         // `lastDictation` is left as it stands: a session the wait let finish may just
         // have copied, and words on the clipboard stay there whichever delivery comes next.
+        // [LAW:no-ambient-temporal-coupling] The delivery is made ready before the hotkey
+        // goes up, so no press is heard that has nowhere to go yet, and the one status write
+        // below comes after every half has answered - nothing can say the loop works before
+        // it does, or be overwritten by a later write about an earlier state.
+        showHotkeyStatus("starting — setting up the \(setup.delivery.title.lowercased())")
+        let delivering = await install(setup.delivery)
         let hotkey = Hotkey(for: Self.flavor, heardBy: setup.source)
         let dictation = Dictation(
             capture: capture,
@@ -282,15 +291,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         listening = Listening(setup: setup, hotkey: hotkey, dictation: dictation)
         let hearing = Result {
             try hotkey.start({ [unowned self] transition in
-                if case .began = transition { lastDictation = nil }
+                if case .began = transition { (lastDictation, lastFailure) = (nil, nil) }
                 dictation.press(transition)
             }, onLapse: { [unowned self] in report($0) })
-        }.mapError { Refusal(stringLiteral: "\($0)") }
-        // Said as soon as the hotkey is listening, since the install can take seconds and
-        // a status line naming the old loop would be wrong for all of them; said again
-        // when the install answers.
-        showHotkeyStatus(of: setup.source, [hearing])
-        showHotkeyStatus(of: setup.source, [hearing, await install(setup.delivery)])
+        }.mapError { LoopRefusal(stringLiteral: "\($0)") }
+        showHotkeyStatus(of: setup.source, [delivering, hearing])
     }
 
     /// [LAW:no-silent-failure] Either half can refuse, and with any source beside any
@@ -298,7 +303,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// words the user can act on, and none overwrites another.
     /// [LAW:dataflow-not-control-flow] One sentence for every pairing that works: every
     /// source feeds the same detector, which hears a hold and a tap alike.
-    private func showHotkeyStatus(of source: HotkeySource, _ halves: [Result<Void, Refusal>]) {
+    private func showHotkeyStatus(of source: HotkeySource, _ halves: [Result<Void, LoopRefusal>]) {
         let refusals = halves.compactMap { if case .failure(let refusal) = $0 { refusal.reason } else { nil } }
         showHotkeyStatus(refusals.isEmpty
             ? "hold \(chordName(heardBy: source)), or tap it to start and again to stop"
@@ -313,7 +318,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     ///
     /// [LAW:no-silent-failure] An install that fails leaves a hotkey that would hear every
     /// press and insert nothing, so it comes back as a refusal for the status line.
-    private func install(_ delivery: Delivery) async -> Result<Void, Refusal> {
+    private func install(_ delivery: Delivery) async -> Result<Void, LoopRefusal> {
         switch delivery {
         case .virtualKeyboard:
             registerKeyboardHelper()
@@ -346,7 +351,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     /// Why half of a loop is not working, in the words the status line says it.
-    private struct Refusal: Error, ExpressibleByStringInterpolation {
+    /// Named apart from `Insertion.Refusal`, which is the input method's answer to an insert.
+    private struct LoopRefusal: Error, ExpressibleByStringInterpolation {
         let reason: String
         init(stringLiteral reason: String) { self.reason = reason }
     }
@@ -606,6 +612,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             }.last
         case .failure(let error):
+            // [LAW:no-silent-failure] The words went nowhere, so the menu says why, in full:
+            // only the person who dictated them reads it. A stopped route is named by what
+            // stopped it; what it did first is the log's.
+            lastFailure = "\((error as? RouteStopped)?.cause ?? error)"
             // The kind of failure is public and its account is not: a TypingStopped
             // names the character left half typed, which is a character the user
             // dictated. [LAW:no-silent-failure] The type alone still says what broke.
@@ -724,6 +734,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(readout("Microphone: \(microphone)"))
         menu.addItem(readout("Hotkey: \(hotkeyStatus)"))
         if wordsOnClipboard { menu.addItem(readout("Your last dictation was copied to the clipboard")) }
+        lastFailure.map { menu.addItem(readout("Your last dictation was not placed: \($0)")) }
         // Every requirement, met or not, and its step under it as the lines it was
         // written in - one item per line, so nothing here wraps text the requirement
         // already broke. A list that showed only what was missing would leave a reader

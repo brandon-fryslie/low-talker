@@ -36,7 +36,7 @@ RELEASE_SCHEME := LowTalker
 RELEASE_APP := $(PRODUCTS)/LowTalker.app
 INSTALLED := /Applications/LowTalker.app
 
-.PHONY: app release install run test check-docs cli helper clean signing-identity model-store
+.PHONY: app release install run test check-docs cli helper clean signing-identity
 
 # Regeneration is unconditional: xcodegen is idempotent and sub-second, and a
 # timestamp rule cannot see removed sources or in-place rewrites of the project.
@@ -51,29 +51,35 @@ define build_app
 		BUNDLED_DRIVER_PACKAGE="$(BUNDLED_DRIVER_PACKAGE)" build
 endef
 
-# The store the bundle carries, copied out of this Mac's own. Two stores and not one,
+# The store the bundle carries, copied out of $(MODEL_SOURCE). Two stores and not one,
 # the way `model pack` works: a store filled from Hugging Face also holds the hub client's
 # own metadata, and a copy out of it takes only the files the manifests list, so the bundle
 # carries exactly what an install certifies. [LAW:one-source-of-truth]
 #
+# Both installations build on the store they carry, so the store is their prerequisite by
+# name: whichever store BUNDLED_MODEL_STORE names is the one filled before the build, and
+# `BUNDLED_MODEL_STORE=` names none, which is how CI builds a bundle with no model.
+# scripts/sign-release fills this same rule from the store it fetched, by passing
+# MODEL_SOURCE. [LAW:dataflow-not-control-flow]
+#
 # Idempotent and cheap on the second run: `model download --from` is an install, and an
 # install of a model already whole copies nothing. It is a directory rather than a file, so
 # it is phony and asks the CLI rather than asking make to compare timestamps on 632 MB.
-.PHONY: model-store
-model-store:
+.PHONY: $(CARRIED_MODEL_STORE)
+$(CARRIED_MODEL_STORE):
 	@test -d "$(MODEL_SOURCE)" || { \
 		echo "no model store at $(MODEL_SOURCE)."; \
 		echo "Run '$(CLI) model download' once; it is the only thing here that reaches the network."; \
 		exit 1; \
 	}
 	$(MAKE) --no-print-directory cli >/dev/null
-	"$(CLI)" model download --models-dir "$(CARRIED_MODEL_STORE)" --from "$(MODEL_SOURCE)"
+	"$(CLI)" model download --models-dir "$@" --from "$(MODEL_SOURCE)"
 
-app: model-store
+app: $(BUNDLED_MODEL_STORE)
 	$(call build_app,$(DEV_SCHEME))
 	@echo "$(DEV_APP)"
 
-release:
+release: $(BUNDLED_MODEL_STORE)
 	$(call build_app,$(RELEASE_SCHEME))
 	@echo "$(RELEASE_APP)"
 

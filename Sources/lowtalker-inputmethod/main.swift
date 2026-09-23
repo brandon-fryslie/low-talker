@@ -60,6 +60,19 @@ let server: IMKServer = {
     return server
 }()
 
+/// The app holding Secure Event Input, by name, or nil when nobody holds it.
+///
+/// Read from the window server's session, which names the holder's process rather than only
+/// saying that someone holds it - the name is what the log line needs, since the fix is in
+/// that app's own menu. A holder whose process has no name is still a holder, and is named
+/// by its pid rather than read as none. [LAW:no-silent-failure]
+@MainActor
+func secureInputHolder() -> String? {
+    let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+    guard let pid = session?["kCGSSessionSecureInputPID"] as? pid_t, pid != 0 else { return nil }
+    return NSRunningApplication(processIdentifier: pid)?.localizedName ?? "process \(pid)"
+}
+
 /// The app's door, beside the text input system's. Held for the life of the process for
 /// the same reason the server is: released, the app's next request finds nothing listening.
 ///
@@ -77,19 +90,6 @@ let server: IMKServer = {
 /// that name. The app's inserts are not lost - they reach that other process, which has its
 /// own cursor and its own view of what is in front - and the fault in the log is the only
 /// place the two copies are distinguishable. [LAW:no-silent-failure]
-/// The app holding Secure Event Input, by name, or nil when nobody holds it.
-///
-/// Read from the window server's session, which names the holder's process rather than only
-/// saying that someone holds it - the name is what the log line needs, since the fix is in
-/// that app's own menu. A holder whose process has no name is still a holder, and is named
-/// by its pid rather than read as none. [LAW:no-silent-failure]
-@MainActor
-func secureInputHolder() -> String? {
-    let session = CGSessionCopyCurrentDictionary() as? [String: Any]
-    guard let pid = session?["kCGSSessionSecureInputPID"] as? pid_t, pid != 0 else { return nil }
-    return NSRunningApplication(processIdentifier: pid)?.localizedName ?? "process \(pid)"
-}
-
 let insertions: InsertionPort? = {
     do {
         return try InsertionPort(flavor: flavor) { text in
