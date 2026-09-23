@@ -289,25 +289,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             report: { [unowned self] in report($0) }
         )
         listening = Listening(setup: setup, hotkey: hotkey, dictation: dictation)
-        let hearing = Result {
-            try hotkey.start({ [unowned self] transition in
-                if case .began = transition { (lastDictation, lastFailure) = (nil, nil) }
-                dictation.press(transition)
-            }, onLapse: { [unowned self] in report($0) })
-        }.mapError { LoopRefusal(stringLiteral: "\($0)") }
-        showHotkeyStatus(of: setup.source, [delivering, hearing])
+        // The hotkey goes up only on a delivery that installed: a hotkey over a delivery
+        // that refused would open the microphone on every press for words that go nowhere,
+        // while the status line said the loop was off. Left down, it is also what lets
+        // choosing the same delivery again retry the install - `take` rebuilds a loop whose
+        // hotkey is not watching. [LAW:no-silent-failure]
+        let hearing = delivering.flatMap {
+            Result {
+                try hotkey.start({ [unowned self] transition in
+                    if case .began = transition { (lastDictation, lastFailure) = (nil, nil) }
+                    dictation.press(transition)
+                }, onLapse: { [unowned self] in report($0) })
+            }.mapError { LoopRefusal(stringLiteral: "\($0)") }
+        }
+        showHotkeyStatus(of: setup.source, hearing)
     }
 
-    /// [LAW:no-silent-failure] Either half can refuse, and with any source beside any
-    /// delivery both can at once: every refusal is on the one surface this app has, in the
-    /// words the user can act on, and none overwrites another.
+    /// [LAW:no-silent-failure] Either half can refuse: every refusal is on the one surface
+    /// this app has, in the words the user can act on.
     /// [LAW:dataflow-not-control-flow] One sentence for every pairing that works: every
     /// source feeds the same detector, which hears a hold and a tap alike.
-    private func showHotkeyStatus(of source: HotkeySource, _ halves: [Result<Void, LoopRefusal>]) {
-        let refusals = halves.compactMap { if case .failure(let refusal) = $0 { refusal.reason } else { nil } }
-        showHotkeyStatus(refusals.isEmpty
-            ? "hold \(chordName(heardBy: source)), or tap it to start and again to stop"
-            : "off — " + refusals.joined(separator: "; "))
+    private func showHotkeyStatus(of source: HotkeySource, _ loop: Result<Void, LoopRefusal>) {
+        switch loop {
+        case .success: showHotkeyStatus("hold \(chordName(heardBy: source)), or tap it to start and again to stop")
+        case .failure(let refusal): showHotkeyStatus("off — \(refusal.reason)")
+        }
     }
 
     /// Makes `delivery` ready to reach the cursor: the virtual keyboard's helper registered,
