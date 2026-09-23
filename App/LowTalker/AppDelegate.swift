@@ -286,15 +286,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 dictation.press(transition)
             }, onLapse: { [unowned self] in report($0) })
         }.mapError { Refusal(stringLiteral: "\($0)") }
-        let delivering = await install(setup.delivery)
-        // [LAW:no-silent-failure] Either half can refuse, and with any source beside any
-        // delivery both can at once: every refusal is on the one surface this app has, in
-        // the words the user can act on, and none overwrites another.
-        // [LAW:dataflow-not-control-flow] One sentence for every pairing that works: every
-        // source feeds the same detector, which hears a hold and a tap alike.
-        let refusals = [hearing, delivering].compactMap { if case .failure(let refusal) = $0 { refusal.reason } else { nil } }
+        // Said as soon as the hotkey is listening, since the install can take seconds and
+        // a status line naming the old loop would be wrong for all of them; said again
+        // when the install answers.
+        showHotkeyStatus(of: setup.source, [hearing])
+        showHotkeyStatus(of: setup.source, [hearing, await install(setup.delivery)])
+    }
+
+    /// [LAW:no-silent-failure] Either half can refuse, and with any source beside any
+    /// delivery both can at once: every refusal is on the one surface this app has, in the
+    /// words the user can act on, and none overwrites another.
+    /// [LAW:dataflow-not-control-flow] One sentence for every pairing that works: every
+    /// source feeds the same detector, which hears a hold and a tap alike.
+    private func showHotkeyStatus(of source: HotkeySource, _ halves: [Result<Void, Refusal>]) {
+        let refusals = halves.compactMap { if case .failure(let refusal) = $0 { refusal.reason } else { nil } }
         showHotkeyStatus(refusals.isEmpty
-            ? "hold \(chordName(heardBy: setup.source)), or tap it to start and again to stop"
+            ? "hold \(chordName(heardBy: source)), or tap it to start and again to stop"
             : "off — " + refusals.joined(separator: "; "))
     }
 
