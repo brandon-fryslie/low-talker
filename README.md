@@ -4,7 +4,7 @@ Native macOS push-to-talk dictation, as a menu-bar app. What it is and why it ex
 
 ## Two installations
 
-LowTalker installs twice and both copies run at the same time. The release copy is the one that runs all day, launched at login, whose event-tap chord is Right Option. The development copy is built from the working tree and runs beside it, on Right Option **and Right Command together** — hold Right Command first, because Right Option alone completes the release chord and that press then owns the hold.
+LowTalker installs twice and both copies run at the same time. The release copy is the one that runs all day, launched at login, whose event-tap chord is Right Option. The development copy is built from the working tree and runs beside it, and its event-tap chord is Right Option **and Right Command together** — hold Right Command first, because Right Option alone completes the release chord and that press then owns the hold. Each copy's chord under the other hotkey source is in "The hotkey source" below.
 
 They are one program, not two. What separates them is four names macOS keys an installation by — the bundle identifier, the Mach service, the launchd label, and the config file — and every one of them is decided in `Sources/Flavors/Flavor.swift`. Nothing else differs; the model store is deliberately shared, the weights being gigabytes and identical.
 
