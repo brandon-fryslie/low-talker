@@ -235,14 +235,16 @@ public struct InputSourceInstaller: Sendable {
             // link, never followed. When it fails, the copy is renamed in: straight away if
             // nothing stood there (ENOENT), and otherwise - as on HFS+, which answers
             // ENOTSUP - after what stood there is moved, whole, to `aside`.
-            if renaming.swap(staged, installed) != 0 {
-                let movedAside = errno == ENOENT || renaming.move(installed, aside) == 0 || errno == ENOENT
-                guard movedAside else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-                guard renaming.move(staged, installed) == 0 else {
-                    let failure = errno
+            let swapFailure = failure(of: renaming.swap(staged, installed))
+            if swapFailure != 0 {
+                // ENOENT from either call means nothing stands at `installed` to move aside.
+                let asideFailure = swapFailure == ENOENT ? ENOENT : failure(of: renaming.move(installed, aside))
+                guard asideFailure == 0 || asideFailure == ENOENT else { throw posixError(asideFailure) }
+                let moveInFailure = failure(of: renaming.move(staged, installed))
+                guard moveInFailure == 0 else {
                     // What was moved aside goes back; if it cannot, the refusal says where it is.
                     _ = renaming.move(aside, installed)
-                    throw POSIXError(POSIXErrorCode(rawValue: failure) ?? .EIO)
+                    throw posixError(moveInFailure)
                 }
             }
             return Replacement(swappedAt: Date(), previous: staging)
@@ -260,6 +262,12 @@ public struct InputSourceInstaller: Sendable {
             throw InputSourceInstallFailure.cannotCopy(from: embedded, to: installed, reason: reason)
         }
     }
+
+    /// 0 when a system call answered 0, and otherwise the errno it set, read before
+    /// anything else can overwrite it.
+    private static func failure(of result: Int32) -> Int32 { result == 0 ? 0 : errno }
+
+    private static func posixError(_ code: Int32) -> POSIXError { POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO) }
 
     /// Deletes the copy a swap put aside, once the processes running it are stopped.
     ///
