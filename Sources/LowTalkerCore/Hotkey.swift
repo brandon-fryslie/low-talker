@@ -181,7 +181,7 @@ public final class Hotkey {
             .map(\.element)
     }
 
-    /// The chord in the grammar `ChordSpelling` reads back: modifiers by their case names in
+    /// The chord in the grammar `KeyChord.init(spelled:on:)` reads back: modifiers by their case names in
     /// the order `pressOrder` gives, then the key by its code. It needs no keyboard layout,
     /// so it can always be printed; `named(_:heardBy:on:)` is the spelling in a person's
     /// words where a layout can be read. [LAW:one-source-of-truth]
