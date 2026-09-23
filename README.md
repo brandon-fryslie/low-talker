@@ -4,7 +4,7 @@ Native macOS push-to-talk dictation, as a menu-bar app. What it is and why it ex
 
 ## Two installations
 
-LowTalker installs twice and both copies run at the same time. The release copy is the one that runs all day, launched at login, held on Right Option. The development copy is built from the working tree and runs beside it, on Right Option **and Right Command together** — hold Right Command first, because Right Option alone completes the release chord and that press then owns the hold.
+LowTalker installs twice and both copies run at the same time. The release copy is the one that runs all day, launched at login, whose event-tap chord is Right Option. The development copy is built from the working tree and runs beside it, on Right Option **and Right Command together** — hold Right Command first, because Right Option alone completes the release chord and that press then owns the hold.
 
 They are one program, not two. What separates them is four names macOS keys an installation by — the bundle identifier, the Mach service, the launchd label, and the config file — and every one of them is decided in `Sources/Flavors/Flavor.swift`. Nothing else differs; the model store is deliberately shared, the weights being gigabytes and identical.
 
@@ -311,8 +311,8 @@ The status menu lists both under "Delivery" with the current one checked, and ch
 
 How the hotkey is heard is a second choice, asked beside the delivery and independent of it: any source goes with any delivery.
 
-- **Event tap.** Right Option (Right Command, then Right Option, for the development copy). A chord of modifiers alone, which only a tap on every key can hear, so it needs Input Monitoring.
-- **Registered hot key.** Shift+Command+Option+X (Command+Option+X for the development copy), registered with the window server, so it needs nothing. macOS registers only a chord with a key in it.
+- **Event tap.** Right Option (Right Command+Right Option for the development copy, Right Command first). A chord of modifiers alone, which only a tap on every key can hear, so it needs Input Monitoring and Accessibility.
+- **Registered hot key.** Option+Shift+Command+X (Option+Command+X for the development copy), registered with the window server, so it needs nothing. macOS registers only a chord with a key in it.
 
 Either way, hold the chord while you speak, or tap it to start and again to stop. The menu lists both under "Hotkey source", each named by its chord on your keyboard layout and what macOS asks for it. The choice is kept under `hotkeySource`; `defaults delete ai.promptctl.low-talker.dev hotkeySource` makes the development copy ask again. The app logs `setup: delivery inputMethod, hotkey source registeredHotKey` at launch, and `Delivery: asked, answered …` or `HotkeySource: asked, answered …` when it asked.
 
@@ -324,7 +324,7 @@ When the app that is in front invokes the Service, it — not low-talker — ins
 
 Verified on this Mac with the development copy: on the clipboard, a hold of Control+Shift+Command+D over the fixture `say/greeting` put "Hello world, this is Low Talker." on the clipboard, and `NSPerformService("Insert LowTalker Dev Dictation")` then returned it on the pasteboard it was handed in a few milliseconds, the log reading `insert dictation: returned 33 characters`; a freshly launched copy with no dictation refused the call, so the caller inserted nothing. Whether a bound shortcut reaches a real cursor is each app's to honour: iTerm2 and the native text apps carry text Services, while many Chromium and Electron apps carry none.
 
-Verified on this Mac with the development copy: on the clipboard, a four-word utterance spoken during a held chord (then Control+Option+Command+D, since moved off VoiceOver's modifier) was on the pasteboard 698 ms after key-up, with no helper registration logged; `lowtalker hotkey --heard-by clipboard` heard a hold and a pair of taps of Control+Shift+Command+D; switched to the virtual keyboard from the menu, the next utterance was typed into TextEdit 693 ms after key-up; and with the stored choice deleted, the next launch asked, and logged the answer. The alert that lists missing steps was not seen, since this Mac is missing none.
+Verified on this Mac with the development copy: on the clipboard, a four-word utterance spoken during a held chord (then Control+Option+Command+D, since moved off VoiceOver's modifier) was on the pasteboard 698 ms after key-up, with no helper registration logged; `lowtalker hotkey --heard-by clipboard` (now `--heard-by registeredHotKey`) heard a hold and a pair of taps of Control+Shift+Command+D; switched to the virtual keyboard from the menu, the next utterance was typed into TextEdit 693 ms after key-up; and with the stored choice deleted, the next launch asked, and logged the answer. The alert that lists missing steps was not seen, since this Mac is missing none.
 
 ## Dictation
 

@@ -19,7 +19,7 @@ struct HotkeyCommand: AsyncParsableCommand {
 
     @OptionGroup var installation: FlavorOption
 
-    @Option(help: "How to hear the hotkey: eventTap, needing Input Monitoring, or registeredHotKey, needing nothing.")
+    @Option(help: "How to hear the hotkey: eventTap, needing Input Monitoring and Accessibility, or registeredHotKey, needing nothing.")
     var heardBy: HotkeySource = .eventTap
 
     // Whole milliseconds, for the same reason as `mic watch --interval`.

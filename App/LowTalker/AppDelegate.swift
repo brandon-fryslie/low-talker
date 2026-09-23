@@ -280,39 +280,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             report: { [unowned self] in report($0) }
         )
         listening = Listening(setup: setup, hotkey: hotkey, dictation: dictation)
-        do {
+        let hearing = Result {
             try hotkey.start({ [unowned self] transition in
                 if case .began = transition { lastDictation = nil }
                 dictation.press(transition)
             }, onLapse: { [unowned self] in report($0) })
-            // [LAW:dataflow-not-control-flow] One sentence for every pairing: every source
-            // feeds the same detector, which hears a hold and a tap alike.
-            showHotkeyStatus("hold \(chordName(heardBy: setup.source)), or tap it to start and again to stop")
-        } catch {
-            // [LAW:no-silent-failure] An app that cannot listen must say so on the one
-            // surface it has, in the words the user can act on.
-            showHotkeyStatus("off — \(error)")
-        }
-        switch setup.delivery {
-        case .virtualKeyboard: registerKeyboardHelper()
-        case .inputMethod: await installInputMethod()
-        }
+        }.mapError { "\($0)" }
+        let delivering = await install(setup.delivery)
+        // [LAW:no-silent-failure] Either half can refuse, and with any source beside any
+        // delivery both can at once: every refusal is on the one surface this app has, in
+        // the words the user can act on, and none overwrites another.
+        // [LAW:dataflow-not-control-flow] One sentence for every pairing that works: every
+        // source feeds the same detector, which hears a hold and a tap alike.
+        let refusals = [hearing, delivering].compactMap { if case .failure(let refusal) = $0 { refusal.reason } else { nil } }
+        showHotkeyStatus(refusals.isEmpty
+            ? "hold \(chordName(heardBy: setup.source)), or tap it to start and again to stop"
+            : "off — " + refusals.joined(separator: "; "))
     }
 
-    /// Puts this installation's input method where macOS looks for one, registered, switched
-    /// on and selected - the input method delivery's counterpart to registering the helper, and
-    /// run at the same moment for the same reason: choosing a delivery is what installs it.
+    /// Makes `delivery` ready to reach the cursor: the virtual keyboard's helper registered,
+    /// or this installation's input method put where macOS looks for one, registered,
+    /// switched on and selected. Run at every adoption, since choosing a delivery is what
+    /// installs it and both are idempotent - which is also what keeps the input method
+    /// selected across a change of hotkey source.
     ///
     /// [LAW:no-silent-failure] An install that fails leaves a hotkey that would hear every
-    /// press and insert nothing, so the failure takes the status line the hotkey's success
-    /// wrote, in the words of the step that refused.
-    private func installInputMethod() async {
-        do {
-            let state = try await InputSourceInstaller(flavor: Self.flavor).install()
-            log.notice("input method: \(state, privacy: .public)")
-        } catch {
-            log.error("input method: \(String(describing: error), privacy: .public)")
-            showHotkeyStatus("off — the input method could not be installed: \(error)")
+    /// press and insert nothing, so it comes back as a refusal for the status line.
+    private func install(_ delivery: Delivery) async -> Result<Void, Refusal> {
+        switch delivery {
+        case .virtualKeyboard:
+            registerKeyboardHelper()
+            return .success(())
+        case .inputMethod:
+            do {
+                let state = try await InputSourceInstaller(flavor: Self.flavor).install()
+                log.notice("input method: \(state, privacy: .public)")
+                return .success(())
+            } catch {
+                log.error("input method: \(String(describing: error), privacy: .public)")
+                return .failure("the input method could not be installed: \(error)")
+            }
         }
     }
 
@@ -329,6 +336,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // cursor through the text input system.
             Executor(insertingThrough: InputMethodInserter(flavor: Self.flavor))
         }
+    }
+
+    /// Why half of a loop is not working, in the words the status line says it.
+    private struct Refusal: Error, ExpressibleByStringInterpolation {
+        let reason: String
+        init(stringLiteral reason: String) { self.reason = reason }
     }
 
     /// Asked when an installation has never made `choices`' choice, which is its first
@@ -441,7 +454,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let setup = chosenSetup, switching != nil, setup != before || cameDown, !quitting else { return }
         Task {
             await choose(setup)
-            showWhatIsMissing(for: setup.delivery)
+            // What a delivery still needs is news when the delivery is new, and not when
+            // only the hotkey it sits behind has changed.
+            if setup.delivery != before?.delivery { showWhatIsMissing(for: setup.delivery) }
         }
     }
 
