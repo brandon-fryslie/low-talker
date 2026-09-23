@@ -185,7 +185,8 @@ public final class Hotkey {
     /// the order to hold them, then the key by its code.
     ///
     /// For refusals and anything a program reads back. A person is told a chord by
-    /// `named(_:heardBy:on:)`, which names the key on their layout. Where a hearing tells
+    /// `named(_:heardBy:on:)`, which names the key on their layout, and by this only when
+    /// that layout cannot be read, as the app's menu falls back to. Where a hearing tells
     /// sides apart, both take the order from `pressOrder`, so neither can print the order
     /// that starts the other installation dictating; a registered hot key is named without
     /// sides, and its chords have a key, which no order of holding modifiers can complete.
