@@ -138,14 +138,23 @@ targetTemplates:
         script: |
           set -euo pipefail
           resources="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
-          # Removed on every build, named or not: Xcode leaves a file it did not make in
-          # the bundle, so what an earlier build carried would ride along, and ditto
-          # merges into a folder already there.
-          rm -rf "${resources}/${MODEL_STORE_RESOURCE}" "${resources}/${DRIVER_PACKAGE_RESOURCE}"
+          # The model is synced, never removed and copied again. The Neural Engine keys its
+          # compiled model on the files themselves, so a store rewritten by every build is a
+          # new model to it, and every launch after a build paid the whole compile again -
+          # measured at 2.5 to 4 minutes, against seconds for files it has seen. `--delete`
+          # keeps what the removal was for: Xcode leaves a file it did not make in the
+          # bundle, so nothing an earlier build carried may ride along. Files that did not
+          # change are not touched at all.
           # An empty setting reaches the script unset, not empty.
           if [ -n "${BUNDLED_MODEL_STORE:-}" ]; then
-            ditto "${BUNDLED_MODEL_STORE}" "${resources}/${MODEL_STORE_RESOURCE}"
+            mkdir -p "${resources}/${MODEL_STORE_RESOURCE}"
+            rsync -a --delete "${BUNDLED_MODEL_STORE}/" "${resources}/${MODEL_STORE_RESOURCE}/"
+          else
+            rm -rf "${resources}/${MODEL_STORE_RESOURCE}"
           fi
+          # Removed on every build, named or not, for the reason above; it is small, so it
+          # costs nothing to copy again.
+          rm -rf "${resources}/${DRIVER_PACKAGE_RESOURCE}"
           if [ -n "${BUNDLED_DRIVER_PACKAGE:-}" ]; then
             ditto "${BUNDLED_DRIVER_PACKAGE}" "${resources}/${DRIVER_PACKAGE_RESOURCE}"
           fi
