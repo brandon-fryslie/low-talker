@@ -114,9 +114,10 @@ public final class Hotkey {
     ///
     /// **A registered hot key cannot be a modifier alone**, so that hearing gets a key: Command+Option+X for the development copy, and
     /// Shift added for the release. Carbon matches modifiers exactly, so neither completes
-    /// the other. No Control: the chord is held while the person speaks, and Control+D held
-    /// over a terminal is end-of-file, which closed the shell it was pressed in. Not
-    /// Control+Option either, which is VoiceOver's modifier.
+    /// the other. No Control: the chord is held while the person speaks, and a Control chord
+    /// held over a terminal is a control character sent to the shell (an earlier chord's
+    /// Control+D was end-of-file, and closed the shell it was pressed in). Not Control+Option
+    /// either, which is VoiceOver's modifier.
     nonisolated public static func defaultChord(for flavor: Flavor, heardBy hearing: HotkeySource) -> KeyChord {
         let x = Key(rawValue: UInt16(kVK_ANSI_X))
         return switch (hearing, flavor) {
