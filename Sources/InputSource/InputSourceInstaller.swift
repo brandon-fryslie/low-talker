@@ -187,9 +187,10 @@ public struct InputSourceInstaller: Sendable {
         return .selected
     }
 
-    /// A copy `place` swapped in: the moment it began to stand, and the staging directory
-    /// now holding whatever stood there before - still whole, because a process may be
-    /// running from it - which is the caller's to delete once nothing is.
+    /// A copy `place` swapped in: the moment it began to stand, and the staging directory,
+    /// which holds whatever stood there before - still whole, because a process may be
+    /// running from it - or nothing on a first install. The caller deletes it once no
+    /// process runs from it.
     struct Replacement: Equatable {
         /// Read after the swap, so every process launched before it may be running the old
         /// copy and every process launched after it is running the new one.
@@ -201,11 +202,18 @@ public struct InputSourceInstaller: Sendable {
     /// answering nil when it left things alone.
     ///
     /// Staged in the system's replacement directory for this volume and swapped in with one
-    /// rename, so the text input system finds the old bundle or the new one and never half
-    /// of either, and a crash mid-copy leaves nothing in `~/Library/Input Methods`. A copy
+    /// rename where the volume can swap, so the text input system finds the old bundle or
+    /// the new one and never half of either, and a crash mid-copy leaves nothing in
+    /// `~/Library/Input Methods`. A copy
     /// that fails takes its staging directory with it, since an install runs at every launch
     /// and a lasting failure would otherwise leave one more copy behind each time.
-    static func place(_ embedded: URL, at installed: URL) throws -> Replacement? {
+    ///
+    /// `swap` is `renamex_np` with `RENAME_SWAP` except in a test standing in for a volume
+    /// that cannot swap.
+    static func place(
+        _ embedded: URL, at installed: URL,
+        swap: (URL, URL) -> Int32 = { renamex_np($0.path, $1.path, UInt32(RENAME_SWAP)) }
+    ) throws -> Replacement? {
         let wanted = try seal(of: embedded)
         if isCopy(installed, of: wanted) { return nil }
         let staging: URL
@@ -219,12 +227,16 @@ public struct InputSourceInstaller: Sendable {
         do {
             let staged = staging.appending(path: installed.lastPathComponent)
             try FileManager.default.copyItem(at: embedded, to: staged)
-            // `RENAME_SWAP` exchanges the two names when both exist - a link is swapped as
-            // the link, never followed - and a plain rename moves the copy in when nothing
-            // stood there.
-            let swapped = renamex_np(staged.path, installed.path, UInt32(RENAME_SWAP)) == 0
-            guard swapped || (errno == ENOENT && rename(staged.path, installed.path) == 0) else {
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            // The swap exchanges the two names when both exist - a link is swapped as the
+            // link, never followed. When it fails, the copy is renamed in: straight away if
+            // nothing stood there (ENOENT), and otherwise - as on HFS+, which answers
+            // ENOTSUP - after what stood there is moved, whole, into the staging directory.
+            if swap(staged, installed) != 0 {
+                let aside = staging.appending(path: "previous")
+                let moved = errno == ENOENT || rename(installed.path, aside.path) == 0 || errno == ENOENT
+                guard moved, rename(staged.path, installed.path) == 0 else {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
             }
             return Replacement(swappedAt: Date(), previous: staging)
         } catch {
@@ -287,8 +299,9 @@ public struct InputSourceInstaller: Sendable {
     /// The one source with this identifier, including sources that are switched off.
     ///
     /// `includeAllInstalled` is what makes a disabled source visible at all: the default
-    /// list holds only what is enabled, so a registered-but-off input method would read as
-    /// never registered and `install` would treat a bundle already in place as missing.
+    /// list holds only what is enabled, so without it a registered-but-off input method
+    /// would read as `notRegistered` to `state`, and `install` would register it and then
+    /// refuse with `notInSourceListAfterRegistering` instead of switching it on.
     static func source(named identifier: String) -> TISInputSource? {
         let query = [kTISPropertyInputSourceID as String: identifier] as CFDictionary
         let sources = TISCreateInputSourceList(query, true)?.takeRetainedValue() as? [TISInputSource]

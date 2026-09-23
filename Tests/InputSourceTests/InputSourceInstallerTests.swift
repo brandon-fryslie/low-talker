@@ -153,6 +153,23 @@ import Testing
         #expect(replacement.swappedAt >= stood)
     }
 
+    /// A home folder on a volume with no swap (HFS+ answers ENOTSUP) still gets its copy, and the old
+    /// bundle is kept whole in the staging directory for the processes still running it.
+    @Test func aVolumeThatCannotSwapStillGetsTheCopy() throws {
+        let directory = try scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let noSwap: (URL, URL) -> Int32 = { _, _ in errno = ENOTSUP; return -1 }
+        let installed = directory.appending(path: "Input.app")
+        let first = try signedBundle(in: directory, build: "1")
+        _ = try InputSourceInstaller.place(first, at: installed, swap: noSwap)
+        #expect(InputSourceInstaller.isCopy(installed, of: try InputSourceInstaller.seal(of: first)))
+        let rebuilt = try signedBundle(in: directory, build: "2")
+        let previous = try #require(try InputSourceInstaller.place(rebuilt, at: installed, swap: noSwap)).previous
+        #expect(InputSourceInstaller.isCopy(installed, of: try InputSourceInstaller.seal(of: rebuilt)))
+        let kept = try FileManager.default.contentsOfDirectory(at: previous, includingPropertiesForKeys: nil)
+        #expect(try kept.map { InputSourceInstaller.isCopy($0, of: try InputSourceInstaller.seal(of: first)) } == [true])
+    }
+
     /// An install runs at every launch, so a copy that cannot be swapped in must not leave
     /// its staged bundle behind each time it fails.
     @Test func aFailedSwapLeavesNothingStaged() throws {
