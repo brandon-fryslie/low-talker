@@ -158,16 +158,56 @@ import Testing
     @Test func aVolumeThatCannotSwapStillGetsTheCopy() throws {
         let directory = try scratch()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let noSwap: (URL, URL) -> Int32 = { _, _ in errno = ENOTSUP; return -1 }
+        let noSwap = InputSourceInstaller.Renaming(swap: { _, _ in errno = ENOTSUP; return -1 }, move: InputSourceInstaller.Renaming.system.move)
         let installed = directory.appending(path: "Input.app")
         let first = try signedBundle(in: directory, build: "1")
-        _ = try InputSourceInstaller.place(first, at: installed, swap: noSwap)
+        _ = try InputSourceInstaller.place(first, at: installed, renaming: noSwap)
         #expect(InputSourceInstaller.isCopy(installed, of: try InputSourceInstaller.seal(of: first)))
         let rebuilt = try signedBundle(in: directory, build: "2")
-        let previous = try #require(try InputSourceInstaller.place(rebuilt, at: installed, swap: noSwap)).previous
+        let previous = try #require(try InputSourceInstaller.place(rebuilt, at: installed, renaming: noSwap)).previous
         #expect(InputSourceInstaller.isCopy(installed, of: try InputSourceInstaller.seal(of: rebuilt)))
         let kept = try FileManager.default.contentsOfDirectory(at: previous, includingPropertiesForKeys: nil)
         #expect(try kept.map { InputSourceInstaller.isCopy($0, of: try InputSourceInstaller.seal(of: first)) } == [true])
+    }
+
+    /// A volume that cannot swap, where the copy's move in then fails - something recreated
+    /// the name between the two renames - and `putBack` says whether moving the old copy
+    /// back works too.
+    private func failedMoveIn(putBack: Bool) throws -> (installed: URL, first: URL, error: InputSourceInstallFailure?) {
+        let directory = try scratch()
+        let installed = directory.appending(path: "Input.app")
+        let first = try signedBundle(in: directory, build: "1")
+        _ = try InputSourceInstaller.place(first, at: installed)
+        let racing = InputSourceInstaller.Renaming(swap: { _, _ in errno = ENOTSUP; return -1 }) { from, to in
+            let refused = to == installed && (from.lastPathComponent != "previous" || !putBack)
+            if refused { errno = EEXIST; return -1 }
+            return rename(from.path, to.path)
+        }
+        do {
+            _ = try InputSourceInstaller.place(try signedBundle(in: directory, build: "2"), at: installed, renaming: racing)
+            return (installed, first, nil)
+        } catch {
+            return (installed, first, error as? InputSourceInstallFailure)
+        }
+    }
+
+    @Test func aFailedMoveInPutsTheOldCopyBack() throws {
+        let (installed, first, error) = try failedMoveIn(putBack: true)
+        defer { try? FileManager.default.removeItem(at: installed.deletingLastPathComponent()) }
+        guard case .cannotCopy = error else { Issue.record("expected cannotCopy, got \(String(describing: error))"); return }
+        #expect(InputSourceInstaller.isCopy(installed, of: try InputSourceInstaller.seal(of: first)))
+    }
+
+    /// Put back refused too: the old copy is the only one left, so it is kept and the
+    /// refusal names where it is.
+    @Test func anOldCopyThatCannotGoBackIsKeptAndNamed() throws {
+        let (installed, first, error) = try failedMoveIn(putBack: false)
+        defer { try? FileManager.default.removeItem(at: installed.deletingLastPathComponent()) }
+        guard case .cannotCopy(_, _, let reason) = error else { Issue.record("expected cannotCopy, got \(String(describing: error))"); return }
+        let kept = try #require(reason.components(separatedBy: "is now at ").last)
+        defer { try? FileManager.default.removeItem(at: URL(fileURLWithPath: kept).deletingLastPathComponent()) }
+        #expect(!FileManager.default.fileExists(atPath: installed.path))
+        #expect(InputSourceInstaller.isCopy(URL(fileURLWithPath: kept), of: try InputSourceInstaller.seal(of: first)))
     }
 
     /// An install runs at every launch, so a copy that cannot be swapped in must not leave

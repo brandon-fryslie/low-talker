@@ -198,22 +198,25 @@ public struct InputSourceInstaller: Sendable {
         let previous: URL
     }
 
+    /// The two renames `place` makes: an atomic exchange of two names, and a plain move.
+    /// Anything but `system` is a test standing in for a volume or a race it cannot stage.
+    struct Renaming: Sendable {
+        let swap: @Sendable (URL, URL) -> Int32
+        let move: @Sendable (URL, URL) -> Int32
+        static let system = Renaming(
+            swap: { renamex_np($0.path, $1.path, UInt32(RENAME_SWAP)) }, move: { rename($0.path, $1.path) })
+    }
+
     /// Puts a copy of `embedded` at `installed` unless what stands there already is one,
     /// answering nil when it left things alone.
     ///
     /// Staged in the system's replacement directory for this volume and swapped in with one
     /// rename where the volume can swap, so the text input system finds the old bundle or
     /// the new one and never half of either, and a crash mid-copy leaves nothing in
-    /// `~/Library/Input Methods`. A copy
-    /// that fails takes its staging directory with it, since an install runs at every launch
-    /// and a lasting failure would otherwise leave one more copy behind each time.
-    ///
-    /// `swap` is `renamex_np` with `RENAME_SWAP` except in a test standing in for a volume
-    /// that cannot swap.
-    static func place(
-        _ embedded: URL, at installed: URL,
-        swap: (URL, URL) -> Int32 = { renamex_np($0.path, $1.path, UInt32(RENAME_SWAP)) }
-    ) throws -> Replacement? {
+    /// `~/Library/Input Methods`. A copy that fails takes its staged copy with it, since an
+    /// install runs at every launch and a lasting failure would otherwise leave one more
+    /// copy behind each time.
+    static func place(_ embedded: URL, at installed: URL, renaming: Renaming = .system) throws -> Replacement? {
         let wanted = try seal(of: embedded)
         if isCopy(installed, of: wanted) { return nil }
         let staging: URL
@@ -224,28 +227,36 @@ public struct InputSourceInstaller: Sendable {
         } catch {
             throw InputSourceInstallFailure.cannotCopy(from: embedded, to: installed, reason: "\(error)")
         }
+        let staged = staging.appending(path: installed.lastPathComponent)
+        let aside = staging.appending(path: "previous")
         do {
-            let staged = staging.appending(path: installed.lastPathComponent)
             try FileManager.default.copyItem(at: embedded, to: staged)
             // The swap exchanges the two names when both exist - a link is swapped as the
             // link, never followed. When it fails, the copy is renamed in: straight away if
             // nothing stood there (ENOENT), and otherwise - as on HFS+, which answers
-            // ENOTSUP - after what stood there is moved, whole, into the staging directory.
-            if swap(staged, installed) != 0 {
-                let aside = staging.appending(path: "previous")
-                let moved = errno == ENOENT || rename(installed.path, aside.path) == 0 || errno == ENOENT
-                guard moved, rename(staged.path, installed.path) == 0 else {
-                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            // ENOTSUP - after what stood there is moved, whole, to `aside`.
+            if renaming.swap(staged, installed) != 0 {
+                let movedAside = errno == ENOENT || renaming.move(installed, aside) == 0 || errno == ENOENT
+                guard movedAside else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+                guard renaming.move(staged, installed) == 0 else {
+                    let failure = errno
+                    // What was moved aside goes back; if it cannot, the refusal says where it is.
+                    _ = renaming.move(aside, installed)
+                    throw POSIXError(POSIXErrorCode(rawValue: failure) ?? .EIO)
                 }
             }
             return Replacement(swappedAt: Date(), previous: staging)
         } catch {
-            // [LAW:no-silent-failure] A staging directory that will not go is said in the
-            // same refusal, where the person reading it is already looking.
+            // [LAW:no-silent-failure] A copy moved aside and not put back is the only one
+            // left, and a process may be running from it, so it is kept and named; otherwise
+            // the whole staging directory goes.
             var reason = "\(error)"
-            do { try FileManager.default.removeItem(at: staging) } catch {
-                reason += "; the staged copy is left at \(staging.path): \(error)"
+            let kept = (try? FileManager.default.attributesOfItem(atPath: aside.path)) != nil
+            let leftover = kept ? staged : staging
+            do { try FileManager.default.removeItem(at: leftover) } catch {
+                reason += "; the staged copy is left at \(leftover.path): \(error)"
             }
+            if kept { reason += "; what stood at \(installed.path) is now at \(aside.path)" }
             throw InputSourceInstallFailure.cannotCopy(from: embedded, to: installed, reason: reason)
         }
     }
