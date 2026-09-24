@@ -12,7 +12,8 @@ import DarwinCalls
 /// outlives whatever carries it.
 public protocol Inserter: Sendable {
     /// Inserts `text` at the cursor, or throws why it did not: a `Refusal` when the input
-    /// method looked and would not, `Unreachable` when the question never got an answer.
+    /// method looked and would not, and otherwise whatever stopped the question reaching it,
+    /// which the channel below names in its own types.
     ///
     /// **Blocking, and not to be called on the main actor or from a task.** The one that
     /// crosses to the input method holds its thread in the kernel for up to its timeout, so
