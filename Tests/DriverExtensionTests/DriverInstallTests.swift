@@ -153,15 +153,6 @@ import Testing
         #expect(throws: Never.self) { try DriverInstall.refuseRoot(501) }
     }
 
-    /// A command performed in front of the person stays in this process's group, which is
-    /// what lets sudo ask for a password on the terminal and Ctrl-C reach it; its exit
-    /// status comes back as the shell would report it.
-    @Test func aPerformedCommandSharesOurProcessGroupAndReportsItsStatus() throws {
-        #expect(try Command("/bin/sh", "-c", "exit 3").perform() == 3)
-        let ours = getpgrp()
-        #expect(try Command("/bin/sh", "-c", "[ \"$(ps -o pgid= -p $$ | tr -d ' ')\" = \"\(ours)\" ]").perform() == 0)
-    }
-
     /// The URL is built from the version and the file name, so a bump cannot leave it
     /// aimed at the old release. [LAW:one-source-of-truth]
     @Test func thePackageUrlCarriesTheVersionItPins() {
@@ -206,5 +197,32 @@ import Testing
         #expect(throws: DriverInstallRefusal.self) {
             try DriverPackage.judge(signature: Command.Output(status: 1, stdout: "", stderr: "no signature"), of: "it")
         }
+    }
+}
+
+/// Performing touches the process's own signal dispositions, which every test in this
+/// process shares, so these run one at a time.
+@Suite(.serialized) struct PerformTests {
+    /// A command performed in front of the person stays in this process's group, which is
+    /// what lets sudo ask for a password on the terminal and Ctrl-C reach it; its exit
+    /// status comes back as the shell would report it.
+    @Test func aPerformedCommandSharesOurProcessGroupAndReportsItsStatus() throws {
+        #expect(try Command("/bin/sh", "-c", "exit 3").perform() == 3)
+        let ours = getpgrp()
+        #expect(try Command("/bin/sh", "-c", "[ \"$(ps -o pgid= -p $$ | tr -d ' ')\" = \"\(ours)\" ]").perform() == 0)
+    }
+
+    /// Ctrl-C at sudo's prompt reaches the whole group. The child dies of it and this
+    /// process lives to clean up, and afterwards Ctrl-C means what it meant before.
+    @Test func anInterruptKillsTheChildAndSparesUs() throws {
+        func disposition() -> Int {
+            let now = signal(SIGINT, SIG_IGN)
+            signal(SIGINT, now)
+            return unsafeBitCast(now, to: Int.self)
+        }
+        let before = disposition()
+        let status = try Command("/bin/sh", "-c", "kill -INT $PPID; kill -INT $$; exit 0").perform()
+        #expect(status == 128 + SIGINT)
+        #expect(disposition() == before)
     }
 }

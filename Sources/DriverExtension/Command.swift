@@ -44,15 +44,38 @@ public struct Command {
     /// of its own - measured: the child's pgid was its own pid. A child outside the
     /// terminal's foreground group is stopped the moment sudo opens the terminal to ask for
     /// a password, and Ctrl-C never reaches it. This child stays in ours.
+    ///
+    /// Staying in ours means Ctrl-C reaches this process too, so while the child runs this
+    /// process ignores it, as `system(3)` and every shell do: the child alone dies of it, its
+    /// status comes back as a refusal, and the caller's cleanup runs instead of dying with
+    /// it. The child is handed the default dispositions and an empty mask, never our ignore
+    /// or a blocked signal inherited from whoever started us.
     public func perform() throws -> Int32 {
         var actions: posix_spawn_file_actions_t?
         posix_spawn_file_actions_init(&actions)
         defer { posix_spawn_file_actions_destroy(&actions) }
         posix_spawn_file_actions_adddup2(&actions, STDERR_FILENO, STDOUT_FILENO)
+        var interrupts = sigset_t()
+        sigemptyset(&interrupts)
+        sigaddset(&interrupts, SIGINT)
+        sigaddset(&interrupts, SIGQUIT)
+        var attributes: posix_spawnattr_t?
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        posix_spawnattr_setsigdefault(&attributes, &interrupts)
+        var unblocked = sigset_t()
+        sigemptyset(&unblocked)
+        posix_spawnattr_setsigmask(&attributes, &unblocked)
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK))
+        let interruptWas = signal(SIGINT, SIG_IGN), quitWas = signal(SIGQUIT, SIG_IGN)
+        defer {
+            signal(SIGINT, interruptWas)
+            signal(SIGQUIT, quitWas)
+        }
         let argv = ([tool.path] + arguments).map { strdup($0) } + [nil]
         defer { argv.forEach { free($0) } }
         var pid: pid_t = 0
-        let spawned = posix_spawn(&pid, tool.path, &actions, nil, argv, environ)
+        let spawned = posix_spawn(&pid, tool.path, &actions, &attributes, argv, environ)
         guard spawned == 0 else { throw POSIXError(POSIXErrorCode(rawValue: spawned) ?? .EIO) }
         var status: Int32 = 0
         while waitpid(pid, &status, 0) == -1 {
