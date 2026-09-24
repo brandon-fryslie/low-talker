@@ -79,6 +79,10 @@ func secureInputHolder() -> String? {
     return NSRunningApplication(processIdentifier: pid)?.localizedName ?? "process \(pid)"
 }
 
+/// Where the insert port's commits run, one serial queue per app, off the main thread. Held
+/// for the life of the process like everything else opened here.
+let committer = Committer(label: "\(flavor.inputMethodPortName).commits")
+
 /// The app's door, beside the text input system's. Held for the life of the process for
 /// the same reason the server is: released, the app's next request finds nothing listening.
 ///
@@ -99,7 +103,6 @@ func secureInputHolder() -> String? {
 /// The fault names the `InsertionPort.NotHosted` case that stopped it - most often the name
 /// already held by another instance of this input method, whose own cursor then answers the
 /// app. [LAW:no-silent-failure]
-let committer = Committer(label: "\(flavor.inputMethodPortName).commits")
 let insertions: InsertionPort? = {
     do {
         return try InsertionPort(flavor: flavor, queue: DispatchQueue(label: flavor.inputMethodPortName), told: { event in
