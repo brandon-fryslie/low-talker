@@ -1,6 +1,7 @@
 import Carbon.HIToolbox
 import Foundation
 import Keystrokes
+import TextInputSources
 
 /// What it costs to type a character on one keyboard layout: the keys, and the modifiers
 /// held while they are pressed.
@@ -23,15 +24,6 @@ public struct KeyboardLayout: Sendable {
     /// What the layout calls itself, for a failure that has to name it.
     public let name: String
 
-    /// Text Input Sources aborts the process - not an error, `abort()` - when two threads
-    /// are inside it at once, so every call this module makes into it goes through one
-    /// lock. [LAW:single-enforcer] A caller cannot be asked to remember a rule whose
-    /// penalty is that the process is gone before it can be told.
-    ///
-    /// This covers only this module's own calls. In a process that also drives AppKit,
-    /// AppKit calls the same API from the main thread, and Apple's rule there is that
-    /// everyone does: read layouts on the main actor in the app.
-    private static let textInputSources = NSLock()
 
     /// The layout the OS would type with right now - for *this* process's user.
     ///
@@ -43,7 +35,9 @@ public struct KeyboardLayout: Sendable {
     /// which is why text becomes keystrokes on the client side of that seam and not past
     /// it. [LAW:one-way-deps]
     public static func current() throws -> KeyboardLayout {
-        try textInputSources.withLock {
+        // [LAW:single-enforcer] Through the one lock every Text Input Sources call takes;
+        // see `TextInputSources`.
+        try TextInputSources.withLock {
             guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue() else {
                 throw NoLayout.noCurrentSource
             }
@@ -56,7 +50,7 @@ public struct KeyboardLayout: Sendable {
     /// selecting it, which is how the Dvorak case is tested and how a future setting would
     /// name a layout.
     public static func named(_ identifier: String) throws -> KeyboardLayout {
-        try textInputSources.withLock {
+        try TextInputSources.withLock {
             let query = [kTISPropertyInputSourceID as String: identifier] as CFDictionary
             let sources = TISCreateInputSourceList(query, true)?.takeRetainedValue() as? [TISInputSource]
             guard let source = sources?.first else { throw NoLayout.noSourceNamed(identifier) }

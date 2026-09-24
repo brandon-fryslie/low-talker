@@ -44,7 +44,7 @@ let package = Package(
         // input source stands on this Mac, and the steps that put it there. It links only
         // Flavors, so the app reaches it without the input method process linking anything
         // of the app's. [LAW:one-way-deps]
-        .target(name: "InputSource", dependencies: ["Flavors"]),
+        .target(name: "InputSource", dependencies: ["Flavors", "TextInputSources"]),
         .testTarget(name: "InputSourceTests", dependencies: ["InputSource", "Flavors"]),
         .target(
             name: "LowTalkerCore",
@@ -82,20 +82,20 @@ let package = Package(
         .target(name: "Pointing"),
         // Carbon lives here and not in VirtualKeyboard, so the privileged side that owns
         // the device never links a window server API. [LAW:one-way-deps]
-        .target(name: "KeyboardLayout", dependencies: ["Keystrokes"]),
+        .target(name: "KeyboardLayout", dependencies: ["Keystrokes", "TextInputSources"]),
         // [LAW:one-way-deps] Everything about the virtual devices, the keyboard and the
         // pointing one, and nothing about low-talker: no dependency on LowTalkerCore, so
         // it leaves for its own package by a move rather than by an untangling.
         .target(name: "VirtualKeyboard", dependencies: ["DriverExtension", "Keystrokes", "Pointing"]),
         // Everything that must hold before low-talker can type, as a list a reader can
         // act on: what was read off this Mac, and the step for whatever is missing. It
-        // links the driver's vocabulary and the service seam and nothing else - no
-        // device and no window server - so both the CLI and the menu-bar app can show
-        // the same words. [LAW:one-source-of-truth]
-        .target(name: "Onboarding", dependencies: ["DriverExtension", "KeyboardService", "Flavors"]),
+        // links the driver's vocabulary, the service seam, the grants the core reads and
+        // the input source's switch - so both the CLI and the menu-bar app can show the
+        // same words, and the app's guided setup walks the same list. [LAW:one-source-of-truth]
+        .target(name: "Onboarding", dependencies: ["DriverExtension", "KeyboardService", "Flavors", "LowTalkerCore", "InputSource"]),
         // The steps are what a person acts on, so they are asserted as values rather
         // than scraped off a terminal.
-        .testTarget(name: "OnboardingTests", dependencies: ["Onboarding", "DriverExtension", "KeyboardService", "Flavors"]),
+        .testTarget(name: "OnboardingTests", dependencies: ["Onboarding", "DriverExtension", "KeyboardService", "Flavors", "LowTalkerCore"]),
         // What crosses the privilege boundary, and the client's side of it. It links the
         // two vocabularies and nothing else: not the layout, because a root helper must
         // never read one, and not the device, because a client must never open one.
@@ -133,6 +133,9 @@ let package = Package(
         // and the kernel's code signing call, each passed through by a line of C and nothing
         // more.
         .target(name: "DarwinCalls"),
+        // The one lock every call into Text Input Sources takes, beneath the two modules
+        // that call it, since the API aborts the process when two threads meet inside it.
+        .target(name: "TextInputSources"),
         // A sender that is not the test process, so the insert port's refusal is held by a
         // request that really crossed from another process. In no product: nothing ships it.
         .executableTarget(name: "insertion-probe", dependencies: ["Insertion", "Flavors"], path: "Tests/InsertionProbe"),

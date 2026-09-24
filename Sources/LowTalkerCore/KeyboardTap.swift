@@ -59,11 +59,16 @@ public protocol KeyboardTap {
 }
 
 public enum KeyboardTapError: Error, CustomStringConvertible {
+    /// The grants were read as held and the session still would not make the tap.
     case refused
+    /// The grants were not held, so no tap was asked for: creating one anyway is what makes
+    /// macOS raise its own dialog, unasked, in front of whatever the person was doing.
+    case notAllowed
 
     public var description: String {
         switch self {
         case .refused: "the session refused an event tap; allow this app under System Settings > Privacy & Security, in both Input Monitoring and Accessibility"
+        case .notAllowed: "this hotkey needs Input Monitoring and Accessibility, and this app does not have both yet; allow them from Set Up in the menu, or under System Settings > Privacy & Security"
         }
     }
 }
@@ -181,6 +186,9 @@ public struct SystemKeyboardTap: KeyboardTap {
         handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Passage,
         onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse
     ) throws -> Disposal {
+        // [LAW:single-enforcer] The one place a keyboard tap is created, so the one place that
+        // makes sure creating it cannot put a system dialog on screen.
+        guard EventTapAccess.held else { throw KeyboardTapError.notAllowed }
         let installed = Unmanaged.passRetained(Installed(handle: handle, onLapse: onLapse))
         let interest: CGEventMask = [CGEventType.flagsChanged, .keyDown, .keyUp].reduce(0) { $0 | 1 << $1.rawValue }
         // Scheduled on the main run loop, so the callback runs on the main actor.
