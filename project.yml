@@ -28,7 +28,8 @@ settings:
     # before low-packaging-0rc shipped with no version at all. LaunchServices keys a
     # bundle's registration by it, and every input method macOS ships carries both.
     # CURRENT_PROJECT_VERSION counts releases, so it rises with each one; v0.1.0-alpha.3 was
-    # the third.
+    # the third. scripts/release refuses a build number no higher than the last release tag
+    # of the same version.
     MARKETING_VERSION: 0.1.0
     CURRENT_PROJECT_VERSION: "4"
   # A build to hand to someone else: the Developer ID certificate, which Gatekeeper trusts
@@ -142,28 +143,6 @@ targetTemplates:
     # `make` passes BUNDLED_MODEL_STORE and BUNDLED_DRIVER_PACKAGE, which only
     # scripts/sign-release sets; a build that names neither carries neither.
     postBuildScripts:
-      # [LAW:no-silent-failure] A bundle that ships without the version project.yml sets
-      # fails the build rather than shipping quietly. Checked here, on the built plist,
-      # because no test sees a shipped bundle: `make test` never builds the app. The input
-      # method runs the same step.
-      - &versionCheck
-        name: The bundle carries the version project.yml sets
-        basedOnDependencyAnalysis: false
-        # The plist as an input is what orders this after Xcode writes it; without it the
-        # step can run first and read the previous build's.
-        inputFiles:
-          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
-        script: |
-          set -euo pipefail
-          plist="${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
-          # An empty setting reaches the script unset, not empty.
-          wanted="${MARKETING_VERSION:-} (${CURRENT_PROJECT_VERSION:-})"
-          short=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "${plist}" 2>/dev/null) || short="none"
-          build=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "${plist}" 2>/dev/null) || build="none"
-          if [ -z "${MARKETING_VERSION:-}" ] || [ -z "${CURRENT_PROJECT_VERSION:-}" ] || [ "${short} (${build})" != "${wanted}" ]; then
-            echo "error: ${plist} carries version ${short} (${build}); project.yml sets '${wanted}', and both must be set and equal" >&2
-            exit 1
-          fi
       - name: Carry what a first run would fetch
         basedOnDependencyAnalysis: false
         script: |
@@ -188,6 +167,28 @@ targetTemplates:
           rm -rf "${resources}/${DRIVER_PACKAGE_RESOURCE}"
           if [ -n "${BUNDLED_DRIVER_PACKAGE:-}" ]; then
             ditto "${BUNDLED_DRIVER_PACKAGE}" "${resources}/${DRIVER_PACKAGE_RESOURCE}"
+          fi
+      # [LAW:no-silent-failure] A bundle that ships without the version project.yml sets
+      # fails the build rather than shipping quietly. Checked here, on the built plist,
+      # because no test sees a shipped bundle: `make test` never builds the app. The input
+      # method runs the same step.
+      - &versionCheck
+        name: The bundle carries the version project.yml sets
+        basedOnDependencyAnalysis: false
+        # The plist as an input is what orders this after Xcode writes it; without it the
+        # step can run first and read the previous build's.
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
+        script: |
+          set -euo pipefail
+          plist="${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
+          # An empty setting reaches the script unset, not empty.
+          wanted="${MARKETING_VERSION:-} (${CURRENT_PROJECT_VERSION:-})"
+          short=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "${plist}" 2>/dev/null) || short="none"
+          build=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "${plist}" 2>/dev/null) || build="none"
+          if [ -z "${MARKETING_VERSION:-}" ] || [ -z "${CURRENT_PROJECT_VERSION:-}" ] || [ "${short} (${build})" != "${wanted}" ]; then
+            echo "error: ${plist} carries version ${short} (${build}); project.yml sets '${wanted}', and both must be set and equal" >&2
+            exit 1
           fi
     # The Insert Dictation service: the app that asks gets the latest dictation's words and
     # puts them at its cursor, so no key is posted and no grant is needed. It returns text
@@ -328,7 +329,6 @@ targetTemplates:
     # for the mode. Written here rather than checked in so no input method name is spelled
     # anywhere but `Flavor` and this file. [LAW:one-source-of-truth]
     postBuildScripts:
-      - *versionCheck
       - name: The name the Input Sources list shows
         basedOnDependencyAnalysis: false
         script: |
@@ -337,6 +337,7 @@ targetTemplates:
           mkdir -p "$(dirname "${strings}")"
           printf '"CFBundleName" = "%s";\n"%s" = "%s";\n' \
             "${INPUT_METHOD_NAME}" "${INPUT_SOURCE_ID}" "${INPUT_METHOD_NAME}" > "${strings}"
+      - *versionCheck
 
 targets:
   # Every name below is `Flavor`'s, written again because xcodegen cannot read Swift, and
