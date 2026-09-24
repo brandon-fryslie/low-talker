@@ -22,6 +22,15 @@ settings:
     # Notarization refuses a binary without it, and every target in this file is one a
     # release carries: the app, the helper, and the input method bundle embedded in it.
     ENABLE_HARDENED_RUNTIME: YES
+    # [LAW:one-source-of-truth] The one place a version is written. Every bundle takes both
+    # from here: GENERATE_INFOPLIST_FILE fills CFBundleShortVersionString and CFBundleVersion
+    # from these settings and drops the keys when they are unset, which is how every build
+    # before low-packaging-0rc shipped with no version at all. LaunchServices keys a
+    # bundle's registration by it, and every input method macOS ships carries both.
+    # CURRENT_PROJECT_VERSION counts releases, so it rises with each one; v0.1.0-alpha.3 was
+    # the third.
+    MARKETING_VERSION: 0.1.0
+    CURRENT_PROJECT_VERSION: "4"
   # A build to hand to someone else: the Developer ID certificate, which Gatekeeper trusts
   # and notarization accepts, in place of the dev identity nobody trusts. The helper admits
   # exactly the certificate that signed it, so the app and everything embedded in it change
@@ -133,6 +142,28 @@ targetTemplates:
     # `make` passes BUNDLED_MODEL_STORE and BUNDLED_DRIVER_PACKAGE, which only
     # scripts/sign-release sets; a build that names neither carries neither.
     postBuildScripts:
+      # [LAW:no-silent-failure] A bundle that ships without the version project.yml sets
+      # fails the build rather than shipping quietly. Checked here, on the built plist,
+      # because no test sees a shipped bundle: `make test` never builds the app. The input
+      # method runs the same step.
+      - &versionCheck
+        name: The bundle carries the version project.yml sets
+        basedOnDependencyAnalysis: false
+        # The plist as an input is what orders this after Xcode writes it; without it the
+        # step can run first and read the previous build's.
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
+        script: |
+          set -euo pipefail
+          plist="${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
+          # An empty setting reaches the script unset, not empty.
+          wanted="${MARKETING_VERSION:-} (${CURRENT_PROJECT_VERSION:-})"
+          short=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "${plist}" 2>/dev/null) || short="none"
+          build=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "${plist}" 2>/dev/null) || build="none"
+          if [ -z "${MARKETING_VERSION:-}" ] || [ -z "${CURRENT_PROJECT_VERSION:-}" ] || [ "${short} (${build})" != "${wanted}" ]; then
+            echo "error: ${plist} carries version ${short} (${build}); project.yml sets '${wanted}', and both must be set and equal" >&2
+            exit 1
+          fi
       - name: Carry what a first run would fetch
         basedOnDependencyAnalysis: false
         script: |
@@ -170,6 +201,10 @@ targetTemplates:
     info:
       path: App/Generated/${displayName}-Info.plist
       properties:
+        # The settings, not literals: xcodegen otherwise writes its own 1.0 and 1 here, a
+        # second version the shipped bundle never carries.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSServices:
           - NSMenuItem:
               default: Insert ${displayName} Dictation
@@ -231,6 +266,8 @@ targetTemplates:
     info:
       path: App/Generated/${displayName}-InputMethod-Info.plist
       properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSUIElement: true
         NSPrincipalClass: NSApplication
         NSSupportsSuddenTermination: true
@@ -291,6 +328,7 @@ targetTemplates:
     # for the mode. Written here rather than checked in so no input method name is spelled
     # anywhere but `Flavor` and this file. [LAW:one-source-of-truth]
     postBuildScripts:
+      - *versionCheck
       - name: The name the Input Sources list shows
         basedOnDependencyAnalysis: false
         script: |
