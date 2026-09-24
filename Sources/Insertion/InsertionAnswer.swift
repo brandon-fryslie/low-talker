@@ -61,6 +61,11 @@ public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, 
     /// signed by another certificate than the app fails the app's own check of who answered
     /// first, and that is the error it reports. [LAW:no-silent-failure]
     case senderIsNotThisInstallationsApp
+    /// Handing the words to the app in front did not finish within the input method's
+    /// bound. The words are on their way to it and land if it recovers. Its own reason
+    /// because it is the one refusal whose words may still appear, so it must never be
+    /// retried.
+    case clientIsNotAnswering
 
     public var description: String {
         switch self {
@@ -70,6 +75,8 @@ public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, 
         case .secureInputIsOn: "an app has secure keyboard entry on, and macOS switches input methods off while it does"
         case .senderIsNotThisInstallationsApp:
             "the input method takes words only from this installation's app, signed by the certificate that signed it, and this process is not that app"
+        case .clientIsNotAnswering:
+            "the app in front did not take the words in time; they are queued to it and land if it recovers"
         }
     }
 }

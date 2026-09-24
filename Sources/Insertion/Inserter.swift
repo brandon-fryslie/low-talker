@@ -76,10 +76,15 @@ public struct InputMethodInserter: Inserter {
     /// rather than inserting through whoever answers. [LAW:no-silent-failure]
     private let answerer: Result<PeerIdentity, PeerIdentity.Unreadable>
 
+    /// What the app gives each insert, split evenly across its four phases. The input
+    /// method's own bound on a client is set beneath one phase, so its answer naming a hung
+    /// app arrives before this end stops listening; `CommitterTests` holds the two apart.
+    public static let standardTimeout = Duration.seconds(5)
+
     /// `flavor` says which installation's input method this reaches. No default, for the
     /// reason `HelperConnection` has none: both copies run at once, and a channel that
     /// guessed would put one installation's words in the other's window.
-    public init(flavor: Flavor, timeout: Duration = .seconds(5)) {
+    public init(flavor: Flavor, timeout: Duration = standardTimeout) {
         self.init(
             portName: flavor.inputMethodPortName, timeout: timeout,
             answerer: Result { () throws(PeerIdentity.Unreadable) in

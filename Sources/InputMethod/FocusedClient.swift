@@ -9,8 +9,10 @@ import Insertion
 /// around, because a type that demanded all of `IMKTextInput` could only ever be handed the
 /// real one - by macOS, in a process macOS launched, with a person's cursor at the far end.
 /// Everything below this line is then reachable without any of that.
-@MainActor
-public protocol TextCursor: AnyObject {
+///
+/// Sendable, because the commit is made off the main thread, where a hung app cannot hold
+/// the keys this source passes through. `Committer` owns where it runs and says why.
+public protocol TextCursor: AnyObject, Sendable {
     /// The app this cursor belongs to, which is how a cursor left over from an app the
     /// person has since switched away from is told from the one in front of them.
     ///
@@ -80,21 +82,14 @@ public final class FocusedClient {
         focus = focus?.application == application ? nil : focus
     }
 
-    /// Commits `text` at the cursor in front, replacing nothing, provided the cursor is in
-    /// the app that is actually in front.
+    /// The cursor words go to, provided it is in the app that is actually in front, or the
+    /// refusal that says why there is none.
+    ///
+    /// Only the decision: the commit is `Committer`'s, off this actor, and what the answer
+    /// claims once it is made is said there.
     ///
     /// Absence is not a mistake to guard against but the answer itself: nowhere to put
     /// words is a refusal the app reports by name, and the words go nowhere else.
-    ///
-    /// **What `inserted` claims, exactly: the client belonging to the app in front accepted
-    /// the commit.** Not that a person saw the words. The text input system offers no
-    /// delivery report, and measured on 2026-09-22 there is nothing to derive one from: the
-    /// Finder's desktop presents a full text client that accepts `insertText` into a buffer
-    /// nobody can see and grows its own `length()` doing it, while iTerm2 - where the words
-    /// land in plain sight - answers `length()` of 0 before and after. A check for "did the
-    /// document grow" would pass the desktop and refuse the terminal. So no such check is
-    /// made up here, and what the answer says is what was actually established.
-    /// [LAW:no-silent-failure] The rest belongs to low-input-method-s71.31s's notes.
     ///
     /// The app in front is compared rather than assumed, which is the part that IS
     /// establishable: focus can move to an app that never becomes a client at all, and then
@@ -111,12 +106,11 @@ public final class FocusedClient {
     /// Secure Event Input macOS hands no input method a client, and a cursor still held from
     /// before it came on is one the text input system has stopped routing to - so no commit
     /// is attempted and the refusal names the thing to fix. [LAW:no-silent-failure]
-    public func insert(_ text: String, whileInFrontIs frontmost: String?, secureInputIsOn: Bool) -> InsertionAnswer {
-        guard !secureInputIsOn else { return .refused(.secureInputIsOn) }
-        guard let focus else { return .refused(.noClientHasFocus) }
-        guard focus.application == frontmost else { return .refused(.cursorIsInAnotherApp) }
-        focus.commit(text)
-        return .inserted(characters: text.count, into: focus.application)
+    public func cursor(whileInFrontIs frontmost: String?, secureInputIsOn: Bool) -> Result<any TextCursor, Refusal> {
+        guard !secureInputIsOn else { return .failure(.secureInputIsOn) }
+        guard let focus else { return .failure(.noClientHasFocus) }
+        guard focus.application == frontmost else { return .failure(.cursorIsInAnotherApp) }
+        return .success(focus)
     }
 }
 
@@ -126,8 +120,13 @@ public final class FocusedClient {
 /// insertion point, and do not take anything away" - the same commit a Japanese or Chinese
 /// input method performs when the user accepts a candidate, which is why this reaches
 /// terminals, browsers and Electron apps that no synthesised keystroke would.
-@MainActor
-final class Client: TextCursor {
+///
+/// [LAW:no-ambient-temporal-coupling] exception: `@unchecked`, because `IMKTextInput` is a
+/// proxy the language cannot see into. What makes it sound is who calls it: the name is
+/// read once, on the main thread, as the cursor is made, and every commit after that runs
+/// on `Committer`'s one serial queue. Called from there, a commit reaches the app and
+/// leaves the main thread free (measured on low-input-method-s71.c7d).
+final class Client: TextCursor, @unchecked Sendable {
     private let client: IMKTextInput
     let application: String
 

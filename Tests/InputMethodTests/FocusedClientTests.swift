@@ -2,7 +2,8 @@
 import Insertion
 import Testing
 
-/// Where the words go, and what is answered when there is nowhere.
+/// Which cursor the words go to, and the refusal when there is none. The commit itself is
+/// `Committer`'s, and held there.
 ///
 /// [LAW:behavior-not-structure] Asked through `TextCursor`, which is the whole of what this
 /// process needs of the thing in front of it. The text input system's own client is
@@ -16,64 +17,52 @@ import Testing
 /// each other's focus.
 @MainActor
 @Suite struct FocusedClientTests {
-    /// A place words can land, which remembers what landed and which app it is in.
+    /// A place words could land, in some app. Never committed into: this suite asks only
+    /// which cursor is chosen.
     private final class Cursor: TextCursor {
         let application: String
-        private(set) var committed: [String] = []
 
         init(in application: String = "com.example.editor") { self.application = application }
 
-        func commit(_ text: String) { committed.append(text) }
+        func commit(_ text: String) { Issue.record("the decision committed \(text.debugDescription)") }
     }
 
     /// The app in front, for the cases where it is simply whoever holds the cursor.
     private static let inFront = "com.example.editor"
 
-    @Test func wordsLandAtTheCursorInFront() {
+    @Test func theCursorInFrontIsTheOneChosen() throws {
         let client = FocusedClient()
         let cursor = Cursor()
         client.took(cursor)
 
-        #expect(client.insert("hello there", whileInFrontIs: Self.inFront, secureInputIsOn: false) == .inserted(characters: 11, into: Self.inFront))
-        #expect(cursor.committed == ["hello there"])
+        #expect(try client.cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false).get() === cursor)
     }
 
     /// A cursor held from before secure input came on is not committed into: macOS has
     /// stopped routing to input methods, and the refusal names what to fix instead of
     /// asking the person to click into a text field they are already in.
-    @Test func secureInputIsRefusedByNameAndCommitsNothing() {
+    @Test func secureInputIsRefusedByName() {
         let client = FocusedClient()
         let cursor = Cursor()
         client.took(cursor)
 
-        #expect(client.insert("hello", whileInFrontIs: Self.inFront, secureInputIsOn: true) == .refused(.secureInputIsOn))
-        #expect(cursor.committed.isEmpty)
+        #expect(throws: Refusal.secureInputIsOn) { try client.cursor(whileInFrontIs: Self.inFront, secureInputIsOn: true).get() }
     }
 
     /// Secure input is asked first, so it is the reason given even where another refusal
     /// also holds: the fix is in the app holding it, and naming the other would send the
     /// person to click into a text field that cannot help.
     @Test func secureInputIsTheReasonOverEveryOtherRefusal() {
-        #expect(FocusedClient().insert("hello", whileInFrontIs: Self.inFront, secureInputIsOn: true) == .refused(.secureInputIsOn))
+        #expect(throws: Refusal.secureInputIsOn) { try FocusedClient().cursor(whileInFrontIs: Self.inFront, secureInputIsOn: true).get() }
         let client = FocusedClient()
         let cursor = Cursor()
         client.took(cursor)
-        #expect(client.insert("hello", whileInFrontIs: "com.example.elsewhere", secureInputIsOn: true) == .refused(.secureInputIsOn))
-        #expect(cursor.committed.isEmpty)
-    }
-
-    /// The count is what a person would count, not what a buffer would: an emoji is one
-    /// character to whoever dictated it.
-    @Test func theCountIsOfCharactersAndNotOfBytes() {
-        let client = FocusedClient()
-        client.took(Cursor())
-
-        #expect(client.insert("🫠", whileInFrontIs: Self.inFront, secureInputIsOn: false) == .inserted(characters: 1, into: Self.inFront))
+        #expect(throws: Refusal.secureInputIsOn) { try client.cursor(whileInFrontIs: "com.example.elsewhere", secureInputIsOn: true).get() }
     }
 
     /// Nothing in front is an answer, not a failure, and it is said by name.
     @Test func nothingInFrontIsRefusedByName() {
-        #expect(FocusedClient().insert("hello", whileInFrontIs: Self.inFront, secureInputIsOn: false) == .refused(.noClientHasFocus))
+        #expect(throws: Refusal.noClientHasFocus) { try FocusedClient().cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false).get() }
     }
 
     /// A cursor does not outlive the app it belongs to. Without this the person could
@@ -86,18 +75,17 @@ import Testing
         client.took(cursor)
         client.applicationQuit("com.apple.TextEdit")
 
-        #expect(client.insert("hello", whileInFrontIs: "com.apple.TextEdit", secureInputIsOn: false) == .refused(.noClientHasFocus))
-        #expect(cursor.committed.isEmpty)
+        #expect(throws: Refusal.noClientHasFocus) { try client.cursor(whileInFrontIs: "com.apple.TextEdit", secureInputIsOn: false).get() }
     }
 
     /// Some other app quitting is not this cursor's business.
-    @Test func anotherAppQuittingLeavesTheCursorAlone() {
+    @Test func anotherAppQuittingLeavesTheCursorAlone() throws {
         let client = FocusedClient()
         let cursor = Cursor()
         client.took(cursor)
         client.applicationQuit("com.apple.Safari")
 
-        #expect(client.insert("hello", whileInFrontIs: Self.inFront, secureInputIsOn: false) == .inserted(characters: 5, into: Self.inFront))
+        #expect(try client.cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false).get() === cursor)
     }
 
     @Test func aCursorThatLeavesTakesTheFocusWithIt() {
@@ -106,8 +94,7 @@ import Testing
         client.took(cursor)
         client.left(cursor)
 
-        #expect(client.insert("hello", whileInFrontIs: Self.inFront, secureInputIsOn: false) == .refused(.noClientHasFocus))
-        #expect(cursor.committed.isEmpty)
+        #expect(throws: Refusal.noClientHasFocus) { try client.cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false).get() }
     }
 
     /// Committing into a window the person has left is the one outcome worse than
@@ -120,15 +107,14 @@ import Testing
         let cursor = Cursor(in: "com.apple.TextEdit")
         client.took(cursor)
 
-        #expect(client.insert("hello", whileInFrontIs: "com.apple.finder", secureInputIsOn: false) == .refused(.cursorIsInAnotherApp))
-        #expect(cursor.committed.isEmpty)
+        #expect(throws: Refusal.cursorIsInAnotherApp) { try client.cursor(whileInFrontIs: "com.apple.finder", secureInputIsOn: false).get() }
     }
 
     /// The one that matters: focus can move by activating the new client before
     /// deactivating the old, and a `left` that cleared on anyone's word would drop the
     /// client that just arrived. The words would then go to the clipboard with a live
     /// cursor sitting right there, and nothing would say why. [LAW:no-silent-failure]
-    @Test func aCursorLeavingAfterAnotherArrivedDoesNotTakeTheNewOnesFocus() {
+    @Test func aCursorLeavingAfterAnotherArrivedDoesNotTakeTheNewOnesFocus() throws {
         let client = FocusedClient()
         let old = Cursor()
         let new = Cursor()
@@ -136,8 +122,6 @@ import Testing
         client.took(new)
         client.left(old)
 
-        #expect(client.insert("hello", whileInFrontIs: Self.inFront, secureInputIsOn: false) == .inserted(characters: 5, into: Self.inFront))
-        #expect(new.committed == ["hello"])
-        #expect(old.committed.isEmpty)
+        #expect(try client.cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false).get() === new)
     }
 }

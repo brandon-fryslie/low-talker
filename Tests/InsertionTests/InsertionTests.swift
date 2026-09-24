@@ -19,6 +19,7 @@ import Testing
         .refused(.requestWasNotText),
         .refused(.secureInputIsOn),
         .refused(.senderIsNotThisInstallationsApp),
+        .refused(.clientIsNotAnswering),
     ])
     func everyAnswerSurvivesTheCrossing(answer: InsertionAnswer) {
         #expect(Wire.answer(of: Wire.answer(answer)) == answer)

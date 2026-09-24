@@ -82,10 +82,13 @@ func secureInputHolder() -> String? {
 /// The app's door, beside the text input system's. Held for the life of the process for
 /// the same reason the server is: released, the app's next request finds nothing listening.
 ///
-/// Answered on the main queue, so its answers run where `FocusedClient` and every
-/// `IMKInputController` callback already run and the two never race.
-/// [LAW:no-ambient-temporal-coupling] `assumeIsolated` is that sentence made checkable: if
-/// this ever answered anywhere else it would stop here rather than corrupt a client.
+/// Answered on a queue of its own and never on the main one, which is where every key this
+/// source passes through is handled. An insert asks the main actor only which cursor is in
+/// front - where `FocusedClient` and every `IMKInputController` callback already run, so
+/// the two never race - and then waits on the `Committer`, off the main thread, for the app
+/// to take the words. A hung app then costs the person one refused insert and not a dead
+/// keyboard. [LAW:no-ambient-temporal-coupling] `assumeIsolated` inside `main.sync` is
+/// that sentence made checkable.
 ///
 /// Only this installation's app gets through; every other sender is refused by the port
 /// before its words are read, and the refusal is logged here with what was required.
@@ -96,28 +99,36 @@ func secureInputHolder() -> String? {
 /// The fault names the `InsertionPort.NotHosted` case that stopped it - most often the name
 /// already held by another instance of this input method, whose own cursor then answers the
 /// app. [LAW:no-silent-failure]
+let committer = Committer(label: "\(flavor.inputMethodPortName).commits")
 let insertions: InsertionPort? = {
     do {
-        return try InsertionPort(flavor: flavor, queue: .main, told: { event in
+        return try InsertionPort(flavor: flavor, queue: DispatchQueue(label: flavor.inputMethodPortName), told: { event in
             logger.error("\(String(describing: event), privacy: .public)")
         }) { text in
-            MainActor.assumeIsolated {
-                // Read here, where the effects are, and handed to the decision as a value.
-                // [LAW:effects-at-boundaries]
-                let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-                let securing = secureInputHolder()
-                let answer = FocusedClient.shared.insert(text, whileInFrontIs: frontmost, secureInputIsOn: securing != nil)
-                // The app in front is named because the refusal that matters here is the
-                // one where it is not the app holding the cursor, and a line saying only
-                // the outcome leaves a reader with the question it was written to answer.
-                logger.notice("""
-                    insert of \(text.count, privacy: .public) characters: \
-                    \(String(describing: answer), privacy: .public), \
-                    with \(frontmost ?? "nothing", privacy: .public) in front\
-                    \(securing.map { ", secure input held by \($0)" } ?? "", privacy: .public)
-                    """)
-                return answer
+            // Read on the main actor, where the effects are, and handed to the decision as
+            // values. [LAW:effects-at-boundaries]
+            let (frontmost, securing, cursor) = DispatchQueue.main.sync {
+                MainActor.assumeIsolated {
+                    let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+                    let securing = secureInputHolder()
+                    return (frontmost, securing, FocusedClient.shared.cursor(whileInFrontIs: frontmost, secureInputIsOn: securing != nil))
+                }
             }
+            let answer: InsertionAnswer
+            switch cursor {
+            case .success(let cursor): answer = committer.commit(text, at: cursor)
+            case .failure(let refusal): answer = .refused(refusal)
+            }
+            // The app in front is named because the refusal that matters here is the one
+            // where it is not the app holding the cursor, and a line saying only the outcome
+            // leaves a reader with the question it was written to answer.
+            logger.notice("""
+                insert of \(text.count, privacy: .public) characters: \
+                \(String(describing: answer), privacy: .public), \
+                with \(frontmost ?? "nothing", privacy: .public) in front\
+                \(securing.map { ", secure input held by \($0)" } ?? "", privacy: .public)
+                """)
+            return answer
         }
     } catch {
         logger.fault("""
