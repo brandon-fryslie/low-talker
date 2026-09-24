@@ -18,8 +18,8 @@ struct OnboardCommand: ParsableCommand {
         discussion: """
             Prints the rows of the delivery and hotkey source this installation's app has \
             chosen, and the rows of every choice for one it has not made yet. Exits 0 when \
-            nothing on those rows is left to do and 2 when something is. The microphone \
-            and Accessibility rows belong to the app and are named, not \
+            nothing on those rows is left to do and 2 when something is. The microphone, \
+            Input Monitoring and Accessibility rows belong to the app and are named, not \
             read, so they count toward neither. A fact that could not be read is a row of \
             its own naming why, and it never counts as met.
             """,

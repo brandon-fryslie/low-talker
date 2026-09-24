@@ -27,7 +27,7 @@ import Testing
         _ = try tap.install(listeningFor: [], handling: { _ in .pass }, onLapse: { _, _ in .comeDown })
     }
 
-    /// Without its grant no tap is asked for at all: asking is what would make macOS
+    /// Without both grants no tap is asked for at all: asking is what would make macOS
     /// raise its own dialog, unasked.
     @Test func withoutItsGrantsNoTapIsAskedFor() {
         let underneath = Underneath()
@@ -37,14 +37,14 @@ import Testing
         #expect(underneath.installs == 0)
     }
 
-    /// With its grant the tap is made as it always was.
+    /// With both grants the tap is made as it always was.
     @Test func withItsGrantsTheTapIsMade() throws {
         let underneath = Underneath()
         try Self.install(GrantedKeyboardTap(underneath, granted: { true }))
         #expect(underneath.installs == 1)
     }
 
-    /// Refused although the grant reads as held: said as the restart a grant given while
+    /// Refused although both grants read as held: said as the restart a grant given while
     /// the process ran needs, never as a grant to give again.
     @Test func aRefusalDespiteTheGrantsIsSaidAsARelaunch() {
         #expect(throws: KeyboardTapError.refusedWhileAllowed) {

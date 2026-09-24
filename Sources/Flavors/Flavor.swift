@@ -13,7 +13,7 @@
 /// copy fail rather than run:
 ///
 /// - the bundle identifier, which LaunchServices treats as the app's identity and TCC
-///   keys Microphone and Accessibility grants to;
+///   keys Microphone, Accessibility and Input Monitoring grants to;
 /// - the Mach service, which exactly one process may own;
 /// - the launchd label, which Background Task Management files the approval record under;
 /// - the config file, so a setting changed for one build does not move the other;

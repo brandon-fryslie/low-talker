@@ -520,6 +520,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case .granted:
                 break
             }
+        case .inputMonitoring:
+            EventTapAccess.askForInputMonitoring()
         case .accessibility:
             EventTapAccess.askForAccessibility()
         case .inputMethod:

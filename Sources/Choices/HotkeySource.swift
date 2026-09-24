@@ -2,8 +2,8 @@
 /// with any `Delivery`, and neither one decides the other.
 ///
 /// What differs between the two is what macOS asks for and what it allows in return: an
-/// event tap sees every key, so its chord can be modifiers alone, and it needs
-/// Accessibility; a registered hot key needs nothing, and macOS will only
+/// event tap sees every key, so its chord can be modifiers alone, and it needs Input
+/// Monitoring and Accessibility; a registered hot key needs nothing, and macOS will only
 /// register a chord that has a key in it. Which grants each needs is Onboarding's list to
 /// say, as `Requirement.Row.grants(for:)`, and every surface that names them reads it there.
 ///
@@ -12,8 +12,9 @@
 /// in LowTalkerCore's `Hotkey` and its grants in Onboarding's list, and no reader
 /// elsewhere switches on which one it holds.
 public enum HotkeySource: String, CaseIterable, Sendable, CustomStringConvertible {
-    /// An active event tap on the session's keyboard events. Needs Accessibility, which
-    /// covers both reading the keys and holding the chord back from the app in front.
+    /// An active event tap on the session's keyboard events. Needs Input Monitoring to
+    /// read the keys and Accessibility to hold the chord back from the app in front. Asking
+    /// for Accessibility normally grants both; see `EventTapAccess` for the measurement.
     case eventTap
     /// A hot key registered with the window server. Needs no permission.
     case registeredHotKey

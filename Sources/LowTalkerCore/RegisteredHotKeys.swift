@@ -1,7 +1,8 @@
 import Carbon.HIToolbox
 
 /// The hotkey heard without watching the keyboard: each chord is registered with the
-/// window server as a Carbon hot key, which needs no permission.
+/// window server as a Carbon hot key, which needs neither Input Monitoring nor
+/// Accessibility.
 ///
 /// [LAW:composability] It sits behind the same seam as the event tap, so the detector
 /// above it tells a hold from a tap exactly as it does for the tap. What the window server

@@ -3,7 +3,7 @@
 #
 #   make-signing-identity <identity-name>
 #
-# macOS keys Microphone and Accessibility grants to the app's
+# macOS keys Microphone, Accessibility, and Input Monitoring grants to the app's
 # designated requirement. Signed with a certificate, that requirement names the
 # certificate and survives every rebuild; signed ad hoc, it names the binary's own
 # hash and changes with each one. Any long-lived certificate works, so a self-signed

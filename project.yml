@@ -7,8 +7,8 @@ options:
   deploymentTarget:
     macOS: "15.0"
 
-# Shared by every target. macOS keys Microphone and Accessibility grants
-# to the signing certificate, so dev builds carry a self-signed identity that
+# Shared by every target. macOS keys Microphone, Accessibility, and Input Monitoring
+# grants to the signing certificate, so dev builds carry a self-signed identity that
 # `make signing-identity` creates once per Mac. Ad hoc signing would key the grants to
 # each build's own hash and lose them on every rebuild. The keyboard helper admits
 # exactly the certificate that signed it, which is one more reason the app and the
