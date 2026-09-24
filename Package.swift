@@ -91,10 +91,10 @@ let package = Package(
         // links the driver's vocabulary and the service seam and nothing else - no
         // device and no window server - so both the CLI and the menu-bar app can show
         // the same words. [LAW:one-source-of-truth]
-        .target(name: "Onboarding", dependencies: ["DriverExtension", "KeyboardService", "Flavors"]),
+        .target(name: "Onboarding", dependencies: ["DriverExtension", "KeyboardService", "InputSource", "Flavors"]),
         // The steps are what a person acts on, so they are asserted as values rather
         // than scraped off a terminal.
-        .testTarget(name: "OnboardingTests", dependencies: ["Onboarding", "DriverExtension", "KeyboardService", "Flavors"]),
+        .testTarget(name: "OnboardingTests", dependencies: ["Onboarding", "DriverExtension", "KeyboardService", "InputSource", "Flavors"]),
         // What crosses the privilege boundary, and the client's side of it. It links the
         // two vocabularies and nothing else: not the layout, because a root helper must
         // never read one, and not the device, because a client must never open one.

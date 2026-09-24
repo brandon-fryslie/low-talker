@@ -336,7 +336,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 return .success(())
             } catch {
                 log.error("input method: \(String(describing: error), privacy: .public)")
-                return .failure("the input method could not be installed: \(error)")
+                // Said as not ready rather than as not installed: the likeliest refusal on a
+                // first install is macOS holding the switch-on until the next login, and the
+                // copy and the registration it follows both happened.
+                return .failure("the input method is not ready: \(error)")
             }
         }
     }
@@ -417,19 +420,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// After the user has chosen the virtual keyboard: what it still needs, in front of
-    /// them, when it needs anything. Not on a launch that only remembers the choice, which
-    /// the menu already answers every time it opens.
+    /// After the user has chosen a delivery: what it still needs, in front of them, when it
+    /// needs anything. Not on a launch that only remembers the choice, which the menu
+    /// already answers every time it opens. For the input method that is the moment a
+    /// first install learns macOS wants a login before switching it on, and the person
+    /// hears it then rather than at their first press. [LAW:no-silent-failure]
     private func showWhatIsMissing(for delivery: Delivery) {
+        let readiness = readiness(of: delivery)
+        guard !readiness.ready else { return }
+        let alert = NSAlert()
+        alert.informativeText = readiness.description
         switch delivery {
         case .inputMethod:
-            return
+            alert.messageText = "The input method is not ready yet"
+            alert.addButton(withTitle: "OK")
+            NSApp.activate()
+            alert.runModal()
         case .virtualKeyboard:
-            let readiness = readVirtualKeyboardReadiness()
-            guard !readiness.ready else { return }
-            let alert = NSAlert()
             alert.messageText = "The virtual keyboard needs a few steps before it can type"
-            alert.informativeText = readiness.description
             alert.addButton(withTitle: "Open Login Items & Extensions…")
             alert.addButton(withTitle: "Later")
             NSApp.activate()
@@ -437,11 +445,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// Choosing the delivery already in use sets it up again, which is how a person puts
+    /// back an input method they deleted by hand: every install step is idempotent, and
+    /// the menu's row for it says to do exactly this.
     @objc private func chooseDelivery(_ item: NSMenuItem) {
         guard let spelling = item.representedObject as? String, let chosen = Delivery(rawValue: spelling) else {
             preconditionFailure("a delivery item carries its delivery's raw value")
         }
-        take { $0.chosenDelivery = chosen }
+        take(again: true) { $0.chosenDelivery = chosen }
     }
 
     @objc private func chooseHotkeySource(_ item: NSMenuItem) {
@@ -466,16 +477,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// line tells them to do. Only that one case: a loop still being built has no
     /// hotkey to read yet, and letting the absence pass for a come-down would chain a
     /// second teardown and rebuild behind the first, alert and all.
-    private func take(_ keep: (AppDelegate) -> Void) {
+    ///
+    /// `again` is a choice a person made of the setup already standing - a delivery
+    /// chosen a second time - which is a request to set it up again, and is taken down
+    /// to the loop even with its hotkey up. A press latched open when it arrives is ended
+    /// as lapsed and reported, like at any switch.
+    private func take(again: Bool = false, _ keep: (AppDelegate) -> Void) {
         let before = chosenSetup
         let cameDown = listening?.hotkey.isWatching == false
         keep(self)
-        guard let setup = chosenSetup, switching != nil, setup != before || cameDown, !quitting else { return }
+        guard let setup = chosenSetup, switching != nil, setup != before || cameDown || again, !quitting else { return }
         Task {
             await choose(setup)
-            // What a delivery still needs is news when the delivery is new, and not when
-            // only the hotkey it sits behind has changed.
-            if setup.delivery != before?.delivery { showWhatIsMissing(for: setup.delivery) }
+            // What a delivery still needs is news when the delivery is new or chosen again,
+            // and not when only the hotkey it sits behind has changed.
+            if setup.delivery != before?.delivery || again { showWhatIsMissing(for: setup.delivery) }
         }
     }
 
@@ -709,6 +725,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return readiness
     }
 
+    /// What `delivery` needs, read off this Mac now. [LAW:single-enforcer] The one place a
+    /// delivery is matched to its requirements, for the menu and the alert alike.
+    private func readiness(of delivery: Delivery) -> Readiness {
+        switch delivery {
+        case .virtualKeyboard:
+            return readVirtualKeyboardReadiness()
+        case .inputMethod:
+            let readiness = OnboardingProbe.inputMethodReadiness(InputSourceInstaller(flavor: Self.flavor))
+            for requirement in readiness.requirements {
+                log.notice("onboarding: \(requirement.name, privacy: .public): \(requirement.reads, privacy: .public)")
+            }
+            return readiness
+        }
+    }
+
     /// Everything the menu says, made here, every time, from what this Mac reads now.
     ///
     /// An `LSUIElement` app has no window to activate, so opening the menu is the moment
@@ -718,13 +749,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // The kept choices while nothing listens yet, so a choice made then is shown as made.
         let delivery = listening?.setup.delivery ?? chosenDelivery
         let source = listening?.setup.source ?? chosenSource
-        // The virtual keyboard's requirements are read only while it is the delivery: on the
-        // input method nothing is missing, and a list of driver steps would be a list of
-        // things to install for an output nobody is using.
-        let requirements = switch delivery {
-        case .virtualKeyboard: readVirtualKeyboardReadiness().requirements
-        case .inputMethod, nil: [Requirement]()
-        }
+        // The chosen delivery's requirements and no other's: a list of driver steps under the
+        // input method would be a list of things to install for an output nobody is using.
+        let requirements = delivery.map { readiness(of: $0).requirements } ?? []
 
         // What the user's microphone is doing, on the surface the epic exists for: the
         // menu-bar indicator says the device is open and only this says why, so a lit

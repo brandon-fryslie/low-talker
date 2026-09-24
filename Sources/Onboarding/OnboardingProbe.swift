@@ -1,6 +1,7 @@
 import DriverExtension
 import Flavors
 import Foundation
+import InputSource
 import KeyboardService
 
 /// Reading this Mac for the two facts onboarding takes for itself: which launchd job
@@ -171,6 +172,16 @@ public extension OnboardingProbe {
             return ([.keyboardHelper(standing, flavor: flavor)],
                     standing.aHelperHasRun)
         } catch { return ([.unreadable(.keyboardHelper, error)], false) }
+    }
+
+    /// What the input method delivery needs, read off this Mac now: its one row.
+    ///
+    /// Read from the text input system and the file system at each call and never kept, so
+    /// a bundle deleted by hand reads as missing the next time the menu opens.
+    /// [FRAMING:representation]
+    static func inputMethodReadiness(_ installer: InputSourceInstaller) -> Readiness {
+        do { return Readiness([.inputMethod(try installer.state(), flavor: installer.flavor)]) }
+        catch { return Readiness([.unreadable(.inputMethod, error)]) }
     }
 
     private static func keyboardSetupAssistantRow(flavor: Flavor, aHelperHasRun: Bool) -> [Requirement] {

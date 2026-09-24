@@ -1,13 +1,15 @@
 import DriverExtension
 import Flavors
+import InputSource
 
 /// One thing that must hold before low-talker can type, as this Mac actually stands.
 ///
-/// [LAW:one-type-per-behavior] Four very different facts - a driver extension's
-/// registration, a launchd job's hold on a Mach service, an approval only a person can
-/// give, a cached answer from a setup assistant - are one type with four instances,
-/// because what a reader does with them does not differ: read what is there, and do the
-/// step when there is one. Four requirement types would be four renderings of one shape.
+/// [LAW:one-type-per-behavior] Very different facts - a driver extension's registration,
+/// a launchd job's hold on a Mach service, an approval only a person can give, a cached
+/// answer from a setup assistant, an input method's standing with the text input system -
+/// are one type with many instances, because what a reader does with them does not
+/// differ: read what is there, and do the step when there is one. A requirement type per
+/// fact would be that many renderings of one shape.
 public struct Requirement: Sendable, Hashable {
     /// What must hold, in the words the menu and the CLI both use.
     public let name: String
@@ -32,7 +34,7 @@ public struct Requirement: Sendable, Hashable {
 public extension Requirement {
     /// What each row is called, in the order onboarding prints them.
     ///
-    /// One home for the three names, because four readers say them: the factory that
+    /// One home for the names, because four readers say them: the factory that
     /// builds each row, the row a failed reading becomes, the readings table `make
     /// check-docs` holds README to, and the tests. Spelled out at each of those, they
     /// are four clocks. [LAW:one-source-of-truth]
@@ -40,6 +42,7 @@ public extension Requirement {
         case driverExtension = "Driver extension"
         case keyboardHelper = "Keyboard helper"
         case keyboardSetupAssistant = "Keyboard Setup Assistant"
+        case inputMethod = "Input method"
     }
 
     /// A requirement whose fact could not be read.
@@ -445,6 +448,47 @@ public extension Requirement {
     }
 }
 
+// MARK: - the input method
+
+public extension Requirement {
+    /// Where this flavor's input method stands, which is the input method delivery's only
+    /// requirement: nothing on that path needs a grant or an approval.
+    ///
+    /// Each rung but the top has a step, and every one of them names the same menu item,
+    /// because choosing the delivery again is what walks the ladder from wherever it
+    /// stands. What differs is what is left once it has: nothing, or the one step no app can
+    /// take for a person - the login macOS wants before it switches on an input method
+    /// first installed during this session (`InputSourceState.disabled`).
+    static func inputMethod(_ state: InputSourceState, flavor: Flavor) -> Requirement {
+        Requirement(name: Row.inputMethod.rawValue, reads: state.description, step: step(for: state, flavor: flavor))
+    }
+
+    private static func step(for state: InputSourceState, flavor: Flavor) -> String? {
+        switch state {
+        case .selected:
+            nil
+        case .bundleNotInstalled, .notRegistered:
+            """
+            Choose Input Method under Delivery in this menu. That copies
+            it into ~/Library/Input Methods and registers it with macOS.
+            """
+        case .disabled:
+            """
+            macOS switches on an input method first installed during this
+            login session only after the next one. Log out and back in;
+            \(flavor.displayName) switches it on as it starts. If this still reads
+            switched off after that, choose Input Method under Delivery again.
+            """
+        case .enabled:
+            """
+            Choose Input Method under Delivery in this menu. While an app
+            holds secure keyboard entry - a password field in front -
+            macOS keeps every input method off.
+            """
+        }
+    }
+}
+
 // MARK: - the vocabulary README keeps a copy of
 
 public extension Requirement {
@@ -471,5 +515,6 @@ public extension Requirement {
         DriverState.allCases.map { (row: Row.driverExtension, reading: reads(for: $0)) }
             + HelperStanding.allCases.map { (row: Row.keyboardHelper, reading: reads(for: $0)) }
             + [true, false].map { (row: Row.keyboardSetupAssistant, reading: reads(forAnswered: $0)) }
+            + InputSourceState.allCases.map { (row: Row.inputMethod, reading: $0.description) }
     }
 }
