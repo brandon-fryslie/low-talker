@@ -69,6 +69,17 @@ public final class Committer: Sendable {
         return seen.withLock { $0 }
     }
 
+    /// The answer to an insert, from what the main actor said about the cursor: nothing in
+    /// time is `inputMethodIsBusy`, a refusal is that refusal, and a cursor is committed
+    /// into. [LAW:dataflow-not-control-flow] The three outcomes of the ask, handled once.
+    public func answer(_ text: String, at cursor: Result<any TextCursor, Refusal>?) -> InsertionAnswer {
+        switch cursor {
+        case .success(let cursor)?: commit(text, at: cursor)
+        case .failure(let refusal)?: .refused(refusal)
+        case nil: .refused(.inputMethodIsBusy)
+        }
+    }
+
     /// Commits `text` at `cursor`, answering once the app takes it or `bound` has passed.
     /// Blocks the caller for at most `bound`, so it belongs on a queue that is not the one
     /// keys are handled on.

@@ -4,9 +4,10 @@ import Foundation
 /// What the input method did with the text it was asked to insert.
 ///
 /// The shape the answer crosses the wire in, which is the only reason it is a sum: the far
-/// end has to be able to say either. Past `InputMethodInserter` a refusal is thrown like
-/// any other failure, because to the caller it is one - the words are not at the cursor,
-/// and nothing here puts them anywhere else. [LAW:types-are-the-program]
+/// end has to be able to say any of these. Past `InputMethodInserter` a refusal or words
+/// not yet taken is thrown like any other failure, because to the caller it is one - the
+/// words are not at the cursor now, and nothing here puts them anywhere else.
+/// [LAW:types-are-the-program]
 public enum InsertionAnswer: Codable, Equatable, Sendable {
     /// Committed into the client in front, replacing nothing.
     ///

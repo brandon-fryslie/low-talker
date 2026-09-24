@@ -115,12 +115,7 @@ let insertions: InsertionPort? = {
                     return (frontmost: frontmost, securing: securing, cursor: FocusedClient.shared.cursor(whileInFrontIs: frontmost, secureInputIsOn: securing != nil))
                 }
             }
-            let answer: InsertionAnswer
-            switch seen?.cursor {
-            case .success(let cursor)?: answer = committer.commit(text, at: cursor)
-            case .failure(let refusal)?: answer = .refused(refusal)
-            case nil: answer = .refused(.inputMethodIsBusy)
-            }
+            let answer = committer.answer(text, at: seen?.cursor)
             // The app in front is named because the refusal that matters here is the one
             // where it is not the app holding the cursor, and a line saying only the outcome
             // leaves a reader with the question it was written to answer. A main thread that

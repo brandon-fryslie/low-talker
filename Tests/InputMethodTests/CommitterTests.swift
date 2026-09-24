@@ -105,6 +105,19 @@ import Testing
         hung.release()
     }
 
+    /// What the main actor said about the cursor decides the answer: a cursor is committed
+    /// into, a refusal is passed on, and nothing said in time is the input method busy -
+    /// with nothing committed anywhere.
+    @Test func theAnswerFollowsWhatWasSaidAboutTheCursor() {
+        let committer = Committer(bound: Self.unspendable, label: #function)
+        let cursor = Cursor()
+
+        #expect(committer.answer("hello", at: .success(cursor)) == .inserted(characters: 5, into: cursor.application))
+        #expect(committer.answer("hello", at: .failure(.noClientHasFocus)) == .refused(.noClientHasFocus))
+        #expect(committer.answer("hello", at: nil) == .refused(.inputMethodIsBusy))
+        #expect(cursor.committed == ["hello"])
+    }
+
     @Test func whatTheQueueSawIsHandedBack() {
         let queue = DispatchQueue(label: #function)
         #expect(Committer(bound: Self.unspendable, label: #function).ask(on: queue) { "the cursor" } == "the cursor")
