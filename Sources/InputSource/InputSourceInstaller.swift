@@ -4,6 +4,7 @@ import Flavors
 import Foundation
 import os
 import Security
+import TextInputSources
 
 /// Where this flavor's input source stands on this Mac, as the text input system reports it.
 ///
@@ -48,8 +49,8 @@ public enum InputSourceState: Equatable, Sendable, CustomStringConvertible {
     }
 }
 
-/// Puts this flavor's input method where macOS looks for one, registers it, and switches it
-/// on - with no logout, no administrator, and no step left for a person.
+/// Puts this flavor's input method where macOS looks for one, registers it, switches it on
+/// when a person has allowed it, and selects it - with no logout and no administrator.
 ///
 /// [LAW:decomposition] The Text Input Sources framework as this program uses it, and
 /// nothing about dictation: what it is handed is a flavor and the app bundle carrying that
@@ -119,12 +120,13 @@ public struct InputSourceInstaller: Sendable {
         // one `install` replaces. [LAW:single-enforcer]
         guard Self.isCopy(try installed(), of: try Self.seal(of: try embedded())) else { return .bundleNotInstalled }
         guard let source = Self.source(named: flavor.inputSourceIdentifier) else { return .notRegistered }
-        guard Self.isEnabled(source) else { return .disabled }
+        guard Self.isSwitchedOn(flavor) else { return .disabled }
         return Self.isSelected(source) ? .selected : .enabled
     }
 
     /// Walks the ladder from wherever this Mac stands to `selected`, doing only the steps
-    /// that are not already done.
+    /// that are not already done, and stopping at `disabled` when a person has not switched
+    /// the input method on.
     ///
     /// [LAW:no-silent-failure] Every step that can refuse says which step it was by name,
     /// and the register step is checked against the source list rather than against its own
@@ -142,6 +144,63 @@ public struct InputSourceInstaller: Sendable {
     @MainActor
     @discardableResult
     public func install(settling: Duration = .seconds(3)) async throws -> InputSourceState {
+        let source = try await registered(settling: settling)
+        // Never switched on here. Switching an input method on is what makes macOS ask the
+        // person, in its own dialog, whether this app may, and `install` runs at every
+        // launch: a launch must put no system dialog on screen. `switchOn` is the one call
+        // that does, and it is made only from the step a person starts. Not a failure: the
+        // ladder stops on the rung a person has yet to allow, and says which it is.
+        guard Self.isSwitchedOn(flavor) else { return .disabled }
+        if !Self.isSelected(source) {
+            let selected = TextInputSources.withLock { TISSelectInputSource(source) }
+            guard selected == noErr else {
+                throw InputSourceInstallFailure.selectRefused(identifier: flavor.inputSourceIdentifier, status: selected)
+            }
+        }
+        // Read back rather than believed, for the reason the lookup above is: the select is
+        // answered `noErr` before this process's list says so, and it can be answered
+        // `noErr` and not take, as it does while an app holds Secure Event Input.
+        guard try await Self.source(named: flavor.inputSourceIdentifier, within: settling, where: Self.isSelected) != nil else {
+            throw InputSourceInstallFailure.notSelectedAfterSelecting(identifier: flavor.inputSourceIdentifier)
+        }
+        return .selected
+    }
+
+    /// Switches this flavor's input method on, which makes macOS ask the person whether this
+    /// app may - the one call in this type that can put a dialog on screen, so it is made only
+    /// when a person has asked for it. Copies and registers first, since a source the text
+    /// input system does not list cannot be switched on; `install` selects it afterwards.
+    ///
+    /// Nothing is read back here: macOS may still be showing its dialog when this returns,
+    /// so whoever asked reads `isSwitchedOn` when the person is done with it.
+    @MainActor
+    public func switchOn(settling: Duration = .seconds(3)) async throws {
+        let mode = try await registered(settling: settling)
+        // The input method's own source, looked for the way the mode's was: this process's
+        // list may not hold it yet, and a list read before the refresh arrives is not an
+        // answer. [LAW:no-ambient-temporal-coupling]
+        guard let inputMethod = try await Self.source(named: flavor.inputMethodBundleIdentifier, within: settling) else {
+            throw InputSourceInstallFailure.notInSourceListAfterRegistering(
+                identifier: flavor.inputMethodBundleIdentifier, bundle: try installed())
+        }
+        // The input method first, which is what macOS asks the person about, then its one
+        // mode, which a person who removed it under Input Sources switched off: both must
+        // be on before the mode can be selected. [LAW:dataflow-not-control-flow] Each is
+        // switched on only where it reads off, so a source already on is left alone.
+        for (source, identifier) in [(inputMethod, flavor.inputMethodBundleIdentifier), (mode, flavor.inputSourceIdentifier)]
+        where !Self.isEnabled(source) {
+            let enabled = TextInputSources.withLock { TISEnableInputSource(source) }
+            guard enabled == noErr else {
+                throw InputSourceInstallFailure.enableRefused(identifier: identifier, status: enabled)
+            }
+        }
+    }
+
+    /// The copy put in place and registered, and the source the text input system lists
+    /// for it: the rungs below switching on, which neither `install` nor `switchOn` may
+    /// skip and neither asks anyone about.
+    @MainActor
+    private func registered(settling: Duration) async throws -> TISInputSource {
         let embedded = try embedded()
         let installed = try installed()
         // A process of this input method started from the copy that stood there before, so
@@ -158,7 +217,7 @@ public struct InputSourceInstaller: Sendable {
         // source already known is how the text input system is told the bundle behind it
         // changed, which is exactly what a rebuilt development copy needs and costs nothing
         // on a copy that did not.
-        let status = TISRegisterInputSource(installed as CFURL)
+        let status = TextInputSources.withLock { TISRegisterInputSource(installed as CFURL) }
         guard status == noErr else {
             throw InputSourceInstallFailure.registrationRefused(bundle: installed, status: status)
         }
@@ -166,25 +225,24 @@ public struct InputSourceInstaller: Sendable {
             throw InputSourceInstallFailure.notInSourceListAfterRegistering(
                 identifier: flavor.inputSourceIdentifier, bundle: installed)
         }
-        if !Self.isEnabled(source) {
-            let enabled = TISEnableInputSource(source)
-            guard enabled == noErr else {
-                throw InputSourceInstallFailure.enableRefused(identifier: flavor.inputSourceIdentifier, status: enabled)
-            }
-        }
-        if !Self.isSelected(source) {
-            let selected = TISSelectInputSource(source)
-            guard selected == noErr else {
-                throw InputSourceInstallFailure.selectRefused(identifier: flavor.inputSourceIdentifier, status: selected)
-            }
-        }
-        // Read back rather than believed, for the reason the lookup above is: the select is
-        // answered `noErr` before this process's list says so, and it can be answered
-        // `noErr` and not take, as it does while an app holds Secure Event Input.
-        guard try await Self.source(named: flavor.inputSourceIdentifier, within: settling, where: Self.isSelected) != nil else {
-            throw InputSourceInstallFailure.notSelectedAfterSelecting(identifier: flavor.inputSourceIdentifier)
-        }
-        return .selected
+        return source
+    }
+
+    /// Whether this flavor's input method is switched on, read from the text input system
+    /// alone. What the switch-on step asks of a person, and nothing about the copy on disk,
+    /// so it reads the same from the app and from a CLI that carries no input method.
+    ///
+    /// Read off the input method's own source, whose identifier is its bundle's, and not off
+    /// its mode's. Measured on 2026-09-24: registered and never switched on, the input
+    /// method's source reads `enabled=no` while its one mode reads `enabled=yes`, because a
+    /// mode declared on by default is on inside an input method that is off. Selecting that
+    /// mode is refused with -50. So the mode's flag alone answers nothing about whether a
+    /// person allowed the input method. Both are read: the input method's own flag is the
+    /// grant, and a mode switched off - as removing the input method under Input Sources
+    /// leaves it - is one that cannot be selected either, and is switched on the same way.
+    public static func isSwitchedOn(_ flavor: Flavor) -> Bool {
+        [flavor.inputMethodBundleIdentifier, flavor.inputSourceIdentifier]
+            .allSatisfy { source(named: $0).map(isEnabled) ?? false }
     }
 
     /// A copy `place` swapped in: the moment it began to stand, and the staging directory,
@@ -323,7 +381,10 @@ public struct InputSourceInstaller: Sendable {
     /// refuse with `notInSourceListAfterRegistering` instead of switching it on.
     static func source(named identifier: String) -> TISInputSource? {
         let query = [kTISPropertyInputSourceID as String: identifier] as CFDictionary
-        let sources = TISCreateInputSourceList(query, true)?.takeRetainedValue() as? [TISInputSource]
+        // [LAW:single-enforcer] Through the lock every Text Input Sources call takes.
+        let sources = TextInputSources.withLock {
+            TISCreateInputSourceList(query, true)?.takeRetainedValue() as? [TISInputSource]
+        }
         return sources?.first
     }
 
@@ -368,7 +429,7 @@ public struct InputSourceInstaller: Sendable {
     static func isSelected(_ source: TISInputSource) -> Bool { flag(kTISPropertyInputSourceIsSelected, of: source) }
 
     private static func flag(_ property: CFString, of source: TISInputSource) -> Bool {
-        guard let pointer = TISGetInputSourceProperty(source, property) else { return false }
+        guard let pointer = TextInputSources.withLock({ TISGetInputSourceProperty(source, property) }) else { return false }
         return CFBooleanGetValue(Unmanaged<CFBoolean>.fromOpaque(pointer).takeUnretainedValue())
     }
 }

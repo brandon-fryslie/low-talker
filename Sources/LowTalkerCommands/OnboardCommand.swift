@@ -1,5 +1,7 @@
 import ArgumentParser
 import Flavors
+import Foundation
+import LowTalkerCore
 import Onboarding
 
 /// Everything that must hold before low-talker can type, read off this Mac, with the
@@ -13,8 +15,12 @@ struct OnboardCommand: ParsableCommand {
         commandName: "onboard",
         abstract: "Print everything that must hold before low-talker can type, and the step for whatever is missing.",
         discussion: """
-            Exits 0 when nothing is left to do and 2 when something is. A fact that could \
-            not be read is a row of its own naming why, and it never counts as met.
+            Prints the rows of the delivery and hotkey source this installation's app has \
+            chosen, and the rows of every choice for one it has not made yet. Exits 0 when \
+            nothing on those rows is left to do and 2 when something is. The microphone, \
+            Input Monitoring and Accessibility rows belong to the app and are named, not \
+            read, so they count toward neither. A fact that could not be read is a row of \
+            its own naming why, and it never counts as met.
             """,
         subcommands: [Readings.self]
     )
@@ -22,11 +28,25 @@ struct OnboardCommand: ParsableCommand {
     @OptionGroup var installation: FlavorOption
 
     func run() throws {
-        // Nil, not false: `SMAppService` answers only the bundle that asks, so a CLI has
-        // no registration of its own to put the question to. From here launchd's "no job"
-        // covers both a helper never registered and one registered and waiting for its
-        // click, and saying so beats answering no on the app's behalf.
-        let readiness = OnboardingProbe.readiness(flavor: installation.flavor, approvalPending: nil, cli: LowTalker.path)
+        // Read from elsewhere, not as the app: `SMAppService` answers only the bundle that
+        // asks, and macOS keys the privacy grants to the app that holds them, so a CLI can
+        // read neither. From here launchd's "no job" covers both a helper never registered
+        // and one registered and waiting for its click, and the grants only the app can read
+        // are named, unread, rather than read as the terminal's.
+        //
+        // The setup the app chose, read from the app's own defaults domain, so the exit
+        // code answers for the setup this installation actually runs. A choice the app has
+        // not made yet could go either way, so the rows of every answer to it are read.
+        let flavor = installation.flavor
+        guard let appDefaults = UserDefaults(suiteName: flavor.bundleIdentifier) else {
+            throw ValidationError("cannot read \(flavor.bundleIdentifier)'s defaults, where its app keeps its choices")
+        }
+        let kept = KeptChoices(appDefaults)
+        let readiness = OnboardingProbe.readiness(
+            flavor: flavor,
+            delivery: kept.delivery,
+            source: kept.source,
+            reader: .elsewhere, cli: LowTalker.path)
         print(readiness)
         // The code is a value computed the one way every time, rather than an exit taken
         // on some runs and not others. [LAW:dataflow-not-control-flow]

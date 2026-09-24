@@ -153,7 +153,8 @@ check-docs:
 	echo "check-docs: README.md names every verdict DriverState emits"
 
 # The onboarding rows' readings are the other vocabulary README.md keeps a copy of: every
-# case of `HelperStanding` has one, so does each of the assistant's two answers, and the
+# case of `HelperStanding` has one, so does each of the assistant's two answers, each way
+# macOS can answer for the microphone, the event tap's two grants and the input method, and the
 # prose lists them for a reader following the runbook by hand. Compared as sets in both
 # directions, so a reading added to the enum and a reading left standing in README after
 # the enum dropped it both fail. Empty on either side is a broken reader, not agreement,
@@ -183,6 +184,10 @@ check-docs:
 	    || { echo "check-docs: the code and README.md disagree about the readings for $$1 (< code, > README)" >&2; exit 1; }; \
 	  echo "check-docs: README.md names every reading the $$1 row can take"; \
 	}; \
+	check_row "Microphone" '^So the microphone.s row reads one of'; \
+	check_row "Input Monitoring" '^So each of the event tap.s two rows'; \
+	check_row "Accessibility" '^So each of the event tap.s two rows'; \
+	check_row "Input method" '^So the input method.s row reads one of'; \
 	check_row "Keyboard helper" '^So the helper.s row reads one of'; \
 	check_row "Keyboard Setup Assistant" '^So the assistant.s row reads one of'
 

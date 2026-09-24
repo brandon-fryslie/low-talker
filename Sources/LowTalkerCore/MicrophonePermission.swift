@@ -10,7 +10,7 @@ public enum MicrophoneAuthorization: Sendable, Equatable, CustomStringConvertibl
     case withheld(Withheld)
 
     /// Why the microphone is not available, in the terms the user can act on.
-    public enum Withheld: Error, Sendable, Equatable, CustomStringConvertible {
+    public enum Withheld: Error, Sendable, Equatable, CaseIterable, CustomStringConvertible {
         /// Never asked. `MicrophonePermission.request()` shows the system prompt.
         case notDetermined
         /// Refused at the prompt or switched off since; only System Settings changes it.

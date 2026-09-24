@@ -2,6 +2,7 @@ import DriverExtension
 import Foundation
 import KeyboardService
 import Flavors
+import LowTalkerCore
 import Testing
 @testable import Onboarding
 
@@ -218,22 +219,58 @@ import Testing
 /// may quietly disagree about: which requirements are in the list, and in what order.
 /// [LAW:behavior-not-structure]
 @Suite struct ReadinessTests {
-    /// Every requirement, named, on any Mac in any state. A reading that failed keeps its
-    /// row and its name, so this holds on a machine with no driver package as surely as
-    /// on one that is fully set up - which is what makes it a check on the assembly and
-    /// not on the Mac it runs on.
-    @Test func theListIsTheSameThreeRequirementsInTheSameOrder() {
-        #expect(OnboardingProbe.readiness(flavor: .development, approvalPending: nil, cli: "lowtalker").requirements.map(\.name)
-            == ["Driver extension", "Keyboard helper", "Keyboard Setup Assistant"])
+    /// Every requirement the CLI can read, named, on any Mac in any state. A reading that
+    /// failed keeps its row and its name, so this holds on a machine with no driver package
+    /// as surely as on one that is fully set up - which is what makes it a check on the
+    /// assembly and not on the Mac it runs on.
+    @Test func theCLIReadsEveryRowThatBelongsToTheMacInOrder() {
+        #expect(Self.asTheCLISeesIt.requirements.map(\.name)
+            == ["Input method", "Driver extension", "Keyboard helper", "Keyboard Setup Assistant"])
     }
 
-    /// The app's extra reading changes the helper's row and nothing else. A caller that
-    /// cannot ask `SMAppService` passes nil and gets launchd's answer unsharpened, which
-    /// is the difference between the CLI and the app and the whole of it.
+    /// The grants macOS keys to the app are named from the CLI, never read: a CLI reading
+    /// them would report its terminal's grants as the app's.
+    @Test func theCLINamesTheAppsOwnGrantsWithoutReadingThem() {
+        #expect(Self.asTheCLISeesIt.notReadHere == [.microphone, .inputMonitoring, .accessibility])
+        #expect(Self.asTheCLISeesIt.description.contains("Microphone: only the app can read this"))
+    }
+
+    /// The app reads every row the CLI reads, plus its own grants, in the one order.
+    @Test func theAppReadsItsOwnGrantsWhereTheCLICannot() {
+        let asTheAppSeesIt = OnboardingProbe.readiness(
+            flavor: .development, delivery: nil, source: nil,
+            reader: .theApp(helperAwaitingApproval: false), cli: "lowtalker")
+        #expect(asTheAppSeesIt.requirements.map(\.row) == Requirement.Row.allCases)
+        #expect(asTheAppSeesIt.notReadHere.isEmpty)
+    }
+
+    /// With the registered hot key chosen, neither event-tap grant is in the list; with the
+    /// event tap chosen, both are. This is low-hotkey-a6m.2's contract.
+    @Test func theEventTapsGrantsAppearOnlyWhenTheEventTapIsChosen() {
+        func rows(_ source: HotkeySource) -> [Requirement.Row] {
+            OnboardingProbe.readiness(
+                flavor: .development, delivery: .inputMethod, source: source,
+                reader: .theApp(helperAwaitingApproval: false), cli: "lowtalker").requirements.map(\.row)
+        }
+        #expect(rows(.eventTap) == [.microphone, .inputMonitoring, .accessibility, .inputMethod])
+        #expect(rows(.registeredHotKey) == [.microphone, .inputMethod])
+    }
+
+    /// The app's extra reading changes the helper's row and nothing else among the rows the
+    /// CLI can read too. A caller that cannot ask `SMAppService` gets launchd's answer
+    /// unsharpened, which is the whole of the difference on those rows.
     @Test func onlyTheHelperCanDifferBetweenTheTwoSurfaces() {
-        let asTheCLISeesIt = OnboardingProbe.readiness(flavor: .development, approvalPending: nil, cli: "lowtalker").requirements
-        let asAnUnapprovedAppSeesIt = OnboardingProbe.readiness(flavor: .development, approvalPending: true, cli: "lowtalker").requirements
-        #expect(asTheCLISeesIt.filter { $0.name != "Keyboard helper" }
+        let asAnUnapprovedAppSeesIt = OnboardingProbe.readiness(
+            flavor: .development, delivery: nil, source: nil,
+            reader: .theApp(helperAwaitingApproval: true), cli: "lowtalker").requirements
+            .filter { !$0.row.readOnlyByTheApp }
+        #expect(Self.asTheCLISeesIt.requirements.filter { $0.name != "Keyboard helper" }
             == asAnUnapprovedAppSeesIt.filter { $0.name != "Keyboard helper" })
+    }
+
+    static var asTheCLISeesIt: Readiness {
+        OnboardingProbe.readiness(
+            flavor: .development, delivery: nil, source: nil,
+            reader: .elsewhere, cli: "lowtalker")
     }
 }
