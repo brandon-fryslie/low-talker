@@ -1,6 +1,6 @@
 import DriverExtension
 import Flavors
-import InputSource
+import InputSourceVocabulary
 
 /// One thing that must hold before low-talker can type, as this Mac actually stands.
 ///
@@ -32,7 +32,9 @@ public struct Requirement: Sendable, Hashable {
 }
 
 public extension Requirement {
-    /// What each row is called, in the order onboarding prints them.
+    /// What each row is called, in the order onboarding shows them. `lowtalker onboard`
+    /// prints the first three; the input method's is the app's alone, since only the app
+    /// carries an input method to read.
     ///
     /// One home for the names, because four readers say them: the factory that
     /// builds each row, the row a failed reading becomes, the readings table `make
@@ -458,7 +460,9 @@ public extension Requirement {
     /// because choosing the delivery again is what walks the ladder from wherever it
     /// stands. What differs is what is left once it has: nothing, or the one step no app can
     /// take for a person - the login macOS wants before it switches on an input method
-    /// first installed during this session (`InputSourceState.disabled`).
+    /// first installed during this session. Switched off is also what removing it in System
+    /// Settings reads as, which choosing again undoes at once, so the step asks for that
+    /// first and the logout only if it did not take.
     static func inputMethod(_ state: InputSourceState, flavor: Flavor) -> Requirement {
         Requirement(name: Row.inputMethod.rawValue, reads: state.description, step: step(for: state, flavor: flavor))
     }
@@ -474,10 +478,10 @@ public extension Requirement {
             """
         case .disabled:
             """
-            macOS switches on an input method first installed during this
-            login session only after the next one. Log out and back in;
-            \(flavor.displayName) switches it on as it starts. If this still reads
-            switched off after that, choose Input Method under Delivery again.
+            Choose Input Method under Delivery in this menu. If it still
+            reads switched off, macOS is holding an input method first
+            installed during this login session until the next one: log
+            out and back in, then open \(flavor.displayName), which switches it on.
             """
         case .enabled:
             """

@@ -1,6 +1,6 @@
 import DriverExtension
 import Flavors
-import InputSource
+import InputSourceVocabulary
 import Testing
 @testable import Onboarding
 
@@ -297,11 +297,12 @@ import Testing
     }
 
     /// Switched off is where a first install waits for the next login, and the row names
-    /// the login and the app that finishes the job after it. [LAW:no-silent-failure]
+    /// the login and the app to open after it, since nothing opens it at login.
+    /// [LAW:no-silent-failure]
     @Test func aSwitchedOffInputMethodNamesTheLogin() throws {
         let step = try #require(Requirement.inputMethod(.disabled, flavor: Self.flavor).step)
-        #expect(step.contains("Log out and back in"))
-        #expect(step.contains(Self.flavor.displayName))
+        #expect(step.contains("out and back in"))
+        #expect(step.contains("open \(Self.flavor.displayName)"))
     }
 
     /// The readings table holds every rung, in the words the row itself reads.

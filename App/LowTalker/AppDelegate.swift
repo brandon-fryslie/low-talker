@@ -334,12 +334,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let state = try await InputSourceInstaller(flavor: Self.flavor).install()
                 log.notice("input method: \(state, privacy: .public)")
                 return .success(())
+            } catch InputSourceInstallFailure.switchedOnOnlyAtNextLogin(let identifier) {
+                // The copy and the registration both happened; what is left is the login.
+                log.error("input method: \(identifier, privacy: .public) waits for the next login")
+                return .failure("the input method is waiting for your next login: \(InputSourceInstallFailure.switchedOnOnlyAtNextLogin(identifier: identifier))")
             } catch {
                 log.error("input method: \(String(describing: error), privacy: .public)")
-                // Said as not ready rather than as not installed: the likeliest refusal on a
-                // first install is macOS holding the switch-on until the next login, and the
-                // copy and the registration it follows both happened.
-                return .failure("the input method is not ready: \(error)")
+                return .failure("the input method could not be installed: \(error)")
             }
         }
     }
@@ -445,14 +446,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Choosing the delivery already in use sets it up again, which is how a person puts
-    /// back an input method they deleted by hand: every install step is idempotent, and
-    /// the menu's row for it says to do exactly this.
+    /// Choosing the delivery already listening repairs it rather than switching to it;
+    /// the menu's row for the input method says to do exactly this.
     @objc private func chooseDelivery(_ item: NSMenuItem) {
         guard let spelling = item.representedObject as? String, let chosen = Delivery(rawValue: spelling) else {
             preconditionFailure("a delivery item carries its delivery's raw value")
         }
-        take(again: true) { $0.chosenDelivery = chosen }
+        if let standing = listening?.setup, standing.delivery == chosen, listening?.hotkey.isWatching == true {
+            repair(standing)
+        } else {
+            take { $0.chosenDelivery = chosen }
+        }
+    }
+
+    /// Sets the listening setup up again only when its delivery reads as not ready - an
+    /// input method deleted by hand, or switched off - and says what is still missing after.
+    ///
+    /// [LAW:no-ambient-temporal-coupling] Queued behind any switch in progress and read
+    /// only once it has finished, so a second click while the first repair runs finds it
+    /// done and does nothing, and a delivery that reads ready is never torn down: a press
+    /// latched open over it is left to finish.
+    private func repair(_ setup: Setup) {
+        let before = switching
+        switching = Task {
+            await before?.value
+            guard !quitting, !readiness(of: setup.delivery).ready else { return }
+            await adopt(setup)
+            showWhatIsMissing(for: setup.delivery)
+        }
     }
 
     @objc private func chooseHotkeySource(_ item: NSMenuItem) {
@@ -477,21 +498,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// line tells them to do. Only that one case: a loop still being built has no
     /// hotkey to read yet, and letting the absence pass for a come-down would chain a
     /// second teardown and rebuild behind the first, alert and all.
-    ///
-    /// `again` is a choice a person made of the setup already standing - a delivery
-    /// chosen a second time - which is a request to set it up again, and is taken down
-    /// to the loop even with its hotkey up. A press latched open when it arrives is ended
-    /// as lapsed and reported, like at any switch.
-    private func take(again: Bool = false, _ keep: (AppDelegate) -> Void) {
+    private func take(_ keep: (AppDelegate) -> Void) {
         let before = chosenSetup
         let cameDown = listening?.hotkey.isWatching == false
         keep(self)
-        guard let setup = chosenSetup, switching != nil, setup != before || cameDown || again, !quitting else { return }
+        guard let setup = chosenSetup, switching != nil, setup != before || cameDown, !quitting else { return }
         Task {
             await choose(setup)
-            // What a delivery still needs is news when the delivery is new or chosen again,
-            // and not when only the hotkey it sits behind has changed.
-            if setup.delivery != before?.delivery || again { showWhatIsMissing(for: setup.delivery) }
+            // What a delivery still needs is news when the delivery is new, and not when
+            // only the hotkey it sits behind has changed.
+            if setup.delivery != before?.delivery { showWhatIsMissing(for: setup.delivery) }
         }
     }
 
@@ -703,7 +719,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - the menu
 
-    /// What the virtual keyboard needs, read off this Mac now, and logged as it is read.
+    /// The input method's one row. A reading that failed is a row saying so, never an
+    /// absent row. [LAW:no-silent-failure]
+    private func readInputMethodReadiness() -> Readiness {
+        do { return Readiness([.inputMethod(try InputSourceInstaller(flavor: Self.flavor).state(), flavor: Self.flavor)]) }
+        catch { return Readiness([.unreadable(.inputMethod, error)]) }
+    }
+
+    /// What the virtual keyboard needs, read off this Mac now.
     ///
     /// The reading waits about 220ms - measured from the log timestamps, and spent almost
     /// entirely in the driver probe's subprocesses. It is paid on every read rather than
@@ -717,27 +740,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // the right plist - has nothing else to read back. [LAW:no-silent-failure]
         let registration = helperService.status
         log.notice("helper registration: SMAppService.Status \(registration.rawValue, privacy: .public)")
-        let readiness = OnboardingProbe.readiness(flavor: Self.flavor, approvalPending: registration == .requiresApproval)
+        return OnboardingProbe.readiness(flavor: Self.flavor, approvalPending: registration == .requiresApproval)
+    }
+
+    /// What `delivery` needs, read off this Mac now. [LAW:single-enforcer] The one place a
+    /// delivery is matched to its requirements, for the menu and the alert alike.
+    ///
+    /// The input method's one row is read here, off the installer, rather than in
+    /// `OnboardingProbe`, which links no window server. Read afresh at every call, so a
+    /// bundle deleted by hand reads as missing at the next menu open. Logged as it is read,
+    /// the same for both deliveries.
+    private func readiness(of delivery: Delivery) -> Readiness {
+        let readiness = switch delivery {
+        case .virtualKeyboard:
+            readVirtualKeyboardReadiness()
+        case .inputMethod:
+            readInputMethodReadiness()
+        }
         log.notice("onboarding: \(readiness.ready ? "ready" : "not ready", privacy: .public)")
         for requirement in readiness.requirements {
             log.notice("onboarding: \(requirement.name, privacy: .public): \(requirement.reads, privacy: .public)")
         }
         return readiness
-    }
-
-    /// What `delivery` needs, read off this Mac now. [LAW:single-enforcer] The one place a
-    /// delivery is matched to its requirements, for the menu and the alert alike.
-    private func readiness(of delivery: Delivery) -> Readiness {
-        switch delivery {
-        case .virtualKeyboard:
-            return readVirtualKeyboardReadiness()
-        case .inputMethod:
-            let readiness = OnboardingProbe.inputMethodReadiness(InputSourceInstaller(flavor: Self.flavor))
-            for requirement in readiness.requirements {
-                log.notice("onboarding: \(requirement.name, privacy: .public): \(requirement.reads, privacy: .public)")
-            }
-            return readiness
-        }
     }
 
     /// Everything the menu says, made here, every time, from what this Mac reads now.

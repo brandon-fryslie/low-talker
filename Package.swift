@@ -43,8 +43,11 @@ let package = Package(
         // input source stands on this Mac, and the steps that put it there. It links only
         // Flavors, so the app reaches it without the input method process linking anything
         // of the app's. [LAW:one-way-deps]
-        .target(name: "InputSource", dependencies: ["Flavors"]),
+        .target(name: "InputSource", dependencies: ["Flavors", "InputSourceVocabulary"]),
         .testTarget(name: "InputSourceTests", dependencies: ["InputSource", "Flavors"]),
+        // The ladder an input source stands on, as words and nothing else, which is what
+        // onboarding needs of it. [LAW:one-way-deps]
+        .target(name: "InputSourceVocabulary"),
         .target(
             name: "LowTalkerCore",
             dependencies: [
@@ -88,13 +91,13 @@ let package = Package(
         .target(name: "VirtualKeyboard", dependencies: ["DriverExtension", "Keystrokes", "Pointing"]),
         // Everything that must hold before low-talker can type, as a list a reader can
         // act on: what was read off this Mac, and the step for whatever is missing. It
-        // links the driver's vocabulary and the service seam and nothing else - no
+        // links the driver's and the input source's vocabularies and the service seam and nothing else - no
         // device and no window server - so both the CLI and the menu-bar app can show
         // the same words. [LAW:one-source-of-truth]
-        .target(name: "Onboarding", dependencies: ["DriverExtension", "KeyboardService", "InputSource", "Flavors"]),
+        .target(name: "Onboarding", dependencies: ["DriverExtension", "KeyboardService", "InputSourceVocabulary", "Flavors"]),
         // The steps are what a person acts on, so they are asserted as values rather
         // than scraped off a terminal.
-        .testTarget(name: "OnboardingTests", dependencies: ["Onboarding", "DriverExtension", "KeyboardService", "InputSource", "Flavors"]),
+        .testTarget(name: "OnboardingTests", dependencies: ["Onboarding", "DriverExtension", "KeyboardService", "InputSourceVocabulary", "Flavors"]),
         // What crosses the privilege boundary, and the client's side of it. It links the
         // two vocabularies and nothing else: not the layout, because a root helper must
         // never read one, and not the device, because a client must never open one.
