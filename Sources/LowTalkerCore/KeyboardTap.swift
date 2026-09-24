@@ -64,11 +64,16 @@ public enum KeyboardTapError: Error, CustomStringConvertible {
     /// The grants were not held, so no tap was asked for: creating one anyway is what makes
     /// macOS raise its own dialog, unasked, in front of whatever the person was doing.
     case notAllowed
+    /// Both grants read as held and the session still refused the tap. macOS can apply a
+    /// newly given Input Monitoring grant only to a process started after it, so this is
+    /// said as the relaunch it most likely needs rather than as a grant to give again.
+    case refusedWhileAllowed
 
     public var description: String {
         switch self {
         case .refused: "the session refused an event tap; allow this app under System Settings > Privacy & Security, in both Input Monitoring and Accessibility"
         case .notAllowed: "this hotkey needs Input Monitoring and Accessibility, and this app does not have both yet; allow them from Set Up in the menu, or under System Settings > Privacy & Security"
+        case .refusedWhileAllowed: "Input Monitoring and Accessibility both read as allowed, and macOS still refused the hotkey's event tap; a grant given while the app is running can take effect only once it starts again, so quit and reopen the app"
         }
     }
 }
@@ -135,6 +140,32 @@ extension KeyEvent {
     }
 }
 
+/// The event tap as the hotkey uses it: created only once both of its grants are held.
+///
+/// [LAW:single-enforcer] The hotkey's one way to a keyboard tap, so the one place that makes
+/// sure the hotkey can never put a system dialog on screen: a tap created without its
+/// grants is what makes macOS ask on its own. Wrapped around the tap rather than built
+/// into it, because the grants are the hotkey's need - `dext watch` passes every event and
+/// runs under a terminal's grants, and is refused by macOS itself when it lacks them.
+public struct GrantedKeyboardTap: KeyboardTap {
+    private let tap: any KeyboardTap
+
+    public init(_ tap: any KeyboardTap = SystemKeyboardTap()) { self.tap = tap }
+
+    public func install(
+        listeningFor chords: Set<KeyChord>,
+        handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Passage,
+        onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse
+    ) throws -> Disposal {
+        guard EventTapAccess.held else { throw KeyboardTapError.notAllowed }
+        do {
+            return try tap.install(listeningFor: chords, handling: handle, onLapse: onLapse)
+        } catch KeyboardTapError.refused {
+            throw KeyboardTapError.refusedWhileAllowed
+        }
+    }
+}
+
 public struct SystemKeyboardTap: KeyboardTap {
     /// What the C callback reaches through its context pointer. It also keeps the
     /// port, which the callback needs to switch the tap back on.
@@ -186,9 +217,6 @@ public struct SystemKeyboardTap: KeyboardTap {
         handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Passage,
         onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse
     ) throws -> Disposal {
-        // [LAW:single-enforcer] The one place a keyboard tap is created, so the one place that
-        // makes sure creating it cannot put a system dialog on screen.
-        guard EventTapAccess.held else { throw KeyboardTapError.notAllowed }
         let installed = Unmanaged.passRetained(Installed(handle: handle, onLapse: onLapse))
         let interest: CGEventMask = [CGEventType.flagsChanged, .keyDown, .keyUp].reduce(0) { $0 | 1 << $1.rawValue }
         // Scheduled on the main run loop, so the callback runs on the main actor.

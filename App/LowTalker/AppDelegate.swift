@@ -110,19 +110,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// is what lands the job in Login Items as "requires approval" and puts macOS's
     /// background item notice on screen, so a launch never does it.
     ///
-    /// Nothing is read back here. `SMAppService` answers only whether
-    /// this app's own registration is approved, and that is one of two readings the
-    /// helper's row needs - the other, which job actually holds the Mach service, only
-    /// launchd can give. Both are taken together when the menu opens.
-    private func registerKeyboardHelper() {
+    /// Answers with why the registration failed, or nil when it landed. `SMAppService`
+    /// answers only whether this app's own registration is approved, and that is one of two
+    /// readings the helper's row needs - the other, which job actually holds the Mach
+    /// service, only launchd can give. Both are taken together at the next reading.
+    private func registerKeyboardHelper() -> String? {
         do {
             try helperService.register()
+            return nil
         } catch {
-            // [LAW:no-silent-failure] On the first registration of every install this throws
-            // "Operation not permitted": smd will not bootstrap a daemon nobody has
-            // approved yet. That is a normal step on the way in rather than a failure to
-            // start, so it is reported here and the readout comes from what was read.
             log.notice("keyboard helper: register — \(error.localizedDescription, privacy: .public)")
+            // On the first registration of every install this throws "Operation not
+            // permitted": smd will not bootstrap a daemon nobody has approved yet, and the
+            // registration it made reads back as waiting for approval. That is the step on
+            // the way in, and the helper's row says what is left. Anything else is a
+            // registration that did not land, and the step says why. [LAW:no-silent-failure]
+            return helperService.status == .requiresApproval
+                ? nil : "the keyboard helper could not be registered: \(error.localizedDescription)"
         }
     }
 
@@ -170,29 +174,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - the delivery and the hotkey source
 
-    /// Where this installation's delivery is kept: its own defaults domain, so the two
+    /// Where this installation's two choices are kept: its own defaults domain, so the two
     /// installations choose apart. [LAW:one-source-of-truth] The menu and the first-launch
-    /// question write it, launch reads it, and nothing else holds a copy.
-    ///
-    /// Still spelled `inputMethod`, which the type no longer is, because the word on disk
-    /// is every installed copy's stored answer and renaming it would ask them all again.
-    private static let deliveryKey = "inputMethod"
-    /// Where this installation's hotkey source is kept, beside the delivery and apart from it.
-    private static let hotkeySourceKey = "hotkeySource"
+    /// questions write them, launch reads them, `lowtalker onboard` reads them from outside,
+    /// and `KeptChoices` holds the one spelling of each key.
+    private let kept = KeptChoices(.standard)
 
     /// The delivery the user chose, or nil for an installation that has never been asked.
-    /// A stored word that names no delivery reads as never asked, and the question comes
-    /// back: that is the one answer to it a person can act on.
     private var chosenDelivery: Delivery? {
-        get { UserDefaults.standard.string(forKey: Self.deliveryKey).flatMap(Delivery.init(rawValue:)) }
-        set { UserDefaults.standard.set(newValue?.rawValue, forKey: Self.deliveryKey) }
+        get { kept.delivery }
+        set { kept.delivery = newValue }
     }
 
-    /// The hotkey source the user chose, or nil for an installation that has never been
-    /// asked, read the way `chosenDelivery` is.
+    /// The hotkey source the user chose, or nil for an installation that has never been asked.
     private var chosenSource: HotkeySource? {
-        get { UserDefaults.standard.string(forKey: Self.hotkeySourceKey).flatMap(HotkeySource.init(rawValue:)) }
-        set { UserDefaults.standard.set(newValue?.rawValue, forKey: Self.hotkeySourceKey) }
+        get { kept.source }
+        set { kept.source = newValue }
     }
 
     /// What a loop is built from: how the words arrive and how the chord is heard.
@@ -274,8 +271,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             await adopt(setup)
         }
         switching = this
+        switchesInFlight += 1
         await this.value
+        switchesInFlight -= 1
     }
+
+    /// How many switches are queued or running. While any is, the loop is being rebuilt by
+    /// someone already, and a grant noticed in the meantime is that switch's to take up.
+    private var switchesInFlight = 0
 
     private func adopt(_ setup: Setup) async {
         if let previous = listening {
@@ -348,10 +351,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             do {
                 let state = try await InputSourceInstaller(flavor: Self.flavor).install()
                 log.notice("input method: \(state, privacy: .public)")
-                return .success(())
+                // Stopped short of selected only where a person has yet to switch it on,
+                // which is a step in setup rather than something that went wrong.
+                return state.ready ? .success(()) : .failure("""
+                    the input method is \(state); switch it on in \(GuidedSetup.title(for: Self.flavor)) \
+                    in this menu, where macOS asks you once to allow it
+                    """)
             } catch {
                 log.error("input method: \(String(describing: error), privacy: .public)")
-                return .failure("\(error)")
+                return .failure("the input method could not be installed: \(error)")
             }
         }
     }
@@ -438,14 +446,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var setUp = SetUpWindow(
         flavor: Self.flavor,
         read: { [unowned self] in readReadiness() },
-        ask: { [unowned self] in await ask($0) })
+        ask: { [unowned self] in await ask($0) },
+        settle: { [unowned self] in comeUpIfGranted($0) })
 
     /// After a choice has been made: the setup, in front of the person, when the setup
     /// they chose still needs anything. Not on a launch that only remembers its choices,
     /// which the menu's Set Up item already answers every time it opens.
     private func showSetUpIfNeeded() {
-        guard !readReadiness().ready else { return }
-        setUp.show()
+        let readiness = readReadiness()
+        guard !readiness.ready else { return }
+        setUp.show(readiness)
     }
 
     /// Asks macOS for one requirement - the only place in the app that does, and reached
@@ -460,7 +470,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         var failure: String?
         switch row {
         case .microphone:
-            _ = await MicrophonePermission().request()
+            // macOS asks about the microphone once. Past that, requesting answers at once and
+            // shows nothing, so a decided "no" is said here and the pane opened instead.
+            switch MicrophonePermission().current {
+            case .withheld(.notDetermined):
+                _ = await MicrophonePermission().request()
+            case .withheld(.denied):
+                Requirement.Row.microphone.settingsPane.map { NSWorkspace.shared.open($0) }
+                failure = "macOS asks about the microphone only once, and it was answered no; turn on \(Self.flavor.displayName) in the Microphone list System Settings just opened"
+            case .withheld(.restricted):
+                failure = "a policy on this Mac forbids the microphone, and only whoever manages this Mac can change that"
+            case .granted:
+                break
+            }
         case .inputMonitoring:
             EventTapAccess.askForInputMonitoring()
         case .accessibility:
@@ -471,7 +493,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 failure = "\(error)"
             }
         case .keyboardHelper:
-            registerKeyboardHelper()
+            failure = registerKeyboardHelper()
         // Nothing the app can ask for: an administrator installs the driver, and the helper
         // answers the assistant. Their steps offer no ask button, so this is never reached
         // from one; it is named rather than defaulted so a new row has to say. [LAW:no-silent-failure]
@@ -482,7 +504,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openSetUp() {
-        setUp.show()
+        setUp.show(readReadiness())
     }
 
     @objc private func chooseDelivery(_ item: NSMenuItem) {
@@ -591,26 +613,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Stopping is idempotent, so a grant withheld and a capture that failed to
             // start leave by one path. [LAW:dataflow-not-control-flow]
             capture.stop()
-            showHotkeyStatus("off — \(error)")
+            // A microphone macOS was never asked about, or was told no, is a step in setup,
+            // and the status says where it is the way the other grants' refusals do.
+            let whereToAllow = switch error {
+            case MicrophoneAuthorization.Withheld.notDetermined, MicrophoneAuthorization.Withheld.denied:
+                "; allow it in \(GuidedSetup.title(for: Self.flavor)) in this menu"
+            default: ""
+            }
+            showHotkeyStatus("off — \(error)\(whereToAllow)")
             return
         }
         await choose(setup)
     }
 
-    /// The rows the last reading found met, which is how a later reading tells that a
-    /// grant has arrived since.
-    private var metAtLastReading: Set<Requirement.Row> = []
+    /// What the last reading handed to `comeUpIfGranted` found met, and the setup it was
+    /// read for: a grant has arrived only when a reading of the same setup finds more met.
+    private var lastSettledReading: (setup: Setup?, met: Set<Requirement.Row>)?
 
-    /// `comeUp` again when a reading finds a grant that was not there before and the loop
-    /// is not listening: a step in setup was allowed, or a switch was turned on in System
-    /// Settings. Only then, because bringing the loop up restarts capture and rebuilds the
-    /// delivery, and a menu opening is no reason to. A loop that is listening is left
-    /// alone, since rebuilding it would end a press in flight.
-    private func notice(_ readiness: Readiness) {
+    /// Brings the loop up when a grant has arrived since the last reading of this setup and
+    /// the loop is down because of it: a step in setup was allowed, or a switch was turned
+    /// on in System Settings.
+    ///
+    /// [LAW:effects-at-boundaries] Reading has no effects; this is the one place a reading
+    /// is acted on, and it is called at the moments a grant can have arrived - a request
+    /// answered, setup coming back to the front, the menu opening. Bringing the loop up
+    /// restarts capture and rebuilds the delivery, so it happens only when something new is
+    /// met, never while a switch is already rebuilding the loop, and never over a loop that
+    /// is listening. [LAW:no-ambient-temporal-coupling]
+    private func comeUpIfGranted(_ readiness: Readiness) {
+        let setup = chosenSetup
         let met = Set(readiness.requirements.filter(\.met).map(\.row))
-        let arrived = !met.isSubset(of: metAtLastReading)
-        metAtLastReading = met
-        guard arrived, listening?.hotkey.isWatching != true else { return }
+        let before = lastSettledReading
+        lastSettledReading = (setup, met)
+        guard let before, before.setup == setup, !met.isSubset(of: before.met),
+              switchesInFlight == 0, listening?.hotkey.isWatching != true, !quitting else { return }
+        log.notice("setup: a grant arrived; bringing dictation up")
         Task { await comeUp() }
     }
 
@@ -794,7 +831,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for requirement in readiness.requirements {
             log.notice("onboarding: \(requirement.name, privacy: .public): \(requirement.reads, privacy: .public)")
         }
-        notice(readiness)
         return readiness
     }
 
@@ -808,6 +844,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // The rows of the setup the person chose and no other: a list of driver steps would
         // be a list of things to install for an output nobody is using.
         let readiness = readReadiness()
+        comeUpIfGranted(readiness)
 
         // What the user's microphone is doing, on the surface the epic exists for: the
         // menu-bar indicator says the device is open and only this says why, so a lit

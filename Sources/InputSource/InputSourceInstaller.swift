@@ -125,7 +125,8 @@ public struct InputSourceInstaller: Sendable {
     }
 
     /// Walks the ladder from wherever this Mac stands to `selected`, doing only the steps
-    /// that are not already done.
+    /// that are not already done, and stopping at `disabled` when a person has not switched
+    /// the input method on.
     ///
     /// [LAW:no-silent-failure] Every step that can refuse says which step it was by name,
     /// and the register step is checked against the source list rather than against its own
@@ -147,12 +148,11 @@ public struct InputSourceInstaller: Sendable {
         // Never switched on here. Switching an input method on is what makes macOS ask the
         // person, in its own dialog, whether this app may, and `install` runs at every
         // launch: a launch must put no system dialog on screen. `switchOn` is the one call
-        // that does, and it is made only from the step a person starts.
-        guard Self.isSwitchedOn(flavor) else {
-            throw InputSourceInstallFailure.notSwitchedOn(identifier: flavor.inputMethodBundleIdentifier)
-        }
+        // that does, and it is made only from the step a person starts. Not a failure: the
+        // ladder stops on the rung a person has yet to allow, and says which it is.
+        guard Self.isSwitchedOn(flavor) else { return .disabled }
         if !Self.isSelected(source) {
-            let selected = TISSelectInputSource(source)
+            let selected = TextInputSources.withLock { TISSelectInputSource(source) }
             guard selected == noErr else {
                 throw InputSourceInstallFailure.selectRefused(identifier: flavor.inputSourceIdentifier, status: selected)
             }
@@ -183,7 +183,7 @@ public struct InputSourceInstaller: Sendable {
                 identifier: flavor.inputMethodBundleIdentifier, bundle: try installed())
         }
         guard !Self.isEnabled(inputMethod) else { return }
-        let enabled = TISEnableInputSource(inputMethod)
+        let enabled = TextInputSources.withLock { TISEnableInputSource(inputMethod) }
         guard enabled == noErr else {
             throw InputSourceInstallFailure.enableRefused(identifier: flavor.inputMethodBundleIdentifier, status: enabled)
         }
@@ -210,7 +210,7 @@ public struct InputSourceInstaller: Sendable {
         // source already known is how the text input system is told the bundle behind it
         // changed, which is exactly what a rebuilt development copy needs and costs nothing
         // on a copy that did not.
-        let status = TISRegisterInputSource(installed as CFURL)
+        let status = TextInputSources.withLock { TISRegisterInputSource(installed as CFURL) }
         guard status == noErr else {
             throw InputSourceInstallFailure.registrationRefused(bundle: installed, status: status)
         }
@@ -441,9 +441,6 @@ public enum InputSourceInstallFailure: Error, Equatable, CustomStringConvertible
     /// what a bundle macOS silently declines looks like from here.
     case notInSourceListAfterRegistering(identifier: String, bundle: URL)
     case enableRefused(identifier: String, status: OSStatus)
-    /// Registered and switched off. Not a fault: switching it on is a person's to allow, and
-    /// `switchOn` is how they are asked.
-    case notSwitchedOn(identifier: String)
     case selectRefused(identifier: String, status: OSStatus)
     case notSelectedAfterSelecting(identifier: String)
 
@@ -462,8 +459,6 @@ public enum InputSourceInstallFailure: Error, Equatable, CustomStringConvertible
                 + "the bundle identifier is one macOS declines silently"
         case let .enableRefused(identifier, status):
             "the text input system refused to switch on \(identifier): OSStatus \(status)"
-        case .notSwitchedOn:
-            "the input method is not switched on yet; switch it on from Set Up in the menu, where macOS asks you once to allow it"
         case let .selectRefused(identifier, status):
             "the text input system refused to select \(identifier): OSStatus \(status)"
         case let .notSelectedAfterSelecting(identifier):

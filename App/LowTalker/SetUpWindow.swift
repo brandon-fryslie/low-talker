@@ -12,7 +12,9 @@ import Onboarding
 /// those, with no relaunch.
 ///
 /// [LAW:effects-at-boundaries] It asks macOS for nothing itself. `ask` is the app's, and the
-/// window calls it only from the button a person pressed.
+/// window calls it only from the button a person pressed. Drawing reads and does nothing
+/// else; the two moments a grant may just have arrived - a request answered, and the window
+/// coming back to the front - hand the reading they drew to `settle`, which is the app's.
 @MainActor
 final class SetUpWindow: NSObject, NSWindowDelegate {
     private let flavor: Flavor
@@ -20,11 +22,18 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
     private let read: () -> Readiness
     /// Asks macOS for one row's grant, and answers with what went wrong when something did.
     private let ask: (Requirement.Row) async -> String?
+    /// Told the reading taken after a request and on coming back to the front, the moments
+    /// a grant may have arrived.
+    private let settle: (Readiness) -> Void
 
     private var walk = GuidedSetup()
     /// What the last request said went wrong, shown on the step it was made from.
     private var failure: (row: Requirement.Row, reason: String)?
     private var asking = false
+    /// The steps whose request was made in this walk. macOS shows most of these dialogs once
+    /// per app, so a second press of the same button would do nothing; once asked, a step
+    /// still unmet offers System Settings instead, and says why.
+    private var asked: Set<Requirement.Row> = []
 
     private lazy var window: NSWindow = {
         let window = NSWindow(
@@ -48,28 +57,48 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
 
     private static let width: CGFloat = 520
 
-    init(flavor: Flavor, read: @escaping () -> Readiness, ask: @escaping (Requirement.Row) async -> String?) {
+    init(
+        flavor: Flavor, read: @escaping () -> Readiness, ask: @escaping (Requirement.Row) async -> String?,
+        settle: @escaping (Readiness) -> Void
+    ) {
         self.flavor = flavor
         self.read = read
         self.ask = ask
+        self.settle = settle
     }
 
-    /// Opens the walk at its first step, with nothing set aside.
-    func show() {
+    /// Opens the walk at its first step, with nothing set aside, drawn from `readiness` - a
+    /// reading the caller has just taken to decide whether to open at all, so it is not
+    /// taken twice.
+    func show(_ readiness: Readiness) {
         walk = GuidedSetup()
         failure = nil
-        draw()
+        asked = []
+        draw(readiness)
         window.center()
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
     }
 
-    func windowDidBecomeKey(_ notification: Notification) { draw() }
+    /// Back at the front, most often from System Settings: read again, and hand the
+    /// reading on, since this is where a grant made there is first seen.
+    func windowDidBecomeKey(_ notification: Notification) {
+        let readiness = read()
+        draw(readiness)
+        settle(readiness)
+    }
 
     // MARK: - drawing
 
-    private func draw() {
-        let readiness = read()
+    /// The reading on screen, which skipping and revisiting redraw from: neither changes
+    /// anything on the Mac, so neither is worth a fresh reading.
+    private var shown = Readiness([])
+
+    /// Reads again and draws it: the Check Again button.
+    private func redrawFromAFreshReading() { draw(read()) }
+
+    private func draw(_ readiness: Readiness) {
+        shown = readiness
         page.arrangedSubviews.forEach { $0.removeFromSuperview() }
         // [LAW:dataflow-not-control-flow] One page or the other, chosen by what the walk
         // reads off the list, never by a mode the window keeps.
@@ -97,17 +126,26 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
             add(label(failure.reason, size: 12, color: .systemRed))
         }
         let row = requirement.row
-        var buttons = [button("Skip for Now") { [unowned self] in walk.skip(row); failure = nil; draw() }]
-        if let pane = row.settingsPane {
-            buttons.append(button("Open System Settings") { NSWorkspace.shared.open(pane) })
+        // Asked once in this walk and still unmet: macOS will not show most of these
+        // dialogs a second time, so pressing the same button again would do nothing at all.
+        // The page says so and puts System Settings where the button was.
+        let askedAlready = asked.contains(row)
+        if askedAlready {
+            add(label("""
+                macOS shows its dialog for this only once. If you said no, or no dialog \
+                appeared, turn it on in System Settings; this page updates when you come back.
+                """, size: 12, color: .secondaryLabelColor))
         }
-        // The one button that makes macOS ask, and the default, so Return is the person
-        // choosing to be asked. A row the app cannot ask for offers a fresh reading instead.
-        let primary = row.askTitle.map { title in button(title) { [unowned self] in request(row) } }
-            ?? button("Check Again") { [unowned self] in draw() }
+        var buttons = [button("Skip for Now") { [unowned self] in walk.skip(row); failure = nil; draw(shown) }]
+        let openSettings = row.settingsPane.map { pane in button("Open System Settings") { NSWorkspace.shared.open(pane) } }
+        let ask = askedAlready ? nil : row.askTitle.map { title in button(title) { [unowned self] in request(row) } }
+        // The default is the one button that makes macOS ask, so Return is the person
+        // choosing to be asked; once asked, System Settings; and for a row nobody can ask
+        // for, a fresh reading.
+        let primary = ask ?? openSettings ?? button("Check Again") { [unowned self] in redrawFromAFreshReading() }
+        buttons += [openSettings, ask].compactMap { $0 }.filter { $0 !== primary } + [primary]
         primary.keyEquivalent = "\r"
         primary.isEnabled = !asking
-        buttons.append(primary)
         add(buttonRow(buttons))
     }
 
@@ -123,7 +161,7 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
             let row = requirement.row
             add(label("\(requirement.name): \(requirement.reads)", size: 13, weight: .semibold))
             add(label(row.explanation(for: flavor).ifSkipped, size: 12, color: .secondaryLabelColor))
-            add(buttonRow([button("Set Up \(requirement.name)…") { [unowned self] in walk.revisit(row); draw() }]))
+            add(buttonRow([button("Set Up \(requirement.name)…") { [unowned self] in walk.revisit(row); draw(shown) }]))
         }
         let done = button("Done") { [unowned self] in window.close() }
         done.keyEquivalent = "\r"
@@ -133,12 +171,15 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
     private func request(_ row: Requirement.Row) {
         asking = true
         failure = nil
-        draw()
+        draw(shown)
         Task {
             let reason = await ask(row)
             asking = false
+            asked.insert(row)
             failure = reason.map { (row, $0) }
-            draw()
+            let readiness = read()
+            draw(readiness)
+            settle(readiness)
         }
     }
 

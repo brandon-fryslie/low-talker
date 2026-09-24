@@ -1,5 +1,6 @@
 import ArgumentParser
 import Flavors
+import Foundation
 import LowTalkerCore
 import Onboarding
 
@@ -14,8 +15,12 @@ struct OnboardCommand: ParsableCommand {
         commandName: "onboard",
         abstract: "Print everything that must hold before low-talker can type, and the step for whatever is missing.",
         discussion: """
-            Exits 0 when nothing is left to do and 2 when something is. A fact that could \
-            not be read is a row of its own naming why, and it never counts as met.
+            Prints the rows of the delivery and hotkey source this installation's app has \
+            chosen, and the rows of every choice for one it has not made yet. Exits 0 when \
+            nothing on those rows is left to do and 2 when something is. The microphone, \
+            Input Monitoring and Accessibility rows belong to the app and are named, not \
+            read, so they count toward neither. A fact that could not be read is a row of \
+            its own naming why, and it never counts as met.
             """,
         subcommands: [Readings.self]
     )
@@ -29,10 +34,18 @@ struct OnboardCommand: ParsableCommand {
         // and one registered and waiting for its click, and the grants only the app can read
         // are named, unread, rather than read as the terminal's.
         //
-        // Every delivery and every hotkey source: the CLI does not know which the app chose,
-        // so it prints the rows of every choice.
+        // The setup the app chose, read from the app's own defaults domain, so the exit
+        // code answers for the setup this installation actually runs. A choice the app has
+        // not made yet could go either way, so the rows of every answer to it are read.
+        let flavor = installation.flavor
+        guard let appDefaults = UserDefaults(suiteName: flavor.bundleIdentifier) else {
+            throw ValidationError("cannot read \(flavor.bundleIdentifier)'s defaults, where its app keeps its choices")
+        }
+        let kept = KeptChoices(appDefaults)
         let readiness = OnboardingProbe.readiness(
-            flavor: installation.flavor, deliveries: Delivery.allCases, sources: HotkeySource.allCases,
+            flavor: flavor,
+            deliveries: kept.delivery.map { [$0] } ?? Delivery.allCases,
+            sources: kept.source.map { [$0] } ?? HotkeySource.allCases,
             reader: .elsewhere, cli: LowTalker.path)
         print(readiness)
         // The code is a value computed the one way every time, rather than an exit taken

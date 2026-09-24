@@ -218,7 +218,7 @@ public final class Hotkey {
     /// a chord can never be handed to a tap that cannot hear it.
     public convenience init(for flavor: Flavor, heardBy hearing: HotkeySource, tapThreshold: Duration = defaultTapThreshold) {
         let tap: any KeyboardTap = switch hearing {
-        case .eventTap: SystemKeyboardTap()
+        case .eventTap: GrantedKeyboardTap()
         case .registeredHotKey: RegisteredHotKeys()
         }
         self.init(chords: [Self.defaultChord(for: flavor, heardBy: hearing)], tapThreshold: tapThreshold, tap: tap)
