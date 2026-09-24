@@ -175,17 +175,23 @@ public struct InputSourceInstaller: Sendable {
     /// so whoever asked reads `isSwitchedOn` when the person is done with it.
     @MainActor
     public func switchOn(settling: Duration = .seconds(3)) async throws {
-        _ = try await registered(settling: settling)
+        let mode = try await registered(settling: settling)
         // Registered, so the text input system lists the input method's own source beside
         // its mode's: the two arrive in one refresh.
         guard let inputMethod = Self.source(named: flavor.inputMethodBundleIdentifier) else {
             throw InputSourceInstallFailure.notInSourceListAfterRegistering(
                 identifier: flavor.inputMethodBundleIdentifier, bundle: try installed())
         }
-        guard !Self.isEnabled(inputMethod) else { return }
-        let enabled = TextInputSources.withLock { TISEnableInputSource(inputMethod) }
-        guard enabled == noErr else {
-            throw InputSourceInstallFailure.enableRefused(identifier: flavor.inputMethodBundleIdentifier, status: enabled)
+        // The input method first, which is what macOS asks the person about, then its one
+        // mode, which a person who removed it under Input Sources switched off: both must
+        // be on before the mode can be selected. [LAW:dataflow-not-control-flow] Each is
+        // switched on only where it reads off, so a source already on is left alone.
+        for (source, identifier) in [(inputMethod, flavor.inputMethodBundleIdentifier), (mode, flavor.inputSourceIdentifier)]
+        where !Self.isEnabled(source) {
+            let enabled = TextInputSources.withLock { TISEnableInputSource(source) }
+            guard enabled == noErr else {
+                throw InputSourceInstallFailure.enableRefused(identifier: identifier, status: enabled)
+            }
         }
     }
 
@@ -229,10 +235,13 @@ public struct InputSourceInstaller: Sendable {
     /// its mode's. Measured on 2026-09-24: registered and never switched on, the input
     /// method's source reads `enabled=no` while its one mode reads `enabled=yes`, because a
     /// mode declared on by default is on inside an input method that is off. Selecting that
-    /// mode is refused with -50. So the mode's flag answers nothing about whether a person
-    /// allowed the input method, and the input method's own flag is the grant.
+    /// mode is refused with -50. So the mode's flag alone answers nothing about whether a
+    /// person allowed the input method. Both are read: the input method's own flag is the
+    /// grant, and a mode switched off - as removing the input method under Input Sources
+    /// leaves it - is one that cannot be selected either, and is switched on the same way.
     public static func isSwitchedOn(_ flavor: Flavor) -> Bool {
-        source(named: flavor.inputMethodBundleIdentifier).map(isEnabled) ?? false
+        [flavor.inputMethodBundleIdentifier, flavor.inputSourceIdentifier]
+            .allSatisfy { source(named: $0).map(isEnabled) ?? false }
     }
 
     /// A copy `place` swapped in: the moment it began to stand, and the staging directory,

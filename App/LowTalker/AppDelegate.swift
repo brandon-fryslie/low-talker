@@ -319,7 +319,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }.mapError { error in
                 // A tap refused for want of its grants waits on them; any other refusal is
                 // not something a grant can fix.
-                if case KeyboardTapError.notAllowed = error { LoopRefusal(awaitingGrant: "\(error)") }
+                if case KeyboardTapError.notAllowed = error {
+                    LoopRefusal(awaitingGrant: "\(error); allow them in \(GuidedSetup.title(for: Self.flavor)) in this menu")
+                }
                 else { LoopRefusal(stringLiteral: "\(error)") }
             }
         }
@@ -355,6 +357,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func install(_ delivery: Delivery) async -> Result<Void, LoopRefusal> {
         switch delivery {
         case .virtualKeyboard:
+            // An approved registration is refreshed at every adoption, which shows nothing
+            // and keeps the job pointing at this copy of the app after it moves or updates.
+            // One that is not approved yet is left to its step: registering is what puts
+            // macOS's notice on screen. [LAW:no-silent-failure] A refresh that fails is said.
+            if helperService.status == .enabled, let failure = registerKeyboardHelper() {
+                log.error("keyboard helper: \(failure, privacy: .public)")
+            }
             return .success(())
         case .inputMethod:
             do {
@@ -462,13 +471,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ask: { [unowned self] in await ask($0) },
         settle: { [unowned self] in comeUpIfGranted($0) })
 
-    /// After a choice has been made: the setup, in front of the person, when the setup
-    /// they chose still needs anything. Not on a launch that only remembers its choices,
-    /// which the menu's Set Up item already answers every time it opens.
-    private func showSetUpIfNeeded() {
-        let readiness = readReadiness()
-        guard !readiness.ready else { return }
-        setUp.show(readiness)
+    /// After a choice has been made: the setup, in front of the person, when the choice
+    /// brought a step they can act on - one with a button that asks macOS, or a System
+    /// Settings pane. A row the old setup already needed was news then, not now, and a row
+    /// nobody can act on (the assistant clears itself; the driver waits on an administrator)
+    /// is not worth taking focus from the app the person is typing in; the menu's Set Up
+    /// item shows both. Not on a launch that only remembers its choices.
+    ///
+    /// - Parameter before: the setup the choice replaced, or nil when there was none.
+    private func showSetUpIfNeeded(replacing before: Setup?) {
+        let actionable = readReadiness().unmet.filter { requirement in
+            let row = requirement.row
+            let new = before.map { !row.isNeeded(deliveries: [$0.delivery], sources: [$0.source]) } ?? true
+            return new && (row.askTitle != nil || row.settingsPane != nil)
+        }
+        guard !actionable.isEmpty else { return }
+        setUp.show()
     }
 
     /// Asks macOS for one requirement - the only place in the app that does, and reached
@@ -517,7 +535,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openSetUp() {
-        setUp.show(readReadiness())
+        setUp.show()
     }
 
     @objc private func chooseDelivery(_ item: NSMenuItem) {
@@ -562,7 +580,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // System Settings starts dictation, and a microphone still withheld says so.
             if switching != nil { await choose(setup) } else { await comeUp() }
             // What a setup still needs is news when the setup is new.
-            if setup != before { showSetUpIfNeeded() }
+            if setup != before { showSetUpIfNeeded(replacing: before) }
         }
     }
 
@@ -596,7 +614,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         chosenSource = source
         log.notice("setup: delivery \(delivery, privacy: .public), hotkey source \(source, privacy: .public)")
         await comeUp()
-        if asked { showSetUpIfNeeded() }
+        if asked { showSetUpIfNeeded(replacing: nil) }
     }
 
     /// From the microphone up: the grant read, then capture holding it, then the hotkey in
@@ -622,11 +640,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         comingUp = true
         defer { comingUp = false }
         do {
-            let config = try Config.load(for: Self.flavor).config
-            try capture.start(try MicrophonePermission().current.grant(), atRest: config.microphone)
-            // Readied before the hotkey goes up, so the first press opens a microphone
-            // already reached rather than paying for reaching one.
-            capture.waitUntilReadied()
+            // A capture already running is left running: the microphone was held before, and
+            // what came up short was the hotkey or the delivery, which `choose` rebuilds.
+            // Restarting it would close and reopen an engine the resting mode holds open.
+            if capture.atRest == nil {
+                let config = try Config.load(for: Self.flavor).config
+                try capture.start(try MicrophonePermission().current.grant(), atRest: config.microphone)
+                // Readied before the hotkey goes up, so the first press opens a microphone
+                // already reached rather than paying for reaching one.
+                capture.waitUntilReadied()
+            }
         } catch {
             // Stopping is idempotent, so a grant withheld and a capture that failed to
             // start leave by one path. [LAW:dataflow-not-control-flow]

@@ -314,7 +314,7 @@ The app gives you what you dictate one of two ways, and asks which the first tim
 - **Input method.** The words are committed where your cursor is by this app's own macOS input method, through the text input system, so nothing is posted as a key and nothing asks for an administrator.
 - **Virtual keyboard.** The words are typed where you are. This is the driver extension and the root helper described under "The virtual keyboard driver", and the approvals under "What is left to set up".
 
-The status menu lists both under "Delivery" with the current one checked, and choosing the other takes effect at once: a press still open is ended, sessions in flight finish, and a loop with the new delivery comes up behind the same hotkey. Choosing either opens the guided setup when the new delivery still needs something ("The guided setup" below): the virtual keyboard's helper is registered from its step there, and the input method is copied and registered at once but switched on only from its step, since switching it on is what macOS asks the person about. The choice is kept per installation in its defaults, under `inputMethod` — the spelling from before the rename, kept because the word on disk is every installed copy's stored answer; `defaults delete ai.promptctl.low-talker.dev inputMethod` makes the development copy ask again at its next launch.
+The status menu lists both under "Delivery" with the current one checked, and choosing the other takes effect at once: a press still open is ended, sessions in flight finish, and a loop with the new delivery comes up behind the same hotkey. Choosing either opens the guided setup when the new choice brings a step the person can act on - one with a button that asks macOS or a System Settings pane ("The guided setup" below): the virtual keyboard's helper is registered from its step there, and the input method is copied and registered at once but switched on only from its step, since switching it on is what macOS asks the person about. The choice is kept per installation in its defaults, under `inputMethod` — the spelling from before the rename, kept because the word on disk is every installed copy's stored answer; `defaults delete ai.promptctl.low-talker.dev inputMethod` makes the development copy ask again at its next launch.
 
 ### The hotkey source
 
@@ -481,7 +481,7 @@ XPC costs about 1 ms per character. 1400 characters landed complete through the 
 
 The same helper is registered in two ways, and only one of them can be live at a time.
 
-The shipped app bundles the helper and a plist at `Contents/Library/LaunchDaemons/ai.promptctl.low-talker.keyboardd.plist`, label `ai.promptctl.low-talker.keyboardd`, and registers it with `SMAppService.daemon` when the person presses Allow Keyboard Helper in the guided setup, never at launch. After that the menu item and the log read "Keyboard helper: waiting for approval in Login Items & Extensions", and the step printed under that line says to turn LowTalker on in System Settings > General > Login Items & Extensions, which is where the approval click happens ("What is left to set up" below). On this Mac the app-owned Background Task Management record appears in `sfltool dumpbtm` as type daemon parented to the app bundle, disposition disallowed until approved. Once approved it reads `Disposition: [enabled, allowed, not notified] (0x3)`, and launchd runs the daemon: on 2026-09-21 `launchctl print system/ai.promptctl.low-talker.keyboardd` showed it `running`, submitted by `smd`, managed by `com.apple.xpc.ServiceManagement`, with `--flavor release` among its arguments.
+The shipped app bundles the helper and a plist at `Contents/Library/LaunchDaemons/ai.promptctl.low-talker.keyboardd.plist`, label `ai.promptctl.low-talker.keyboardd`, and registers it with `SMAppService.daemon` when the person presses Allow Keyboard Helper in the guided setup. Launch registers it only again once it is approved, which shows nothing and keeps the job pointing at this copy of the app after it moves or updates. After that the menu item and the log read "Keyboard helper: waiting for approval in Login Items & Extensions", and the step printed under that line says to turn LowTalker on in System Settings > General > Login Items & Extensions, which is where the approval click happens ("What is left to set up" below). On this Mac the app-owned Background Task Management record appears in `sfltool dumpbtm` as type daemon parented to the app bundle, disposition disallowed until approved. Once approved it reads `Disposition: [enabled, allowed, not notified] (0x3)`, and launchd runs the daemon: on 2026-09-21 `launchctl print system/ai.promptctl.low-talker.keyboardd` showed it `running`, submitted by `smd`, managed by `com.apple.xpc.ServiceManagement`, with `--flavor release` among its arguments.
 
 `scripts/keyboard-helper` is the dev and agent path, which needs no approval from anyone:
 
@@ -735,8 +735,8 @@ So each of the event tap's two rows, Input Monitoring and Accessibility, reads o
 
 So the input method's row reads one of two things:
 
-- `switched on` means macOS lists this installation's input method as on, and the app selects it itself.
-- `switched off` means it is not on yet, whether or not it has been copied and registered.
+- `switched on` means macOS lists this installation's input method and its one mode as on, and the app selects the mode itself.
+- `switched off` means either is not on yet, whether or not it has been copied and registered: never allowed, or removed under Keyboard > Input Sources, which switches the mode off.
 
 The app logs every reading it takes, so an agent can read back what the menu is showing without a screen:
 

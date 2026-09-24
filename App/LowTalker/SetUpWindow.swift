@@ -67,17 +67,19 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
         self.settle = settle
     }
 
-    /// Opens the walk at its first step, with nothing set aside, drawn from `readiness` - a
-    /// reading the caller has just taken to decide whether to open at all, so it is not
-    /// taken twice.
-    func show(_ readiness: Readiness) {
+    /// Opens the walk at its first step, with nothing set aside. The page is drawn from the
+    /// one reading taken as the window becomes key; a window macOS did not let become key
+    /// is drawn here instead, so it is never shown empty, and so is one that was key
+    /// already, which does not become key again.
+    func show() {
         walk = GuidedSetup()
         failure = nil
         asked = []
-        draw(readiness)
+        let wasKey = window.isKeyWindow
         window.center()
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
+        if wasKey || !window.isKeyWindow { draw(read()) }
     }
 
     /// Back at the front, most often from System Settings: read again, and hand the
@@ -175,7 +177,9 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
         Task {
             let reason = await ask(row)
             asking = false
-            asked.insert(row)
+            // Only a request that went through counts as asked: one that failed showed no
+            // dialog, so its button stays, beside the reason, to be tried again.
+            if reason == nil { asked.insert(row) }
             failure = reason.map { (row, $0) }
             let readiness = read()
             draw(readiness)

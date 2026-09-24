@@ -72,8 +72,8 @@ public enum KeyboardTapError: Error, CustomStringConvertible {
     public var description: String {
         switch self {
         case .refused: "the session refused an event tap; allow this app under System Settings > Privacy & Security, in both Input Monitoring and Accessibility"
-        case .notAllowed: "this hotkey needs Input Monitoring and Accessibility, and this app does not have both yet; allow them from Set Up in the menu, or under System Settings > Privacy & Security"
-        case .refusedWhileAllowed: "Input Monitoring and Accessibility both read as allowed, and macOS still refused the hotkey's event tap; a grant given while the app is running can take effect only once it starts again, so quit and reopen the app"
+        case .notAllowed: "this hotkey needs Input Monitoring and Accessibility, and this process does not have both yet; allow them under System Settings > Privacy & Security for the app running it - for a command run from a terminal, the terminal"
+        case .refusedWhileAllowed: "Input Monitoring and Accessibility both read as allowed, and macOS still refused the hotkey's event tap; a grant given while a process runs can reach it only once it starts again, so quit and reopen the app running it - for a command run from a terminal, the terminal"
         }
     }
 }
