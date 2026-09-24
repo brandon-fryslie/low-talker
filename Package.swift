@@ -123,11 +123,19 @@ let package = Package(
         .target(name: "InputMethod", dependencies: ["Insertion"]),
         .testTarget(name: "InputMethodTests", dependencies: ["InputMethod", "Insertion", "Flavors"]),
         // The one call that crosses between the app and the input method, and both ends of
-        // the port carrying it. It links Flavors for the port's name and nothing else - in
-        // particular no InputMethodKit, because the app is one of its two callers and the
-        // app has no business linking the text input system. [LAW:one-way-deps]
-        .target(name: "Insertion", dependencies: ["Flavors"]),
-        .testTarget(name: "InsertionTests", dependencies: ["Insertion", "Flavors"]),
+        // the port carrying it. It links Flavors for the port's name and the Darwin calls
+        // beneath it, and nothing else - in particular no InputMethodKit, because the app is
+        // one of its two callers and the app has no business linking the text input system.
+        // [LAW:one-way-deps]
+        .target(name: "Insertion", dependencies: ["Flavors", "DarwinCalls"]),
+        // The bootstrap calls the SDK keeps from Swift, the Mach macros Swift cannot import
+        // and the kernel's code signing call, each passed through by a line of C and nothing
+        // more.
+        .target(name: "DarwinCalls"),
+        // A sender that is not the test process, so the insert port's refusal is held by a
+        // request that really crossed from another process. In no product: nothing ships it.
+        .executableTarget(name: "insertion-probe", dependencies: ["Insertion", "Flavors"], path: "Tests/InsertionProbe"),
+        .testTarget(name: "InsertionTests", dependencies: ["Insertion", "Flavors", "DarwinCalls", "insertion-probe"]),
         // The process macOS launches out of the input method bundle. It holds the effects -
         // reading the bundle, opening the port, running the loop - and nothing else.
         .executableTarget(name: "lowtalker-inputmethod", dependencies: ["InputMethod", "Insertion", "Flavors"]),
@@ -158,7 +166,6 @@ let package = Package(
                 "Keystrokes",
                 "Typing",
                 "Dictation",
-                "Insertion",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),

@@ -82,23 +82,25 @@ func secureInputHolder() -> String? {
 /// The app's door, beside the text input system's. Held for the life of the process for
 /// the same reason the server is: released, the app's next request finds nothing listening.
 ///
-/// Hosted on this thread, which is the main one, so its answers run where `FocusedClient`
-/// and every `IMKInputController` callback already run and the two never race.
+/// Answered on the main queue, so its answers run where `FocusedClient` and every
+/// `IMKInputController` callback already run and the two never race.
 /// [LAW:no-ambient-temporal-coupling] `assumeIsolated` is that sentence made checkable: if
 /// this ever answered anywhere else it would stop here rather than corrupt a client.
+///
+/// Only this installation's app gets through; every other sender is refused by the port
+/// before its words are read, and the refusal is logged here with what was required.
 ///
 /// A door that will not open is not the end of this process, unlike the server above it.
 /// The controller's whole promise is that every key passes through untouched, so a person
 /// with this source selected keeps a working keyboard even when nothing here can insert.
-///
-/// What that case actually is, said exactly: `InsertionPort` throws only `NameIsTaken`, so
-/// the port failing means another instance of this input method is already answering on
-/// that name. The app's inserts are not lost - they reach that other process, which has its
-/// own cursor and its own view of what is in front - and the fault in the log is the only
-/// place the two copies are distinguishable. [LAW:no-silent-failure]
+/// The fault names the `InsertionPort.NotHosted` case that stopped it - most often the name
+/// already held by another instance of this input method, whose own cursor then answers the
+/// app. [LAW:no-silent-failure]
 let insertions: InsertionPort? = {
     do {
-        return try InsertionPort(flavor: flavor) { text in
+        return try InsertionPort(flavor: flavor, queue: .main, told: { event in
+            logger.error("\(String(describing: event), privacy: .public)")
+        }) { text in
             MainActor.assumeIsolated {
                 // Read here, where the effects are, and handed to the decision as a value.
                 // [LAW:effects-at-boundaries]
@@ -120,9 +122,7 @@ let insertions: InsertionPort? = {
     } catch {
         logger.fault("""
             no insert port on \(flavor.inputMethodPortName, privacy: .public): \
-            \(String(describing: error), privacy: .public); \
-            keys still pass through, and inserts are answered by whichever instance holds \
-            that name, which is not this one
+            \(String(describing: error), privacy: .public); keys still pass through
             """)
         return nil
     }

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// What the input method did with the text it was asked to insert.
@@ -54,6 +55,12 @@ public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, 
     /// holds it. Measured on 2026-09-22: iTerm2 with Secure Keyboard Entry on greys this
     /// input method out of the Input menu and it is never handed a client.
     case secureInputIsOn
+    /// The request came from a process that is not this installation's app, signed as the
+    /// input method is. Answered rather than ignored, so the sender learns why instead of
+    /// waiting out its timeout. This installation's own app never reads it: an input method
+    /// signed by another certificate than the app fails the app's own check of who answered
+    /// first, and that is the error it reports. [LAW:no-silent-failure]
+    case senderIsNotThisInstallationsApp
 
     public var description: String {
         switch self {
@@ -61,6 +68,28 @@ public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, 
         case .cursorIsInAnotherApp: "the cursor is in an app that is not in front"
         case .requestWasNotText: "the request was not text"
         case .secureInputIsOn: "an app has secure keyboard entry on, and macOS switches input methods off while it does"
+        case .senderIsNotThisInstallationsApp:
+            "the input method takes words only from this installation's app, signed by the certificate that signed it, and this process is not that app"
+        }
+    }
+}
+
+/// Where the words were when the channel failed, which is what decides whether saying them
+/// again could put them at the cursor twice.
+///
+/// A property of the moment, not of the failure: the same fault before the words were sent
+/// and after is one case holding each of these, never two spellings of it.
+/// [LAW:one-source-of-truth]
+public enum Words: Equatable, Sendable, CustomStringConvertible {
+    /// The channel failed before the words were sent.
+    case notSent
+    /// The words went out, and nothing came back to say what became of them.
+    case mayHaveLanded
+
+    public var description: String {
+        switch self {
+        case .notSent: "the words were not sent"
+        case .mayHaveLanded: "the words may have landed"
         }
     }
 }
@@ -72,12 +101,21 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
     /// The send itself timed out: the request never entered the far end's queue.
     case requestWasNotTaken(port: String, after: Duration)
     case answerDidNotArrive(port: String, after: Duration)
-    /// A status none of the others names, which is the arm every unknown status takes.
-    case sendFailed(port: String, status: Int32)
+    /// The far end took the greeting and did not answer it in time, so the words were never
+    /// sent.
+    case didNotSayWhoItIs(port: String, after: Duration)
+    /// The far end took the request and let go of the way back without answering.
+    case answerWasAbandoned(port: String)
+    /// Whatever answered is not this installation's input method. Found out from its answer
+    /// to the greeting, before the words go; after them it is the input method gone before
+    /// the kernel could say who had answered.
+    case answeredByAStranger(port: String, pid: pid_t, because: PeerIdentity.NotAdmitted, required: PeerIdentity, words: Words)
+    /// A Mach status none of the others names, which is the arm every unknown status takes.
+    case failed(port: String, status: kern_return_t, words: Words)
     /// Bytes came back that are not an answer, which is what an input method left running
     /// from before an update says: it described what it did in a shape this end no longer
     /// reads.
-    case answerWasNotReadable(port: String, bytes: Int)
+    case answerWasNotReadable(port: String, bytes: Int, words: Words)
 
     public var description: String {
         switch self {
@@ -87,15 +125,24 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
             "the input method on \(port) did not take the request within \(after), so the words did not land"
         case let .answerDidNotArrive(port, after):
             "the input method on \(port) took the request but did not answer within \(after), so the words may have landed"
-        case let .sendFailed(port, status):
-            "the request to \(port) failed: CFMessagePort status \(status), so the words may have landed"
-        case let .answerWasNotReadable(port, bytes):
-            "the input method on \(port) answered \(bytes) bytes that are not an answer, so the words may have landed"
+        case let .didNotSayWhoItIs(port, after):
+            "the input method on \(port) did not say who it is within \(after), so the words were not sent"
+        case let .answerWasAbandoned(port):
+            "the input method on \(port) took the request and went away without answering, so the words may have landed"
+        case let .answeredByAStranger(port, pid, because, required, words):
+            "pid \(pid) answered on \(port) and is not this installation's input method, \(required) - \(because) - so \(words)"
+        case let .failed(port, status, words):
+            "the request to \(port) failed: \(Mach.describe(status)), so \(words)"
+        case let .answerWasNotReadable(port, bytes, words):
+            "the input method on \(port) answered \(bytes) bytes that are not an answer, so \(words)"
         }
     }
 }
 
 /// The wire, which is the one place either half turns a value into bytes or back.
+///
+/// Two messages cross it, told apart by their Mach id: the greeting, empty, which the input
+/// method answers empty once it has admitted the sender, and the words.
 /// [LAW:single-enforcer]
 ///
 /// The request is the text and nothing else, so it crosses as its own UTF-8 and carries no
@@ -104,6 +151,9 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
 /// values, never against the bytes: what matters is that what goes in comes out.
 /// [LAW:behavior-not-structure]
 enum Wire {
+    static let greeting: mach_msg_id_t = 1
+    static let insert: mach_msg_id_t = 2
+
     static func request(_ text: String) -> Data { Data(text.utf8) }
 
     /// [LAW:parse-dont-validate] Hands back the text or nothing at all; a caller cannot
@@ -117,19 +167,11 @@ enum Wire {
         try! JSONEncoder().encode(answer)
     }
 
-    /// [LAW:parse-dont-validate] An answer or nothing at all - and an answer naming its app
-    /// with an empty string is nothing at all, because a caller renders that as a line
-    /// ending in nothing, which is worse than a line naming no app.
+    /// [LAW:parse-dont-validate] An answer or nothing at all.
     ///
-    /// The far half refuses the same thing at its own border, in `Client.init?`, so our own
-    /// input method cannot send one. This is the near half, where what answers is whatever
-    /// holds a port name anyone can derive from the public bundle id. Two checks of one
-    /// rule, standing at two borders in two processes, and neither is the other's duplicate.
-    /// A far end that answers a plausible but wrong app name is not caught here and cannot
-    /// be: that needs a sender this end can identify, which is low-input-method-s71.6tk.
+    /// An insert naming no app is not refused here: only this installation's input method
+    /// is believed, and it refuses one at its own border, in `Client.init?`. [LAW:single-enforcer]
     static func answer(of data: Data) -> InsertionAnswer? {
-        guard let answer = try? JSONDecoder().decode(InsertionAnswer.self, from: data) else { return nil }
-        if case .inserted(_, let into) = answer, into.isEmpty { return nil }
-        return answer
+        try? JSONDecoder().decode(InsertionAnswer.self, from: data)
     }
 }
