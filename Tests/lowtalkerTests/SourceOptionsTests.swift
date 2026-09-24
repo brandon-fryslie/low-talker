@@ -1,4 +1,4 @@
-@testable import lowtalker
+@testable import LowTalkerCommands
 import LowTalkerCore
 import Testing
 

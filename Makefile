@@ -235,31 +235,33 @@ check-docs:
 	check_row "Keyboard helper" '^So the helper.s row reads one of'; \
 	check_row "Keyboard Setup Assistant" '^So the assistant.s row reads one of'
 
-# The CLI for engine work, and the keyboard helper it types through. Both are signed
-# with the dev identity rather than ad hoc: the helper admits exactly the certificate
-# that signed it, so the CLI has to carry the same one to press a key. The CLI's
-# identifier is fixed because the Neural Engine keeps its compiled model per signing
-# identifier and `swift build` links a fresh one into every binary; a plain
-# `swift run` pays the minutes-long specialization after each rebuild. The helper's is
-# read from the helper target in project.yml, which signs the app-embedded build with it,
-# so the two builds of one program are one code identity; who may call it is decided by
-# the certificate, never by the identifier.
+# The CLI for engine work, and the keyboard helper it types through, as this tree builds
+# them. Both are signed with the dev identity rather than ad hoc: the helper admits exactly
+# the certificate that signed it, so the CLI has to carry the same one to press a key. Each
+# identifier is read from its target in project.yml, which signs the copy every app bundle
+# carries with it, so the two builds of one program are one code identity. For the CLI
+# that identity is also what the Neural Engine keys its compiled model by, and `swift
+# build` links a fresh one into every binary: unsigned, each rebuild pays the minutes-long
+# specialization again. Who may call the helper is decided by the certificate, never by
+# the identifier.
 # [LAW:one-source-of-truth] scripts/signing-identity reads the identity name off
-# project.yml; the lookup runs in the recipe (not $(shell), which discards exit status)
-# so a failing tool aborts loudly.
+# project.yml; the lookups run in the recipe (not $(shell), which discards exit status)
+# so a failing tool aborts loudly. [LAW:one-type-per-behavior] One recipe for both,
+# taking the SwiftPM product and the project.yml target that builds the same program.
+define sign_product
+	swift build --product $(1)
+	# Read into a variable first: a failed lookup inside the codesign line would sign as "null".
+	identifier=$$(xcodegen dump --type json | jq -er '.targets["$(2)"].settings.base.PRODUCT_BUNDLE_IDENTIFIER // error("project.yml sets no PRODUCT_BUNDLE_IDENTIFIER for $(2)")') \
+		&& codesign --force --sign "$$(scripts/signing-identity)" --identifier "$$identifier" ".build/debug/$(1)"
+	@echo ".build/debug/$(1)"
+endef
+
 CLI := .build/debug/lowtalker
 cli:
-	swift build --product lowtalker
-	codesign --force --sign "$$(scripts/signing-identity)" --identifier lowtalker "$(CLI)"
-	@echo "$(CLI)"
+	$(call sign_product,lowtalker,lowtalker-cli)
 
-HELPER := .build/debug/lowtalker-keyboardd
 helper:
-	swift build --product lowtalker-keyboardd
-	# Read into a variable first: a failed lookup inside the codesign line would sign as "null".
-	identifier=$$(xcodegen dump --type json | jq -er '.targets["lowtalker-keyboardd"].settings.base.PRODUCT_BUNDLE_IDENTIFIER // error("project.yml sets no PRODUCT_BUNDLE_IDENTIFIER for lowtalker-keyboardd")') \
-		&& codesign --force --sign "$$(scripts/signing-identity)" --identifier "$$identifier" "$(HELPER)"
-	@echo "$(HELPER)"
+	$(call sign_product,lowtalker-keyboardd,lowtalker-keyboardd)
 
 # Once per Mac. Until it has run, `make app`, `make cli`, `make helper` and `make test`
 # stop with "No certificate matching".

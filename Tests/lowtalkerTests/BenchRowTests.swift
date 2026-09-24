@@ -1,7 +1,7 @@
 import Foundation
 import LowTalkerCore
 import Testing
-@testable import lowtalker
+@testable import LowTalkerCommands
 
 @Suite struct BenchRowTests {
     /// Every field of the result is distinct, so a value fed into the wrong column

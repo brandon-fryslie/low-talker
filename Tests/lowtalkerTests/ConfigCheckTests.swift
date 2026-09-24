@@ -3,7 +3,7 @@ import Flavors
 import Foundation
 import LowTalkerCore
 import Testing
-@testable import lowtalker
+@testable import LowTalkerCommands
 
 /// `lowtalker config check`'s exit code is its contract: a script that runs it wants to
 /// know whether the file is usable without reading the report. These pin the three

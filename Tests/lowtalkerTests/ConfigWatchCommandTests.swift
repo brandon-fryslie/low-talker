@@ -3,7 +3,7 @@ import Flavors
 import Foundation
 import LowTalkerCore
 import Testing
-@testable import lowtalker
+@testable import LowTalkerCommands
 
 /// What `lowtalker config watch` prints for one reload is its contract: it is the whole
 /// of what somebody watching an edit reads, and the only place the difference between a

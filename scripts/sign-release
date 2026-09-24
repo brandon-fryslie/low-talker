@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds LowTalker.app to hand to someone else, and proves its signature is one the notary
-# service accepts, on the app and on everything embedded in it: the keyboard helper and the
-# input method bundle.
+# service accepts, on the app and on everything embedded in it: the keyboard helper, the CLI
+# and the input method bundle.
 #
 #   scripts/sign-release <output directory> [model source]    # prints <output directory>/LowTalker.app
 #
@@ -85,6 +85,9 @@ scripts/virtual-hid-driver check "$app/Contents/Resources/$driver" \
   || fail "$app does not carry the pinned driver package"
 check "$app"
 check "$app/Contents/MacOS/lowtalker-keyboardd"
+# The CLI the app carries for a Mac with no checkout, which the release helper admits only
+# because it is signed as the app is.
+check "$app/Contents/Helpers/lowtalker"
 # The input method bundle the app carries. Embedded content is signed on copy by Xcode
 # rather than by its own target's codesign step, and the notary service refuses the whole
 # upload for one nested bundle it dislikes, long after this script has printed the path as
@@ -94,8 +97,8 @@ check "$app/Contents/MacOS/lowtalker-keyboardd"
 # signature: `codesign -dvv` on `X.app/Contents/MacOS/X` resolves the path back to the
 # bundle and prints byte-for-byte what `codesign -dvv X.app` prints - measured. A second
 # `check` there is a second checkpoint for one rule that can never disagree with the first.
-# [LAW:single-enforcer] `lowtalker-keyboardd` above is the opposite case and stays: it is a
-# separate Mach-O beside the app's own executable, with its own identifier and its own
+# [LAW:single-enforcer] `lowtalker-keyboardd` and `lowtalker` above are the opposite case and
+# stay: each is a separate Mach-O in the app's bundle, with its own identifier and its own
 # signature, which nothing else here reads.
 #
 # Found by looking rather than by name: the bundle is called after PRODUCT_NAME, which is
