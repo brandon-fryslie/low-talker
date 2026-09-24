@@ -48,6 +48,16 @@ import Testing
         }
     }
 
+    /// macOS's activation notice names the driver's Manager app rather than low-talker, so
+    /// the steps that run `install` - the only ones that ask macOS to activate it - say that
+    /// name before the notice appears, and no other state promises a notice that never comes.
+    @Test(arguments: DriverState.allCases)
+    func onlyTheStepsThatActivateTheDriverWarnOfTheManagerNamedNotice(state: DriverState) {
+        let step = Requirement.driverExtension(state, cli: Self.cli).step ?? ""
+        let warns = step.contains("macOS then asks about \"Karabiner-VirtualHIDDevice-Manager\"")
+        #expect(warns == [.absent, .installedInactive, .residue].contains(state))
+    }
+
     /// A state nobody could read is never dressed up as a step to take. It points at the
     /// verb that says what could not be read. [LAW:no-silent-failure]
     @Test func anUnreadableDriverPointsAtWhatWouldSayWhy() {
