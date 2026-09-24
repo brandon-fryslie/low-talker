@@ -50,11 +50,14 @@ struct FlavorOption: ParsableArguments {
     /// told to reach it - sees no bundle at all, and would act on the development helper from
     /// inside the release app, refused by it. Measured: a tool inside `X.app/Contents` reads
     /// X.app's identifier when run in place and nil when run through a symlink.
+    ///
+    /// The nearest enclosing `.app` is the carrier, wherever inside it project.yml puts the
+    /// binary, so the subpath is written in one place only. [LAW:one-source-of-truth]
     static func carrier(of executable: URL) -> Flavor? {
-        // …/<App>.app/Contents/Helpers/lowtalker, and the bundle is three levels up.
-        let bundle = executable.resolvingSymlinksInPath()
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        return Bundle(url: bundle)?.bundleIdentifier.flatMap(Flavor.init(bundleIdentifier:))
+        let bundle = sequence(first: executable.resolvingSymlinksInPath()) { url in
+            url.pathComponents.count > 1 ? url.deletingLastPathComponent() : nil
+        }.first { $0.pathExtension == "app" }
+        return bundle.flatMap { Bundle(url: $0)?.bundleIdentifier }.flatMap(Flavor.init(bundleIdentifier:))
     }
 
     /// The installation this command acts on.

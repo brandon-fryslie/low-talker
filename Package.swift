@@ -154,8 +154,8 @@ let package = Package(
             name: "lowtalker-keyboarddTests",
             dependencies: ["lowtalker-keyboardd", "KeyboardService", "VirtualKeyboard", "DriverExtension", "Keystrokes", "Pointing", "Signals", "Flavors"]
         ),
-        // Every command the CLI has, as a library, so the one program has two builds that
-        // cannot differ: SwiftPM's `.build/debug/lowtalker` for this tree, and the copy Xcode
+        // Every command the CLI has, as a library, so the one program has two builds of the
+        // same code: SwiftPM's `.build/debug/lowtalker` for this tree, and the copy Xcode
         // embeds in each app bundle, which cannot embed a package's executable. Both are the
         // entry below over this library, the shape the input method already takes, and this
         // list is the one place the CLI's dependencies are declared. [LAW:one-source-of-truth]

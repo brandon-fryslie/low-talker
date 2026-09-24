@@ -114,7 +114,7 @@ targetTemplates:
       # which installation it acts on is read from the bundle it sits in, never built into
       # it. In Helpers and not beside the helper, because `lowtalker` and the release app's
       # own `LowTalker` are one file name on a case-insensitive volume.
-      - target: lowtalker
+      - target: lowtalker-cli
         embed: true
         copy:
           destination: wrapper
@@ -398,7 +398,13 @@ targets:
   # checkout runs. `make cli` signs that build with this identifier too, so both builds are
   # one code identity - which is also the key the Neural Engine files its compiled model
   # under, so either copy warms the other's cache.
-  lowtalker:
+  #
+  # Named apart from its product: Xcode keeps each target's intermediates in a folder named
+  # for the target, and `lowtalker` and the release app's `LowTalker` are one folder on a
+  # case-insensitive volume. Measured under that name, the release app linked the CLI's
+  # objects and carried no AppDelegate. The entitlements file is named apart for the same
+  # reason.
+  lowtalker-cli:
     type: tool
     platform: macOS
     sources:
@@ -410,11 +416,12 @@ targets:
     # `record`, `mic` and `dictate` listen. The same entitlement the app carries, for the
     # same measured reason written above it.
     entitlements:
-      path: App/Generated/lowtalker.entitlements
+      path: App/Generated/lowtalker-cli.entitlements
       properties:
         com.apple.security.device.audio-input: true
     settings:
       base:
+        PRODUCT_NAME: lowtalker
         PRODUCT_BUNDLE_IDENTIFIER: ai.promptctl.low-talker.cli
         # Passed by hand for the reason the helper's is, below.
         OTHER_CODE_SIGN_FLAGS: $(inherited) --identifier $(PRODUCT_BUNDLE_IDENTIFIER)

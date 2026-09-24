@@ -247,21 +247,21 @@ check-docs:
 # [LAW:one-source-of-truth] scripts/signing-identity reads the identity name off
 # project.yml; the lookups run in the recipe (not $(shell), which discards exit status)
 # so a failing tool aborts loudly. [LAW:one-type-per-behavior] One recipe for both,
-# taking the product.
+# taking the SwiftPM product and the project.yml target that builds the same program.
 define sign_product
 	swift build --product $(1)
 	# Read into a variable first: a failed lookup inside the codesign line would sign as "null".
-	identifier=$$(xcodegen dump --type json | jq -er '.targets["$(1)"].settings.base.PRODUCT_BUNDLE_IDENTIFIER // error("project.yml sets no PRODUCT_BUNDLE_IDENTIFIER for $(1)")') \
+	identifier=$$(xcodegen dump --type json | jq -er '.targets["$(2)"].settings.base.PRODUCT_BUNDLE_IDENTIFIER // error("project.yml sets no PRODUCT_BUNDLE_IDENTIFIER for $(2)")') \
 		&& codesign --force --sign "$$(scripts/signing-identity)" --identifier "$$identifier" ".build/debug/$(1)"
 	@echo ".build/debug/$(1)"
 endef
 
 CLI := .build/debug/lowtalker
 cli:
-	$(call sign_product,lowtalker)
+	$(call sign_product,lowtalker,lowtalker-cli)
 
 helper:
-	$(call sign_product,lowtalker-keyboardd)
+	$(call sign_product,lowtalker-keyboardd,lowtalker-keyboardd)
 
 # Once per Mac. Until it has run, `make app`, `make cli`, `make helper` and `make test`
 # stop with "No certificate matching".
