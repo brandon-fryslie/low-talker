@@ -1,6 +1,8 @@
 import AppKit
+import Choices
 import Dictation
 import Flavors
+import Grants
 import InputSource
 import Insertion
 import KeyboardLayout

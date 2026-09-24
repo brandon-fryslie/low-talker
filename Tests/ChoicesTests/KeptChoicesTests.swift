@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import LowTalkerCore
+@testable import Choices
 
 /// The app's two choices as every reader sees them: what the app keeps, the CLI reads back
 /// under the same keys. [LAW:behavior-not-structure]

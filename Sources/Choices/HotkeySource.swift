@@ -8,8 +8,9 @@
 /// say, as `Requirement.Row.grants(for:)`, and every surface that names them reads it there.
 ///
 /// [LAW:locality-or-seam] Everything a reader of a hearing needs to know about it is a
-/// value read off it here, so a new hearing is a new case in this file and its chord and
-/// tap in `Hotkey`, and no reader elsewhere switches on which one it holds.
+/// value read off it here, so a new hearing is a new case in this file, its chord and tap
+/// in LowTalkerCore's `Hotkey` and its grants in Onboarding's list, and no reader
+/// elsewhere switches on which one it holds.
 public enum HotkeySource: String, CaseIterable, Sendable, CustomStringConvertible {
     /// An active event tap on the session's keyboard events. Needs Input Monitoring to
     /// read the keys and Accessibility to hold the chord back from the app in front.

@@ -1,3 +1,5 @@
+import Grants
+
 /// What the microphone indicator did across one hold, and whether that is what this app
 /// promises: dark while nobody is dictating, lit for the length of a hold, dark again when
 /// it ends.

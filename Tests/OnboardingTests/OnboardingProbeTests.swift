@@ -1,8 +1,8 @@
+import Choices
 import DriverExtension
 import Foundation
 import KeyboardService
 import Flavors
-import LowTalkerCore
 import Testing
 @testable import Onboarding
 

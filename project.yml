@@ -79,6 +79,12 @@ targetTemplates:
     dependencies:
       - package: low-talker
         product: LowTalkerCore
+      # The choices the menu keeps and the grants it reads, beneath both the core and the
+      # setup list.
+      - package: low-talker
+        product: Choices
+      - package: low-talker
+        product: Grants
       - package: low-talker
         product: KeyboardService
       # The list of what must hold before low-talker can type, which the menu shows and
