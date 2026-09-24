@@ -55,7 +55,7 @@ import Testing
     func onlyTheStepsThatActivateTheDriverWarnOfTheManagerNamedNotice(state: DriverState) {
         let step = Requirement.driverExtension(state, cli: Self.cli).step ?? ""
         let warns = step.contains("macOS then asks about \"Karabiner-VirtualHIDDevice-Manager\"")
-        #expect(warns == [.absent, .installedInactive].contains(state))
+        #expect(warns == [.absent, .installedInactive, .residue].contains(state))
     }
 
     /// A state nobody could read is never dressed up as a step to take. It points at the

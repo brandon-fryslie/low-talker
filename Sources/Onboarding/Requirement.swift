@@ -376,6 +376,7 @@ public extension Requirement {
                 \(DriverInstall.command(cli, "remove"))
                 \(DriverInstall.command(cli, "install"))
             \(notUnderSudo)
+            \(managerNotice)
             """
         // The probe said it could not read the machine, or read a registration it could
         // not name. Either way the reason is already on stderr, and pointing at it beats
