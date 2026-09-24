@@ -233,7 +233,12 @@ targetTemplates:
         # No checked-in Info.plist: Xcode synthesises one from these keys.
         GENERATE_INFOPLIST_FILE: true
         INFOPLIST_KEY_LSUIElement: true
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: low-talker listens to your microphone while you hold the dictation key so it can turn what you say into text. Audio never leaves this Mac.
+        # The name every system dialog, notice and list puts in front of a person: macOS
+        # reads the display name first, and a prompt names whatever bundle raised it.
+        INFOPLIST_KEY_CFBundleDisplayName: ${displayName}
+        # Shown inside macOS's microphone dialog, under the app's name. The guided setup
+        # explains the same thing first, so the dialog repeats what the person just read.
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: ${displayName} listens only while you hold or tap your dictation key, to turn what you say into text. What it hears never leaves this Mac.
         # Where the bundle's resources hold the carried store, as ModelStore.carriedResourceName
         # names it; CarriedModelStoreTests holds the two equal. [LAW:one-source-of-truth]
         MODEL_STORE_RESOURCE: model-store
@@ -327,6 +332,7 @@ targetTemplates:
         # reads in the Input Sources list is the LOCALIZED name, which the script below
         # writes from `Flavor.displayName`, and which macOS prefers over this.
         PRODUCT_NAME: ${displayName} Input Method
+        INFOPLIST_KEY_CFBundleDisplayName: ${displayName} Input Method
         PRODUCT_BUNDLE_IDENTIFIER: ${inputMethodBundleIdentifier}
         GENERATE_INFOPLIST_FILE: true
         # Read by the script below, which is the only way this bundle's one localized
