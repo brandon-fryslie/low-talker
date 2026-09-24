@@ -1,4 +1,5 @@
 import CoreAudio
+import Grants
 
 /// Whether a device change leaves the main actor free, and whether a press that lands on one
 /// still comes back whole.

@@ -1,9 +1,10 @@
+import Choices
 import DriverExtension
 import Flavors
 import Foundation
+import Grants
 import InputSource
 import KeyboardService
-import LowTalkerCore
 
 /// Reading this Mac for the two facts onboarding takes for itself: which launchd job
 /// holds the helper's Mach service, and whether Keyboard Setup Assistant already has an

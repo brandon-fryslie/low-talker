@@ -1,5 +1,5 @@
 import AVFoundation
-import LowTalkerCore
+import Grants
 import Synchronization
 import Testing
 

@@ -1,4 +1,5 @@
 import Foundation
+import Grants
 import Synchronization
 
 /// Microphone capture whose engine lives for one session, or for the whole run when the

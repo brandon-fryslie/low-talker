@@ -1,5 +1,6 @@
 import Carbon.HIToolbox
 import CoreGraphics
+import Grants
 import IOKit.hidsystem
 
 /// What a tap does about the system having switched it off for being slow to answer.

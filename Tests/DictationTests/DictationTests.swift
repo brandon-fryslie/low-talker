@@ -1,6 +1,7 @@
 import Dictation
 import Flavors
 import Foundation
+import Grants
 import KeyboardLayout
 import LowTalkerCore
 import Synchronization

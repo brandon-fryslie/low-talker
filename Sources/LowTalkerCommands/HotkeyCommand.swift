@@ -1,5 +1,6 @@
 import AppKit
 import ArgumentParser
+import Choices
 import Flavors
 import Foundation
 import KeyboardLayout

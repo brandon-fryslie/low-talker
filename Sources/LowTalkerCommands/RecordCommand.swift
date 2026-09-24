@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import Grants
 import LowTalkerCore
 
 /// Captures the microphone for a while and writes what the ring holds, so the
