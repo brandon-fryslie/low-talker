@@ -316,7 +316,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     if case .began = transition { (lastDictation, lastFailure) = (nil, nil) }
                     dictation.press(transition)
                 }, onLapse: { [unowned self] in report($0) })
-            }.mapError { LoopRefusal(stringLiteral: "\($0)") }
+            }.mapError { error in
+                // A tap refused for want of its grants waits on them; any other refusal is
+                // not something a grant can fix.
+                if case KeyboardTapError.notAllowed = error { LoopRefusal(awaitingGrant: "\(error)") }
+                else { LoopRefusal(stringLiteral: "\(error)") }
+            }
         }
         showHotkeyStatus(of: setup.source, hearing)
     }
@@ -327,8 +332,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// source feeds the same detector, which hears a hold and a tap alike.
     private func showHotkeyStatus(of source: HotkeySource, _ loop: Result<Void, LoopRefusal>) {
         switch loop {
-        case .success: showHotkeyStatus("hold \(chordName(heardBy: source)), or tap it to start and again to stop")
-        case .failure(let refusal): showHotkeyStatus("off — \(refusal.reason)")
+        case .success:
+            downForAGrant = false
+            showHotkeyStatus("hold \(chordName(heardBy: source)), or tap it to start and again to stop")
+        case .failure(let refusal):
+            downForAGrant = refusal.awaitsGrant
+            showHotkeyStatus("off — \(refusal.reason)")
         }
     }
 
@@ -353,10 +362,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 log.notice("input method: \(state, privacy: .public)")
                 // Stopped short of selected only where a person has yet to switch it on,
                 // which is a step in setup rather than something that went wrong.
-                return state.ready ? .success(()) : .failure("""
+                return state.ready ? .success(()) : .failure(LoopRefusal(awaitingGrant: """
                     the input method is \(state); switch it on in \(GuidedSetup.title(for: Self.flavor)) \
                     in this menu, where macOS asks you once to allow it
-                    """)
+                    """))
             } catch {
                 log.error("input method: \(String(describing: error), privacy: .public)")
                 return .failure("the input method could not be installed: \(error)")
@@ -383,7 +392,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Named apart from `Insertion.Refusal`, which is the input method's answer to an insert.
     private struct LoopRefusal: Error, ExpressibleByStringInterpolation {
         let reason: String
-        init(stringLiteral reason: String) { self.reason = reason }
+        /// Whether the loop is down only for a grant a person has yet to give, which is what
+        /// a grant arriving later brings it back up from.
+        let awaitsGrant: Bool
+        init(stringLiteral reason: String) { (self.reason, awaitsGrant) = (reason, false) }
+        init(awaitingGrant reason: String) { (self.reason, awaitsGrant) = (reason, true) }
     }
 
     /// Asked when an installation has never made `choices`' choice, which is its first
@@ -538,13 +551,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// second teardown and rebuild behind the first, alert and all.
     private func take(_ keep: (AppDelegate) -> Void) {
         let before = chosenSetup
-        let cameDown = listening?.hotkey.isWatching == false
+        // Down is no hotkey watching and no switch building one: a loop that never came
+        // up, or whose hotkey came down, but not one being rebuilt right now.
+        let cameDown = listening?.hotkey.isWatching != true && switchesInFlight == 0
         keep(self)
         guard let setup = chosenSetup, setup != before || cameDown, !quitting else { return }
         Task {
-            // Taken down to a loop only once `comeUp` has brought one up; before that the
-            // choice is only kept, and `comeUp` takes it up once what it waits on is granted.
-            if switching != nil { await choose(setup) }
+            // A loop that has come up is switched; one that never did is brought up from the
+            // microphone, which `comeUp` reads - so choosing again after a grant is given in
+            // System Settings starts dictation, and a microphone still withheld says so.
+            if switching != nil { await choose(setup) } else { await comeUp() }
             // What a setup still needs is news when the setup is new.
             if setup != before { showSetUpIfNeeded() }
         }
@@ -602,7 +618,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// chose. The menu says what is wrong with it.
     /// [LAW:no-silent-failure]
     private func comeUp() async {
-        guard let setup = chosenSetup, !quitting else { return }
+        guard let setup = chosenSetup, !quitting, !comingUp else { return }
+        comingUp = true
+        defer { comingUp = false }
         do {
             let config = try Config.load(for: Self.flavor).config
             try capture.start(try MicrophonePermission().current.grant(), atRest: config.microphone)
@@ -615,39 +633,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             capture.stop()
             // A microphone macOS was never asked about, or was told no, is a step in setup,
             // and the status says where it is the way the other grants' refusals do.
-            let whereToAllow = switch error {
+            let (whereToAllow, awaitsGrant) = switch error {
             case MicrophoneAuthorization.Withheld.notDetermined, MicrophoneAuthorization.Withheld.denied:
-                "; allow it in \(GuidedSetup.title(for: Self.flavor)) in this menu"
-            default: ""
+                ("; allow it in \(GuidedSetup.title(for: Self.flavor)) in this menu", true)
+            default: ("", false)
             }
+            downForAGrant = awaitsGrant
             showHotkeyStatus("off — \(error)\(whereToAllow)")
             return
         }
         await choose(setup)
     }
 
-    /// What the last reading handed to `comeUpIfGranted` found met, and the setup it was
-    /// read for: a grant has arrived only when a reading of the same setup finds more met.
-    private var lastSettledReading: (setup: Setup?, met: Set<Requirement.Row>)?
+    /// True while the loop is down for a grant a person has yet to give: the microphone,
+    /// the event tap's two, or the input method switched on. Set by the loop's own last
+    /// attempt to come up, so a loop down for anything else - a config that cannot be read,
+    /// a hotkey that kept lapsing - is not restarted by a grant.
+    private var downForAGrant = false
+    /// True while `comeUp` runs, so readings taken meanwhile do not start a second one.
+    private var comingUp = false
 
-    /// Brings the loop up when a grant has arrived since the last reading of this setup and
-    /// the loop is down because of it: a step in setup was allowed, or a switch was turned
-    /// on in System Settings.
+    /// Brings the loop up when it is down for a grant and every row that stops dictation is
+    /// now met: a step in setup was allowed, or a switch was turned on in System Settings.
     ///
-    /// [LAW:effects-at-boundaries] Reading has no effects; this is the one place a reading
-    /// is acted on, and it is called at the moments a grant can have arrived - a request
-    /// answered, setup coming back to the front, the menu opening. Bringing the loop up
-    /// restarts capture and rebuilds the delivery, so it happens only when something new is
-    /// met, never while a switch is already rebuilding the loop, and never over a loop that
-    /// is listening. [LAW:no-ambient-temporal-coupling]
+    /// [LAW:dataflow-not-control-flow] Decided from where things stand, not from a
+    /// difference between two readings, so it holds however the grant arrived and whichever
+    /// reading first sees it. [LAW:effects-at-boundaries] Reading has no effects; this is the
+    /// one place a reading is acted on, called after a request, when setup comes back to the
+    /// front, and when the menu opens. Never while a switch is rebuilding the loop or
+    /// `comeUp` is already running, and never while quitting.
+    /// [LAW:no-ambient-temporal-coupling]
     private func comeUpIfGranted(_ readiness: Readiness) {
-        let setup = chosenSetup
-        let met = Set(readiness.requirements.filter(\.met).map(\.row))
-        let before = lastSettledReading
-        lastSettledReading = (setup, met)
-        guard let before, before.setup == setup, !met.isSubset(of: before.met),
-              switchesInFlight == 0, listening?.hotkey.isWatching != true, !quitting else { return }
-        log.notice("setup: a grant arrived; bringing dictation up")
+        guard downForAGrant, !comingUp, switchesInFlight == 0, !quitting,
+              readiness.unmet.allSatisfy({ !$0.row.stopsDictation }) else { return }
+        log.notice("setup: what dictation waited on is granted; bringing it up")
         Task { await comeUp() }
     }
 

@@ -96,6 +96,18 @@ public extension Requirement {
             }
         }
 
+        /// Whether dictation cannot start at all without this row. The rest let the loop come
+        /// up and stop only the words at the keyboard: an unapproved helper or a missing
+        /// driver fails the press that reaches it, with its reason, and the assistant's
+        /// answer is filed by the helper. The app waits on these rows and comes up when
+        /// they are met.
+        public var stopsDictation: Bool {
+            switch self {
+            case .microphone, .inputMonitoring, .accessibility, .inputMethod: true
+            case .driverExtension, .keyboardHelper, .keyboardSetupAssistant: false
+            }
+        }
+
         /// The rows a person must allow before this hotkey hears anything: the grants it
         /// asks for, read off the list rather than kept beside it.
         public static func grants(for source: HotkeySource) -> [Row] {
