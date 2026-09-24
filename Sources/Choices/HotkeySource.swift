@@ -13,7 +13,8 @@
 /// elsewhere switches on which one it holds.
 public enum HotkeySource: String, CaseIterable, Sendable, CustomStringConvertible {
     /// An active event tap on the session's keyboard events. Needs Input Monitoring to
-    /// read the keys and Accessibility to hold the chord back from the app in front.
+    /// read the keys and Accessibility to hold the chord back from the app in front. Asking
+    /// for Accessibility normally grants both; see `EventTapAccess` for the measurement.
     case eventTap
     /// A hot key registered with the window server. Needs no permission.
     case registeredHotKey

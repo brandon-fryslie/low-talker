@@ -41,13 +41,18 @@ public extension Requirement {
     /// walks them: what hearing needs, then what the chosen hotkey needs, then what the
     /// chosen delivery needs.
     ///
+    /// Accessibility comes before Input Monitoring because granting it normally grants the
+    /// other: once Accessibility is held, macOS answers Input Monitoring from it, so that
+    /// step reads allowed and the walk passes it without a second dialog. See
+    /// `EventTapAccess`.
+    ///
     /// This is the one list of what low-talker asks of a Mac. The CLI prints it, the menu
     /// shows it, and the guided setup is a walk over it, so a grant added here reaches every
     /// surface and a grant missing here is missing from all of them. [LAW:one-source-of-truth]
     enum Row: String, Sendable, Hashable, CaseIterable {
         case microphone = "Microphone"
-        case inputMonitoring = "Input Monitoring"
         case accessibility = "Accessibility"
+        case inputMonitoring = "Input Monitoring"
         case inputMethod = "Input method"
         case driverExtension = "Driver extension"
         case keyboardHelper = "Keyboard helper"
@@ -649,6 +654,6 @@ public extension Requirement {
         let driver: [(row: Row, reading: String)] = DriverState.allCases.map { (row: Row.driverExtension, reading: reads(for: $0)) }
         let helper: [(row: Row, reading: String)] = HelperStanding.allCases.map { (row: Row.keyboardHelper, reading: reads(for: $0)) }
         let assistant: [(row: Row, reading: String)] = [true, false].map { (row: Row.keyboardSetupAssistant, reading: reads(forAnswered: $0)) }
-        return [microphone, inputMonitoring, accessibility, inputMethod, driver, helper, assistant].flatMap { $0 }
+        return [microphone, accessibility, inputMonitoring, inputMethod, driver, helper, assistant].flatMap { $0 }
     }
 }

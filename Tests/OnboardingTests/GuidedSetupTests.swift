@@ -44,7 +44,7 @@ import Testing
     /// which the helper answers - have none, so no button promises a dialog that never comes.
     @Test func onlyTheRowsTheAppCanAskForHaveAnAskButton() {
         let asking = Requirement.Row.allCases.filter { $0.askTitle != nil }
-        #expect(asking == [.microphone, .inputMonitoring, .accessibility, .inputMethod, .keyboardHelper])
+        #expect(asking == [.microphone, .accessibility, .inputMonitoring, .inputMethod, .keyboardHelper])
         for row in asking { #expect(row.askTitle?.hasSuffix("…") == true, "\(row.rawValue)'s button does not say a dialog follows") }
     }
 
@@ -120,7 +120,7 @@ import Testing
 
     /// The hotkey menu names the grants a source needs from the list itself.
     @Test func aHotkeySourceNamesTheGrantsTheListGivesIt() {
-        #expect(HotkeySource.eventTap.asks == "needs Input Monitoring and Accessibility")
+        #expect(HotkeySource.eventTap.asks == "needs Accessibility and Input Monitoring")
         #expect(HotkeySource.registeredHotKey.asks == "needs nothing")
     }
 }

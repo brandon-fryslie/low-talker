@@ -184,7 +184,7 @@ Each press prints `began` as the key goes down. A release after the threshold (2
 
 Which chord that is depends on the installation, and the CLI built here defaults to the development one: `lowtalker hotkey` watches Right Option and Right Command together unless `--flavor release` is passed, in which case it watches Right Option alone. Every command that reaches a helper or reads a config takes the same `--flavor`, and defaults the same way: to the installation whose app carries the binary, and to the development copy for `.build/debug/lowtalker`, which no app carries ("The CLI without a checkout" above).
 
-The tap needs Input Monitoring and Accessibility, and no tap is created until both are held: creating one without them is what makes macOS raise its own dialog, unasked. macOS charges a terminal command's tap to the terminal, so the command fails with `this hotkey needs Input Monitoring and Accessibility` until the terminal has both under System Settings > Privacy & Security; the app asks on its own behalf, from its guided setup.
+The tap needs Input Monitoring and Accessibility, and no tap is created until both are held: creating one without them is what makes macOS raise its own dialog, unasked. Holding Accessibility normally satisfies Input Monitoring too, since macOS answers the one from the other. An explicit "no" to Input Monitoring is not overridden that way. macOS still lets a probe that skips this check create its tap, but no key reaches it, so the hotkey reads both grants rather than trusting Accessibility (measured on macOS 15.0.1). macOS charges a terminal command's tap to the terminal, so the command fails with `this hotkey needs Input Monitoring and Accessibility` until the terminal has both under System Settings > Privacy & Security; the app asks on its own behalf, from its guided setup.
 
     .build/debug/lowtalker hotkey --heard-by registeredHotKey   # the registered hot key, needing neither
 
@@ -638,8 +638,8 @@ On inferno.local (Mac16,6, macOS 26.5.1, System Integrity Protection enabled): `
 prints everything that must hold before low-talker can hear and type, read off this Mac now, with the step for whatever is missing indented under it. On a Mac whose development helper was never registered:
 
     Microphone: only the app can read this; see Set Up in its menu
-    Input Monitoring: only the app can read this; see Set Up in its menu
     Accessibility: only the app can read this; see Set Up in its menu
+    Input Monitoring: only the app can read this; see Set Up in its menu
     Input method: switched on
     Driver extension: running
     Keyboard helper: not registered
@@ -712,8 +712,8 @@ The setup is a walk over the same list the menu shows, one requirement per page.
 | Step | Shown when | What the button does |
 |---|---|---|
 | Microphone | always | asks for the microphone (`AVCaptureDevice.requestAccess`) |
-| Input Monitoring | the hotkey source is the event tap | asks to read the keyboard (`CGRequestListenEventAccess`) |
 | Accessibility | the hotkey source is the event tap | asks to act on other apps' input (`AXIsProcessTrustedWithOptions`, with the prompt) |
+| Input Monitoring | the hotkey source is the event tap | asks to read the keyboard (`CGRequestListenEventAccess`). Normally already met by then: once Accessibility is held, macOS answers Input Monitoring from it, so the walk passes this step without a dialog. The step shows when Accessibility was skipped, or when Input Monitoring was switched off; macOS shows its dialog once, so after a "no" the button becomes Open System Settings |
 | Input method | the delivery is the input method | switches this installation's input method on (`TISEnableInputSource`), which macOS asks about |
 | Driver extension | the delivery is the virtual keyboard | nothing: an administrator installs it with `lowtalker driver install`, so the page names that and opens Login Items & Extensions. The install is the one request macOS words with another product's name, since the package's own Manager app files it: the notice reads "Karabiner-VirtualHIDDevice-Manager" would like to use a new driver extension, and the step says so before the command runs |
 | Keyboard helper | the delivery is the virtual keyboard | registers the helper (`SMAppService.register`), which lands it in Login Items & Extensions |
