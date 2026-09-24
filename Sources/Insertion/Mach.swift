@@ -29,21 +29,17 @@ enum Mach {
         let reply: mach_port_t
         let replyDisposition: mach_msg_type_name_t
 
-        /// The sender's pid, for a log line and never for a decision: the token is what is
-        /// checked. Its sixth word, as `audit_token_to_pid` reads it.
-        var senderPID: pid_t { pid_t(bitPattern: sender.val.5) }
-
         /// Sends `payload` back to the sender, consuming the reply right either way.
         ///
-        /// A zero timeout, because the one who answers is the input method's run loop and a
-        /// reply that cannot be delivered at once is not one to wait for there: a sender
-        /// that asked with a send-once right, which is the only kind this channel's own
-        /// sender makes, cannot be full.
+        /// A zero timeout, because whoever answers is the queue the input method's text
+        /// clients live on, and a reply that cannot be delivered at once is not one to wait
+        /// for there: a sender that asked with a send-once right, which is the only kind this
+        /// channel's own sender makes, cannot be full.
         func answer(_ payload: Data) -> kern_return_t {
             let status = Mach.send(payload, id: id, to: reply, disposition: replyDisposition, replyTo: Mach.noPort, timeout: .zero)
-            // A send that failed has not consumed the right it named, and a right held here
-            // with no message behind it is a sender waiting for an answer until it gives up.
-            if status != MACH_MSG_SUCCESS { discardReply() }
+            // A send refused outright leaves the right with this process, and a right held
+            // here with no message behind it is a sender waiting until it gives up.
+            if status != MACH_MSG_SUCCESS, !Mach.pseudoReceived(status) { discardReply() }
             return status
         }
 
@@ -72,6 +68,11 @@ enum Mach {
     /// Sends `payload` to `remote`, asking for the answer on `replyTo` when it names a port.
     /// `timeout` bounds the wait for room in the far end's queue; nil waits as long as it
     /// takes.
+    ///
+    /// The rights the message moves are gone when this returns, sent or not, except after a
+    /// send the kernel refused outright - an invalid destination, say - which leaves them
+    /// with the caller. A send that timed out or was interrupted is handed back whole, rights
+    /// and all, and those are released here rather than left for a caller to forget.
     static func send(
         _ payload: Data, id: mach_msg_id_t, to remote: mach_port_t, disposition: mach_msg_type_name_t,
         replyTo local: mach_port_t, timeout: Duration?
@@ -90,7 +91,14 @@ enum Mach {
         (buffer + headerSize).storeBytes(of: UInt32(payload.count), as: UInt32.self)
         payload.copyBytes(to: UnsafeMutableRawBufferPointer(start: buffer + headerSize + countSize, count: payload.count))
         let options = MACH_SEND_MSG | (timeout == nil ? 0 : MACH_SEND_TIMEOUT)
-        return mach_msg(header, options, mach_msg_size_t(size), 0, Mach.noPort, timeout.map(milliseconds) ?? 0, Mach.noPort)
+        let status = mach_msg(header, options, mach_msg_size_t(size), 0, Mach.noPort, timeout.map(milliseconds) ?? 0, Mach.noPort)
+        if pseudoReceived(status) { mach_msg_destroy(header) }
+        return status
+    }
+
+    /// Whether a failed send came back to the sender whole, rights included.
+    static func pseudoReceived(_ status: kern_return_t) -> Bool {
+        status == MACH_SEND_TIMED_OUT || status == MACH_SEND_INTERRUPTED
     }
 
     /// Takes the next message off `port`, waiting up to `timeout` for one to arrive.
@@ -143,9 +151,12 @@ enum Mach {
         mach_error_string(status).map { String(cString: $0) } ?? "Mach status \(status)"
     }
 
+    /// Rounded up, so a wait shorter than a millisecond is a millisecond and never the zero
+    /// that means not waiting at all.
     private static func milliseconds(_ duration: Duration) -> mach_msg_timeout_t {
         let (seconds, attoseconds) = duration.components
-        return mach_msg_timeout_t(clamping: seconds * 1000 + attoseconds / 1_000_000_000_000_000)
+        let (whole, part) = attoseconds.quotientAndRemainder(dividingBy: 1_000_000_000_000_000)
+        return mach_msg_timeout_t(clamping: seconds * 1000 + whole + (part > 0 ? 1 : 0))
     }
 }
 
@@ -179,4 +190,10 @@ final class ReceiveRight {
     deinit {
         mach_port_destruct(mach_task_self_, port, -sendRights, 0)
     }
+}
+
+extension audit_token_t {
+    /// The process's pid, for a log line and never for a decision: the token is what is
+    /// checked. Its sixth word, as `audit_token_to_pid` reads it.
+    var pid: pid_t { pid_t(bitPattern: val.5) }
 }

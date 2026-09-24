@@ -88,9 +88,13 @@ public final class InsertionPort {
             do throws(PeerIdentity.NotAdmitted) {
                 try senders.admits(request.sender)
             } catch {
-                told(.turnedAway(pid: request.senderPID, because: error, required: senders))
+                told(.turnedAway(pid: request.sender.pid, because: error, required: senders))
                 return Wire.answer(.refused(.senderIsNotThisInstallationsApp))
             }
+            // The greeting is answered empty: the sender has been admitted, and that is all
+            // it asked. [LAW:dataflow-not-control-flow] The id is the wire's own
+            // discriminator, and these are its two values.
+            guard request.id != Wire.greeting else { return Data() }
             // Bytes that are not text are answered, never dropped: a sender that hears
             // nothing waits out its timeout and learns nothing. [LAW:no-silent-failure]
             let text = request.payload.flatMap(Wire.text(of:))
@@ -133,6 +137,3 @@ public final class InsertionPort {
 
     deinit { source.cancel() }
 }
-
-/// Mach's own spelling, which Swift does not import.
-private let BOOTSTRAP_NAME_IN_USE: kern_return_t = 1101

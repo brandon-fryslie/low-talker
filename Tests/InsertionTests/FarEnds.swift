@@ -67,15 +67,17 @@ enum Probe {
     /// kernel will read off it. The dev identity is the one `make signing-identity` makes,
     /// which `make test` already needs; it is a real certificate, which no ad hoc signature
     /// can stand in for. [LAW:verifiable-goals]
-    static func signed(as identifier: String) async throws -> (url: URL, identity: PeerIdentity, certificate: String) {
-        try await onAThreadOfItsOwn { try signing(as: identifier) }
+    static func signed(as identifier: String, hardened: Bool = true) async throws -> (url: URL, identity: PeerIdentity, certificate: String) {
+        try await onAThreadOfItsOwn { try signing(as: identifier, hardened: hardened) }
     }
 
-    private static func signing(as identifier: String) throws -> (url: URL, identity: PeerIdentity, certificate: String) {
+    private static func signing(as identifier: String, hardened: Bool) throws -> (url: URL, identity: PeerIdentity, certificate: String) {
         let copy = FileManager.default.temporaryDirectory.appending(path: "insertion-probe-\(UUID().uuidString)")
         try FileManager.default.copyItem(at: try url(), to: copy)
         let name = try run(repository.appending(path: "scripts/signing-identity"), []).trimmingCharacters(in: .whitespacesAndNewlines)
-        _ = try run(URL(fileURLWithPath: "/usr/bin/codesign"), ["--force", "--sign", name, "--identifier", identifier, copy.path])
+        _ = try run(
+            URL(fileURLWithPath: "/usr/bin/codesign"),
+            ["--force", "--sign", name, "--identifier", identifier] + (hardened ? ["--options", "runtime"] : []) + [copy.path])
         var code: SecStaticCode?
         try #require(SecStaticCodeCreateWithPath(copy as CFURL, [], &code) == errSecSuccess)
         var information: CFDictionary?

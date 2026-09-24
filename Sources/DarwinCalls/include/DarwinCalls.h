@@ -2,6 +2,7 @@
 #define DARWIN_CALLS_H
 
 #include <mach/mach.h>
+#include <servers/bootstrap.h>
 #include <sys/types.h>
 
 // The parts of Darwin that Swift cannot reach on its own: the bootstrap calls, which the SDK
@@ -31,5 +32,17 @@ mach_msg_type_name_t lt_msgh_bits_remote(mach_msg_bits_t bits);
 // about that process and no other. Declared in xnu's sys/codesign.h, which the SDK leaves
 // out; the operations are that header's CS_OPS_ numbers.
 int csops_audittoken(pid_t pid, unsigned int ops, void *useraddr, size_t usersize, audit_token_t *token);
+
+// From xnu's sys/codesign.h and kern/cs_blobs.h, under the names they have there.
+#define CS_OPS_STATUS 0         // the process's code signing flags
+#define CS_OPS_CDHASH 5         // the cdhash the kernel runs the process under
+#define CS_OPS_BLOB 10          // the process's whole embedded signature
+#define CS_VALID 0x00000001     // the running code still matches its signature
+#define CS_RUNTIME 0x00010000   // the hardened runtime is on
+#define CSMAGIC_EMBEDDED_SIGNATURE 0xfade0cc0
+#define CSSLOT_CODEDIRECTORY 0
+#define CSSLOT_SIGNATURESLOT 0x10000
+#define CS_HASHTYPE_SHA1 1
+#define CS_HASHTYPE_SHA256 2
 
 #endif

@@ -52,7 +52,7 @@ import Testing
 
 /// Long enough that the runner's own stall cannot spend it: `DirectoryChangesTests` records
 /// a CI machine that freezes this process for seconds at a time, and `InputMethodInserter`
-/// hands each phase of the round trip half of what it is given. Said once, because it is one
+/// hands each of its four phases a quarter of what it is given. Said once, because it is one
 /// fact about the machine rather than five. [LAW:one-source-of-truth] The cases that ARE
 /// timing under test set their own budget and say so.
 let aBudgetTheRunnerCannotSpend = Duration.seconds(20)
@@ -215,11 +215,15 @@ private let anEditor = "com.example.editor"
         withExtendedLifetime(port) {}
     }
 
-    /// The other direction: a name anyone can compute is a name anyone can hold, and what
-    /// answers on it is believed only when it is who the app asked for.
-    @Test func anAnswerFromAStrangerIsNotBelieved() async throws {
+    /// The other direction: a name anyone can compute is a name anyone can hold, so the app
+    /// asks who holds it before saying anything, and a stranger never hears the words.
+    @Test func aStrangerHoldingTheNameNeverHearsTheWords() async throws {
         let name = aPortNobodyElseUses()
-        let port = try hostInsertion(name: name) { .inserted(characters: $0.count, into: anEditor) }
+        let seen = Seen()
+        let port = try hostInsertion(name: name) { text in
+            seen.record(text)
+            return .inserted(characters: text.count, into: anEditor)
+        }
 
         let us = try OwnProcess.identity()
         let elsewhere = PeerIdentity.adHoc(cdhash: String(repeating: "0", count: 40))
@@ -227,6 +231,7 @@ private let anEditor = "com.example.editor"
         await #expect(throws: Unreachable.answeredByAStranger(port: name, pid: getpid(), because: .someoneElse(us), required: elsewhere)) {
             try await asking.insert("hello")
         }
+        #expect(seen.text == nil)
         withExtendedLifetime(port) {}
     }
 
@@ -254,6 +259,23 @@ private let anEditor = "com.example.editor"
 
         _ = try await Probe.send("hello", to: name, answeredBy: try OwnProcess.identity(), from: probe.url)
         #expect(try read.result?.get() == probe.identity)
+        withExtendedLifetime(port) {}
+    }
+
+    /// A certificate vouches for code only when nothing else can be loaded into it, so a
+    /// signed process without the hardened runtime is not read as signed at all.
+    @Test func aSignedProcessWithoutTheHardenedRuntimeIsNotReadAsSigned() async throws {
+        let probe = try await Probe.signed(as: "ai.promptctl.low-talker.test.probe", hardened: false)
+        defer { try? FileManager.default.removeItem(at: probe.url) }
+        let name = aPortNobodyElseUses()
+        let read = Read()
+        let port = try InsertionPort(portName: name, queue: DispatchQueue(label: name), told: { _ in }) { request in
+            read.record(Result { () throws(PeerIdentity.Unreadable) in try PeerIdentity.of(request.sender) })
+            return Wire.answer(.refused(.noClientHasFocus))
+        }
+
+        _ = try await Probe.send("hello", to: name, answeredBy: try OwnProcess.identity(), from: probe.url)
+        #expect(read.result.map { if case .failure(.notHardened) = $0 { true } else { false } } == true)
         withExtendedLifetime(port) {}
     }
 
@@ -312,7 +334,7 @@ private let anEditor = "com.example.editor"
         }
         #expect(filled, "the queue behind the port never filled, so no send timeout can be asked for")
 
-        await #expect(throws: Unreachable.requestWasNotTaken(port: name, after: budget / 2)) {
+        await #expect(throws: Unreachable.requestWasNotTaken(port: name, after: budget / 4)) {
             try await inserter(name, timeout: budget).insert("hello")
         }
         withExtendedLifetime(port) {}
@@ -327,28 +349,46 @@ private let anEditor = "com.example.editor"
             return .inserted(characters: text.count, into: anEditor)
         }
 
-        // Halved, because the two phases of the round trip share the caller's budget and the
+        // Quartered, because the four phases of an insert share the caller's budget and the
         // error names the phase's own bound rather than a number nobody waited. Five seconds
-        // for the send half rather than the least that works: which phase ran out is the
-        // whole of what this case asks, and the runner freeze the budget above is sized
-        // against would otherwise fail it as a send that never landed. The five seconds this
-        // case does spend are the receive half, which is the wait under test.
-        let timeout = Duration.seconds(10)
-        await #expect(throws: Unreachable.answerDidNotArrive(port: name, after: timeout / 2)) {
+        // a phase rather than the least that works: which phase ran out is the whole of what
+        // this case asks, and the runner freeze the budget above is sized against would
+        // otherwise fail it in the greeting. The five seconds this case does spend are the
+        // last receive, which is the wait under test.
+        let timeout = Duration.seconds(20)
+        await #expect(throws: Unreachable.answerDidNotArrive(port: name, after: timeout / 4)) {
             try await inserter(name, timeout: timeout).insert("hello")
         }
         withExtendedLifetime(port) {}
     }
 
-    /// A far end that takes the request and lets go of the way back is said at once, rather
+    /// A far end that never says who it is is not sent the words, and says so rather than
+    /// that they may have landed.
+    @Test func aGreetingThatIsNotAnsweredIsSaidByName() async throws {
+        let name = aPortNobodyElseUses()
+        let port = try InsertionPort(portName: name, queue: DispatchQueue(label: name), told: { _ in }) { _ in
+            Thread.sleep(forTimeInterval: 30)
+            return Data()
+        }
+
+        let timeout = Duration.seconds(4)
+        await #expect(throws: Unreachable.didNotSayWhoItIs(port: name, after: timeout / 4)) {
+            try await inserter(name, timeout: timeout).insert("hello")
+        }
+        withExtendedLifetime(port) {}
+    }
+
+    /// A far end that takes the words and lets go of the way back is said at once, rather
     /// than waited out as an answer that is merely late.
     @Test func anAnswerAbandonedIsSaidByName() async throws {
         let name = aPortNobodyElseUses()
         let right = try ReceiveRight(sendable: true)
         try #require(lt_bootstrap_register(name, right.port) == KERN_SUCCESS)
         Thread {
-            guard case .received(let request) = Mach.receive(on: right.port, timeout: aBudgetTheRunnerCannotSpend) else { return }
-            request.discardReply()
+            guard case .received(let greeting) = Mach.receive(on: right.port, timeout: aBudgetTheRunnerCannotSpend) else { return }
+            _ = greeting.answer(Data())
+            guard case .received(let words) = Mach.receive(on: right.port, timeout: aBudgetTheRunnerCannotSpend) else { return }
+            words.discardReply()
         }.start()
 
         await #expect(throws: Unreachable.answerWasAbandoned(port: name)) {

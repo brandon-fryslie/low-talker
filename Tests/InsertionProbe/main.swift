@@ -1,5 +1,5 @@
 import Flavors
-@testable import Insertion
+import Insertion
 import Foundation
 
 /// Sends one insert from a process that is not the suite, and prints what came of it.

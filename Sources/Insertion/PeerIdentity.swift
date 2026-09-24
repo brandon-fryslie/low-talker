@@ -34,7 +34,10 @@ public enum PeerIdentity: Equatable, Codable, Sendable, CustomStringConvertible 
     case signed(identifier: String, certificate: String)
     /// Signed ad hoc. No certificate vouches for it, so it is nobody but exactly the code it
     /// runs, named by the cdhash the kernel runs it under. An identifier here would be a
-    /// claim anyone can sign, so there is none. [LAW:types-are-the-program]
+    /// claim anyone can sign, so there is none. [LAW:types-are-the-program] Nothing that
+    /// ships admits one - the app and the input method each require the other `signed` -
+    /// so it is what a stranger is named as in a refusal, and what the suite's own ad hoc
+    /// runner is admitted as.
     case adHoc(cdhash: String)
 
     public var description: String {
@@ -53,12 +56,18 @@ public enum PeerIdentity: Equatable, Codable, Sendable, CustomStringConvertible 
         case noAuditToken(kern_return_t)
         /// The kernel no longer holds the process's code valid.
         case notValid
+        /// Signed by a certificate but not under the hardened runtime, so anything could
+        /// have been loaded into it and its signature says nothing about what it runs.
+        case notHardened
         /// This process is signed ad hoc, so there is no certificate for a peer to share.
         case noCertificate
         case signatureMalformed(String)
         /// The certificate's signature does not verify over the code directory.
         case signatureDoesNotVerify(String)
-        /// The signature's code directory is not the one the kernel runs the process under.
+        /// The signature's primary code directory - the one its CMS signature covers - is not
+        /// the one the kernel runs the process under. A signature whose kernel cdhash comes
+        /// from an alternate directory is refused this way too, since binding the certificate
+        /// to an alternate is more than this check proves. [LAW:no-silent-failure]
         case notTheRunningCode
 
         public var description: String {
@@ -67,10 +76,11 @@ public enum PeerIdentity: Equatable, Codable, Sendable, CustomStringConvertible 
                 "the kernel would not say \(operation) of the process: \(String(cString: strerror(errno)))"
             case .noAuditToken(let status): "this process's audit token could not be read: \(Mach.describe(status))"
             case .notValid: "the kernel no longer holds the process's code signature valid"
+            case .notHardened: "the process is signed but not under the hardened runtime, so code could have been loaded into it that its signature does not cover"
             case .noCertificate: "this process is signed ad hoc, so there is no certificate for its peer to be signed by; build it signed (make app)"
             case .signatureMalformed(let why): "the process's code signature is malformed: \(why)"
             case .signatureDoesNotVerify(let why): "the process's code signature does not verify: \(why)"
-            case .notTheRunningCode: "the process's code signature is not for the code it is running"
+            case .notTheRunningCode: "the process's signed code directory is not the one it is running under"
             }
         }
     }
@@ -91,15 +101,15 @@ public enum PeerIdentity: Equatable, Codable, Sendable, CustomStringConvertible 
     /// The identity of the process `token` names.
     public static func of(_ token: audit_token_t) throws(Unreadable) -> PeerIdentity {
         var token = token
-        let pid = pid_t(bitPattern: token.val.5)
         var status: UInt32 = 0
-        try kernel("its status", pid, &token, operation: 0, into: &status, size: 4)
-        guard status & 0x1 != 0 else { throw .notValid }
+        try kernel("its status", &token, operation: CS_OPS_STATUS, into: &status, size: 4)
+        guard status & UInt32(CS_VALID) != 0 else { throw .notValid }
         var cdhash = [UInt8](repeating: 0, count: 20)
-        try kernel("its cdhash", pid, &token, operation: 5, into: &cdhash, size: 20)
-        let signature = try Signature(Data(try blob(pid, &token)))
-        guard Array(SHA256.hash(data: signature.codeDirectory).prefix(20)) == cdhash else { throw .notTheRunningCode }
+        try kernel("its cdhash", &token, operation: CS_OPS_CDHASH, into: &cdhash, size: 20)
+        let signature = try Signature(Data(try blob(&token)))
+        guard try signature.cdhash() == cdhash else { throw .notTheRunningCode }
         guard let cms = signature.cms else { return .adHoc(cdhash: hex(cdhash)) }
+        guard status & UInt32(CS_RUNTIME) != 0 else { throw .notHardened }
         return .signed(identifier: signature.identifier, certificate: try signature.signer(cms))
     }
 
@@ -137,10 +147,10 @@ public enum PeerIdentity: Equatable, Codable, Sendable, CustomStringConvertible 
     }
 
     private static func kernel(
-        _ what: String, _ pid: pid_t, _ token: inout audit_token_t, operation: UInt32,
+        _ what: String, _ token: inout audit_token_t, operation: Int32,
         into buffer: UnsafeMutableRawPointer, size: Int
     ) throws(Unreadable) {
-        guard csops_audittoken(pid, operation, buffer, size, &token) == 0 else {
+        guard csops_audittoken(token.pid, UInt32(operation), buffer, size, &token) == 0 else {
             throw .kernelRefused(operation: what, errno: errno)
         }
     }
@@ -148,13 +158,13 @@ public enum PeerIdentity: Equatable, Codable, Sendable, CustomStringConvertible 
     /// The process's whole signature. Asked for once with room for its header alone, which
     /// the kernel refuses with ERANGE after writing the header, whose length says how much
     /// room the whole needs.
-    private static func blob(_ pid: pid_t, _ token: inout audit_token_t) throws(Unreadable) -> [UInt8] {
+    private static func blob(_ token: inout audit_token_t) throws(Unreadable) -> [UInt8] {
         var header = [UInt8](repeating: 0, count: 8)
-        if csops_audittoken(pid, 10, &header, header.count, &token) != 0, errno != ERANGE {
+        if csops_audittoken(token.pid, UInt32(CS_OPS_BLOB), &header, header.count, &token) != 0, errno != ERANGE {
             throw .kernelRefused(operation: "its signature", errno: errno)
         }
         var blob = [UInt8](repeating: 0, count: max(Int(bigEndian: header, at: 4), header.count))
-        try kernel("its signature", pid, &token, operation: 10, into: &blob, size: blob.count)
+        try kernel("its signature", &token, operation: CS_OPS_BLOB, into: &blob, size: blob.count)
         return blob
     }
 }
@@ -169,7 +179,7 @@ private struct Signature {
 
     init(_ blob: Data) throws(PeerIdentity.Unreadable) {
         let bytes = [UInt8](blob)
-        guard bytes.count >= 12, Int(bigEndian: bytes, at: 0) == 0xFADE_0CC0 else {
+        guard bytes.count >= 12, Int(bigEndian: bytes, at: 0) == Int(CSMAGIC_EMBEDDED_SIGNATURE) else {
             throw .signatureMalformed("it is not an embedded signature")
         }
         var directory: [UInt8]?
@@ -183,9 +193,9 @@ private struct Signature {
             guard length >= 8, offset + length <= bytes.count else { throw .signatureMalformed("a blob runs past its end") }
             switch Int(bigEndian: bytes, at: entry) {
             // The primary code directory, the one the CMS signature covers.
-            case 0: directory = Array(bytes[offset ..< offset + length])
+            case Int(CSSLOT_CODEDIRECTORY): directory = Array(bytes[offset ..< offset + length])
             // The CMS signature, past its own eight-byte blob header.
-            case 0x10000: cms = Array(bytes[offset + 8 ..< offset + length])
+            case Int(CSSLOT_SIGNATURESLOT): cms = Array(bytes[offset + 8 ..< offset + length])
             default: break
             }
         }
@@ -198,6 +208,16 @@ private struct Signature {
         codeDirectory = Data(directory)
         self.identifier = identifier
         self.cms = cms.flatMap { $0.isEmpty ? nil : Data($0) }
+    }
+
+    /// The code directory's cdhash, by the hash its own header names: a SHA-1 is its cdhash
+    /// whole, and a SHA-256 is cut to the twenty bytes the kernel keeps.
+    func cdhash() throws(PeerIdentity.Unreadable) -> [UInt8] {
+        switch Int(codeDirectory[codeDirectory.startIndex + 37]) {
+        case Int(CS_HASHTYPE_SHA1): return Array(Insecure.SHA1.hash(data: codeDirectory))
+        case Int(CS_HASHTYPE_SHA256): return Array(SHA256.hash(data: codeDirectory).prefix(20))
+        case let type: throw .signatureMalformed("its code directory is hashed with type \(type), which this check does not read")
+        }
     }
 
     /// The SHA-1 of the certificate whose signature verifies over the code directory.

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// What the input method did with the text it was asked to insert.
@@ -55,9 +56,10 @@ public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, 
     /// input method out of the Input menu and it is never handed a client.
     case secureInputIsOn
     /// The request came from a process that is not this installation's app, signed as the
-    /// input method is. Answered rather than ignored, because the one that sees it in
-    /// practice is this installation's own app, left talking to an input method copied
-    /// out of a build signed by another certificate - and it needs to hear why.
+    /// input method is. Answered rather than ignored, so the sender learns why instead of
+    /// waiting out its timeout. This installation's own app never reads it: an input method
+    /// signed by another certificate than the app fails the app's own check of who answered
+    /// first, and that is the error it reports. [LAW:no-silent-failure]
     case senderIsNotThisInstallationsApp
 
     public var description: String {
@@ -79,10 +81,13 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
     /// The send itself timed out: the request never entered the far end's queue.
     case requestWasNotTaken(port: String, after: Duration)
     case answerDidNotArrive(port: String, after: Duration)
+    /// The far end took the greeting and did not answer it in time, so the words were never
+    /// sent.
+    case didNotSayWhoItIs(port: String, after: Duration)
     /// The far end took the request and let go of the way back without answering.
     case answerWasAbandoned(port: String)
-    /// Whatever answered is not this installation's input method, so its answer is not
-    /// believed: it may say the words landed when they are sitting in a stranger's process.
+    /// Whatever answered is not this installation's input method. Found out from its answer
+    /// to the greeting, so the words were never sent to it.
     case answeredByAStranger(port: String, pid: pid_t, because: PeerIdentity.NotAdmitted, required: PeerIdentity)
     /// A Mach status none of the others names, which is the arm every unknown status takes.
     case failed(port: String, status: kern_return_t)
@@ -99,10 +104,12 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
             "the input method on \(port) did not take the request within \(after), so the words did not land"
         case let .answerDidNotArrive(port, after):
             "the input method on \(port) took the request but did not answer within \(after), so the words may have landed"
+        case let .didNotSayWhoItIs(port, after):
+            "the input method on \(port) did not say who it is within \(after), so the words were not sent"
         case let .answerWasAbandoned(port):
             "the input method on \(port) took the request and went away without answering, so the words may have landed"
         case let .answeredByAStranger(port, pid, because, required):
-            "pid \(pid) answered on \(port) and is not this installation's input method, \(required) - \(because) - so its answer was not believed and the words did not go through this installation's input method"
+            "pid \(pid) answered on \(port) and is not this installation's input method, \(required) - \(because) - so the words were not sent to it"
         case let .failed(port, status):
             "the request to \(port) failed: \(Mach.describe(status)), so the words may have landed"
         case let .answerWasNotReadable(port, bytes):
@@ -112,6 +119,9 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
 }
 
 /// The wire, which is the one place either half turns a value into bytes or back.
+///
+/// Two messages cross it, told apart by their Mach id: the greeting, empty, which the input
+/// method answers empty once it has admitted the sender, and the words.
 /// [LAW:single-enforcer]
 ///
 /// The request is the text and nothing else, so it crosses as its own UTF-8 and carries no
@@ -120,6 +130,9 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
 /// values, never against the bytes: what matters is that what goes in comes out.
 /// [LAW:behavior-not-structure]
 enum Wire {
+    static let greeting: mach_msg_id_t = 1
+    static let insert: mach_msg_id_t = 2
+
     static func request(_ text: String) -> Data { Data(text.utf8) }
 
     /// [LAW:parse-dont-validate] Hands back the text or nothing at all; a caller cannot
