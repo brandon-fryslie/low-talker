@@ -12,7 +12,7 @@ import Typing
 /// key no longer reaching the frontmost app can each be seen before the app is wired.
 ///
 /// The CLI is not the app: macOS charges a terminal command's event tap to the
-/// terminal, so it needs Input Monitoring and Accessibility for the terminal.
+/// terminal, so it needs Accessibility for the terminal.
 struct HotkeyCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "hotkey",

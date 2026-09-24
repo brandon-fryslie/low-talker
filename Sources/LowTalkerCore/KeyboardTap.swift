@@ -60,24 +60,24 @@ public protocol KeyboardTap {
 }
 
 public enum KeyboardTapError: Error, Equatable, CustomStringConvertible {
-    /// The session would not make the tap, from a tap made without reading the grants
-    /// first - `dext watch`, under a terminal's grants - where the likeliest reason is that
-    /// they are missing. The hotkey's tap reads them first and says this as
+    /// The session would not make the tap, from a tap made without reading the grant
+    /// first - `dext watch`, under a terminal's grant - where the likeliest reason is that
+    /// it is missing. The hotkey's tap reads them first and says this as
     /// `notAllowed` or `refusedWhileAllowed` instead; see `GrantedKeyboardTap`.
     case refused
-    /// The grants were not held, so no tap was asked for: creating one anyway is what makes
+    /// The grant was not held, so no tap was asked for: creating one anyway is what makes
     /// macOS raise its own dialog, unasked, in front of whatever the person was doing.
     case notAllowed
-    /// Both grants read as held and the session still refused the tap. macOS can apply a
-    /// newly given Input Monitoring grant only to a process started after it, so this is
-    /// said as the relaunch it most likely needs rather than as a grant to give again.
+    /// The grant read as held and the session still refused the tap. A grant given while a
+    /// process runs can reach it only once it starts again, so this is said as the
+    /// relaunch it most likely needs rather than as a grant to give again.
     case refusedWhileAllowed
 
     public var description: String {
         switch self {
-        case .refused: "the session refused an event tap; allow this app under System Settings > Privacy & Security, in both Input Monitoring and Accessibility"
-        case .notAllowed: "this hotkey needs Input Monitoring and Accessibility, and this process does not have both yet; allow them under System Settings > Privacy & Security for the app running it - for a command run from a terminal, the terminal"
-        case .refusedWhileAllowed: "Input Monitoring and Accessibility both read as allowed, and macOS still refused the hotkey's event tap; a grant given while a process runs can reach it only once it starts again, so quit and reopen the app running it - for a command run from a terminal, the terminal"
+        case .refused: "the session refused an event tap; allow this app under System Settings > Privacy & Security > Accessibility"
+        case .notAllowed: "this hotkey needs Accessibility, and this process does not have it yet; allow it under System Settings > Privacy & Security > Accessibility for the app running it - for a command run from a terminal, the terminal"
+        case .refusedWhileAllowed: "Accessibility reads as allowed, and macOS still refused the hotkey's event tap; a grant given while a process runs can reach it only once it starts again, so quit and reopen the app running it - for a command run from a terminal, the terminal"
         }
     }
 }
@@ -144,21 +144,21 @@ extension KeyEvent {
     }
 }
 
-/// The event tap as the hotkey uses it: created only once both of its grants are held.
+/// The event tap as the hotkey uses it: created only once its grant is held.
 ///
 /// [LAW:single-enforcer] The hotkey's one way to a keyboard tap, so the one place that makes
 /// sure the hotkey can never put a system dialog on screen: a tap created without its
-/// grants is what makes macOS ask on its own. Wrapped around the tap rather than built
-/// into it, because the grants are the hotkey's need - `dext watch` passes every event and
-/// runs under a terminal's grants, and is refused by macOS itself when it lacks them.
+/// grant is what makes macOS ask on its own. Wrapped around the tap rather than built
+/// into it, because the grant is the hotkey's need - `dext watch` passes every event and
+/// runs under a terminal's grant, and is refused by macOS itself when it lacks them.
 public struct GrantedKeyboardTap: KeyboardTap {
     private let tap: any KeyboardTap
-    /// Whether both grants are held now. [LAW:effects-at-boundaries] The system's reading
+    /// Whether the grant is held now. [LAW:effects-at-boundaries] The system's reading
     /// unless a test says otherwise, so both of this type's answers run against a grant
     /// state a test controls.
     private let granted: @MainActor () -> Bool
 
-    public init(_ tap: any KeyboardTap = SystemKeyboardTap(), granted: @escaping @MainActor () -> Bool = { EventTapAccess.held }) {
+    public init(_ tap: any KeyboardTap = SystemKeyboardTap(), granted: @escaping @MainActor () -> Bool = { EventTapAccess.accessibility }) {
         self.tap = tap
         self.granted = granted
     }

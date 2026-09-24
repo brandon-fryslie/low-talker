@@ -231,7 +231,7 @@ import Testing
     /// The grants macOS keys to the app are named from the CLI, never read: a CLI reading
     /// them would report its terminal's grants as the app's.
     @Test func theCLINamesTheAppsOwnGrantsWithoutReadingThem() {
-        #expect(Self.asTheCLISeesIt.notReadHere == [.microphone, .inputMonitoring, .accessibility])
+        #expect(Self.asTheCLISeesIt.notReadHere == [.microphone, .accessibility])
         #expect(Self.asTheCLISeesIt.description.contains("Microphone: only the app can read this"))
     }
 
@@ -252,7 +252,7 @@ import Testing
                 flavor: .development, delivery: .inputMethod, source: source,
                 reader: .theApp(helperAwaitingApproval: false), cli: "lowtalker").requirements.map(\.row)
         }
-        #expect(rows(.eventTap) == [.microphone, .inputMonitoring, .accessibility, .inputMethod])
+        #expect(rows(.eventTap) == [.microphone, .accessibility, .inputMethod])
         #expect(rows(.registeredHotKey) == [.microphone, .inputMethod])
     }
 

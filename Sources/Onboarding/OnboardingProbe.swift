@@ -190,8 +190,6 @@ public extension OnboardingProbe {
                 case .withheld(let reason): reason
                 }
                 requirements.append(.microphone(withheld, flavor: flavor))
-            case .inputMonitoring:
-                requirements.append(.inputMonitoring(held: EventTapAccess.inputMonitoring, flavor: flavor))
             case .accessibility:
                 requirements.append(.accessibility(held: EventTapAccess.accessibility, flavor: flavor))
             case .inputMethod:

@@ -52,11 +52,6 @@ public extension Requirement.Row {
     /// compile without the three answers a person needs before being asked for it.
     func explanation(for flavor: Flavor) -> Explanation {
         let app = flavor.displayName
-        let otherHotkey = """
-            That hotkey stays off. You can still dictate: choose the other hotkey under \
-            Hotkey source in the menu. macOS hands that one to \(app) directly, and it needs \
-            no permission.
-            """
         let otherDeliveryThanTheVirtualKeyboard = """
             The virtual keyboard can't type. You can choose Input Method under Delivery in \
             the menu instead; it needs no driver and no helper.
@@ -74,24 +69,21 @@ public extension Requirement.Row {
                     Nothing can be dictated. \(app) stays in the menu bar, and you can come \
                     back to this step from \(GuidedSetup.title(for: flavor)) at any time.
                     """)
-        case .inputMonitoring:
-            Explanation(
-                why: """
-                    Your dictation key is one you already have, like Right Option. To notice \
-                    you pressing it, \(app) has to watch the keyboard. It looks for that one \
-                    key and ignores the rest: nothing you type is kept or sent anywhere.
-                    """,
-                enables: "Starting dictation with a modifier key on its own.",
-                ifSkipped: otherHotkey)
         case .accessibility:
             Explanation(
                 why: """
-                    When you press your dictation key, \(app) stops that key press from also \
-                    reaching the app you are typing in, so the app does not react to it. \
-                    macOS counts that as controlling your computer, which is why it asks.
+                    Your dictation key is one you already have, like Right Option. \(app) \
+                    watches the keyboard for that one key and stops it from also reaching the \
+                    app you are typing in. It ignores every other key: nothing you type is \
+                    kept or sent anywhere. macOS counts that as controlling your computer, \
+                    which is why it asks.
                     """,
-                enables: "Dictating into any app without the hotkey leaking into it.",
-                ifSkipped: otherHotkey)
+                enables: "Starting dictation with a modifier key on its own, without it leaking into your app.",
+                ifSkipped: """
+                    That hotkey stays off. You can still dictate: choose the other hotkey under \
+                    Hotkey source in the menu. macOS hands that one to \(app) directly, and it \
+                    needs no permission.
+                    """)
         case .inputMethod:
             Explanation(
                 why: """
@@ -141,7 +133,6 @@ public extension Requirement.Row {
     var askTitle: String? {
         switch self {
         case .microphone: "Allow Microphone…"
-        case .inputMonitoring: "Allow Input Monitoring…"
         case .accessibility: "Allow Accessibility…"
         case .inputMethod: "Switch On Input Method…"
         case .keyboardHelper: "Allow Keyboard Helper…"
@@ -155,7 +146,6 @@ public extension Requirement.Row {
         let privacy = "x-apple.systempreferences:com.apple.preference.security?"
         return switch self {
         case .microphone: URL(string: privacy + "Privacy_Microphone")
-        case .inputMonitoring: URL(string: privacy + "Privacy_ListenEvent")
         case .accessibility: URL(string: privacy + "Privacy_Accessibility")
         case .inputMethod: URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension")
         case .driverExtension, .keyboardHelper: URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")

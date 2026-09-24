@@ -17,7 +17,7 @@ import Typing
 /// it, Karabiner-VirtualHIDDevice-Daemon, which runs as root and takes reports over a
 /// Unix domain socket in a root-only directory. That socket is the way in, and root is
 /// what it takes to reach it: `type` needs sudo. `watch` runs as the user and needs
-/// the terminal's Input Monitoring and Accessibility, like `hotkey`.
+/// the terminal's Accessibility, like `hotkey`.
 struct DextCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "dext",

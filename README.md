@@ -8,7 +8,7 @@ LowTalker installs twice and both copies run at the same time. The release copy 
 
 They are one program, not two. What separates them is four names macOS keys an installation by — the bundle identifier, the Mach service, the launchd label, and the config file — and every one of them is decided in `Sources/Flavors/Flavor.swift`. Nothing else differs. Each bundle carries its own copy of the model, as below.
 
-The cost of the second copy is paid in grants: it needs its own Microphone, Accessibility and Input Monitoring approvals, its own Login Items approval, and one cold Neural Engine model load, that cache being keyed by signing identifier.
+The cost of the second copy is paid in grants: it needs its own Microphone and Accessibility approvals, its own Login Items approval, and one cold Neural Engine model load, that cache being keyed by signing identifier.
 
 ## Building
 
@@ -184,7 +184,7 @@ Each press prints `began` as the key goes down. A release after the threshold (2
 
 Which chord that is depends on the installation, and the CLI built here defaults to the development one: `lowtalker hotkey` watches Right Option and Right Command together unless `--flavor release` is passed, in which case it watches Right Option alone. Every command that reaches a helper or reads a config takes the same `--flavor`, and defaults the same way: to the installation whose app carries the binary, and to the development copy for `.build/debug/lowtalker`, which no app carries ("The CLI without a checkout" above).
 
-The tap needs Input Monitoring and Accessibility, and no tap is created until both are held: creating one without them is what makes macOS raise its own dialog, unasked. macOS charges a terminal command's tap to the terminal, so the command fails with `this hotkey needs Input Monitoring and Accessibility` until the terminal has both under System Settings > Privacy & Security; the app asks on its own behalf, from its guided setup.
+The tap needs Accessibility, and no tap is created until it is held: creating one without it is what makes macOS raise its own dialog, unasked. Accessibility alone is enough: macOS also checks Input Monitoring for the tap, and answers it from the Accessibility grant (measured on macOS 15.0.1). macOS charges a terminal command's tap to the terminal, so the command fails with `this hotkey needs Accessibility` until the terminal has it under System Settings > Privacy & Security > Accessibility; the app asks on its own behalf, from its guided setup.
 
     .build/debug/lowtalker hotkey --heard-by registeredHotKey   # the registered hot key, needing neither
 
@@ -320,7 +320,7 @@ The status menu lists both under "Delivery" with the current one checked, and ch
 
 How the hotkey is heard is a second choice, asked beside the delivery and independent of it: any source goes with any delivery.
 
-- **Event tap.** Right Option (Right Command+Right Option for the development copy, Right Command first). A chord of modifiers alone, which only a tap on every key can hear, so it needs Input Monitoring and Accessibility.
+- **Event tap.** Right Option (Right Command+Right Option for the development copy, Right Command first). A chord of modifiers alone, which only a tap on every key can hear, so it needs Accessibility.
 - **Registered hot key.** Option+Shift+Command+X (Option+Command+X for the development copy), registered with the window server, so it needs nothing. macOS registers only a chord with a key in it.
 
 Either way, hold the chord while you speak, or tap it to start and again to stop. The menu lists both under "Hotkey source", each named by its chord on your keyboard layout and what macOS asks for it. The choice is kept under `hotkeySource`; `defaults delete ai.promptctl.low-talker.dev hotkeySource` makes the development copy ask again. The app logs `setup: delivery inputMethod, hotkey source registeredHotKey` at launch, and `Delivery: asked, answered …` or `HotkeySource: asked, answered …` when it asked.
@@ -343,7 +343,7 @@ The milestone 1 loop is closed: hold the hotkey, speak, release, and what was sa
     scripts/keyboard-helper install
     .build/debug/lowtalker dictate    # hold the hotkey, speak, release, until interrupted
 
-The model is loaded before the tap goes up, so `ready: hold Right Command+Right Option to dictate` on stdout — this installation's own chord, the development one by default — means the next press will type. Key-down marks where the utterance begins on the audio ring and reads which app is in front, and does nothing else, because it runs inside the tap's callback where a slow handler is what makes macOS switch the tap off; key-up ends the mark, and the clip is heard, routed, and typed off that thread. Each press prints one line for the session, which is how many words were heard, how long after key-up, how many actions went into which app, and then the text itself, followed by the executor's line for every action performed, the `typed 21 characters into com.apple.TextEdit, key-up to acknowledged 312 ms` shape from `act` above. Sessions are heard and typed on one serial queue, so two presses in quick succession type in the order they were spoken however long the engine takes on either. Like `act`, this needs the helper installed and no sudo, and macOS charges a terminal command's tap and microphone to the terminal, so it runs under the terminal's own Input Monitoring, Accessibility and microphone grants: the loop can be proven on a Mac before the app has grants of its own.
+The model is loaded before the tap goes up, so `ready: hold Right Command+Right Option to dictate` on stdout — this installation's own chord, the development one by default — means the next press will type. Key-down marks where the utterance begins on the audio ring and reads which app is in front, and does nothing else, because it runs inside the tap's callback where a slow handler is what makes macOS switch the tap off; key-up ends the mark, and the clip is heard, routed, and typed off that thread. Each press prints one line for the session, which is how many words were heard, how long after key-up, how many actions went into which app, and then the text itself, followed by the executor's line for every action performed, the `typed 21 characters into com.apple.TextEdit, key-up to acknowledged 312 ms` shape from `act` above. Sessions are heard and typed on one serial queue, so two presses in quick succession type in the order they were spoken however long the engine takes on either. Like `act`, this needs the helper installed and no sudo, and macOS charges a terminal command's tap and microphone to the terminal, so it runs under the terminal's own Accessibility and microphone grants: the loop can be proven on a Mac before the app has grants of its own.
 
 The app wires the same loop to the real microphone, the WhisperKit engine and the root keyboard helper, and writes each session to the unified log under the `dictation` category rather than to stdout. On this Mac it launched, loaded `large-v3-v20240930_turbo_632MB` and armed the hotkey, the model ready about 2.7 seconds after launch; two utterances spoken at the microphone were transcribed and typed into TextEdit, 26 characters and 24 characters, 649 ms and 668 ms after key-up. A separate run played a recorded fixture through the speakers for the microphone to hear and typed "Hello world, this is Low Talker." into TextEdit. Both times fall in the range the batch column of the table under "The latency harness" shows for the default model, and both are more than twice the 300 ms the loop is aiming at; getting under that is the encoder's problem, not this loop's.
 
@@ -463,7 +463,7 @@ macOS raises the Keyboard Setup Assistant the first time the virtual keyboard ap
 
 The file is a shared one — it held fourteen devices' answers on this Mac — so the write is a read, a merge and a write back, and a cache that cannot be parsed is refused with nothing written rather than replaced by a file holding our one entry. Our own key is what gets written, and never another device's: this cache already held `10203-5824-33` from some unrelated country-33 device, and initialising this keyboard as country 33 to collide with that entry would make the device declare something untrue about itself, and would work only until that entry was cleared. A helper that could not file the answer says so in its log and types anyway; onboarding's row stays unmet until the answer is actually on disk, so the failure is reported twice and swallowed nowhere.
 
-`watch` runs as the logged-in user and needs the terminal's Input Monitoring and Accessibility, as `hotkey` does. It sees the synthetic keys too: the app's own tap observes the keys the app types, which is a thing anything built on this has to account for.
+`watch` runs as the logged-in user and needs the terminal's Accessibility, as `hotkey` does. It sees the synthetic keys too: the app's own tap observes the keys the app types, which is a thing anything built on this has to account for.
 
 ### The keyboard helper
 
@@ -638,7 +638,6 @@ On inferno.local (Mac16,6, macOS 26.5.1, System Integrity Protection enabled): `
 prints everything that must hold before low-talker can hear and type, read off this Mac now, with the step for whatever is missing indented under it. On a Mac whose development helper was never registered:
 
     Microphone: only the app can read this; see Set Up in its menu
-    Input Monitoring: only the app can read this; see Set Up in its menu
     Accessibility: only the app can read this; see Set Up in its menu
     Input method: switched on
     Driver extension: running
@@ -658,9 +657,9 @@ and, on a Mac whose helper has not started yet, that last row instead reads:
 
 Both transcripts are illustrative. `make check-docs` holds this file to the reading words — `running`, `will ask on first use`, and the rest — but nothing checks the indented step text under them against the strings in `Requirement`. Read those steps for their shape; their wording can drift from the program's without anything failing.
 
-Every row is `Name: what was read`. The rows are those of the delivery and hotkey source this installation's app has chosen, read from the app's own defaults (`defaults read ai.promptctl.low-talker.dev`), and of every answer to a choice it has not made yet. The exit status is 0 when nothing on those rows that the CLI can read is left to do and 2 when something is, so an input method setup is not held back by a driver it never needed. Three rows are the app's own: macOS keys the Microphone, Input Monitoring and Accessibility grants to the app that holds them, so a CLI asking would be told about its terminal. Those are named and never read from here, and the menu and the guided setup read them. Every row is printed every time, met or not, since a list that showed only what was wrong leaves a reader unable to tell "checked and fine" from "never checked". A fact that could not be read is a row of its own reading `could not be read`, with the reason as its step, and it never counts as met, so a reading nobody managed to take can never come out as ready.
+Every row is `Name: what was read`. The rows are those of the delivery and hotkey source this installation's app has chosen, read from the app's own defaults (`defaults read ai.promptctl.low-talker.dev`), and of every answer to a choice it has not made yet. The exit status is 0 when nothing on those rows that the CLI can read is left to do and 2 when something is, so an input method setup is not held back by a driver it never needed. Two rows are the app's own: macOS keys the Microphone and Accessibility grants to the app that holds them, so a CLI asking would be told about its terminal. Those are named and never read from here, and the menu and the guided setup read them. Every row is printed every time, met or not, since a list that showed only what was wrong leaves a reader unable to tell "checked and fine" from "never checked". A fact that could not be read is a row of its own reading `could not be read`, with the reason as its step, and it never counts as met, so a reading nobody managed to take can never come out as ready.
 
-The menu-bar app's status menu shows the same list in the same words, holding only the rows the chosen delivery and hotkey need: the event tap's two grants appear only while the event tap is the hotkey source, the input method's row only while it is the delivery, and the driver, helper and assistant only while the virtual keyboard is. All three surfaces, the CLI, the menu and the guided setup, read one list, assembled in `OnboardingProbe.readiness` and nowhere else. The app has no words of its own for `SMAppService.Status` any more: the private `describe(_:)` that turned that enum into user-facing text is gone, so the app and the CLI cannot say different things about the same fact. The menu holds no state either. It is emptied and rebuilt from a fresh reading every time it is about to be shown, in `NSMenuDelegate.menuNeedsUpdate`. Measured on this Mac, that reading makes the menu wait about 220 ms, spent almost entirely in the driver probe's subprocesses. It is paid on every open rather than cached because a cached reading is stale exactly when it matters: right after the user has given the approval the menu was telling them to give.
+The menu-bar app's status menu shows the same list in the same words, holding only the rows the chosen delivery and hotkey need: the event tap's grant appears only while the event tap is the hotkey source, the input method's row only while it is the delivery, and the driver, helper and assistant only while the virtual keyboard is. All three surfaces, the CLI, the menu and the guided setup, read one list, assembled in `OnboardingProbe.readiness` and nowhere else. The app has no words of its own for `SMAppService.Status` any more: the private `describe(_:)` that turned that enum into user-facing text is gone, so the app and the CLI cannot say different things about the same fact. The menu holds no state either. It is emptied and rebuilt from a fresh reading every time it is about to be shown, in `NSMenuDelegate.menuNeedsUpdate`. Measured on this Mac, that reading makes the menu wait about 220 ms, spent almost entirely in the driver probe's subprocesses. It is paid on every open rather than cached because a cached reading is stale exactly when it matters: right after the user has given the approval the menu was telling them to give.
 
 The driver extension's row reads whichever of the nine verdict words above `lowtalker driver` returns, and each word has its own step, because they are not degrees of one problem: `absent` wants an install, `awaiting-approval` wants the click in Login Items & Extensions, `pending-reboot` wants a restart.
 
@@ -705,21 +704,20 @@ The third of those is what this Mac is in right now for the development copy: la
 
 ### The guided setup
 
-The app launches without raising any system dialog: no Microphone, Input Monitoring, Accessibility, Login Items or input method prompt, and no driver request. Launch reads every grant, which asks nothing, and brings dictation up as far as what is already granted allows. What is missing is asked for from Set Up LowTalker… in the menu (Set Up LowTalker Dev… for the development copy), which opens on its own after the launch that asks which delivery and hotkey to use. The menu item says how many steps are left.
+The app launches without raising any system dialog: no Microphone, Accessibility, Login Items or input method prompt, and no driver request. Launch reads every grant, which asks nothing, and brings dictation up as far as what is already granted allows. What is missing is asked for from Set Up LowTalker… in the menu (Set Up LowTalker Dev… for the development copy), which opens on its own after the launch that asks which delivery and hotkey to use. The menu item says how many steps are left.
 
-The setup is a walk over the same list the menu shows, one requirement per page. Each page says why the app asks, what the grant lets you do, and what still works if you skip it, before the button that makes macOS ask. Pressing that button raises one system dialog, naming the app. Skip for Now moves on and leaves the app running; skipped steps wait on the last page, each with what skipping it costs and a button back to it. The page is redrawn from a fresh reading whenever the window comes back to the front, so a switch turned on in System Settings clears its step there without a relaunch. When a reading after a request, on coming back to the front, or on opening the menu finds a grant the previous reading of the same setup did not, dictation comes up behind it. Most of these dialogs are shown once per app, so once a step has been asked in a walk and is still unmet, its button becomes Open System Settings and the page says why. A new Input Monitoring grant can reach a running app only after it restarts; when both grants read as allowed and macOS still refuses the tap, the hotkey's status says to quit and reopen the app.
+The setup is a walk over the same list the menu shows, one requirement per page. Each page says why the app asks, what the grant lets you do, and what still works if you skip it, before the button that makes macOS ask. Pressing that button raises one system dialog, naming the app. Skip for Now moves on and leaves the app running; skipped steps wait on the last page, each with what skipping it costs and a button back to it. The page is redrawn from a fresh reading whenever the window comes back to the front, so a switch turned on in System Settings clears its step there without a relaunch. When a reading after a request, on coming back to the front, or on opening the menu finds a grant the previous reading of the same setup did not, dictation comes up behind it. Most of these dialogs are shown once per app, so once a step has been asked in a walk and is still unmet, its button becomes Open System Settings and the page says why. When Accessibility reads as allowed and macOS still refuses the tap, the hotkey's status says to quit and reopen the app.
 
 | Step | Shown when | What the button does |
 |---|---|---|
 | Microphone | always | asks for the microphone (`AVCaptureDevice.requestAccess`) |
-| Input Monitoring | the hotkey source is the event tap | asks to read the keyboard (`CGRequestListenEventAccess`) |
-| Accessibility | the hotkey source is the event tap | asks to act on other apps' input (`AXIsProcessTrustedWithOptions`, with the prompt) |
+| Accessibility | the hotkey source is the event tap | asks to read the keyboard and act on other apps' input (`AXIsProcessTrustedWithOptions`, with the prompt) |
 | Input method | the delivery is the input method | switches this installation's input method on (`TISEnableInputSource`), which macOS asks about |
 | Driver extension | the delivery is the virtual keyboard | nothing: an administrator installs it with `lowtalker driver install`, so the page names that and opens Login Items & Extensions. The install is the one request macOS words with another product's name, since the package's own Manager app files it: the notice reads "Karabiner-VirtualHIDDevice-Manager" would like to use a new driver extension, and the step says so before the command runs |
 | Keyboard helper | the delivery is the virtual keyboard | registers the helper (`SMAppService.register`), which lands it in Login Items & Extensions |
 | Keyboard Setup Assistant | the delivery is the virtual keyboard | nothing: the helper answers it as it starts |
 
-Those are the only places the app calls anything that can put a dialog on screen. The keyboard tap is not created until both of its grants are held, and the input method is copied and registered at launch but never switched on there.
+Those are the only places the app calls anything that can put a dialog on screen. The keyboard tap is not created until its grant is held, and the input method is copied and registered at launch but never switched on there.
 
 So the microphone's row reads one of four things:
 
@@ -728,7 +726,7 @@ So the microphone's row reads one of four things:
 - `turned off` means the person declined or switched it off since, and only System Settings > Privacy & Security > Microphone turns it back on.
 - `restricted by policy` means whoever manages this Mac has forbidden it.
 
-So each of the event tap's two rows, Input Monitoring and Accessibility, reads one of two things:
+So the event tap's row, Accessibility, reads one of two things:
 
 - `allowed` means the app holds the grant.
 - `not allowed` means it does not, and the step names the Privacy & Security pane to turn it on in.
@@ -754,7 +752,7 @@ Without it, `make app` fails with an xcodebuild error beginning `No certificate 
 
 ### Why a certificate
 
-macOS keys the Microphone, Accessibility, and Input Monitoring grants to the app's code signature, its "designated requirement". For an ad-hoc-signed build that requirement is the hash of the specific binary, so every rebuild is a new app as far as macOS is concerned and the grants are gone. For a certificate-signed build the requirement names the certificate instead, and it survives rebuilds.
+macOS keys the Microphone and Accessibility grants to the app's code signature, its "designated requirement". For an ad-hoc-signed build that requirement is the hash of the specific binary, so every rebuild is a new app as far as macOS is concerned and the grants are gone. For a certificate-signed build the requirement names the certificate instead, and it survives rebuilds.
 
 ### What the command does
 

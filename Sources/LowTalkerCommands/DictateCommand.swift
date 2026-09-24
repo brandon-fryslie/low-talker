@@ -13,7 +13,7 @@ import Typing
 /// what was said is typed into the app in front.
 ///
 /// The CLI is not the app: macOS charges a terminal command's event tap to the
-/// terminal, so this runs under the terminal's Accessibility and Input Monitoring and
+/// terminal, so this runs under the terminal's Accessibility and
 /// the loop can be proven on a Mac before the app has its own. The app wires the same
 /// `Dictation`; the one difference here is that the engine is loaded before the tap
 /// goes up, so "ready" on stdout means a press will type.

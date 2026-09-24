@@ -46,7 +46,6 @@ public extension Requirement {
     /// surface and a grant missing here is missing from all of them. [LAW:one-source-of-truth]
     enum Row: String, Sendable, Hashable, CaseIterable {
         case microphone = "Microphone"
-        case inputMonitoring = "Input Monitoring"
         case accessibility = "Accessibility"
         case inputMethod = "Input method"
         case driverExtension = "Driver extension"
@@ -67,7 +66,7 @@ public extension Requirement {
         public var serves: Serves {
             switch self {
             case .microphone: .everySetup
-            case .inputMonitoring, .accessibility: .hearing(.eventTap)
+            case .accessibility: .hearing(.eventTap)
             case .inputMethod: .delivery(.inputMethod)
             case .driverExtension, .keyboardHelper, .keyboardSetupAssistant: .delivery(.virtualKeyboard)
             }
@@ -92,7 +91,7 @@ public extension Requirement {
         /// [LAW:no-silent-failure]
         public var readOnlyByTheApp: Bool {
             switch self {
-            case .microphone, .inputMonitoring, .accessibility: true
+            case .microphone, .accessibility: true
             case .inputMethod, .driverExtension, .keyboardHelper, .keyboardSetupAssistant: false
             }
         }
@@ -104,7 +103,7 @@ public extension Requirement {
         /// they are met.
         public var stopsDictation: Bool {
             switch self {
-            case .microphone, .inputMonitoring, .accessibility, .inputMethod: true
+            case .microphone, .accessibility, .inputMethod: true
             case .driverExtension, .keyboardHelper, .keyboardSetupAssistant: false
             }
         }
@@ -240,22 +239,12 @@ public extension Requirement {
         }
     }
 
-    /// Input Monitoring, which the event tap needs to read the keys.
-    static func inputMonitoring(held: Bool, flavor: Flavor) -> Requirement {
-        privacyGrant(.inputMonitoring, held: held, flavor: flavor)
-    }
-
-    /// Accessibility, which the event tap needs to hold the chord back from the app in front.
+    /// Accessibility, which the event tap needs to read the keys and hold the chord back
+    /// from the app in front.
     static func accessibility(held: Bool, flavor: Flavor) -> Requirement {
-        privacyGrant(.accessibility, held: held, flavor: flavor)
-    }
-
-    /// [LAW:one-type-per-behavior] The two grants read, word and step, the same way; only
-    /// the row differs.
-    private static func privacyGrant(_ row: Row, held: Bool, flavor: Flavor) -> Requirement {
-        Requirement(row: row, reads: reads(forGrantHeld: held), step: held ? nil : """
+        Requirement(row: .accessibility, reads: reads(forGrantHeld: held), step: held ? nil : """
             Allow it in \(GuidedSetup.title(for: flavor)), in its menu, or turn on
-            \(flavor.displayName) in \(privacyPane(row)).
+            \(flavor.displayName) in \(privacyPane(.accessibility)).
             """)
     }
 
@@ -643,12 +632,11 @@ public extension Requirement {
         // more than Swift 6.1's type checker will finish in time.
         let answers: [MicrophoneAuthorization.Withheld?] = [nil] + MicrophoneAuthorization.Withheld.allCases
         let microphone: [(row: Row, reading: String)] = answers.map { (row: Row.microphone, reading: reads(forMicrophone: $0)) }
-        let inputMonitoring: [(row: Row, reading: String)] = [true, false].map { (row: Row.inputMonitoring, reading: reads(forGrantHeld: $0)) }
         let accessibility: [(row: Row, reading: String)] = [true, false].map { (row: Row.accessibility, reading: reads(forGrantHeld: $0)) }
         let inputMethod: [(row: Row, reading: String)] = [true, false].map { (row: Row.inputMethod, reading: reads(forSwitchedOn: $0)) }
         let driver: [(row: Row, reading: String)] = DriverState.allCases.map { (row: Row.driverExtension, reading: reads(for: $0)) }
         let helper: [(row: Row, reading: String)] = HelperStanding.allCases.map { (row: Row.keyboardHelper, reading: reads(for: $0)) }
         let assistant: [(row: Row, reading: String)] = [true, false].map { (row: Row.keyboardSetupAssistant, reading: reads(forAnswered: $0)) }
-        return [microphone, inputMonitoring, accessibility, inputMethod, driver, helper, assistant].flatMap { $0 }
+        return [microphone, accessibility, inputMethod, driver, helper, assistant].flatMap { $0 }
     }
 }
