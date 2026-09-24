@@ -104,8 +104,8 @@ let package = Package(
         .target(name: "VirtualKeyboard", dependencies: ["DriverExtension", "Keystrokes", "Pointing"]),
         // Everything that must hold before low-talker can type, as a list a reader can
         // act on: what was read off this Mac, and the step for whatever is missing. It
-        // links the driver's vocabulary, the service seam, the grants, the choices and
-        // the input source's switch, and not the core - so both the CLI and the menu-bar
+        // links the driver's vocabulary, the service seam, the flavor, the grants, the
+        // choices and the input source's switch, and not the core - so both the CLI and the menu-bar
         // app can show the same words, and the app's guided setup walks the same list.
         // [LAW:one-source-of-truth] [LAW:one-way-deps]
         .target(name: "Onboarding", dependencies: ["DriverExtension", "KeyboardService", "Flavors", "Choices", "Grants", "InputSource"]),
