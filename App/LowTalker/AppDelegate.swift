@@ -459,19 +459,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Sets the listening setup up again only when its delivery reads as not ready - an
-    /// input method deleted by hand, or switched off - and says what is still missing after.
+    /// When the listening delivery reads as not ready, sets it up again if its install can
+    /// put that right - an input method deleted by hand, or switched off - and says what is
+    /// still missing either way.
     ///
     /// [LAW:no-ambient-temporal-coupling] Queued behind any switch in progress and read
     /// only once it has finished, so a second click while the first repair runs finds it
-    /// done and does nothing, and a delivery that reads ready is never torn down: a press
-    /// latched open over it is left to finish.
+    /// done and does nothing. A delivery that reads ready, or one whose missing steps only a
+    /// person can take, is never torn down: a press latched open over it is left to finish.
     private func repair(_ setup: Setup) {
         let before = switching
         switching = Task {
             await before?.value
             guard !quitting, !readiness(of: setup.delivery).ready else { return }
-            await adopt(setup)
+            if setup.delivery.installRepairsIt { await adopt(setup) }
             showWhatIsMissing(for: setup.delivery)
         }
     }
@@ -834,6 +835,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 }
 
 private extension Delivery {
+    /// Whether installing it again can put right what its requirements say is missing. The
+    /// input method's install copies, registers and switches on; every unmet row of the
+    /// virtual keyboard waits on a person - an install, an approval, a restart.
+    var installRepairsIt: Bool {
+        switch self {
+        case .inputMethod: true
+        case .virtualKeyboard: false
+        }
+    }
+
     /// The name a person picks it by, in the menu and in the first-launch question.
     var title: String {
         switch self {
