@@ -106,9 +106,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// The root keyboard helper, registered from the bundle's own launchd plist.
     ///
-    /// Only from the keyboard helper's step in setup, which a person starts: registering
-    /// is what lands the job in Login Items as "requires approval" and puts macOS's
-    /// background item notice on screen, so a launch never does it.
+    /// Two callers. The keyboard helper's step in setup, which a person starts: a first
+    /// registration is what lands the job in Login Items as "requires approval" and puts
+    /// macOS's background item notice on screen. And adoption, launch included, but only
+    /// once the job is already enabled, where registering again shows nothing and keeps the
+    /// job pointing at this copy of the app; see `install(_:)`.
     ///
     /// Answers with why the registration failed, or nil when it landed. `SMAppService`
     /// answers only whether this app's own registration is approved, and that is one of two
@@ -124,7 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // permitted": smd will not bootstrap a daemon nobody has approved yet, and the
             // registration it made reads back as waiting for approval. That is the step on
             // the way in, and the helper's row says what is left. Anything else is a
-            // registration that did not land, and the step says why. [LAW:no-silent-failure]
+            // registration that did not land, and the caller says why. [LAW:no-silent-failure]
             return helperService.status == .requiresApproval
                 ? nil : "the keyboard helper could not be registered: \(error.localizedDescription)"
         }
@@ -349,8 +351,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// is also what keeps the input method selected across a change of hotkey source.
     ///
     /// Nothing here puts a system dialog on screen, because adoption runs at launch. The
-    /// virtual keyboard's helper is registered from its step in setup, and the input
-    /// method is switched on from its own; see `ask(_:)`.
+    /// virtual keyboard's helper is first registered from its step in setup, and only an
+    /// already enabled registration is refreshed here, which shows nothing; the input
+    /// method is switched on from its own step. See `ask(_:)`.
     ///
     /// [LAW:no-silent-failure] An install that fails leaves a hotkey that would hear every
     /// press and insert nothing, so it comes back as a refusal for the status line.
