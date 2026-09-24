@@ -471,8 +471,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let before = switching
         switching = Task {
             await before?.value
-            guard !quitting, !readiness(of: setup.delivery).ready else { return }
+            // A choice made meanwhile supersedes this one: it is queued behind, and a repair
+            // of the setup it replaces would only reinstall and alert about a delivery left.
+            guard !quitting, setup == chosenSetup, !readiness(of: setup.delivery).ready else { return }
             if setup.delivery.installRepairsIt { await adopt(setup) }
+            guard setup == chosenSetup else { return }
             showWhatIsMissing(for: setup.delivery)
         }
     }
