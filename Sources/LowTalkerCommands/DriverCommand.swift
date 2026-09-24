@@ -2,18 +2,147 @@ import ArgumentParser
 import DriverExtension
 import Foundation
 
-/// Where the virtual keyboard's driver extension stands on this Mac, read out loud.
+/// The virtual keyboard's driver extension on this Mac: where it stands, and the verbs
+/// that put it there and take it off.
 ///
-/// `scripts/virtual-hid-driver` installs and removes the driver and calls these to find
-/// out what it is looking at. The probe lives in Swift rather than in that script
-/// because the menu-bar app has to reach the same answer in the same words, and an app
-/// in /Applications cannot run a script out of this repo. [LAW:one-source-of-truth]
+/// All of it is here, in the binary each app carries, so a Mac with no clone of this repo
+/// installs the driver with the same program that reads its state, and the menu-bar app
+/// names the same verbs. [LAW:one-source-of-truth]
 struct DriverCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "driver",
-        abstract: "Read where the virtual keyboard's driver extension stands on this Mac.",
-        subcommands: [State.self, Registered.self, Receipt.self, Pins.self]
+        abstract: "Read, install and remove the virtual keyboard's driver extension.",
+        subcommands: [State.self, Expect.self, Install.self, Remove.self, Fetch.self, Check.self, Registered.self, Receipt.self, Pins.self]
     )
+}
+
+extension DriverCommand {
+    /// Asserts the verdict `state` would print, for a caller that wants a machine in one
+    /// state before going on.
+    struct Expect: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "expect",
+            abstract: "Exit 0 when the driver is in the named state, and 1 saying what it is instead."
+        )
+
+        @Argument(help: "The verdict the driver should be in.")
+        var verdict: DriverState
+
+        func run() throws {
+            // An unreadable machine confirms nothing, `unknown` included: `state` exits 1 on
+            // it too, whatever word it prints.
+            let got: DriverState
+            do { got = DriverState(try DriverProbe.facts()) } catch {
+                throw DriverVerb.refused("could not read the driver, so nothing is confirmed: \(error)")
+            }
+            guard got == verdict else { throw DriverVerb.refused("expected the driver to be '\(verdict.rawValue)' but it is '\(got.rawValue)'") }
+            FileHandle.standardError.write(Data("lowtalker driver: confirmed '\(verdict.rawValue)'\n".utf8))
+        }
+    }
+
+    /// [CLI] Exit 0 when the driver is active, 2 when it waits on the approval click, and 1
+    /// when the install could not do its part.
+    struct Install: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "install",
+            abstract: "Install the pinned driver package and ask macOS to activate it.",
+            discussion: """
+                Downloads the pinned package, or takes the one named - such as the copy a \
+                release carries in Contents/Resources - verifies its checksum and signature, \
+                installs it with sudo, and asks macOS to activate the driver as you. Run it as \
+                yourself, not under sudo: the approval you give answers the request of whoever \
+                asked. Exits 0 when the driver is active, 2 when it waits for your approval \
+                in System Settings, and 1 otherwise.
+                """
+        )
+
+        @Argument(help: "A package file to install instead of downloading one.", completion: .file())
+        var package: String?
+
+        func run() throws {
+            try DriverVerb.end(DriverVerb.refusing { try DriverInstall.install(from: package.map { URL(fileURLWithPath: $0) }, cli: LowTalker.path) })
+        }
+    }
+
+    /// [CLI] Exit 0 when the driver is gone, 2 when only a restart is left, and 1 when the
+    /// removal refused.
+    struct Remove: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "remove",
+            abstract: "Deactivate the driver extension, delete its files and forget its receipt.",
+            discussion: "Exits 0 when the driver is gone, 2 when macOS keeps it registered until a restart, and 1 otherwise."
+        )
+
+        func run() throws { try DriverVerb.end(DriverVerb.refusing { try DriverInstall.remove(cli: LowTalker.path) }) }
+    }
+
+    /// [CLI] The copy's path on stdout, and nothing else there, so a build can capture it.
+    struct Fetch: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "fetch",
+            abstract: "Download and verify the pinned package into a directory, for a release to carry."
+        )
+
+        @Argument(help: "The directory to put the package in.", completion: .directory)
+        var directory: String
+
+        func run() throws {
+            print(try DriverVerb.refusing { try DriverInstall.fetch(into: URL(fileURLWithPath: directory)) }.path)
+        }
+    }
+
+    /// Judges a package file where it lies, for a build checking what it put in a bundle.
+    /// An install never trusts this verdict: it copies the file and judges the copy.
+    struct Check: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "check",
+            abstract: "Verify a package file against the pinned checksum and signature."
+        )
+
+        @Argument(help: "The package file.", completion: .file())
+        var package: String
+
+        func run() throws {
+            _ = try DriverVerb.refusing { try DriverPackage.verify(URL(fileURLWithPath: package), as: "the package at \(package)") }
+            FileHandle.standardError.write(Data("lowtalker driver: \(package) is the pinned package \(DriverPackage.version)\n".utf8))
+        }
+    }
+}
+
+extension DriverState: ExpressibleByArgument {}
+
+/// How the driver verbs leave the process, in one place so every verb exits the same way.
+///
+/// [CLI] The exit codes are the verbs' contract: 0 done, 2 waiting on a person, 1 anything
+/// else - a refusal or any failure underneath one - always said as `lowtalker driver: ...`.
+enum DriverVerb {
+    /// What an ending says and the code it exits with. Pure, so the contract is tested
+    /// without a driver to install.
+    static func exit(for ending: DriverInstall.Ending) -> (said: String, code: Int32) {
+        switch ending {
+        case .done(let said): ("lowtalker driver: \(said)", 0)
+        case .waitingOnAPerson(let said): ("\nlowtalker driver: \(said)", 2)
+        }
+    }
+
+    static func end(_ ending: DriverInstall.Ending) throws {
+        let (said, code) = exit(for: ending)
+        FileHandle.standardError.write(Data("\(said)\n".utf8))
+        if code != 0 { throw ExitCode(code) }
+    }
+
+    /// A refusal printed as the sentence it is, exit 1.
+    static func refused(_ said: String) -> ExitCode {
+        FileHandle.standardError.write(Data("lowtalker driver: \(said)\n".utf8))
+        return ExitCode(1)
+    }
+
+    /// Every failure a verb meets, said in the verbs' one voice: a refusal as its sentence,
+    /// anything else - a tool that would not start, a file that would not copy - as the
+    /// error it is.
+    static func refusing<T>(_ body: () throws -> T) throws -> T {
+        do { return try body() } catch let exit as ExitCode { throw exit } catch { throw refused("\(error)") }
+    }
 }
 
 extension DriverCommand {
@@ -81,11 +210,9 @@ extension DriverCommand {
     /// Every constant this program holds about the driver extension, as
     /// `name<TAB>value` lines.
     ///
-    /// [LAW:one-source-of-truth] `scripts/virtual-hid-driver` and README.md both name
-    /// some of these - the script because it deletes those paths and forgets that
-    /// receipt, README because a reader follows the runbook by hand. Neither can read a
-    /// Swift constant, so both keep copies and `make check-docs` reads this to prove the
-    /// copies still agree. The value is here; the copies are derived and checked.
+    /// [LAW:one-source-of-truth] README.md names some of these, because a reader follows
+    /// the runbook by hand. It cannot read a Swift constant, so it keeps copies and
+    /// `make check-docs` reads this to prove they still agree.
     struct Pins: ParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "pins",
@@ -99,15 +226,12 @@ extension DriverCommand {
                 ("io-node", DriverProbe.ioNodeName),
                 ("elements-receipt", DriverProbe.elementsReceiptID),
                 ("manager-app", DriverProbe.managerApp),
-                // The binary onboarding names to a reader with no clone, so that the
-                // activation step and the script's own `MANAGER` cannot drift apart.
                 ("manager-executable", DriverProbe.managerExecutable),
                 ("support-dir", DriverProbe.supportDirectory),
-                // What onboarding names to a reader with no clone. The script fetches and
-                // checksums the package and so holds the pin it acts on; this copy is the
-                // one the app reads out loud, and check-docs proves they still agree.
                 ("package-version", DriverPackage.version),
+                ("extension-version", DriverPackage.extensionVersion),
                 ("package-url", DriverPackage.url),
+                ("package-sha256", DriverPackage.sha256),
                 // The whole verdict vocabulary on one line, in the enum's own order, so a
                 // word added or dropped here reaches every reader that quotes the list.
                 ("verdicts", DriverState.allCases.map(\.rawValue).joined(separator: " ")),

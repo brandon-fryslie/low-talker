@@ -2,7 +2,7 @@ import Testing
 @testable import DriverExtension
 
 /// The verdict table, over every reading the machine can produce rather than over the
-/// handful this Mac happens to be in. The table is the contract `scripts/virtual-hid-driver`
+/// handful this Mac happens to be in. The table is the contract `lowtalker driver state`
 /// prints, `expect` asserts and README.md documents, so what is checked here is the word
 /// each combination yields - never how the switch is written. [LAW:behavior-not-structure]
 @Suite struct DriverStateTests {

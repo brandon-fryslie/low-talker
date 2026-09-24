@@ -6,7 +6,7 @@ import VirtualKeyboard
 ///
 /// The public package installs it and registers nothing to run it: there is no launchd
 /// job for it on a Mac that has never had Karabiner-Elements, so a driver that is
-/// enabled and running per `scripts/virtual-hid-driver state` still types nothing. This
+/// enabled and running per `lowtalker driver state` still types nothing. This
 /// helper owns that lifecycle alongside its own. [LAW:no-ambient-temporal-coupling] It
 /// reaches for the daemon first and starts it only when nothing answers, so a daemon
 /// somebody else is running - by hand, or by Karabiner-Elements' own job - is used as it

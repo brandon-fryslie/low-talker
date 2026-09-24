@@ -238,7 +238,7 @@ targetTemplates:
         # names it; CarriedModelStoreTests holds the two equal. [LAW:one-source-of-truth]
         MODEL_STORE_RESOURCE: model-store
         # Named without its version, so whatever installs it from the bundle need not change
-        # when the pin does; scripts/virtual-hid-driver checks the bytes against the pin.
+        # when the pin does; `lowtalker driver install` checks the bytes against the pin.
         DRIVER_PACKAGE_RESOURCE: Karabiner-DriverKit-VirtualHIDDevice.pkg
 
   # [LAW:one-type-per-behavior] One input method, built once per installation. What
