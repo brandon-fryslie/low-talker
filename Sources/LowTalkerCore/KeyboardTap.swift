@@ -58,7 +58,7 @@ public protocol KeyboardTap {
     ) throws -> Disposal
 }
 
-public enum KeyboardTapError: Error, CustomStringConvertible {
+public enum KeyboardTapError: Error, Equatable, CustomStringConvertible {
     /// The grants were read as held and the session still would not make the tap.
     case refused
     /// The grants were not held, so no tap was asked for: creating one anyway is what makes
@@ -149,15 +149,22 @@ extension KeyEvent {
 /// runs under a terminal's grants, and is refused by macOS itself when it lacks them.
 public struct GrantedKeyboardTap: KeyboardTap {
     private let tap: any KeyboardTap
+    /// Whether both grants are held now. [LAW:effects-at-boundaries] The system's reading
+    /// unless a test says otherwise, so both of this type's answers run against a grant
+    /// state a test controls.
+    private let granted: @MainActor () -> Bool
 
-    public init(_ tap: any KeyboardTap = SystemKeyboardTap()) { self.tap = tap }
+    public init(_ tap: any KeyboardTap = SystemKeyboardTap(), granted: @escaping @MainActor () -> Bool = { EventTapAccess.held }) {
+        self.tap = tap
+        self.granted = granted
+    }
 
     public func install(
         listeningFor chords: Set<KeyChord>,
         handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Passage,
         onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse
     ) throws -> Disposal {
-        guard EventTapAccess.held else { throw KeyboardTapError.notAllowed }
+        guard granted() else { throw KeyboardTapError.notAllowed }
         do {
             return try tap.install(listeningFor: chords, handling: handle, onLapse: onLapse)
         } catch KeyboardTapError.refused {

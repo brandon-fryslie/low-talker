@@ -917,8 +917,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         // The way into the guided setup, always there, and saying how much is left in it.
         let left = readiness.unmet.count
-        menu.addItem(withTitle: GuidedSetup.title(for: Self.flavor) + (left == 0 ? "" : " (\(left) left)"),
-                     action: #selector(openSetUp), keyEquivalent: "")
+        let stepsLeft = left == 0 ? "" : " (\(left) left)"
+        menu.addItem(withTitle: "\(GuidedSetup.title(for: Self.flavor))\(stepsLeft)", action: #selector(openSetUp), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(readout("Delivery"))
         for choice in Delivery.allCases {

@@ -42,8 +42,8 @@ let package = Package(
         .testTarget(name: "FlavorsTests", dependencies: ["Flavors"]),
         // The Text Input Sources framework as this program uses it: where this flavor's
         // input source stands on this Mac, and the steps that put it there. It links only
-        // Flavors, so the app reaches it without the input method process linking anything
-        // of the app's. [LAW:one-way-deps]
+        // Flavors and the Text Input Sources lock beneath it, so the app reaches it without
+        // the input method process linking anything of the app's. [LAW:one-way-deps]
         .target(name: "InputSource", dependencies: ["Flavors", "TextInputSources"]),
         .testTarget(name: "InputSourceTests", dependencies: ["InputSource", "Flavors"]),
         .target(

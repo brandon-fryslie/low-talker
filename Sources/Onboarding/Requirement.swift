@@ -180,10 +180,13 @@ public struct Readiness: Sendable, CustomStringConvertible {
     /// The rows this reader could not read sit where the list puts them, so the CLI's
     /// printout and the app's menu run in one order.
     public var description: String {
-        let read = requirements.map { (row: $0.row, text: $0.description) }
-        let unread = notReadHere.map { (row: $0, text: "\($0.rawValue): only the app can read this; see Set Up in its menu") }
+        let read: [(row: Requirement.Row, text: String)] = requirements.map { (row: $0.row, text: $0.description) }
+        let unread: [(row: Requirement.Row, text: String)] = notReadHere.map {
+            (row: $0, text: "\($0.rawValue): only the app can read this; see Set Up in its menu")
+        }
         let order = Requirement.Row.allCases
-        return (read + unread)
+        let lines: [(row: Requirement.Row, text: String)] = read + unread
+        return lines
             .sorted { order.firstIndex(of: $0.row)! < order.firstIndex(of: $1.row)! }
             .map(\.text).joined(separator: "\n")
     }
@@ -621,12 +624,16 @@ public extension Requirement {
     /// being the one thing every row says when the machine could not be read, and README
     /// describes it once as exactly that.
     static var readings: [(row: Row, reading: String)] {
-        ([nil] + MicrophoneAuthorization.Withheld.allCases).map { (row: Row.microphone, reading: reads(forMicrophone: $0)) }
-            + [true, false].map { (row: Row.inputMonitoring, reading: reads(forGrantHeld: $0)) }
-            + [true, false].map { (row: Row.accessibility, reading: reads(forGrantHeld: $0)) }
-            + [true, false].map { (row: Row.inputMethod, reading: reads(forSwitchedOn: $0)) }
-            + DriverState.allCases.map { (row: Row.driverExtension, reading: reads(for: $0)) }
-            + HelperStanding.allCases.map { (row: Row.keyboardHelper, reading: reads(for: $0)) }
-            + [true, false].map { (row: Row.keyboardSetupAssistant, reading: reads(forAnswered: $0)) }
+        // One typed list per row, joined once: a single expression chaining all of them is
+        // more than Swift 6.1's type checker will finish in time.
+        let answers: [MicrophoneAuthorization.Withheld?] = [nil] + MicrophoneAuthorization.Withheld.allCases
+        let microphone: [(row: Row, reading: String)] = answers.map { (row: Row.microphone, reading: reads(forMicrophone: $0)) }
+        let inputMonitoring: [(row: Row, reading: String)] = [true, false].map { (row: Row.inputMonitoring, reading: reads(forGrantHeld: $0)) }
+        let accessibility: [(row: Row, reading: String)] = [true, false].map { (row: Row.accessibility, reading: reads(forGrantHeld: $0)) }
+        let inputMethod: [(row: Row, reading: String)] = [true, false].map { (row: Row.inputMethod, reading: reads(forSwitchedOn: $0)) }
+        let driver: [(row: Row, reading: String)] = DriverState.allCases.map { (row: Row.driverExtension, reading: reads(for: $0)) }
+        let helper: [(row: Row, reading: String)] = HelperStanding.allCases.map { (row: Row.keyboardHelper, reading: reads(for: $0)) }
+        let assistant: [(row: Row, reading: String)] = [true, false].map { (row: Row.keyboardSetupAssistant, reading: reads(forAnswered: $0)) }
+        return [microphone, inputMonitoring, accessibility, inputMethod, driver, helper, assistant].flatMap { $0 }
     }
 }

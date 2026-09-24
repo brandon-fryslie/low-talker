@@ -145,7 +145,9 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
         // choosing to be asked; once asked, System Settings; and for a row nobody can ask
         // for, a fresh reading.
         let primary = ask ?? openSettings ?? button("Check Again") { [unowned self] in redrawFromAFreshReading() }
-        buttons += [openSettings, ask].compactMap { $0 }.filter { $0 !== primary } + [primary]
+        let others: [NSButton] = [openSettings, ask].compactMap { $0 }.filter { $0 !== primary }
+        buttons.append(contentsOf: others)
+        buttons.append(primary)
         primary.keyEquivalent = "\r"
         primary.isEnabled = !asking
         add(buttonRow(buttons))

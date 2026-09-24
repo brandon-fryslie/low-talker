@@ -22,14 +22,18 @@ import Testing
         }
     }
 
-    /// A step that names the app names the installation it is shown in. "LowTalker Dev"
-    /// contains "LowTalker", so containment alone would pass a step hardcoding the release
-    /// name; the explanations are required to differ between the two instead.
+    /// A step that names the app names the installation it is shown in, in every part of
+    /// its explanation. "LowTalker Dev" contains "LowTalker", so containment alone would
+    /// pass a part hardcoding the release name; a part that names the app is required to
+    /// differ between the two instead.
     @Test func aStepNamingTheAppNamesTheInstallationItIsShownIn() {
+        let parts: [(name: String, of: (Explanation) -> String)] = [("why", \.why), ("enables", \.enables), ("if skipped", \.ifSkipped)]
         for row in Requirement.Row.allCases {
-            let whys = Flavor.allCases.map { row.explanation(for: $0).why }
-            if whys.contains(where: { $0.contains(Flavor.release.displayName) }) {
-                #expect(Set(whys).count == Flavor.allCases.count, "\(row.rawValue) reads the same for every installation")
+            for part in parts {
+                let texts = Flavor.allCases.map { part.of(row.explanation(for: $0)) }
+                if texts.contains(where: { $0.contains(Flavor.release.displayName) }) {
+                    #expect(Set(texts).count == Flavor.allCases.count, "\(row.rawValue)'s \(part.name) reads the same for every installation")
+                }
             }
         }
     }
@@ -49,6 +53,9 @@ import Testing
         #expect(Requirement.Row.microphone.settingsPane?.absoluteString.hasSuffix("Privacy_Microphone") == true)
         #expect(Requirement.Row.inputMonitoring.settingsPane?.absoluteString.hasSuffix("Privacy_ListenEvent") == true)
         #expect(Requirement.Row.accessibility.settingsPane?.absoluteString.hasSuffix("Privacy_Accessibility") == true)
+        #expect(Requirement.Row.inputMethod.settingsPane?.absoluteString.hasSuffix("com.apple.Keyboard-Settings.extension") == true)
+        #expect(Requirement.Row.driverExtension.settingsPane?.absoluteString.hasSuffix("com.apple.LoginItems-Settings.extension") == true)
+        #expect(Requirement.Row.keyboardHelper.settingsPane?.absoluteString.hasSuffix("com.apple.LoginItems-Settings.extension") == true)
         #expect(Requirement.Row.keyboardSetupAssistant.settingsPane == nil)
     }
 

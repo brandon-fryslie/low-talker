@@ -176,9 +176,10 @@ public struct InputSourceInstaller: Sendable {
     @MainActor
     public func switchOn(settling: Duration = .seconds(3)) async throws {
         let mode = try await registered(settling: settling)
-        // Registered, so the text input system lists the input method's own source beside
-        // its mode's: the two arrive in one refresh.
-        guard let inputMethod = Self.source(named: flavor.inputMethodBundleIdentifier) else {
+        // The input method's own source, looked for the way the mode's was: this process's
+        // list may not hold it yet, and a list read before the refresh arrives is not an
+        // answer. [LAW:no-ambient-temporal-coupling]
+        guard let inputMethod = try await Self.source(named: flavor.inputMethodBundleIdentifier, within: settling) else {
             throw InputSourceInstallFailure.notInSourceListAfterRegistering(
                 identifier: flavor.inputMethodBundleIdentifier, bundle: try installed())
         }
