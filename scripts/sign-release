@@ -42,8 +42,8 @@ cli=$(make cli | tee /dev/stderr | tail -n 1)
 fetched="$derived/fetched-store"
 "$cli" model download --models-dir "$fetched" ${source:+--from "$source"} >&2
 
-# The driver script holds the pins and the checks, so it fetches the package it would install.
-package=$(scripts/virtual-hid-driver fetch "$derived")
+# The CLI holds the pins and the checks, so it fetches the package it would install.
+package=$("$cli" driver fetch "$derived")
 
 make release CONFIGURATION=Release DERIVED_DATA="$derived" MODEL_SOURCE="$fetched" BUNDLED_DRIVER_PACKAGE="$package" >&2
 
@@ -81,7 +81,7 @@ store=$(jq -er '.MODEL_STORE_RESOURCE // error("project.yml names no MODEL_STORE
 "$cli" model status --models-dir "$app/Contents/Resources/$store" >&2 \
   || fail "$app does not carry the default model whole"
 driver=$(jq -er '.DRIVER_PACKAGE_RESOURCE // error("project.yml names no DRIVER_PACKAGE_RESOURCE")' <<<"$resources")
-scripts/virtual-hid-driver check "$app/Contents/Resources/$driver" \
+"$cli" driver check "$app/Contents/Resources/$driver" \
   || fail "$app does not carry the pinned driver package"
 check "$app"
 check "$app/Contents/MacOS/lowtalker-keyboardd"

@@ -223,7 +223,7 @@ import Testing
     /// on one that is fully set up - which is what makes it a check on the assembly and
     /// not on the Mac it runs on.
     @Test func theListIsTheSameThreeRequirementsInTheSameOrder() {
-        #expect(OnboardingProbe.readiness(flavor: .development, approvalPending: nil).requirements.map(\.name)
+        #expect(OnboardingProbe.readiness(flavor: .development, approvalPending: nil, cli: "lowtalker").requirements.map(\.name)
             == ["Driver extension", "Keyboard helper", "Keyboard Setup Assistant"])
     }
 
@@ -231,8 +231,8 @@ import Testing
     /// cannot ask `SMAppService` passes nil and gets launchd's answer unsharpened, which
     /// is the difference between the CLI and the app and the whole of it.
     @Test func onlyTheHelperCanDifferBetweenTheTwoSurfaces() {
-        let asTheCLISeesIt = OnboardingProbe.readiness(flavor: .development, approvalPending: nil).requirements
-        let asAnUnapprovedAppSeesIt = OnboardingProbe.readiness(flavor: .development, approvalPending: true).requirements
+        let asTheCLISeesIt = OnboardingProbe.readiness(flavor: .development, approvalPending: nil, cli: "lowtalker").requirements
+        let asAnUnapprovedAppSeesIt = OnboardingProbe.readiness(flavor: .development, approvalPending: true, cli: "lowtalker").requirements
         #expect(asTheCLISeesIt.filter { $0.name != "Keyboard helper" }
             == asAnUnapprovedAppSeesIt.filter { $0.name != "Keyboard helper" })
     }

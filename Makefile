@@ -100,10 +100,9 @@ install: release
 run: app
 	open "$(DEV_APP)"
 
-# The build comes first because everything after it needs the CLI: `check-docs` reads
-# the driver constants out of it, and scripts/virtual-hid-driver now takes every reading
-# of the machine through it. This is why `check-docs` is a recipe line here rather than a
-# prerequisite: a prerequisite would run before `swift build`, against a stale CLI or none.
+# The build comes first because `check-docs` reads the driver constants out of the CLI.
+# This is why `check-docs` is a recipe line here rather than a prerequisite: a
+# prerequisite would run before `swift build`, against a stale CLI or none.
 #
 # Signing last is what makes a test run safe to leave behind. Every link SwiftPM performs
 # ad-hoc signs the product, dropping the dev identity the helper admits callers by, so
@@ -119,72 +118,24 @@ test:
 	xcodegen generate
 	swift build
 	$(MAKE) check-docs
-	scripts/virtual-hid-driver-test
 	swift test
 	$(MAKE) cli helper
 
 # [LAW:one-source-of-truth] `lowtalker driver pins` is the source for everything about
-# the driver extension's identity: the bundle id, the team, the IORegistry node, the
-# receipt ids, the two payload trees, and the verdict vocabulary. Two readers keep
-# copies - scripts/virtual-hid-driver, because it is the file that deletes those paths
-# and a path arriving from a subprocess is not what `sudo rm -rf` should be handed, and
-# README.md, because a reader follows the runbook by hand. This is what proves the
-# copies still agree.
-#
-# The script's copies are read by SOURCING it rather than by grepping its assignments,
-# because two of them are built out of the others - `PKG_URL` from `$PKG_VERSION`, and
-# `MANAGER` from `$MANAGER_APP` - and a grep hands back the template rather than the
-# value. Expanding those here would be this recipe keeping a second implementation of
-# the script's own semantics, which is the drift it exists to catch; sourcing makes the
-# script resolve them, which is the only resolution that cannot disagree with what the
-# script actually runs. The script is written to be sourced: everything it DOES is
-# behind its `BASH_SOURCE[0] == $0` guard, so this defines its constants and runs none
-# of its verbs.
+# the driver extension's identity and the package it ships in, and README.md keeps copies
+# because a reader follows the runbook by hand. This is what proves the copies still agree.
 #
 # Needs `swift build` first; the `test` target runs it before this.
 check-docs:
 	@set -euo pipefail; \
-	pairs="bundle-id:BUNDLE_ID team-id:TEAM_ID elements-receipt:ELEMENTS_RECEIPT \
-	       manager-app:MANAGER_APP manager-executable:MANAGER support-dir:SUPPORT_DIR \
-	       package-version:PKG_VERSION package-url:PKG_URL"; \
 	pins=$$(.build/debug/lowtalker driver pins) \
 	  || { echo "check-docs: could not read 'lowtalker driver pins' - run 'swift build' first" >&2; exit 1; }; \
-	copies=$$( \
-	    source scripts/virtual-hid-driver; \
-	    for pair in $$pairs; do name=$${pair#*:}; printf '%s\t%s\n' "$$name" "$${!name}"; done \
-	  ) || { echo "check-docs: scripts/virtual-hid-driver did not resolve every constant check-docs asks it for" >&2; exit 1; }; \
-	look() { awk -F'\t' -v k="$$2" '$$1==k{print $$2}' <<<"$$1"; }; \
-	for pair in $$pairs; do \
-	  key=$${pair%%:*}; name=$${pair#*:}; \
-	  value=$$(look "$$pins" "$$key"); \
-	  [ -n "$$value" ] || { echo "check-docs: 'lowtalker driver pins' emits no $$key" >&2; exit 1; }; \
-	  copy=$$(look "$$copies" "$$name"); \
-	  [ -n "$$copy" ] || { echo "check-docs: scripts/virtual-hid-driver leaves $$name empty" >&2; exit 1; }; \
-	  [ "$$copy" = "$$value" ] \
-	    || { echo "check-docs: scripts/virtual-hid-driver resolves $$name=$$copy, but the CLI pins $$key=$$value" >&2; exit 1; }; \
-	  echo "check-docs: scripts/virtual-hid-driver agrees with $$key"; \
-	done
-# What README.md quotes for a reader following the runbook by hand. The driver's identity
-# comes from the CLI, and so do the package and the Manager now: nothing in Swift downloads
-# or activates anything, but onboarding has to NAME both to a reader who installed
-# LowTalker.app and has no clone, for whom `scripts/virtual-hid-driver install` is not an
-# instruction. The script still holds the pins it acts on, because it is the file that
-# fetches the bytes and runs the Manager; the loop above is what proves the copies agree.
-	@set -euo pipefail; \
-	pins=$$(.build/debug/lowtalker driver pins); \
-	for key in bundle-id team-id io-node elements-receipt package-url manager-executable; do \
+	for key in bundle-id team-id io-node elements-receipt package-url package-version extension-version manager-executable; do \
 	  value=$$(awk -F'\t' -v k="$$key" '$$1==k{print $$2}' <<<"$$pins"); \
 	  [ -n "$$value" ] || { echo "check-docs: 'lowtalker driver pins' emits no $$key" >&2; exit 1; }; \
 	  grep -qF "$$value" README.md \
 	    || { echo "check-docs: the CLI pins $$key=$$value, which README.md never mentions" >&2; exit 1; }; \
 	  echo "check-docs: README.md agrees with $$key=$$value"; \
-	done; \
-	for constant in PKG_VERSION DEXT_VERSION; do \
-	  pinned=$$(source scripts/virtual-hid-driver; printf '%s' "$${!constant}"); \
-	  [ -n "$$pinned" ] || { echo "check-docs: scripts/virtual-hid-driver leaves $$constant empty" >&2; exit 1; }; \
-	  grep -qF "$$pinned" README.md \
-	    || { echo "check-docs: scripts/virtual-hid-driver pins $$constant=$$pinned, which README.md never mentions" >&2; exit 1; }; \
-	  echo "check-docs: README.md agrees with $$constant=$$pinned"; \
 	done
 # The verdict vocabulary is the other copy README.md keeps: `DriverState` emits the words
 # and the prose lists them. Compared as sets in both directions, so a verdict added to the

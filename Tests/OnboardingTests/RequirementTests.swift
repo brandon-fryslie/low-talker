@@ -13,6 +13,8 @@ import Testing
     /// renamed it, and then pin a name no installation carries. [LAW:one-source-of-truth]
     static let flavor = Flavor.release
     static let service = Flavor.release.machServiceName
+    /// A CLI path as an app names it, space and all, so the quoting is under test too.
+    static let cli = "/Applications/LowTalker Dev.app/Contents/Helpers/lowtalker"
 
     // MARK: - the driver extension
 
@@ -21,7 +23,7 @@ import Testing
     /// which is not something anyone can be told to do.
     @Test func onlyAnEnabledDriverAsksNothingOfAnyone() {
         for state in DriverState.allCases {
-            let nothingToDo = Requirement.driverExtension(state).met
+            let nothingToDo = Requirement.driverExtension(state, cli: Self.cli).met
             #expect(nothingToDo == (state == .enabled || state == .running), "\(state.rawValue)")
         }
     }
@@ -31,7 +33,7 @@ import Testing
     /// Mac needing a restart the same way.
     @Test func everyDriverStateThatNeedsSomethingSaysWhat() {
         for state in DriverState.allCases where state != .enabled && state != .running {
-            let step = Requirement.driverExtension(state).step
+            let step = Requirement.driverExtension(state, cli: Self.cli).step
             #expect(step?.isEmpty == false, "\(state.rawValue) carries no step")
         }
     }
@@ -40,7 +42,7 @@ import Testing
     /// that has both approvals in it, and name the extension they are turning on.
     @Test func theStatesNeedingAClickNameThePaneAndTheExtension() {
         for state in [DriverState.awaitingApproval, .disabled] {
-            let step = Requirement.driverExtension(state).step ?? ""
+            let step = Requirement.driverExtension(state, cli: Self.cli).step ?? ""
             #expect(step.contains("Login Items & Extensions"))
             #expect(step.contains(DriverProbe.bundleID))
         }
@@ -49,21 +51,21 @@ import Testing
     /// A state nobody could read is never dressed up as a step to take. It points at the
     /// verb that says what could not be read. [LAW:no-silent-failure]
     @Test func anUnreadableDriverPointsAtWhatWouldSayWhy() {
-        let step = Requirement.driverExtension(.unknown).step ?? ""
-        #expect(step.contains("virtual-hid-driver state"))
+        let step = Requirement.driverExtension(.unknown, cli: Self.cli).step ?? ""
+        #expect(step.contains("'\(Self.cli)' driver state"))
     }
 
     /// A state a command can repair names the command that repairs it. `state` takes a
     /// reading and changes nothing, so a step promising a repair has to say it in the
     /// verbs that perform one - which a step merely being non-empty cannot tell apart.
-    @Test func everyStateAScriptCanRepairNamesTheVerbsThatRepairIt() {
+    @Test func everyStateACommandCanRepairNamesTheVerbsThatRepairIt() {
         let repairs: [(DriverState, [String])] = [
-            (.absent, ["virtual-hid-driver install"]),
-            (.installedInactive, ["virtual-hid-driver install"]),
-            (.residue, ["virtual-hid-driver remove", "virtual-hid-driver install"]),
+            (.absent, ["'\(Self.cli)' driver install"]),
+            (.installedInactive, ["'\(Self.cli)' driver install"]),
+            (.residue, ["'\(Self.cli)' driver remove", "'\(Self.cli)' driver install"]),
         ]
         for (state, verbs) in repairs {
-            let step = Requirement.driverExtension(state).step ?? ""
+            let step = Requirement.driverExtension(state, cli: Self.cli).step ?? ""
             for verb in verbs {
                 #expect(step.contains(verb), "\(state.rawValue) never names `\(verb)`")
             }
@@ -74,7 +76,7 @@ import Testing
     /// what it wants done.
     @Test func everyDriverStateReadsBackAsItsOwnWord() {
         for state in DriverState.allCases {
-            #expect(Requirement.driverExtension(state).reads == state.rawValue)
+            #expect(Requirement.driverExtension(state, cli: Self.cli).reads == state.rawValue)
         }
     }
 
@@ -273,67 +275,23 @@ import Testing
         #expect(Requirement.keyboardSetupAssistant(answered: true, aHelperHasRun: false, helperSubsystem: Self.service).met)
     }
 
-    // MARK: - a reader with no clone
+    // MARK: - the CLI the reader has
 
-    /// Both states that want the driver put right name something the reader can run
-    /// without a clone, as well as the repo script. Someone who installed LowTalker.app
-    /// has no `scripts/` directory, and the app cannot run the install for them - so a
-    /// step naming only the script is one that half its readers cannot follow.
-    @Test func bothStatesNeedingTheDriverGiveTheReaderWithNoCloneSomethingToRun() {
-        for state in [DriverState.absent, .installedInactive] {
-            let step = Requirement.driverExtension(state).step ?? ""
-            #expect(step.contains("scripts/virtual-hid-driver install"), "\(state)")
-            #expect(step.contains("\(DriverProbe.managerExecutable) activate"), "\(state)")
-        }
-    }
-
-    /// Both of them scope that activation to the reader it is for, on the line that
-    /// introduces it. The script's `install` activates, so the block is only ever the
-    /// no-clone reader's - and a step is not read as a paragraph: `stepLines` makes every
-    /// line its own menu item, so a qualifier set three lines up never reaches someone
-    /// skimming down to the command. Unscoped, this told a reader who had just run the
-    /// script to go and activate again, which is the defect the block was rewritten to
-    /// remove and the one it grew back for `absent` alone.
-    @Test func theActivationBothStatesNameSaysWhichReaderOwesIt() throws {
-        for state in [DriverState.absent, .installedInactive] {
-            let leadIn = try #require(
-                Requirement.driverExtension(state).stepLines.first { $0.contains("ask macOS to activate") },
-                "\(state) no longer introduces the activation in words")
-            #expect(leadIn.contains("Without"),
-                    "\(state) never says the activation is the no-clone reader's")
-        }
-    }
-
-    /// A Mac with no package needs the package, and one that has it needs only the
-    /// activation. Naming the package to `installed-inactive` too was telling a reader to
-    /// install what they already had, which could never move them off that state - the
-    /// script's `install` is a download AND a separate activation, and only the second
-    /// half is what is missing here.
-    @Test func onlyTheStateMissingThePackageNamesThePackage() {
-        let absent = Requirement.driverExtension(.absent).step ?? ""
-        #expect(absent.contains(DriverPackage.url))
-        #expect(absent.contains(DriverPackage.version))
-
-        let inactive = Requirement.driverExtension(.installedInactive).step ?? ""
-        #expect(!inactive.contains(DriverPackage.url), "the step tells a reader to install a package they already have")
+    /// A quote in the path is escaped rather than ending the quoting early, so the command
+    /// a step names is always one the shell reads as a single path.
+    @Test func aPathHoldingAQuoteIsStillOnePath() {
+        let step = Requirement.driverExtension(.absent, cli: "/tmp/it's/lowtalker").step ?? ""
+        #expect(step.contains(#"'/tmp/it'\''s/lowtalker' driver install"#))
     }
 
     /// The activation has to be asked for by the logged-in user - macOS attributes the
     /// request to whoever asks, and the approval answers that request - so a step that
     /// let a reader reach for sudo would send them to an install that cannot complete.
-    /// It is the same fact that keeps this step out of the app's hands.
     @Test func theActivationTellsTheReaderNotToTakeItUnderSudo() {
         for state in [DriverState.absent, .installedInactive] {
-            let step = Requirement.driverExtension(state).step ?? ""
+            let step = Requirement.driverExtension(state, cli: Self.cli).step ?? ""
             #expect(step.contains("not under sudo"), "\(state)")
         }
-    }
-
-    /// The URL is built from the version, so a bump cannot leave it aimed at the old
-    /// release - the failure a hand-written pair invites. [LAW:one-source-of-truth]
-    @Test func thePackageUrlCarriesTheVersionItPins() {
-        #expect(DriverPackage.url.contains("/v\(DriverPackage.version)/"))
-        #expect(DriverPackage.url.hasSuffix("-\(DriverPackage.version).pkg"))
     }
 
     // MARK: - the list
@@ -352,7 +310,7 @@ import Testing
     /// checked". [LAW:dataflow-not-control-flow]
     @Test func theListShowsEveryRequirementWhetherOrNotItNeedsAnything() {
         let readiness = Readiness([
-            .driverExtension(.running),
+            .driverExtension(.running, cli: Self.cli),
             .keyboardHelper(.holdingTheService, flavor: Self.flavor),
         ])
         #expect(readiness.ready)
@@ -362,7 +320,7 @@ import Testing
 
     @Test func oneUnmetRequirementIsEnoughToStopTheList() {
         let readiness = Readiness([
-            .driverExtension(.running),
+            .driverExtension(.running, cli: Self.cli),
             .keyboardHelper(.anotherJobHoldsTheService, flavor: Self.flavor),
         ])
         #expect(!readiness.ready)

@@ -80,6 +80,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return flavor
     }()
 
+    /// The CLI this bundle carries, which the driver's onboarding steps name: a person who
+    /// installed only this app has it, and it is the one the helper this app registers
+    /// admits. Where project.yml's `lowtalker-cli` embed puts it.
+    static let carriedCLI = Bundle.main.bundleURL.appending(path: "Contents/Helpers/lowtalker").path
+
     /// The helper's registration, from the bundle's own launchd plist. One instance,
     /// because registering and asking where the registration stands are two questions
     /// about one record. [LAW:one-source-of-truth] The plist is named from the flavor, so
@@ -701,7 +706,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // the right plist - has nothing else to read back. [LAW:no-silent-failure]
         let registration = helperService.status
         log.notice("helper registration: SMAppService.Status \(registration.rawValue, privacy: .public)")
-        let readiness = OnboardingProbe.readiness(flavor: Self.flavor, approvalPending: registration == .requiresApproval)
+        let readiness = OnboardingProbe.readiness(flavor: Self.flavor, approvalPending: registration == .requiresApproval, cli: Self.carriedCLI)
         log.notice("onboarding: \(readiness.ready ? "ready" : "not ready", privacy: .public)")
         for requirement in readiness.requirements {
             log.notice("onboarding: \(requirement.name, privacy: .public): \(requirement.reads, privacy: .public)")

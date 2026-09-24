@@ -130,22 +130,24 @@ public extension OnboardingProbe {
     /// - Parameter approvalPending: what `SMAppService` told the app that owns the
     ///   helper's registration, and nil from a caller that owns none. See
     ///   `HelperStanding.sharpenedByTheAppsOwnRegistration(approvalPending:)`.
-    static func readiness(flavor: Flavor, approvalPending: Bool?) -> Readiness {
+    /// - Parameter cli: the lowtalker binary the driver's steps name; see
+    ///   `Requirement.driverExtension(_:cli:)`.
+    static func readiness(flavor: Flavor, approvalPending: Bool?, cli: String) -> Readiness {
         // The helper's row is read before the assistant's because the assistant's step
         // depends on it: the answer is filed BY the helper, so what is left to do about a
         // missing answer is a different thing depending on whether the helper has run.
         // The dependency is in the data rather than in the order two independent readings
         // happen to be taken in. [LAW:no-ambient-temporal-coupling]
         let helper = helperRow(flavor: flavor, approvalPending: approvalPending)
-        return Readiness(driverRow() + helper.rows + keyboardSetupAssistantRow(flavor: flavor, aHelperHasRun: helper.aHelperHasRun))
+        return Readiness(driverRow(cli: cli) + helper.rows + keyboardSetupAssistantRow(flavor: flavor, aHelperHasRun: helper.aHelperHasRun))
     }
 
     /// Each reading is taken and turned into its row here, at the edge, and a reading
     /// that failed becomes a row saying so rather than ending the report: three
     /// requirements a reader could have acted on are worth more than one error.
     /// [LAW:effects-at-boundaries]
-    private static func driverRow() -> [Requirement] {
-        do { return [.driverExtension(DriverState(try DriverProbe.facts()))] }
+    private static func driverRow(cli: String) -> [Requirement] {
+        do { return [.driverExtension(DriverState(try DriverProbe.facts()), cli: cli)] }
         catch { return [.unreadable(.driverExtension, error)] }
     }
 

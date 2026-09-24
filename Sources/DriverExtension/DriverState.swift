@@ -2,7 +2,7 @@
 /// as one word, and the readings that word is derived from.
 ///
 /// [LAW:one-source-of-truth] This is the whole vocabulary for the driver's state, and
-/// it exists once. `scripts/virtual-hid-driver` prints these words, the menu-bar app
+/// it exists once. `lowtalker driver state` prints these words, the menu-bar app
 /// shows them, `expect` asserts them and README.md documents them; a second spelling
 /// anywhere is a way for two readers to come to different conclusions about one
 /// machine. The probe used to live in bash, where the app - which cannot run a script

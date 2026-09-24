@@ -91,7 +91,7 @@ enum PerformExit: Int32, CaseIterable {
     /// then the code its kind is owed. A failure this names nothing about exits 1, as
     /// ArgumentParser's own would.
     static func fail(_ error: any Error, flavor: Flavor) -> ExitCode {
-        let failure = classify(error, flavor: flavor, machine: .of(flavor))
+        let failure = classify(error, flavor: flavor, machine: .of(flavor), cli: LowTalker.path)
         FileHandle.standardError.write(Data("Error: \(failure.said)\n".utf8))
         return ExitCode(failure.exit?.rawValue ?? ExitCode.failure.rawValue)
     }
@@ -109,14 +109,14 @@ enum PerformExit: Int32, CaseIterable {
     /// driver, so a Mac missing both is a Mac whose next step is the driver. Each is read
     /// only once every row before it is met, so a reading that fails costs the code only
     /// when it is the one that decides it.
-    static func classify(_ error: any Error, flavor: Flavor, machine: Machine) -> (exit: PerformExit?, said: String) {
+    static func classify(_ error: any Error, flavor: Flavor, machine: Machine, cli: String) -> (exit: PerformExit?, said: String) {
         let causes = error.causes
         if causes.contains(where: { $0 is UntypeableCharacters || $0 is UnpressableChord || $0 is WouldPressTheHotkey }) {
             return (.untypeable, "\(error)")
         }
         guard causes.contains(where: { $0 is HelperConnection.Unreachable }) else { return (nil, "\(error)") }
         let rows: [(PerformExit, () throws -> Requirement)] = [
-            (.driverNotActivated, { .driverExtension(try machine.driver()) }),
+            (.driverNotActivated, { .driverExtension(try machine.driver(), cli: cli) }),
             (.helperNotApproved, { .keyboardHelper(try machine.helper(), flavor: flavor) }),
         ]
         for (exit, row) in rows {

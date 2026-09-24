@@ -33,13 +33,13 @@ import Testing
             WouldPressTheHotkey(hotkey: KeyChord(modifiers: .rightOption), keystroke: Keystroke(Usage(rawValue: 0x08), [.rightOption])),
         ]
         for refusal in refusals {
-            #expect(PerformExit.classify(refusal, flavor: .development, machine: Self.unreadable).exit == .untypeable)
+            #expect(PerformExit.classify(refusal, flavor: .development, machine: Self.unreadable, cli: "lowtalker").exit == .untypeable)
         }
     }
 
     /// The driver outranks the helper: without it no helper can type, so it is the step.
     @Test func anUnreachableHelperOnAMacWithoutTheDriverIsFive() {
-        let failure = PerformExit.classify(Self.stoppedOnTheWire, flavor: .development, machine: Self.machine(driver: .awaitingApproval, helper: .noJob))
+        let failure = PerformExit.classify(Self.stoppedOnTheWire, flavor: .development, machine: Self.machine(driver: .awaitingApproval, helper: .noJob), cli: "lowtalker")
         #expect(failure.exit == .driverNotActivated)
         #expect(failure.said.contains("Driver extension: awaiting-approval"))
     }
@@ -47,19 +47,19 @@ import Testing
     /// The driver alone decides it, so a helper that cannot be read does not cost the code.
     @Test func aDriverNotActivatedIsFiveWithoutReadingTheHelper() {
         let machine = Machine(driver: { .awaitingApproval }, helper: { throw NotReadAgain() })
-        #expect(PerformExit.classify(Self.stoppedOnTheWire, flavor: .development, machine: machine).exit == .driverNotActivated)
+        #expect(PerformExit.classify(Self.stoppedOnTheWire, flavor: .development, machine: machine, cli: "lowtalker").exit == .driverNotActivated)
     }
 
     /// A click reaches the helper as a keystroke does, so it stops on the same wire.
     @Test func aClickStoppedOnTheWireReadsTheMachineAsTypingDoes() {
         let clicked = RouteStopped(performed: [], cause: PointingStopped(cause: Self.unreachable))
-        let failure = PerformExit.classify(clicked, flavor: .development, machine: Self.machine(driver: .awaitingApproval, helper: .noJob))
+        let failure = PerformExit.classify(clicked, flavor: .development, machine: Self.machine(driver: .awaitingApproval, helper: .noJob), cli: "lowtalker")
         #expect(failure.exit == .driverNotActivated)
     }
 
     @Test func anUnreachableHelperThatIsNotAnsweringIsFour() {
         for standing in HelperStanding.allCases where standing != .holdingTheService {
-            let failure = PerformExit.classify(Self.stoppedOnTheWire, flavor: .release, machine: Self.machine(driver: .enabled, helper: standing))
+            let failure = PerformExit.classify(Self.stoppedOnTheWire, flavor: .release, machine: Self.machine(driver: .enabled, helper: standing), cli: "lowtalker")
             #expect(failure.exit == .helperNotApproved, "\(standing)")
             #expect(failure.said.contains("Keyboard helper: "))
         }
@@ -68,7 +68,7 @@ import Testing
     /// Both rows met and the wire still refused: nothing here can name it, so it is 1 with
     /// the wire's own words - a caller refused by code signing lands here.
     @Test func anUnreachableHelperOnAReadyMacNamesNoCode() {
-        let failure = PerformExit.classify(Self.stoppedOnTheWire, flavor: .development, machine: Self.machine(driver: .running, helper: .holdingTheService))
+        let failure = PerformExit.classify(Self.stoppedOnTheWire, flavor: .development, machine: Self.machine(driver: .running, helper: .holdingTheService), cli: "lowtalker")
         #expect(failure.exit == nil)
         #expect(failure.said == "\(Self.stoppedOnTheWire)")
     }
@@ -78,7 +78,7 @@ import Testing
     @Test func aDecidingReadingThatCannotBeTakenNamesNoCodeAndSaysSo() {
         let helperUnread = Machine(driver: { .running }, helper: { throw NotReadAgain() })
         for machine in [Self.unreadable, helperUnread] {
-            let failure = PerformExit.classify(Self.stoppedOnTheWire, flavor: .development, machine: machine)
+            let failure = PerformExit.classify(Self.stoppedOnTheWire, flavor: .development, machine: machine, cli: "lowtalker")
             #expect(failure.exit == nil)
             #expect(failure.said.contains("why the helper could not be reached was not read"))
         }
@@ -87,7 +87,7 @@ import Testing
     /// Only an unreachable helper is worth reading the machine for.
     @Test func aFailureThatIsNotTheHelperIsOneAndReadsNothing() {
         let moved = RouteStopped(performed: [], cause: TypingStopped(typed: 2, of: 5, cause: ScreenUnreadable.wrongApp(wanted: "com.apple.TextEdit", frontmost: "com.apple.Terminal")))
-        let failure = PerformExit.classify(moved, flavor: .development, machine: Self.unreadable)
+        let failure = PerformExit.classify(moved, flavor: .development, machine: Self.unreadable, cli: "lowtalker")
         #expect(failure.exit == nil)
         #expect(failure.said == "\(moved)")
     }

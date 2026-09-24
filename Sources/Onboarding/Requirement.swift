@@ -95,54 +95,20 @@ public struct Readiness: Sendable, CustomStringConvertible {
 /// reader who stops.
 private let loginItemsPane = "System Settings > General > Login Items & Extensions"
 
-/// What the `absent` step says to the reader the repo script cannot serve: someone who
-/// installed LowTalker.app and has no clone, for whom `scripts/virtual-hid-driver` names
-/// a file that is not on their Mac. The app cannot run the install for them - see
-/// README's account of why - so the least it can do is name the artifact rather than a
-/// path only a developer has. [LAW:no-silent-failure] at the level of an instruction: a
-/// step a reader cannot follow is a step that fails without saying so.
-///
-/// Both halves of the script's `install` are named, because it is two things and only the
-/// first is the package: it installs, and then it asks the Manager to activate. Naming
-/// the download alone left this reader installed and inactive - the next state down,
-/// whose own step then told them to install a package they already had, so nothing here
-/// could ever move them off it.
-/// The lead-in to the activation is part of this text and not written beside it at the
-/// call site, because the activation is the second half of what the script's `install`
-/// does for the reader who has it. Written as a separate sentence after the block, it
-/// read as a step every reader owed - telling someone who had just run
-/// `scripts/virtual-hid-driver install`, which activates, to go and activate again.
-///
-/// It names the qualifier a second time rather than resting on the "Without one," three
-/// lines above, because a step is not read as a paragraph: `Requirement.stepLines` makes
-/// every line its own menu item, with no blank line to hold them together. A scope set
-/// once at the top reaches whoever is still reading from the top, which is not the reader
-/// this block goes wrong for.
-private let installWithoutAClone = """
-    Without one, install \(DriverPackage.version) of the public package yourself -
-    download it, open it, and let the installer finish:
-        \(DriverPackage.url)
-    Without a clone, ask macOS to activate the driver yourself too.
+/// Said beside every command that installs, because it is the one mistake that sends the
+/// install somewhere it cannot finish: macOS attributes an activation request to whoever
+/// asks, and the approval the user gives answers that request. The command takes sudo
+/// itself for the file steps. A step's lines are what the menu makes its items out of, so
+/// this is written to stand on its own line.
+private let notUnderSudo = """
+    Run it as you, not under sudo: it asks for your password itself.
     """
 
-/// The activation itself, which both of those states end in and neither can reach with
-/// the package alone.
-///
-/// Run as the logged-in user rather than under sudo, and the reason is the same one that
-/// keeps this step out of the app's hands entirely: macOS attributes an activation
-/// request to whoever asks, and the approval the user gives answers that request. The
-/// Manager is named from `DriverProbe`, so this and the `MANAGER` the script runs cannot
-/// come to name different binaries. [LAW:one-source-of-truth]
-///
-/// Begins on a line of its own at every site, so the lead-in sentence each state writes
-/// for it does not push this one's first line past the width the rest of the steps wrap
-/// to. A step's lines are what the menu makes its items out of.
-private let activationWithoutAClone = """
-    Run it as you and not under sudo: macOS attributes an activation
-    request to whoever asks, and the approval you give answers that
-    request.
-        \(DriverProbe.managerExecutable) activate
-    """
+/// The command as a reader types it: the path quoted whole, since an app's name can hold a
+/// space, and any quote in it escaped for the shell.
+private func typed(_ cli: String, _ verbs: String) -> String {
+    "'\(cli.replacingOccurrences(of: "'", with: "'\\''"))' driver \(verbs)"
+}
 
 public extension Requirement {
     /// The driver extension low-talker types through.
@@ -151,8 +117,12 @@ public extension Requirement {
     /// of one problem: a Mac with no package needs an install, a Mac holding a
     /// registration nobody approved needs a click, and a Mac mid-removal needs a
     /// restart. A single "the driver is not ready" would send all three the same way.
-    static func driverExtension(_ state: DriverState) -> Requirement {
-        Requirement(name: Row.driverExtension.rawValue, reads: reads(for: state), step: step(for: state))
+    ///
+    /// - Parameter cli: the lowtalker binary this reader has, which every step that repairs
+    ///   the driver names. Each app carries one, so this is never a path only a clone has:
+    ///   the CLI passes its own, the app the one inside its bundle.
+    static func driverExtension(_ state: DriverState, cli: String) -> Requirement {
+        Requirement(name: Row.driverExtension.rawValue, reads: reads(for: state), step: step(for: state, cli: cli))
     }
 
     /// The verdict word itself. Named as a reading rather than reached through
@@ -160,7 +130,7 @@ public extension Requirement {
     /// expression. [LAW:one-source-of-truth]
     private static func reads(for state: DriverState) -> String { state.rawValue }
 
-    private static func step(for state: DriverState) -> String? {
+    private static func step(for state: DriverState, cli: String) -> String? {
         switch state {
         // macOS has the extension switched on. `running` additionally means some client
         // has opened it, which is not something a user does and not something to ask for.
@@ -168,19 +138,17 @@ public extension Requirement {
             nil
         case .absent:
             """
-            The driver package is not on this Mac. From a clone of this repo:
-                scripts/virtual-hid-driver install
-            \(installWithoutAClone)
-            \(activationWithoutAClone)
+            The driver package is not on this Mac. This downloads and verifies
+            it, installs it, and asks macOS to activate it:
+                \(typed(cli, "install"))
+            \(notUnderSudo)
             """
         case .installedInactive:
             """
             The package is installed but macOS holds no registration for it,
-            so the activation request never landed. From a clone of this repo,
-            whose install asks for it again:
-                scripts/virtual-hid-driver install
-            Without one, ask macOS to activate it yourself.
-            \(activationWithoutAClone)
+            so the activation request never landed. This asks for it again:
+                \(typed(cli, "install"))
+            \(notUnderSudo)
             """
         case .awaitingApproval:
             """
@@ -205,8 +173,8 @@ public extension Requirement {
             """
             Part of the driver package is here and part is not.
             Remove what is there, then install it again:
-                scripts/virtual-hid-driver remove
-                scripts/virtual-hid-driver install
+                \(typed(cli, "remove"))
+                \(typed(cli, "install"))
             """
         // The probe said it could not read the machine, or read a registration it could
         // not name. Either way the reason is already on stderr, and pointing at it beats
@@ -215,7 +183,7 @@ public extension Requirement {
             """
             This Mac's driver state could not be read. This says what could
             not be read, and why:
-                scripts/virtual-hid-driver state
+                \(typed(cli, "state"))
             """
         }
     }

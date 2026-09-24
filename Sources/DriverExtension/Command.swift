@@ -35,6 +35,20 @@ public struct Command {
         }
     }
 
+    /// Runs the command in front of the person at the terminal rather than behind a pipe:
+    /// sudo has to reach them for a password, and an installer's progress is theirs to
+    /// watch. Its standard output goes to this process's standard error, so a verb whose
+    /// own stdout is a value a caller reads - a path, a verdict - keeps it clean.
+    public func perform() throws -> Int32 {
+        let process = Process()
+        process.executableURL = tool
+        process.arguments = arguments
+        process.standardOutput = FileHandle.standardError
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus
+    }
+
     public func run() throws -> Output {
         let process = Process()
         process.executableURL = tool

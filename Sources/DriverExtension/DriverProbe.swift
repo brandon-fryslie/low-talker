@@ -20,21 +20,17 @@ public enum DriverProbe {
     /// to ask about it before deleting anything.
     public static let elementsReceiptID = "org.pqrs.Karabiner-Elements"
 
-    /// The package's two payload trees. Public because `scripts/virtual-hid-driver`
-    /// deletes exactly these, and detection and deletion disagreeing about where the
-    /// package lives is the one mistake removal cannot walk back.
+    /// The package's two payload trees. `DriverInstall.remove` deletes exactly these, and
+    /// detection and deletion disagreeing about where the package lives is the one mistake
+    /// removal cannot walk back.
     public static let managerApp = "/Applications/.Karabiner-VirtualHIDDevice-Manager.app"
     public static let supportDirectory = "/Library/Application Support/org.pqrs/Karabiner-DriverKit-VirtualHIDDevice"
 
     /// The Manager binary inside that app, which is what asks macOS to activate the
-    /// driver. Onboarding names it to a reader who has no clone and so cannot run
-    /// `scripts/virtual-hid-driver`, for whom the activation is otherwise a step with no
-    /// command attached to it.
+    /// driver and to withdraw it.
     ///
     /// Built from `managerApp` rather than written out beside it, so the two cannot come
-    /// to name different installs. [LAW:one-source-of-truth] The script keeps its own
-    /// `MANAGER`, because it is the file that runs it; `make check-docs` resolves that
-    /// copy and fails when the two disagree.
+    /// to name different installs. [LAW:one-source-of-truth]
     public static var managerExecutable: String {
         "\(managerApp)/Contents/MacOS/Karabiner-VirtualHIDDevice-Manager"
     }

@@ -60,8 +60,8 @@ let package = Package(
         .target(name: "Keystrokes"),
         // Where the Karabiner-DriverKit-VirtualHIDDevice driver extension stands on this
         // Mac, and the four readings that answer is derived from. It links nothing and
-        // knows nothing of low-talker, so the CLI, the menu-bar app and
-        // scripts/virtual-hid-driver all reach one vocabulary instead of three.
+        // knows nothing of low-talker, so the CLI's driver verbs and the menu-bar app
+        // reach one vocabulary instead of two.
         // [LAW:one-source-of-truth]
         .target(name: "DriverExtension"),
         // The verdict table is a pure function of four readings, so every combination is
