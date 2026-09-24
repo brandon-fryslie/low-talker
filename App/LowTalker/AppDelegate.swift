@@ -427,7 +427,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// first install learns macOS wants a login before switching it on, and the person
     /// hears it then rather than at their first press. [LAW:no-silent-failure]
     private func showWhatIsMissing(for delivery: Delivery) {
-        let readiness = readiness(of: delivery)
+        show(readiness(of: delivery), missingFrom: delivery)
+    }
+
+    /// The alert itself, from a reading already taken.
+    private func show(_ readiness: Readiness, missingFrom delivery: Delivery) {
         guard !readiness.ready else { return }
         let alert = NSAlert()
         alert.informativeText = readiness.description
@@ -471,12 +475,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let before = switching
         switching = Task {
             await before?.value
-            // A choice made meanwhile supersedes this one: it is queued behind, and a repair
-            // of the setup it replaces would only reinstall and alert about a delivery left.
-            guard !quitting, setup == chosenSetup, !readiness(of: setup.delivery).ready else { return }
-            if setup.delivery.installRepairsIt { await adopt(setup) }
-            guard setup == chosenSetup else { return }
-            showWhatIsMissing(for: setup.delivery)
+            // A choice made meanwhile supersedes this one, and so does a quit: each waits
+            // behind, and a repair of what it replaces would reinstall and alert for nothing.
+            // [LAW:no-ambient-temporal-coupling]
+            guard !quitting, setup == chosenSetup else { return }
+            var readiness = readiness(of: setup.delivery)
+            guard !readiness.ready else { return }
+            // Read again only after an install, the one thing here that can change it.
+            if setup.delivery.installRepairsIt {
+                await adopt(setup)
+                readiness = self.readiness(of: setup.delivery)
+            }
+            guard !quitting, setup == chosenSetup else { return }
+            show(readiness, missingFrom: setup.delivery)
         }
     }
 
