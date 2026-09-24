@@ -118,6 +118,16 @@ private let anEditor = "com.example.editor"
         withExtendedLifetime(port) {}
     }
 
+    /// Words the app in front has not taken yet cross the wire as their own answer and are
+    /// thrown past it by that name - never as a refusal, since they may still land.
+    @Test func wordsNotYetTakenAreThrownByName() async throws {
+        let name = aPortNobodyElseUses()
+        let port = try hostInsertion(name: name) { .notYetTaken(characters: $0.count, into: anEditor) }
+
+        await #expect(throws: NotYetTaken(characters: 5, into: anEditor)) { try await inserter(name).insert("hello") }
+        withExtendedLifetime(port) {}
+    }
+
     /// Bytes that are not text are answered rather than dropped, so a sender learns why
     /// instead of waiting out its timeout. [LAW:no-silent-failure]
     @Test func bytesThatAreNotTextAreRefusedByName() async throws {

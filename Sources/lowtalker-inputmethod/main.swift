@@ -121,15 +121,17 @@ let insertions: InsertionPort? = {
             case .failure(let refusal)?: answer = .refused(refusal)
             case nil: answer = .refused(.inputMethodIsBusy)
             }
-            let (frontmost, securing) = (seen?.frontmost ?? nil, seen?.securing ?? nil)
             // The app in front is named because the refusal that matters here is the one
             // where it is not the app holding the cursor, and a line saying only the outcome
-            // leaves a reader with the question it was written to answer.
+            // leaves a reader with the question it was written to answer. A main thread that
+            // did not look is said as not knowing, never as nothing in front.
+            // [LAW:no-silent-failure]
+            let context = seen.map { seen in
+                "with \(seen.frontmost ?? "nothing") in front" + (seen.securing.map { ", secure input held by \($0)" } ?? "")
+            } ?? "without knowing what is in front, since the main thread did not look in time"
             logger.notice("""
                 insert of \(text.count, privacy: .public) characters: \
-                \(String(describing: answer), privacy: .public), \
-                with \(frontmost ?? "nothing", privacy: .public) in front\
-                \(securing.map { ", secure input held by \($0)" } ?? "", privacy: .public)
+                \(String(describing: answer), privacy: .public), \(context, privacy: .public)
                 """)
             return answer
         }
