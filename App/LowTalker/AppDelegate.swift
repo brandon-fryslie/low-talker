@@ -82,8 +82,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// The CLI this bundle carries, which the driver's onboarding steps name: a person who
     /// installed only this app has it, and it is the one the helper this app registers
-    /// admits. Where project.yml's `lowtalker-cli` embed puts it.
-    static let carriedCLI = Bundle.main.bundleURL.appending(path: "Contents/Helpers/lowtalker").path
+    /// admits.
+    static let carriedCLI = CarriedCLI.path(in: Bundle.main.bundleURL)
 
     /// The helper's registration, from the bundle's own launchd plist. One instance,
     /// because registering and asking where the registration stands are two questions
