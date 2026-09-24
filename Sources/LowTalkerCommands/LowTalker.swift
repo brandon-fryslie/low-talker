@@ -14,6 +14,7 @@ public struct LowTalker: AsyncParsableCommand {
     public init() {}
 
     /// This binary as a reader can run it again: its own file, links resolved, so a step
-    /// that names it works from any directory and outlives the link it was reached by.
+    /// that names it outlives the link it was reached by. Where Foundation cannot say what
+    /// file that is, the name it was started by.
     static let path: String = Bundle.main.executableURL?.resolvingSymlinksInPath().path ?? CommandLine.arguments[0]
 }

@@ -170,3 +170,41 @@ import Testing
         #expect(DriverPackage.fileName.hasSuffix("-\(DriverPackage.version).pkg"))
     }
 }
+
+/// The package's signature, judged from what pkgutil says. A chain macOS does not trust
+/// and the right name on the wrong chain are both refused: pkgutil prints a Common Name
+/// whether or not the chain behind it is trusted.
+@Suite struct SignatureJudgementTests {
+    private static let trusted = """
+        Package "driver.pkg":
+        \(DriverPackage.trustedStatus)
+           Certificate Chain:
+            1. \(DriverPackage.signingAuthority)
+        """
+
+    @Test func thePinnedSignerOnATrustedChainPasses() {
+        #expect(throws: Never.self) {
+            try DriverPackage.judge(signature: Command.Output(status: 0, stdout: Self.trusted, stderr: ""), of: "it")
+        }
+    }
+
+    @Test func anUntrustedChainIsRefusedEvenUnderTheRightName() {
+        let forged = Self.trusted.replacingOccurrences(of: DriverPackage.trustedStatus, with: "   Status: signed by untrusted certificate")
+        #expect(throws: DriverInstallRefusal("it has no signature macOS trusts; pkgutil did not report '\(DriverPackage.trustedStatus)'")) {
+            try DriverPackage.judge(signature: Command.Output(status: 0, stdout: forged, stderr: ""), of: "it")
+        }
+    }
+
+    @Test func anotherSignerIsRefused() {
+        let other = Self.trusted.replacingOccurrences(of: DriverPackage.signingAuthority, with: "Developer ID Installer: Someone Else (XXXXXXXXXX)")
+        #expect(throws: DriverInstallRefusal("it is not signed by '\(DriverPackage.signingAuthority)'")) {
+            try DriverPackage.judge(signature: Command.Output(status: 0, stdout: other, stderr: ""), of: "it")
+        }
+    }
+
+    @Test func pkgutilRefusingIsARefusal() {
+        #expect(throws: DriverInstallRefusal.self) {
+            try DriverPackage.judge(signature: Command.Output(status: 1, stdout: "", stderr: "no signature"), of: "it")
+        }
+    }
+}

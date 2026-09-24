@@ -113,15 +113,23 @@ extension DriverCommand {
 extension DriverState: ExpressibleByArgument {}
 
 /// How the driver verbs leave the process, in one place so every verb exits the same way.
-private enum DriverVerb {
-    static func end(_ ending: DriverInstall.Ending) throws {
+///
+/// [CLI] The exit codes are the verbs' contract: 0 done, 2 waiting on a person, 1 anything
+/// else - a refusal or any failure underneath one - always said as `lowtalker driver: ...`.
+enum DriverVerb {
+    /// What an ending says and the code it exits with. Pure, so the contract is tested
+    /// without a driver to install.
+    static func exit(for ending: DriverInstall.Ending) -> (said: String, code: Int32) {
         switch ending {
-        case .done(let said):
-            FileHandle.standardError.write(Data("lowtalker driver: \(said)\n".utf8))
-        case .waitingOnAPerson(let said):
-            FileHandle.standardError.write(Data("\nlowtalker driver: \(said)\n".utf8))
-            throw ExitCode(2)
+        case .done(let said): ("lowtalker driver: \(said)", 0)
+        case .waitingOnAPerson(let said): ("\nlowtalker driver: \(said)", 2)
         }
+    }
+
+    static func end(_ ending: DriverInstall.Ending) throws {
+        let (said, code) = exit(for: ending)
+        FileHandle.standardError.write(Data("\(said)\n".utf8))
+        if code != 0 { throw ExitCode(code) }
     }
 
     /// A refusal printed as the sentence it is, exit 1.
@@ -130,8 +138,11 @@ private enum DriverVerb {
         return ExitCode(1)
     }
 
+    /// Every failure a verb meets, said in the verbs' one voice: a refusal as its sentence,
+    /// anything else - a tool that would not start, a file that would not copy - as the
+    /// error it is.
     static func refusing<T>(_ body: () throws -> T) throws -> T {
-        do { return try body() } catch let refusal as DriverInstallRefusal { throw refused(refusal.description) }
+        do { return try body() } catch let exit as ExitCode { throw exit } catch { throw refused("\(error)") }
     }
 }
 

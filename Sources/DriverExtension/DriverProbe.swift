@@ -47,7 +47,7 @@ public enum DriverProbe {
             receipt: try receiptVersion(of: bundleID),
             registration: try registration(),
             ioNode: try ioNodePresent(),
-            elementsReceipt: elementsReceipt { try Command("/usr/sbin/pkgutil", "--pkg-info", elementsReceiptID).run() }
+            elementsReceipt: elementsReceipt()
         )
     }
 
@@ -55,6 +55,10 @@ public enum DriverProbe {
     /// caught into `.unreadable` rather than thrown past the verdict it does not feed.
     /// Takes the pkgutil run as a closure so a test can fail it either way it fails in
     /// life: the run itself, or an answer this build cannot read.
+    public static func elementsReceipt() -> ElementsReceipt {
+        elementsReceipt { try Command("/usr/sbin/pkgutil", "--pkg-info", elementsReceiptID).run() }
+    }
+
     static func elementsReceipt(_ read: () throws -> Command.Output) -> ElementsReceipt {
         do {
             return try receiptVersion(of: elementsReceiptID, from: read()).map { .installed(version: $0) } ?? .absent

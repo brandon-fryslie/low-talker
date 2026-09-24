@@ -35,7 +35,7 @@ public enum DriverInstall {
     /// macOS to activate the driver.
     public static func install(from source: URL?, cli: String, scratch: URL = scratch) throws -> Ending {
         try refuseRoot(getuid())
-        if let warning = warning(about: try DriverProbe.facts().elementsReceipt) { say(warning) }
+        if let warning = warning(about: DriverProbe.elementsReceipt()) { say(warning) }
         try withPackage(from: source, scratch: scratch) { package in
             say("==> installing (sudo)")
             try require(Command("/usr/bin/sudo", "/usr/sbin/installer", "-pkg", package.url.path, "-target", "/"), "the installer")

@@ -51,7 +51,14 @@ public enum DriverPackage {
         guard digest.map({ String(format: "%02x", $0) }).joined() == sha256 else {
             throw DriverInstallRefusal("\(what) does not match the checksum pinned for \(version)")
         }
-        let signature = try Command("/usr/sbin/pkgutil", "--check-signature", file.path).run()
+        try judge(signature: Command("/usr/sbin/pkgutil", "--check-signature", file.path).run(), of: what)
+        return VerifiedPackage(url: file)
+    }
+
+    /// What `pkgutil --check-signature` said, judged. Pure, so an untrusted chain and a
+    /// wrong signer are both refused in a test with no such package to hand.
+    /// [LAW:effects-at-boundaries]
+    static func judge(signature: Command.Output, of what: String) throws {
         guard signature.status == 0 else { throw DriverInstallRefusal("pkgutil refused \(what): \(signature.merged)") }
         let lines = signature.stdout.split(separator: "\n").map(String.init)
         guard lines.contains(trustedStatus) else {
@@ -60,7 +67,6 @@ public enum DriverPackage {
         guard signature.stdout.contains(signingAuthority) else {
             throw DriverInstallRefusal("\(what) is not signed by '\(signingAuthority)'")
         }
-        return VerifiedPackage(url: file)
     }
 }
 
