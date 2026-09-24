@@ -38,7 +38,7 @@ struct FlavorOption: ParsableArguments {
     /// The installation a command acts on when none is stated, for the reason above. Named
     /// once, because the help text, this option and `ConfigSource` all say it.
     /// [LAW:one-source-of-truth]
-    static let defaultFlavor: Flavor = carrier(of: Bundle.main.executableURL!) ?? .development
+    static let defaultFlavor: Flavor = Bundle.main.executableURL.flatMap(carrier(of:)) ?? .development
 
     /// [LAW:parse-dont-validate] Which installation's bundle holds the executable at this
     /// path, or nil when none does. The bundle's identifier is the one fact that says so -
