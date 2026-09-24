@@ -288,7 +288,7 @@ import Testing
     /// request to whoever asks, and the approval answers that request - so a step that
     /// let a reader reach for sudo would send them to an install that cannot complete.
     @Test func theActivationTellsTheReaderNotToTakeItUnderSudo() {
-        for state in [DriverState.absent, .installedInactive] {
+        for state in [DriverState.absent, .installedInactive, .residue] {
             let step = Requirement.driverExtension(state, cli: Self.cli).step ?? ""
             #expect(step.contains("not under sudo"), "\(state)")
         }

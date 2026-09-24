@@ -25,7 +25,7 @@ extension DriverCommand {
             abstract: "Exit 0 when the driver is in the named state, and 1 saying what it is instead."
         )
 
-        @Argument(help: "One of: \(DriverState.allCases.map(\.rawValue).joined(separator: ", ")).")
+        @Argument(help: "The verdict the driver should be in.")
         var verdict: DriverState
 
         func run() throws {
