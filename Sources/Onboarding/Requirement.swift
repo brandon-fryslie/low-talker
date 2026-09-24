@@ -104,12 +104,6 @@ private let notUnderSudo = """
     Run it as you, not under sudo: it asks for your password itself.
     """
 
-/// The command as a reader types it: the path quoted whole, since an app's name can hold a
-/// space, and any quote in it escaped for the shell.
-private func typed(_ cli: String, _ verbs: String) -> String {
-    "'\(cli.replacingOccurrences(of: "'", with: "'\\''"))' driver \(verbs)"
-}
-
 public extension Requirement {
     /// The driver extension low-talker types through.
     ///
@@ -140,14 +134,14 @@ public extension Requirement {
             """
             The driver package is not on this Mac. This downloads and verifies
             it, installs it, and asks macOS to activate it:
-                \(typed(cli, "install"))
+                \(DriverInstall.command(cli, "install"))
             \(notUnderSudo)
             """
         case .installedInactive:
             """
             The package is installed but macOS holds no registration for it,
             so the activation request never landed. This asks for it again:
-                \(typed(cli, "install"))
+                \(DriverInstall.command(cli, "install"))
             \(notUnderSudo)
             """
         case .awaitingApproval:
@@ -173,8 +167,8 @@ public extension Requirement {
             """
             Part of the driver package is here and part is not.
             Remove what is there, then install it again:
-                \(typed(cli, "remove"))
-                \(typed(cli, "install"))
+                \(DriverInstall.command(cli, "remove"))
+                \(DriverInstall.command(cli, "install"))
             """
         // The probe said it could not read the machine, or read a registration it could
         // not name. Either way the reason is already on stderr, and pointing at it beats
@@ -183,7 +177,7 @@ public extension Requirement {
             """
             This Mac's driver state could not be read. This says what could
             not be read, and why:
-                \(typed(cli, "state"))
+                \(DriverInstall.command(cli, "state"))
             """
         }
     }

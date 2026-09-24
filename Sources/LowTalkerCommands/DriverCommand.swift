@@ -61,7 +61,7 @@ extension DriverCommand {
         var package: String?
 
         func run() throws {
-            try DriverVerb.end(DriverVerb.refusing { try DriverInstall.install(from: package.map { URL(fileURLWithPath: $0) }) })
+            try DriverVerb.end(DriverVerb.refusing { try DriverInstall.install(from: package.map { URL(fileURLWithPath: $0) }, cli: LowTalker.path) })
         }
     }
 
@@ -74,7 +74,7 @@ extension DriverCommand {
             discussion: "Exits 0 when the driver is gone, 2 when macOS keeps it registered until a restart, and 1 otherwise."
         )
 
-        func run() throws { try DriverVerb.end(DriverVerb.refusing { try DriverInstall.remove() }) }
+        func run() throws { try DriverVerb.end(DriverVerb.refusing { try DriverInstall.remove(cli: LowTalker.path) }) }
     }
 
     /// [CLI] The copy's path on stdout, and nothing else there, so a build can capture it.

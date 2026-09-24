@@ -10,11 +10,13 @@ import Testing
 /// the installer. Installing the pinned bytes is checked live, and README.md records it.
 /// [LAW:behavior-not-structure]
 @Suite struct DriverInstallTests {
+    static let cli = "/Applications/LowTalker Dev.app/Contents/Helpers/lowtalker"
+
     // MARK: - how an install ends
 
     @Test(arguments: DriverState.allCases)
     func anInstallEndsByTheStateItLeft(state: DriverState) {
-        let ending = try? DriverInstall.installed(state)
+        let ending = try? DriverInstall.installed(state, cli: Self.cli)
         switch state {
         case .enabled, .running:
             #expect(ending == .done("the driver is active."))
@@ -22,10 +24,12 @@ import Testing
             guard case .waitingOnAPerson(let said) = ending else { Issue.record("\(state) is not a wait on a person"); return }
             #expect(said.contains("Login Items & Extensions"))
             #expect(said.contains(DriverProbe.bundleID))
+            // Confirmed with the binary the reader has, not a name PATH may not hold.
+            #expect(said.contains("'\(Self.cli)' driver expect enabled"))
         // Every other state is one installing cannot leave behind, and says so rather
         // than reporting success with a caveat.
         case .absent, .installedInactive, .pendingReboot, .residue, .unknown:
-            #expect(throws: DriverInstallRefusal.self) { try DriverInstall.installed(state) }
+            #expect(throws: DriverInstallRefusal.self) { try DriverInstall.installed(state, cli: Self.cli) }
         }
     }
 
@@ -35,12 +39,13 @@ import Testing
     /// second `remove` stops at once, and a Mac anywhere else after removal is a refusal.
     @Test(arguments: DriverState.allCases)
     func onlyAbsentAndPendingRebootEndARemoval(state: DriverState) {
-        let ending = DriverInstall.removed(state)
+        let ending = DriverInstall.removed(state, cli: Self.cli)
         switch state {
         case .absent: #expect(ending == .done("the driver is gone."))
         case .pendingReboot:
             guard case .waitingOnAPerson(let said) = ending else { Issue.record("pending-reboot is not a wait"); return }
             #expect(said.contains("Restart the Mac"))
+            #expect(said.contains("'\(Self.cli)' driver expect absent"))
         default: #expect(ending == nil, "\(state.rawValue)")
         }
     }

@@ -33,7 +33,7 @@ public enum DriverInstall {
     /// Downloads the pinned package, or takes the one at `source` - which is how a release's
     /// own copy is installed with the network off - verifies it, installs it, and asks
     /// macOS to activate the driver.
-    public static func install(from source: URL?, scratch: URL = scratch) throws -> Ending {
+    public static func install(from source: URL?, cli: String, scratch: URL = scratch) throws -> Ending {
         try refuseRoot(getuid())
         if let warning = warning(about: try DriverProbe.facts().elementsReceipt) { say(warning) }
         try withPackage(from: source, scratch: scratch) { package in
@@ -52,7 +52,7 @@ public enum DriverInstall {
         try require(Command(DriverProbe.managerExecutable, "activate"), "the Manager's activation")
         // The Manager exits 0 even when handed a bare usage error, so its exit status proves
         // little and the state reading is the only honest report. [LAW:verifiable-goals]
-        return try installed(reported(DriverProbe.facts()))
+        return try installed(reported(DriverProbe.facts()), cli: cli)
     }
 
     /// The verified package, copied into `directory` under its release name, for a release
@@ -68,7 +68,7 @@ public enum DriverInstall {
     }
 
     /// Deactivates the extension, deletes both payload trees, and forgets the receipt.
-    public static func remove() throws -> Ending {
+    public static func remove(cli: String) throws -> Ending {
         try refuseRoot(getuid())
         // One reading answers the first three questions: where removal stands, whether
         // Karabiner-Elements shares the files, and whether the extension is registered.
@@ -77,7 +77,7 @@ public enum DriverInstall {
         // `remove` says where the machine actually stands.
         let before = try reading({ try DriverProbe.facts() },
             or: "could not read where the driver stands, and removal deletes what nothing here could put back; refusing to guess")
-        if let ending = removed(DriverState(before)) { return ending }
+        if let ending = removed(DriverState(before), cli: cli) { return ending }
 
         if let blocker = blocker(before.elementsReceipt) { throw blocker }
 
@@ -111,13 +111,24 @@ public enum DriverInstall {
         }
 
         let after = reported(try DriverProbe.facts())
-        guard let ending = removed(after) else {
+        guard let ending = removed(after, cli: cli) else {
             throw DriverInstallRefusal("after removal, the driver is '\(after.rawValue)', which is not a state removing can leave behind")
         }
         return ending
     }
 
     // MARK: - the decisions
+
+    /// A driver verb as a reader types it: the CLI's path quoted whole, since an app's name
+    /// can hold a space, with any quote in it escaped for the shell. The endings here and
+    /// onboarding's steps both spell commands through this, so the two cannot differ.
+    /// [LAW:one-source-of-truth]
+    ///
+    /// - Parameter cli: the lowtalker binary this reader has - the running CLI's own path,
+    ///   or the copy inside the app's bundle - never a bare name PATH may not hold.
+    public static func command(_ cli: String, _ verbs: String) -> String {
+        "'\(cli.replacingOccurrences(of: "'", with: "'\\''"))' driver \(verbs)"
+    }
 
     /// The click macOS waits for, said once for both places that say it.
     static let approval = """
@@ -142,14 +153,14 @@ public enum DriverInstall {
     }
 
     /// How an install ends, read off the state it left.
-    static func installed(_ state: DriverState) throws -> Ending {
+    static func installed(_ state: DriverState, cli: String) throws -> Ending {
         switch state {
         case .enabled, .running:
             return .done("the driver is active.")
         case .awaitingApproval, .disabled:
             return .waitingOnAPerson("""
                 the driver is installed and waiting for you: \(approval)
-                Then confirm with:  lowtalker driver expect enabled
+                Then confirm with:  \(command(cli, "expect enabled"))
                 """)
         // The package is on disk but macOS holds no registration for it, so the request
         // never landed - whether the Manager refused it or the listing has not caught up.
@@ -163,7 +174,7 @@ public enum DriverInstall {
     /// The two states removal can end in, as endings; nil for every other state. Shared by
     /// the early return and the closing report, so the two cannot describe one state
     /// differently. [LAW:one-source-of-truth]
-    static func removed(_ state: DriverState) -> Ending? {
+    static func removed(_ state: DriverState, cli: String) -> Ending? {
         switch state {
         case .absent:
             .done("the driver is gone.")
@@ -175,7 +186,7 @@ public enum DriverInstall {
 
                   Restart the Mac
 
-                Then confirm with:  lowtalker driver expect absent
+                Then confirm with:  \(command(cli, "expect absent"))
                 """)
         case .installedInactive, .awaitingApproval, .disabled, .enabled, .running, .residue, .unknown:
             nil
