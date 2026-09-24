@@ -297,6 +297,17 @@ private let notUnderSudo = """
     Run it as you, not under sudo: it asks for your password itself.
     """
 
+/// Said beside every command that asks macOS to activate the driver, because the dialog
+/// that follows is the one macOS words with another product's name: the package's own
+/// Manager app files the request, so the notice reads "Karabiner-VirtualHIDDevice-Manager"
+/// would like to use a new driver extension, which is what it said on studious (macOS
+/// 15.0.1) on 2026-09-24. A person told only of "the driver" meets a name they never
+/// installed.
+private let managerNotice = """
+    macOS then asks about "Karabiner-VirtualHIDDevice-Manager": the driver
+    is the open-source Karabiner virtual keyboard, and that is its installer.
+    """
+
 public extension Requirement {
     /// The driver extension low-talker types through.
     ///
@@ -329,6 +340,7 @@ public extension Requirement {
             it, installs it, and asks macOS to activate it:
                 \(DriverInstall.command(cli, "install"))
             \(notUnderSudo)
+            \(managerNotice)
             """
         case .installedInactive:
             """
@@ -336,6 +348,7 @@ public extension Requirement {
             so the activation request never landed. This asks for it again:
                 \(DriverInstall.command(cli, "install"))
             \(notUnderSudo)
+            \(managerNotice)
             """
         case .awaitingApproval:
             """

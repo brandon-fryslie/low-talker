@@ -1,4 +1,3 @@
-import DriverExtension
 import Flavors
 import Foundation
 
@@ -111,10 +110,7 @@ public extension Requirement.Row {
                     The virtual keyboard types your words the way a real keyboard would, and \
                     macOS needs a small driver for that. Installing it takes an \
                     administrator's password, and then macOS asks you to approve it in \
-                    System Settings. The driver is the open-source Karabiner virtual \
-                    keyboard, so macOS names it, not \(app): the notice says \
-                    “\(DriverProbe.managerName)” would like to use a new driver extension, \
-                    and the switch reads \(DriverProbe.bundleID).
+                    System Settings.
                     """,
                 enables: "Typing your words into any app, including ones that do not work with input methods.",
                 ifSkipped: otherDeliveryThanTheVirtualKeyboard)

@@ -715,7 +715,7 @@ The setup is a walk over the same list the menu shows, one requirement per page.
 | Input Monitoring | the hotkey source is the event tap | asks to read the keyboard (`CGRequestListenEventAccess`) |
 | Accessibility | the hotkey source is the event tap | asks to act on other apps' input (`AXIsProcessTrustedWithOptions`, with the prompt) |
 | Input method | the delivery is the input method | switches this installation's input method on (`TISEnableInputSource`), which macOS asks about |
-| Driver extension | the delivery is the virtual keyboard | nothing: an administrator installs it with `lowtalker driver install`, so the page names that and opens Login Items & Extensions |
+| Driver extension | the delivery is the virtual keyboard | nothing: an administrator installs it with `lowtalker driver install`, so the page names that and opens Login Items & Extensions. The install is the one request macOS words with another product's name, since the package's own Manager app files it: the notice reads "Karabiner-VirtualHIDDevice-Manager" would like to use a new driver extension, and the step says so before the command runs |
 | Keyboard helper | the delivery is the virtual keyboard | registers the helper (`SMAppService.register`), which lands it in Login Items & Extensions |
 | Keyboard Setup Assistant | the delivery is the virtual keyboard | nothing: the helper answers it as it starts |
 
