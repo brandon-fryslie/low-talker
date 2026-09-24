@@ -54,6 +54,11 @@ public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, 
     /// holds it. Measured on 2026-09-22: iTerm2 with Secure Keyboard Entry on greys this
     /// input method out of the Input menu and it is never handed a client.
     case secureInputIsOn
+    /// The request came from a process that is not this installation's app, signed as the
+    /// input method is. Answered rather than ignored, because the one that sees it in
+    /// practice is this installation's own app, left talking to an input method copied
+    /// out of a build signed by another certificate - and it needs to hear why.
+    case senderIsNotThisInstallationsApp
 
     public var description: String {
         switch self {
@@ -61,6 +66,8 @@ public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, 
         case .cursorIsInAnotherApp: "the cursor is in an app that is not in front"
         case .requestWasNotText: "the request was not text"
         case .secureInputIsOn: "an app has secure keyboard entry on, and macOS switches input methods off while it does"
+        case .senderIsNotThisInstallationsApp:
+            "the input method takes words only from this installation's app, signed by the certificate that signed it, and this process is not that app"
         }
     }
 }
@@ -72,8 +79,13 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
     /// The send itself timed out: the request never entered the far end's queue.
     case requestWasNotTaken(port: String, after: Duration)
     case answerDidNotArrive(port: String, after: Duration)
-    /// A status none of the others names, which is the arm every unknown status takes.
-    case sendFailed(port: String, status: Int32)
+    /// The far end took the request and let go of the way back without answering.
+    case answerWasAbandoned(port: String)
+    /// Whatever answered is not this installation's input method, so its answer is not
+    /// believed: it may say the words landed when they are sitting in a stranger's process.
+    case answeredByAStranger(port: String, pid: pid_t, because: PeerIdentity.NotAdmitted, required: PeerIdentity)
+    /// A Mach status none of the others names, which is the arm every unknown status takes.
+    case failed(port: String, status: kern_return_t)
     /// Bytes came back that are not an answer, which is what an input method left running
     /// from before an update says: it described what it did in a shape this end no longer
     /// reads.
@@ -87,8 +99,12 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
             "the input method on \(port) did not take the request within \(after), so the words did not land"
         case let .answerDidNotArrive(port, after):
             "the input method on \(port) took the request but did not answer within \(after), so the words may have landed"
-        case let .sendFailed(port, status):
-            "the request to \(port) failed: CFMessagePort status \(status), so the words may have landed"
+        case let .answerWasAbandoned(port):
+            "the input method on \(port) took the request and went away without answering, so the words may have landed"
+        case let .answeredByAStranger(port, pid, because, required):
+            "pid \(pid) answered on \(port) and is not this installation's input method, \(required) - \(because) - so its answer was not believed and the words did not go through this installation's input method"
+        case let .failed(port, status):
+            "the request to \(port) failed: \(Mach.describe(status)), so the words may have landed"
         case let .answerWasNotReadable(port, bytes):
             "the input method on \(port) answered \(bytes) bytes that are not an answer, so the words may have landed"
         }
@@ -117,19 +133,11 @@ enum Wire {
         try! JSONEncoder().encode(answer)
     }
 
-    /// [LAW:parse-dont-validate] An answer or nothing at all - and an answer naming its app
-    /// with an empty string is nothing at all, because a caller renders that as a line
-    /// ending in nothing, which is worse than a line naming no app.
+    /// [LAW:parse-dont-validate] An answer or nothing at all.
     ///
-    /// The far half refuses the same thing at its own border, in `Client.init?`, so our own
-    /// input method cannot send one. This is the near half, where what answers is whatever
-    /// holds a port name anyone can derive from the public bundle id. Two checks of one
-    /// rule, standing at two borders in two processes, and neither is the other's duplicate.
-    /// A far end that answers a plausible but wrong app name is not caught here and cannot
-    /// be: that needs a sender this end can identify, which is low-input-method-s71.6tk.
+    /// An insert naming no app is not refused here: only this installation's input method
+    /// is believed, and it refuses one at its own border, in `Client.init?`. [LAW:single-enforcer]
     static func answer(of data: Data) -> InsertionAnswer? {
-        guard let answer = try? JSONDecoder().decode(InsertionAnswer.self, from: data) else { return nil }
-        if case .inserted(_, let into) = answer, into.isEmpty { return nil }
-        return answer
+        try? JSONDecoder().decode(InsertionAnswer.self, from: data)
     }
 }

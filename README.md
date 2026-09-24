@@ -355,13 +355,11 @@ Pressing another app's menu item needs Accessibility, charged to the terminal fo
 
 ## Insert
 
-Insert is the other hand-held delivery, and it needs no grant at all. It asks the input method to put text at the cursor through the text input system, the way a Japanese or Chinese input method commits a candidate, so nothing is posted as a key and the pasteboard is never touched. The LowTalker input source has to be selected for it, from the Input menu or System Settings; the input method process launches on demand.
+The input method delivery needs no grant at all. The app asks the input method to put text at the cursor through the text input system, the way a Japanese or Chinese input method commits a candidate, so nothing is posted as a key and the pasteboard is never touched. The LowTalker input source has to be selected for it; the input method process launches on demand.
 
-    swift run lowtalker insert "hello there"            # insert at the cursor now
-    swift run lowtalker insert "hello there" --delay 3  # three seconds to bring the receiving app forward
-    swift run lowtalker insert "hello there" --timeout 2  # the whole round trip: the request out and the answer back
+The input method takes words only from its own installation's app. The name the app sends to can be computed by any process, so every request is checked against the sender's code signature, as the kernel reports it, before its words are read: the sender has to be the app's bundle identifier, signed by the certificate that signed the input method. Anything else is refused by name, `the input method takes words only from this installation's app`, and the input method's log says which pid was turned away and what was required. The check runs the other way too: the app believes an answer only from its own input method, signed as the app is, because a name anyone can compute is one anyone can hold first. There is no command-line `insert` for the same reason. A command any process can run would let any process type.
 
-On success the line printed says how many characters the client in front accepted. Anything else is an error, printed by name with a non-zero exit, because either way the words are not at the cursor: a refusal says why (no client has focus, the cursor is in an app that is not in front, or an app has secure keyboard entry on), and a transport that could not carry the question at all says which failure it was, because a request the input method never took means the words did not land while an answer that never came back means they may have.
+When an insert fails, the app reports why by name, because either way the words are not at the cursor. A refusal says why: no client has focus, the cursor is in an app that is not in front, an app has secure keyboard entry on, or the sender is not this installation's app. A transport failure says which one it was, because a request the input method never took means the words did not land, while an answer that never came back means they may have.
 
 What `inserted` claims is that the client belonging to the app in front accepted the commit, not that a person saw the words - the text input system offers no delivery report. The Finder's desktop, in particular, presents a full text client that accepts text into a buffer nobody can see.
 

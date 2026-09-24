@@ -1,5 +1,7 @@
+import Darwin
 import Flavors
 import Foundation
+import DarwinCalls
 
 /// Something that puts text at the cursor and says what happened.
 ///
@@ -13,9 +15,9 @@ public protocol Inserter: Sendable {
     /// method looked and would not, `Unreachable` when the question never got an answer.
     ///
     /// **Blocking, and not to be called on the main actor or from a task.** The one that
-    /// crosses to the input method runs a run loop while it waits, so on the main thread it
-    /// would pump that thread's timers, URL session callbacks and UI events re-entrantly for
-    /// the whole timeout, and on a task it would hold a cooperative thread for the same.
+    /// crosses to the input method holds its thread in the kernel for up to its timeout, so
+    /// on the main thread it would freeze the menu and every event for that long, and on a
+    /// task it would hold a cooperative thread for the same.
     /// Said here rather than at the one implementation because this is the seam
     /// low-input-method-s71.b26's executor consumes, and the obligation belongs to whatever
     /// satisfies it. [LAW:no-ambient-temporal-coupling]
@@ -26,9 +28,9 @@ public extension Inserter {
     /// The same round trip asked for from inside a task, which is where the app asks from.
     ///
     /// The blocking call goes onto a thread of its own and the caller suspends, so nothing
-    /// holds a cooperative thread for the length of the timeout and no run loop anyone else
-    /// is using is pumped - which is the obligation stated above, kept here once rather than
-    /// by every caller that has to remember it. [LAW:single-enforcer]
+    /// holds a cooperative thread or the main one for the length of the timeout - which is
+    /// the obligation stated above, kept here once rather than by every caller that has to
+    /// remember it. [LAW:single-enforcer]
     ///
     /// The `insert` inside is the blocking one: that closure is not async, so the overload
     /// it names is the protocol's own. An async caller writing `try await insert(text)` gets
@@ -50,11 +52,16 @@ public extension Inserter {
 /// The app's end of the channel: one round trip to this flavor's input method.
 ///
 /// Synchronous, with the wait bounded by the transport's own timeouts rather than by a
-/// deadline this type keeps. `CFMessagePortSendRequest` is a send and a receive with a
-/// timeout each, and it is handed HALF of `timeout` for each: the two phases share the
-/// budget, so the call returns within `timeout` rather than within twice it, and the error
-/// for a phase names that phase's own bound rather than a number nobody waited.
+/// deadline this type keeps. The round trip is a send and a receive with a timeout each,
+/// and each is handed HALF of `timeout`: the two phases share the budget, so the call
+/// returns within `timeout` rather than within twice it, and the error for a phase names
+/// that phase's own bound rather than a number nobody waited.
 /// [LAW:no-ambient-temporal-coupling]
+///
+/// The answer is believed only from this installation's input method. The port's name is
+/// one anyone can compute and so one anyone can publish first, and whatever holds it would
+/// otherwise hear every dictation and say what it liked about where the words went.
+/// [LAW:single-enforcer] `PeerIdentity` is the check; this is its one caller here.
 ///
 /// Nothing is retried. An input method that did not answer is one whose state nobody here
 /// knows - it may have inserted the words and died before replying - and sending again
@@ -62,48 +69,73 @@ public extension Inserter {
 public struct InputMethodInserter: Inserter {
     private let portName: String
     private let timeout: Duration
+    /// Who may answer. A failure to write the requirement is kept and thrown by every
+    /// insert, so a build that cannot say who its input method is says so on each press
+    /// rather than inserting through whoever answers. [LAW:no-silent-failure]
+    private let answerer: Result<PeerIdentity, PeerIdentity.Unreadable>
 
     /// `flavor` says which installation's input method this reaches. No default, for the
     /// reason `HelperConnection` has none: both copies run at once, and a channel that
     /// guessed would put one installation's words in the other's window.
     public init(flavor: Flavor, timeout: Duration = .seconds(5)) {
-        self.init(portName: flavor.inputMethodPortName, timeout: timeout)
+        self.init(
+            portName: flavor.inputMethodPortName, timeout: timeout,
+            answerer: Result { () throws(PeerIdentity.Unreadable) in
+                try .signedLikeThisProcess(identifier: flavor.inputMethodBundleIdentifier)
+            })
     }
 
-    /// Onto a port someone else named, which is how a test puts its own port on the far
-    /// end without installing an input method. [LAW:decomposition]
-    init(portName: String, timeout: Duration) {
+    /// Onto a port and an answerer someone else named, which is how a test puts its own port
+    /// on the far end without installing an input method. [LAW:decomposition]
+    init(portName: String, timeout: Duration, answerer: Result<PeerIdentity, PeerIdentity.Unreadable>) {
         self.portName = portName
         self.timeout = timeout
+        self.answerer = answerer
     }
 
     public func insert(_ text: String) throws -> Inserted {
+        let answerer = try answerer.get()
+        var remote = mach_port_t()
         // [LAW:parse-dont-validate] The boundary: past here there is a port or a thrown
         // reason, never a maybe-port that later code has to keep asking about.
-        guard let port = CFMessagePortCreateRemote(nil, portName as CFString) else {
+        guard lt_bootstrap_look_up(portName, &remote) == KERN_SUCCESS else {
             throw Unreachable.nothingIsListening(port: portName)
         }
-        var reply: Unmanaged<CFData>?
+        defer { mach_port_deallocate(mach_task_self_, remote) }
+        let reply: ReceiveRight
+        do throws(ReceiveRight.NotAllocated) { reply = try ReceiveRight(sendable: false) } catch { throw Unreachable.failed(port: portName, status: error.status) }
         let phase = timeout / 2
-        let status = CFMessagePortSendRequest(
-            port, 0, Wire.request(text) as CFData, phase.seconds, phase.seconds,
-            CFRunLoopMode.defaultMode.rawValue, &reply
-        )
-        switch status {
-        case kCFMessagePortSuccess:
+        let sent = Mach.send(
+            Wire.request(text), id: 0, to: remote, disposition: mach_msg_type_name_t(MACH_MSG_TYPE_COPY_SEND),
+            replyTo: reply.port, timeout: phase)
+        switch sent {
+        case MACH_MSG_SUCCESS:
             break
-        case kCFMessagePortSendTimeout:
+        case MACH_SEND_TIMED_OUT:
             throw Unreachable.requestWasNotTaken(port: portName, after: phase)
-        case kCFMessagePortReceiveTimeout:
-            throw Unreachable.answerDidNotArrive(port: portName, after: phase)
         // The far end went away between resolving the name and sending to it, which is the
         // same fact as never having found it and is said the same way.
-        case kCFMessagePortIsInvalid:
+        case MACH_SEND_INVALID_DEST:
             throw Unreachable.nothingIsListening(port: portName)
         default:
-            throw Unreachable.sendFailed(port: portName, status: status)
+            throw Unreachable.failed(port: portName, status: sent)
         }
-        let data = reply.map { $0.takeRetainedValue() as Data } ?? Data()
+        let received: Mach.Received
+        switch Mach.receive(on: reply.port, timeout: phase) {
+        case .received(let arrived): received = arrived
+        case .failed(MACH_RCV_TIMED_OUT): throw Unreachable.answerDidNotArrive(port: portName, after: phase)
+        case .failed(let status): throw Unreachable.failed(port: portName, status: status)
+        }
+        received.discardReply()
+        // The kernel's word that the right the answer was to come back on was destroyed
+        // unanswered: the far end took the request and then went away, or dropped it.
+        guard received.id != Mach.answerAbandoned else { throw Unreachable.answerWasAbandoned(port: portName) }
+        do throws(PeerIdentity.NotAdmitted) {
+            try answerer.admits(received.sender)
+        } catch {
+            throw Unreachable.answeredByAStranger(port: portName, pid: received.senderPID, because: error, required: answerer)
+        }
+        let data = received.payload ?? Data()
         guard let answer = Wire.answer(of: data) else {
             throw Unreachable.answerWasNotReadable(port: portName, bytes: data.count)
         }
@@ -113,13 +145,5 @@ public struct InputMethodInserter: Inserter {
         case .inserted(let characters, let into): return Inserted(characters: characters, into: into)
         case .refused(let refusal): throw refusal
         }
-    }
-}
-
-extension Duration {
-    /// As `CFMessagePortSendRequest` wants it. Whole seconds and the fraction, because
-    /// dropping the fraction would silently round a sub-second timeout to none at all.
-    var seconds: CFTimeInterval {
-        CFTimeInterval(components.seconds) + CFTimeInterval(components.attoseconds) / 1e18
     }
 }
