@@ -44,8 +44,8 @@ struct OnboardCommand: ParsableCommand {
         let kept = KeptChoices(appDefaults)
         let readiness = OnboardingProbe.readiness(
             flavor: flavor,
-            deliveries: kept.delivery.map { [$0] } ?? Delivery.allCases,
-            sources: kept.source.map { [$0] } ?? HotkeySource.allCases,
+            delivery: kept.delivery,
+            source: kept.source,
             reader: .elsewhere, cli: LowTalker.path)
         print(readiness)
         // The code is a value computed the one way every time, rather than an exit taken

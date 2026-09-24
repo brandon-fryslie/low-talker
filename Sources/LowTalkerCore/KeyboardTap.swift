@@ -59,7 +59,10 @@ public protocol KeyboardTap {
 }
 
 public enum KeyboardTapError: Error, Equatable, CustomStringConvertible {
-    /// The grants were read as held and the session still would not make the tap.
+    /// The session would not make the tap, from a tap made without reading the grants
+    /// first - `dext watch`, under a terminal's grants - where the likeliest reason is that
+    /// they are missing. The hotkey's tap reads them first and says this as
+    /// `notAllowed` or `refusedWhileAllowed` instead; see `GrantedKeyboardTap`.
     case refused
     /// The grants were not held, so no tap was asked for: creating one anyway is what makes
     /// macOS raise its own dialog, unasked, in front of whatever the person was doing.

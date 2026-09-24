@@ -160,15 +160,20 @@ public extension OnboardingProbe {
     /// - Parameter flavor: which installation is being read. The two run side by side and
     ///   each has its own helper, service, label and grants, so every reading below is a
     ///   reading about one of them and there is no such thing as the readiness of "the app".
-    /// - Parameter deliveries: the deliveries whose rows to read - the app's one choice, or
-    ///   every delivery from a reader that has none.
-    /// - Parameter sources: the hotkey sources whose rows to read, the same way.
+    /// - Parameter delivery: the delivery chosen, or nil for a choice not made yet.
+    /// - Parameter source: the hotkey source chosen, or nil the same way.
+    ///
+    /// [LAW:one-source-of-truth] A choice not made yet could go either way, so it reads the
+    /// rows of every answer to it. That rule is written here once, for the app and the CLI
+    /// alike.
     /// - Parameter reader: who is asking, which decides the rows only the app can read.
     /// - Parameter cli: the lowtalker binary the driver's steps name; see
     ///   `Requirement.driverExtension(_:cli:)`.
     static func readiness(
-        flavor: Flavor, deliveries: [Delivery], sources: [HotkeySource], reader: OnboardingReader, cli: String
+        flavor: Flavor, delivery: Delivery?, source: HotkeySource?, reader: OnboardingReader, cli: String
     ) -> Readiness {
+        let deliveries: [Delivery] = delivery.map { [$0] } ?? Delivery.allCases
+        let sources: [HotkeySource] = source.map { [$0] } ?? HotkeySource.allCases
         let needed = Requirement.Row.allCases.filter { $0.isNeeded(deliveries: deliveries, sources: sources) }
         // The helper's standing is read at most once and only if asked for, because two
         // rows want it: its own, and the assistant's, whose step depends on whether a

@@ -868,8 +868,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         log.notice("helper registration: SMAppService.Status \(registration.rawValue, privacy: .public)")
         let readiness = OnboardingProbe.readiness(
             flavor: Self.flavor,
-            deliveries: delivery.map { [$0] } ?? Delivery.allCases,
-            sources: source.map { [$0] } ?? HotkeySource.allCases,
+            delivery: delivery,
+            source: source,
             reader: .theApp(helperAwaitingApproval: registration == .requiresApproval),
             cli: Self.carriedCLI)
         log.notice("onboarding: \(readiness.ready ? "ready" : "not ready", privacy: .public)")

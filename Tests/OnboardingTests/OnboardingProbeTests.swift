@@ -238,7 +238,7 @@ import Testing
     /// The app reads every row the CLI reads, plus its own grants, in the one order.
     @Test func theAppReadsItsOwnGrantsWhereTheCLICannot() {
         let asTheAppSeesIt = OnboardingProbe.readiness(
-            flavor: .development, deliveries: Delivery.allCases, sources: HotkeySource.allCases,
+            flavor: .development, delivery: nil, source: nil,
             reader: .theApp(helperAwaitingApproval: false), cli: "lowtalker")
         #expect(asTheAppSeesIt.requirements.map(\.row) == Requirement.Row.allCases)
         #expect(asTheAppSeesIt.notReadHere.isEmpty)
@@ -249,7 +249,7 @@ import Testing
     @Test func theEventTapsGrantsAppearOnlyWhenTheEventTapIsChosen() {
         func rows(_ source: HotkeySource) -> [Requirement.Row] {
             OnboardingProbe.readiness(
-                flavor: .development, deliveries: [.inputMethod], sources: [source],
+                flavor: .development, delivery: .inputMethod, source: source,
                 reader: .theApp(helperAwaitingApproval: false), cli: "lowtalker").requirements.map(\.row)
         }
         #expect(rows(.eventTap) == [.microphone, .inputMonitoring, .accessibility, .inputMethod])
@@ -261,7 +261,7 @@ import Testing
     /// unsharpened, which is the whole of the difference on those rows.
     @Test func onlyTheHelperCanDifferBetweenTheTwoSurfaces() {
         let asAnUnapprovedAppSeesIt = OnboardingProbe.readiness(
-            flavor: .development, deliveries: Delivery.allCases, sources: HotkeySource.allCases,
+            flavor: .development, delivery: nil, source: nil,
             reader: .theApp(helperAwaitingApproval: true), cli: "lowtalker").requirements
             .filter { !$0.row.readOnlyByTheApp }
         #expect(Self.asTheCLISeesIt.requirements.filter { $0.name != "Keyboard helper" }
@@ -270,7 +270,7 @@ import Testing
 
     static var asTheCLISeesIt: Readiness {
         OnboardingProbe.readiness(
-            flavor: .development, deliveries: Delivery.allCases, sources: HotkeySource.allCases,
+            flavor: .development, delivery: nil, source: nil,
             reader: .elsewhere, cli: "lowtalker")
     }
 }
