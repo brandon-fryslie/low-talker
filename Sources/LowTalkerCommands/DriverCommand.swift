@@ -29,12 +29,11 @@ extension DriverCommand {
         var verdict: DriverState
 
         func run() throws {
-            // An unreadable machine is the `unknown` verdict, as `state` prints it, with the
-            // reason said first; the comparison below then speaks for it.
+            // An unreadable machine confirms nothing, `unknown` included: `state` exits 1 on
+            // it too, whatever word it prints.
             let got: DriverState
             do { got = DriverState(try DriverProbe.facts()) } catch {
-                FileHandle.standardError.write(Data("lowtalker driver: \(error)\n".utf8))
-                got = .unknown
+                throw DriverVerb.refused("could not read the driver, so nothing is confirmed: \(error)")
             }
             guard got == verdict else { throw DriverVerb.refused("expected the driver to be '\(verdict.rawValue)' but it is '\(got.rawValue)'") }
             FileHandle.standardError.write(Data("lowtalker driver: confirmed '\(verdict.rawValue)'\n".utf8))
