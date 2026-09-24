@@ -233,7 +233,8 @@ check-docs:
 	  echo "check-docs: README.md names every reading the $$1 row can take"; \
 	}; \
 	check_row "Keyboard helper" '^So the helper.s row reads one of'; \
-	check_row "Keyboard Setup Assistant" '^So the assistant.s row reads one of'
+	check_row "Keyboard Setup Assistant" '^So the assistant.s row reads one of'; \
+	check_row "Input method" '^So the input method.s row reads one of'
 
 # The CLI for engine work, and the keyboard helper it types through. Both are signed
 # with the dev identity rather than ad hoc: the helper admits exactly the certificate

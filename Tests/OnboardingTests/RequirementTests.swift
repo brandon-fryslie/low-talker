@@ -1,5 +1,6 @@
 import DriverExtension
 import Flavors
+import InputSourceVocabulary
 import Testing
 @testable import Onboarding
 
@@ -271,6 +272,42 @@ import Testing
     @Test func anAnsweredAssistantAsksNothing() {
         #expect(Requirement.keyboardSetupAssistant(answered: true, aHelperHasRun: true, helperSubsystem: Self.service).met)
         #expect(Requirement.keyboardSetupAssistant(answered: true, aHelperHasRun: false, helperSubsystem: Self.service).met)
+    }
+
+    // MARK: - the input method
+
+    /// Only a selected input method asks nothing: every rung below it leaves a person
+    /// something to do, and the row says what.
+    @Test func onlyASelectedInputMethodAsksNothing() {
+        for state in InputSourceState.allCases {
+            let requirement = Requirement.inputMethod(state, flavor: Self.flavor)
+            #expect(requirement.met == (state == .selected), "\(state)")
+            #expect(requirement.met || requirement.step?.isEmpty == false, "\(state) carries no step")
+            #expect(requirement.reads == state.description)
+        }
+    }
+
+    /// Every unmet rung starts from the one menu item that walks the ladder, so a bundle
+    /// deleted by hand, one never registered and one switched off are all put back the
+    /// same way.
+    @Test func everyUnmetRungSendsAPersonToChooseTheDeliveryAgain() {
+        for state in InputSourceState.allCases where state != .selected {
+            #expect(Requirement.inputMethod(state, flavor: Self.flavor).step?.contains("Input Method under Delivery") == true, "\(state)")
+        }
+    }
+
+    /// Switched off is where a first install waits for the next login, and the row names
+    /// the login and the app to open after it, since nothing opens it at login.
+    /// [LAW:no-silent-failure]
+    @Test func aSwitchedOffInputMethodNamesTheLogin() throws {
+        let step = try #require(Requirement.inputMethod(.disabled, flavor: Self.flavor).step)
+        #expect(step.contains("out and back in"))
+        #expect(step.contains("open \(Self.flavor.displayName)"))
+    }
+
+    /// The readings table holds every rung, in the words the row itself reads.
+    @Test func everyInputMethodReadingIsInTheTable() {
+        #expect(Self.readings(for: .inputMethod) == InputSourceState.allCases.map(\.description))
     }
 
     // MARK: - a reader with no clone

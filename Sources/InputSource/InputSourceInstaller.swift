@@ -2,51 +2,9 @@ import AppKit
 import Carbon
 import Flavors
 import Foundation
+@_exported import InputSourceVocabulary
 import os
 import Security
-
-/// Where this flavor's input source stands on this Mac, as the text input system reports it.
-///
-/// A ladder and not a set of flags: each rung is the one below it plus one more thing that
-/// has happened, and `install` walks it from wherever this Mac is standing.
-/// [LAW:types-are-the-program] Nothing here is remembered between launches - every reading
-/// is taken from the text input system and the file system now, so a bundle the user
-/// deleted by hand reads as gone at the next look rather than as whatever the last install
-/// recorded. [FRAMING:representation]
-public enum InputSourceState: Equatable, Sendable, CustomStringConvertible {
-    /// Nothing stands at this flavor's place in `~/Library/Input Methods`.
-    case bundleNotInstalled
-    /// The bundle is there and the text input system holds no source for it, which is the
-    /// state a bundle copied in by hand sits in until something registers it.
-    case notRegistered
-    /// Registered, and switched off: it is not in the Input menu and cannot be selected.
-    case disabled
-    /// In the Input menu, and some other source is the one in use.
-    case enabled
-    /// The source in use, which is the only state an insert can happen from.
-    ///
-    /// Kept selected for as long as the delivery is the input method, rather than selected
-    /// for each press and put back after it. Measured on 2026-09-22: a source selected from
-    /// this background app becomes current at once, but the app in front goes on talking to
-    /// the input method it had until its own focus changes - so a press-length selection is
-    /// an input method with no client for the length of the press, and every insert refused.
-    /// Selected once, the source is what every app picks up as it takes focus. The input
-    /// method's controller passes every key through, so typing is unchanged by it.
-    case selected
-
-    /// Whether the input method can be asked to insert.
-    public var ready: Bool { self == .selected }
-
-    public var description: String {
-        switch self {
-        case .bundleNotInstalled: "not installed"
-        case .notRegistered: "installed, not registered"
-        case .disabled: "registered, switched off"
-        case .enabled: "enabled, not selected"
-        case .selected: "selected"
-        }
-    }
-}
 
 /// Puts this flavor's input method where macOS looks for one, registers it, and switches it
 /// on - with no logout, no administrator, and no step left for a person.
@@ -104,8 +62,8 @@ public struct InputSourceInstaller: Sendable {
 
     /// Where this flavor's input method stands once installed, which takes its name from
     /// the bundle being installed rather than coining a second one.
-    public func installed() throws -> URL {
-        Self.installDirectory.appending(path: try embedded().lastPathComponent)
+    static func installed(_ embedded: URL) -> URL {
+        installDirectory.appending(path: embedded.lastPathComponent)
     }
 
     /// What this Mac says about this flavor's source, right now.
@@ -113,14 +71,23 @@ public struct InputSourceInstaller: Sendable {
     /// [LAW:parse-dont-validate] Read in the ladder's own order, so each reading is taken
     /// only where the one below it already held: a source list queried for a bundle that is
     /// not installed would answer about somebody else's leftovers.
+    ///
+    /// Switched on is read off the input method and selected off its mode, the two sources
+    /// the text input system lists for one bundle. Measured on 2026-09-24: a mode reads as
+    /// enabled whenever its bundle is registered - Apple's Ainu and Kotoeri modes did, on a
+    /// Mac where neither is switched on - so only the input method's own source says
+    /// whether it is.
     public func state() throws -> InputSourceState {
         // Installed means the copy this app carries, which is what `install` would leave: a
         // link, another build or a damaged copy reads as not installed, because each is
         // one `install` replaces. [LAW:single-enforcer]
-        guard Self.isCopy(try installed(), of: try Self.seal(of: try embedded())) else { return .bundleNotInstalled }
-        guard let source = Self.source(named: flavor.inputSourceIdentifier) else { return .notRegistered }
-        guard Self.isEnabled(source) else { return .disabled }
-        return Self.isSelected(source) ? .selected : .enabled
+        let embedded = try embedded()
+        let installed = Self.installed(embedded)
+        guard Self.isCopy(installed, of: try Self.seal(of: embedded)) else { return .bundleNotInstalled }
+        guard let mode = Self.source(named: flavor.inputSourceIdentifier),
+              let method = Self.source(named: flavor.inputMethodBundleIdentifier) else { return .notRegistered }
+        guard Self.isEnabled(method) else { return .disabled }
+        return Self.isSelected(mode) ? .selected : .enabled
     }
 
     /// Walks the ladder from wherever this Mac stands to `selected`, doing only the steps
@@ -143,7 +110,7 @@ public struct InputSourceInstaller: Sendable {
     @discardableResult
     public func install(settling: Duration = .seconds(3)) async throws -> InputSourceState {
         let embedded = try embedded()
-        let installed = try installed()
+        let installed = Self.installed(embedded)
         // A process of this input method started from the copy that stood there before, so
         // once that copy is replaced every one of them answers the insert port with replaced
         // code for as long as it lives; the text input system launches the next from the new
@@ -162,14 +129,28 @@ public struct InputSourceInstaller: Sendable {
         guard status == noErr else {
             throw InputSourceInstallFailure.registrationRefused(bundle: installed, status: status)
         }
+        // Both sources are awaited, each named when it is the one missing: a list refreshed
+        // with one and not yet the other is not a bundle macOS declined.
         guard let source = try await Self.source(named: flavor.inputSourceIdentifier, within: settling) else {
             throw InputSourceInstallFailure.notInSourceListAfterRegistering(
                 identifier: flavor.inputSourceIdentifier, bundle: installed)
         }
-        if !Self.isEnabled(source) {
-            let enabled = TISEnableInputSource(source)
+        guard let method = try await Self.source(named: flavor.inputMethodBundleIdentifier, within: settling) else {
+            throw InputSourceInstallFailure.notInSourceListAfterRegistering(
+                identifier: flavor.inputMethodBundleIdentifier, bundle: installed)
+        }
+        // The input method is switched on, not its mode, for the reason `state` reads it:
+        // the mode reads as on already. Switching the input method on is what adds both to
+        // the Input menu - measured with Ainu, whose one call wrote both entries.
+        if !Self.isEnabled(method) {
+            let enabled = TISEnableInputSource(method)
             guard enabled == noErr else {
-                throw InputSourceInstallFailure.enableRefused(identifier: flavor.inputSourceIdentifier, status: enabled)
+                throw InputSourceInstallFailure.enableRefused(identifier: flavor.inputMethodBundleIdentifier, status: enabled)
+            }
+            // Read back, because on a first install the call answers `noErr` and does
+            // nothing until the next login (`InputSourceState.disabled`).
+            guard try await Self.source(named: flavor.inputMethodBundleIdentifier, within: settling, where: Self.isEnabled) != nil else {
+                throw InputSourceInstallFailure.switchedOnOnlyAtNextLogin(identifier: flavor.inputMethodBundleIdentifier)
             }
         }
         if !Self.isSelected(source) {
@@ -317,6 +298,9 @@ public struct InputSourceInstaller: Sendable {
 
     /// The one source with this identifier, including sources that are switched off.
     ///
+    /// An input method's own source carries its bundle identifier, and each mode's the
+    /// identifier its Info.plist gives it, so both are found by the names `Flavor` holds.
+    ///
     /// `includeAllInstalled` is what makes a disabled source visible at all: the default
     /// list holds only what is enabled, so without it a registered-but-off input method
     /// would read as `notRegistered` to `state`, and `install` would register it and then
@@ -390,6 +374,9 @@ public enum InputSourceInstallFailure: Error, Equatable, CustomStringConvertible
     /// what a bundle macOS silently declines looks like from here.
     case notInSourceListAfterRegistering(identifier: String, bundle: URL)
     case enableRefused(identifier: String, status: OSStatus)
+    /// The switch-on answered `noErr` and did not take: an input method first registered
+    /// during this login session, which macOS switches on only after the next.
+    case switchedOnOnlyAtNextLogin(identifier: String)
     case selectRefused(identifier: String, status: OSStatus)
     case notSelectedAfterSelecting(identifier: String)
 
@@ -408,6 +395,9 @@ public enum InputSourceInstallFailure: Error, Equatable, CustomStringConvertible
                 + "the bundle identifier is one macOS declines silently"
         case let .enableRefused(identifier, status):
             "the text input system refused to switch on \(identifier): OSStatus \(status)"
+        case let .switchedOnOnlyAtNextLogin(identifier):
+            "macOS registered \(identifier) and will not switch it on until you log out and back in, "
+                + "as with any input method first installed during a login session; it is switched on at the first launch after that"
         case let .selectRefused(identifier, status):
             "the text input system refused to select \(identifier): OSStatus \(status)"
         case let .notSelectedAfterSelecting(identifier):

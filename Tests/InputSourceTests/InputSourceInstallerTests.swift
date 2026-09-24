@@ -33,7 +33,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: app) }
         let installer = InputSourceInstaller(flavor: flavor, carrier: app)
         #expect(try installer.embedded().lastPathComponent == "Renamed.app")
-        #expect(try installer.installed() == InputSourceInstaller.installDirectory.appending(path: "Renamed.app"))
+        #expect(InputSourceInstaller.installed(try installer.embedded()) == InputSourceInstaller.installDirectory.appending(path: "Renamed.app"))
     }
 
     @Test func anAppCarryingNoInputMethodSaysSoByIdentifier() throws {

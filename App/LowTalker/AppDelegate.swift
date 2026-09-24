@@ -334,6 +334,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let state = try await InputSourceInstaller(flavor: Self.flavor).install()
                 log.notice("input method: \(state, privacy: .public)")
                 return .success(())
+            } catch InputSourceInstallFailure.switchedOnOnlyAtNextLogin(let identifier) {
+                // The copy and the registration both happened; what is left is the login.
+                log.error("input method: \(identifier, privacy: .public) waits for the next login")
+                return .failure("the input method is waiting for your next login: \(InputSourceInstallFailure.switchedOnOnlyAtNextLogin(identifier: identifier))")
             } catch {
                 log.error("input method: \(String(describing: error), privacy: .public)")
                 return .failure("the input method could not be installed: \(error)")
@@ -417,19 +421,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// After the user has chosen the virtual keyboard: what it still needs, in front of
-    /// them, when it needs anything. Not on a launch that only remembers the choice, which
-    /// the menu already answers every time it opens.
+    /// After the user has chosen a delivery: what it still needs, in front of them, when it
+    /// needs anything. Not on a launch that only remembers the choice, which the menu
+    /// already answers every time it opens. For the input method that is the moment a
+    /// first install learns macOS wants a login before switching it on, and the person
+    /// hears it then rather than at their first press. [LAW:no-silent-failure]
     private func showWhatIsMissing(for delivery: Delivery) {
+        show(readiness(of: delivery), missingFrom: delivery)
+    }
+
+    /// The alert itself, from a reading already taken.
+    private func show(_ readiness: Readiness, missingFrom delivery: Delivery) {
+        guard !readiness.ready else { return }
+        let alert = NSAlert()
+        alert.informativeText = readiness.description
         switch delivery {
         case .inputMethod:
-            return
+            alert.messageText = "The input method is not ready yet"
+            alert.addButton(withTitle: "OK")
+            NSApp.activate()
+            alert.runModal()
         case .virtualKeyboard:
-            let readiness = readVirtualKeyboardReadiness()
-            guard !readiness.ready else { return }
-            let alert = NSAlert()
             alert.messageText = "The virtual keyboard needs a few steps before it can type"
-            alert.informativeText = readiness.description
             alert.addButton(withTitle: "Open Login Items & Extensions…")
             alert.addButton(withTitle: "Later")
             NSApp.activate()
@@ -437,11 +450,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// Choosing the delivery already listening repairs it rather than switching to it;
+    /// the menu's row for the input method says to do exactly this.
     @objc private func chooseDelivery(_ item: NSMenuItem) {
         guard let spelling = item.representedObject as? String, let chosen = Delivery(rawValue: spelling) else {
             preconditionFailure("a delivery item carries its delivery's raw value")
         }
-        take { $0.chosenDelivery = chosen }
+        if let standing = listening?.setup, standing.delivery == chosen, listening?.hotkey.isWatching == true {
+            repair(standing)
+        } else {
+            take { $0.chosenDelivery = chosen }
+        }
+    }
+
+    /// When the listening delivery reads as not ready, sets it up again if its install can
+    /// put that right - an input method deleted by hand, or switched off - and says what is
+    /// still missing either way.
+    ///
+    /// [LAW:no-ambient-temporal-coupling] Queued behind any switch in progress and read
+    /// only once it has finished, so a second click while the first repair runs finds it
+    /// done and does nothing. A delivery that reads ready, or one whose missing steps only a
+    /// person can take, is never torn down: a press latched open over it is left to finish.
+    private func repair(_ setup: Setup) {
+        let before = switching
+        switching = Task {
+            await before?.value
+            // A choice made meanwhile supersedes this one, and so does a quit: each waits
+            // behind, and a repair of what it replaces would reinstall and alert for nothing.
+            // [LAW:no-ambient-temporal-coupling]
+            guard !quitting, setup == chosenSetup else { return }
+            var readiness = readiness(of: setup.delivery)
+            guard !readiness.ready else { return }
+            // Read again only after an install, the one thing here that can change it.
+            if setup.delivery.installRepairsIt {
+                await adopt(setup)
+                readiness = self.readiness(of: setup.delivery)
+            }
+            guard !quitting, setup == chosenSetup else { return }
+            show(readiness, missingFrom: setup.delivery)
+        }
     }
 
     @objc private func chooseHotkeySource(_ item: NSMenuItem) {
@@ -687,7 +734,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - the menu
 
-    /// What the virtual keyboard needs, read off this Mac now, and logged as it is read.
+    /// The input method's one row. A reading that failed is a row saying so, never an
+    /// absent row. [LAW:no-silent-failure]
+    private func readInputMethodReadiness() -> Readiness {
+        do { return Readiness([.inputMethod(try InputSourceInstaller(flavor: Self.flavor).state(), flavor: Self.flavor)]) }
+        catch { return Readiness([.unreadable(.inputMethod, error)]) }
+    }
+
+    /// What the virtual keyboard needs, read off this Mac now.
     ///
     /// The reading waits about 220ms - measured from the log timestamps, and spent almost
     /// entirely in the driver probe's subprocesses. It is paid on every read rather than
@@ -701,7 +755,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // the right plist - has nothing else to read back. [LAW:no-silent-failure]
         let registration = helperService.status
         log.notice("helper registration: SMAppService.Status \(registration.rawValue, privacy: .public)")
-        let readiness = OnboardingProbe.readiness(flavor: Self.flavor, approvalPending: registration == .requiresApproval)
+        return OnboardingProbe.readiness(flavor: Self.flavor, approvalPending: registration == .requiresApproval)
+    }
+
+    /// What `delivery` needs, read off this Mac now. [LAW:single-enforcer] The one place a
+    /// delivery is matched to its requirements, for the menu and the alert alike.
+    ///
+    /// The input method's one row is read here, off the installer, rather than in
+    /// `OnboardingProbe`, which links no window server. Read afresh at every call, so a
+    /// bundle deleted by hand reads as missing at the next menu open. Logged as it is read,
+    /// the same for both deliveries.
+    private func readiness(of delivery: Delivery) -> Readiness {
+        let readiness = switch delivery {
+        case .virtualKeyboard:
+            readVirtualKeyboardReadiness()
+        case .inputMethod:
+            readInputMethodReadiness()
+        }
         log.notice("onboarding: \(readiness.ready ? "ready" : "not ready", privacy: .public)")
         for requirement in readiness.requirements {
             log.notice("onboarding: \(requirement.name, privacy: .public): \(requirement.reads, privacy: .public)")
@@ -718,13 +788,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // The kept choices while nothing listens yet, so a choice made then is shown as made.
         let delivery = listening?.setup.delivery ?? chosenDelivery
         let source = listening?.setup.source ?? chosenSource
-        // The virtual keyboard's requirements are read only while it is the delivery: on the
-        // input method nothing is missing, and a list of driver steps would be a list of
-        // things to install for an output nobody is using.
-        let requirements = switch delivery {
-        case .virtualKeyboard: readVirtualKeyboardReadiness().requirements
-        case .inputMethod, nil: [Requirement]()
-        }
+        // The chosen delivery's requirements and no other's: a list of driver steps under the
+        // input method would be a list of things to install for an output nobody is using.
+        let requirements = delivery.map { readiness(of: $0).requirements } ?? []
 
         // What the user's microphone is doing, on the surface the epic exists for: the
         // menu-bar indicator says the device is open and only this says why, so a lit
@@ -783,6 +849,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 }
 
 private extension Delivery {
+    /// Whether installing it again can put right what its requirements say is missing. The
+    /// input method's install copies, registers and switches on; every unmet row of the
+    /// virtual keyboard waits on a person - an install, an approval, a restart.
+    var installRepairsIt: Bool {
+        switch self {
+        case .inputMethod: true
+        case .virtualKeyboard: false
+        }
+    }
+
     /// The name a person picks it by, in the menu and in the first-launch question.
     var title: String {
         switch self {
