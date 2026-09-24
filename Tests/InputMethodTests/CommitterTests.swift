@@ -105,9 +105,25 @@ import Testing
         hung.release()
     }
 
+    @Test func whatTheQueueSawIsHandedBack() {
+        let queue = DispatchQueue(label: #function)
+        #expect(Committer(bound: Self.unspendable, label: #function).ask(on: queue) { "the cursor" } == "the cursor")
+    }
+
+    /// A queue that does not get round to looking - the main thread, held by a call into a
+    /// hung app - is nothing at all, and the look it runs later changes nothing.
+    @Test func aQueueThatDoesNotLookInTimeIsNothing() {
+        let held = DispatchQueue(label: #function)
+        held.suspend()
+        defer { held.resume() }
+
+        #expect(Committer(bound: .milliseconds(50), label: #function).ask(on: held) { "too late" } == nil)
+    }
+
     /// The input method's answer naming a hung app has to reach the app before the app
-    /// stops listening, which it does after one of its four phases.
-    @Test func theBoundIsWithinOnePhaseOfTheAppsWait() {
-        #expect(Committer.standardBound < InputMethodInserter.standardTimeout / 4)
+    /// stops listening, which it does after one of its four phases. An insert waits the
+    /// bound at most twice: to learn the cursor, then to commit.
+    @Test func bothWaitsFitWithinOnePhaseOfTheAppsWait() {
+        #expect(Committer.standardBound * 2 < InputMethodInserter.standardTimeout / 4)
     }
 }

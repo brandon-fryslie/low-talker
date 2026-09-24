@@ -82,6 +82,11 @@ public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, 
     /// signed by another certificate than the app fails the app's own check of who answered
     /// first, and that is the error it reports. [LAW:no-silent-failure]
     case senderIsNotThisInstallationsApp
+    /// The input method's main thread did not say which cursor is in front in time, so
+    /// nothing was committed. It is where IMK makes its own calls into apps, and a hung
+    /// app holds it there for up to 3 s at a time (measured on low-input-method-s71.c7d).
+    case inputMethodIsBusy
+
     public var description: String {
         switch self {
         case .noClientHasFocus: "no client has focus"
@@ -90,6 +95,8 @@ public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, 
         case .secureInputIsOn: "an app has secure keyboard entry on, and macOS switches input methods off while it does"
         case .senderIsNotThisInstallationsApp:
             "the input method takes words only from this installation's app, signed by the certificate that signed it, and this process is not that app"
+        case .inputMethodIsBusy:
+            "the input method was held up by an app that is not answering and did not look for the cursor in time; nothing was inserted"
         }
     }
 }

@@ -34,8 +34,9 @@ import os
 /// are already on their way to the app, and they land when it recovers. Nothing is
 /// committed twice for it.
 public final class Committer: Sendable {
-    /// Beneath one phase of the app's own wait, so this answer arrives before the app
-    /// stops listening. `CommitterTests` holds the two apart.
+    /// An insert waits this long at most twice - once to learn the cursor, once to commit -
+    /// and the two together sit beneath one phase of the app's own wait, so this answer
+    /// arrives before the app stops listening. `CommitterTests` holds the two apart.
     public static let standardBound = Duration.milliseconds(500)
 
     private let bound: Duration
@@ -47,6 +48,25 @@ public final class Committer: Sendable {
     public init(bound: Duration = standardBound, label: String) {
         self.bound = bound
         self.label = label
+    }
+
+    /// Runs `look` on `queue` and hands back what it saw, or nothing once `bound` has passed.
+    ///
+    /// How an insert asks the main actor which cursor is in front without waiting on it
+    /// past the bound: the main thread is where IMK makes its own calls into apps, and a
+    /// hung app holds it there for up to 3 s on each. Nothing at all is an answer the
+    /// caller refuses by name, and `look` runs late or never; what it saw is thrown away.
+    /// [LAW:parse-dont-validate] The typed absence is the whole failure arm.
+    public func ask<Seen: Sendable>(on queue: DispatchQueue, _ look: @escaping @Sendable () -> Seen) -> Seen? {
+        let seen = OSAllocatedUnfairLock<Seen?>(initialState: nil)
+        let answered = DispatchSemaphore(value: 0)
+        queue.async {
+            let saw = look()
+            seen.withLock { $0 = saw }
+            answered.signal()
+        }
+        guard answered.wait(timeout: .now() + bound / .seconds(1)) == .success else { return nil }
+        return seen.withLock { $0 }
     }
 
     /// Commits `text` at `cursor`, answering once the app takes it or `bound` has passed.

@@ -43,9 +43,10 @@ public final class DictationInputController: IMKInputController {
     /// insert that asked about it had already been refused, and the words would be lost
     /// while the cursor sat waiting. [LAW:no-ambient-temporal-coupling]
     override public func activateServer(_ sender: Any!) {
-        // The client is a main-thread object arriving through a signature written before
-        // the language could say so, so the compiler cannot see that it never leaves the
-        // thread it was made on. `assumeIsolated` is where that is asserted and checked.
+        // The controller is a main-thread object arriving through a signature written
+        // before the language could say so, and `assumeIsolated` is where that is asserted
+        // and checked. The client is read here and nowhere else on this thread; its commits
+        // are made off it, by `Committer`, which is why `Client` is Sendable.
         nonisolated(unsafe) let client = sender as? IMKTextInput
         nonisolated(unsafe) let controller = self
         MainActor.assumeIsolated {

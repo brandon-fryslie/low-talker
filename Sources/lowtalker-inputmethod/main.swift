@@ -85,10 +85,10 @@ func secureInputHolder() -> String? {
 /// Answered on a queue of its own and never on the main one, which is where every key this
 /// source passes through is handled. An insert asks the main actor only which cursor is in
 /// front - where `FocusedClient` and every `IMKInputController` callback already run, so
-/// the two never race - and then waits on the `Committer`, off the main thread, for the app
-/// to take the words. A hung app then costs the person one refused insert and not a dead
-/// keyboard. [LAW:no-ambient-temporal-coupling] `assumeIsolated` inside `main.sync` is
-/// that sentence made checkable.
+/// the two never race - and then hands the words to the `Committer`, off the main thread.
+/// Both waits are bounded by the committer, so a hung app costs the person an insert
+/// answered by name and not a dead keyboard. [LAW:no-ambient-temporal-coupling]
+/// `assumeIsolated` inside the ask is that sentence made checkable.
 ///
 /// Only this installation's app gets through; every other sender is refused by the port
 /// before its words are read, and the refusal is logged here with what was required.
@@ -106,19 +106,22 @@ let insertions: InsertionPort? = {
             logger.error("\(String(describing: event), privacy: .public)")
         }) { text in
             // Read on the main actor, where the effects are, and handed to the decision as
-            // values. [LAW:effects-at-boundaries]
-            let (frontmost, securing, cursor) = DispatchQueue.main.sync {
+            // values. [LAW:effects-at-boundaries] Asked within the committer's bound, like
+            // the commit, so the whole answer is one this process keeps.
+            let seen = committer.ask(on: .main) {
                 MainActor.assumeIsolated {
                     let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
                     let securing = secureInputHolder()
-                    return (frontmost, securing, FocusedClient.shared.cursor(whileInFrontIs: frontmost, secureInputIsOn: securing != nil))
+                    return (frontmost: frontmost, securing: securing, cursor: FocusedClient.shared.cursor(whileInFrontIs: frontmost, secureInputIsOn: securing != nil))
                 }
             }
             let answer: InsertionAnswer
-            switch cursor {
-            case .success(let cursor): answer = committer.commit(text, at: cursor)
-            case .failure(let refusal): answer = .refused(refusal)
+            switch seen?.cursor {
+            case .success(let cursor)?: answer = committer.commit(text, at: cursor)
+            case .failure(let refusal)?: answer = .refused(refusal)
+            case nil: answer = .refused(.inputMethodIsBusy)
             }
+            let (frontmost, securing) = (seen?.frontmost ?? nil, seen?.securing ?? nil)
             // The app in front is named because the refusal that matters here is the one
             // where it is not the app holding the cursor, and a line saying only the outcome
             // leaves a reader with the question it was written to answer.

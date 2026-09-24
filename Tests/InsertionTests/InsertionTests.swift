@@ -19,6 +19,7 @@ import Testing
         .refused(.requestWasNotText),
         .refused(.secureInputIsOn),
         .refused(.senderIsNotThisInstallationsApp),
+        .refused(.inputMethodIsBusy),
         .notYetTaken(characters: 5, into: "com.example.editor"),
     ])
     func everyAnswerSurvivesTheCrossing(answer: InsertionAnswer) {
