@@ -20,6 +20,7 @@ let package = Package(
         .library(name: "InputMethod", targets: ["InputMethod"]),
         .library(name: "Insertion", targets: ["Insertion"]),
         .library(name: "InputSource", targets: ["InputSource"]),
+        .library(name: "LowTalkerCommands", targets: ["LowTalkerCommands"]),
         .executable(name: "lowtalker", targets: ["lowtalker"]),
         .executable(name: "lowtalker-keyboardd", targets: ["lowtalker-keyboardd"]),
         .executable(name: "lowtalker-inputmethod", targets: ["lowtalker-inputmethod"]),
@@ -153,8 +154,13 @@ let package = Package(
             name: "lowtalker-keyboarddTests",
             dependencies: ["lowtalker-keyboardd", "KeyboardService", "VirtualKeyboard", "DriverExtension", "Keystrokes", "Pointing", "Signals", "Flavors"]
         ),
-        .executableTarget(
-            name: "lowtalker",
+        // Every command the CLI has, as a library, so the one program has two builds that
+        // cannot differ: SwiftPM's `.build/debug/lowtalker` for this tree, and the copy Xcode
+        // embeds in each app bundle, which cannot embed a package's executable. Both are the
+        // entry below over this library, the shape the input method already takes, and this
+        // list is the one place the CLI's dependencies are declared. [LAW:one-source-of-truth]
+        .target(
+            name: "LowTalkerCommands",
             dependencies: [
                 "LowTalkerCore",
                 "Flavors",
@@ -169,6 +175,7 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
+        .executableTarget(name: "lowtalker", dependencies: ["LowTalkerCommands"]),
         .testTarget(
             name: "LowTalkerCoreTests",
             dependencies: [
@@ -206,7 +213,7 @@ let package = Package(
         // The CLI's table shape is its contract; this pins column names to fields.
         .testTarget(
             name: "lowtalkerTests",
-            dependencies: ["lowtalker", "LowTalkerCore", "VirtualKeyboard", "Keystrokes", "Typing", "KeyboardService", "Onboarding", "DriverExtension", "Flavors"]
+            dependencies: ["LowTalkerCommands", "LowTalkerCore", "VirtualKeyboard", "Keystrokes", "Typing", "KeyboardService", "Onboarding", "DriverExtension", "Flavors"]
         ),
     ]
 )

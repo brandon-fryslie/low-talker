@@ -7,7 +7,7 @@ import LowTalkerCore
 import Onboarding
 import Testing
 @testable import Typing
-@testable import lowtalker
+@testable import LowTalkerCommands
 
 /// The exit codes `act`, `type` and `keys` share are their contract with a script, and
 /// these pin which failure earns which.

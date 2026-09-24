@@ -27,6 +27,15 @@ CI runs `make signing-identity`, `make test`, and `make app` on a macos-15 runne
 
 Before the first `make app`, `make cli`, or `make helper`, do the one-time setup below.
 
+## The CLI without a checkout
+
+Each app carries the CLI at `Contents/Helpers/lowtalker`, signed as the app is, so the keyboard helper that app registers admits it and a Mac with no clone of this repo can type, click and look through it:
+
+    /Applications/LowTalker.app/Contents/Helpers/lowtalker onboard
+    sudo mkdir -p /usr/local/bin && sudo ln -sf /Applications/LowTalker.app/Contents/Helpers/lowtalker /usr/local/bin/lowtalker
+
+The copy acts on the installation that carries it: `--flavor` defaults to `release` for the one inside `LowTalker.app` and to `development` for the one inside `LowTalker Dev.app`, and a link on PATH keeps that, because the CLI resolves links before it reads which bundle it sits in. `.build/debug/lowtalker` sits in no bundle and defaults to `development`. It is one program built two ways: `make cli` builds it with SwiftPM, and each app embeds the Xcode build of the same entry over the same `LowTalkerCommands` library. The copy is in `Helpers` rather than `MacOS` because `lowtalker` and the release app's own `LowTalker` are one file name on a case-insensitive volume.
+
 ## Trying the engine
 
     make cli
@@ -65,7 +74,7 @@ Loading the model means Core ML compiling it for this Mac's Neural Engine, which
 | Same signing identifier, same files, model already compiled | 1.5 to 7 seconds |
 | A binary with a new signing identifier | 2 to 4 minutes again |
 
-`swift build` links a fresh identifier into every binary it produces, so a plain `swift run` pays the full compile after every rebuild. `make cli` re-signs the built binary with the fixed identifier `lowtalker`, which keeps the cache warm across rebuilds, and with the dev identity, for the keyboard helper's sake ("The keyboard helper" below). The app's identifier is its bundle id, set by its certificate signature, so `make app` builds keep the cache warm on their own.
+`swift build` links a fresh identifier into every binary it produces, so a plain `swift run` pays the full compile after every rebuild. `make cli` re-signs the built binary with the fixed identifier `ai.promptctl.low-talker.cli`, which keeps the cache warm across rebuilds, and with the dev identity, for the keyboard helper's sake ("The keyboard helper" below). The copy of the CLI each app carries is signed with the same identifier, so it shares that cache. The app's identifier is its bundle id, set by its certificate signature, so `make app` builds keep the cache warm on their own.
 
 A release that carries its model pays this compile on its first launch — a model just shipped has never been compiled here — and loading it in place pays it again after every update, because replacing the app rewrites the model files at their path and the cache does not follow them. This is the cost the copy had been hiding: a model copied into Application Support outlived an app update untouched, so an update relaunched warm; a model loaded from the bundle is replaced along with the bundle, so the first launch after each update is cold again. Measured on 2026-09-16 on an M2 Max, loading the default model from a fixed path with the CLI: 171 s cold the first time, 2.1 s once the cache was warm, and 180 s again after the model files at that path were replaced with an identical copy — the update. While the model is not yet ready, the menu bar icon is an hourglass, described to Accessibility as "LowTalker: preparing the model", and the menu's model line is the one the log records, "loading model, minutes the first time on this Mac, 0 s so far" while it loads and "ready (large-v3-v20240930_turbo_632MB) after ..." once it is resident, counted from launch, with a second line meanwhile saying a press made now is heard once the model is ready. A load that fails draws a warning triangle. A Mac that has never run low-talker also runs Gatekeeper's first check of the notarized bundle. On an Apple M5 Max running macOS Tahoe that had never run low-talker, the notarized release (v0.1.0-alpha.2) was reported to launch with no Gatekeeper prompt (how that copy reached the Mac, and so whether it carried a quarantine, is not recorded) and was ready 2 min 4 s after launch, the network on — quicker than the M2 Max here, on a newer Neural Engine. The virtual-keyboard helper has been approved and run from the notarized build on this Mac ("Signing for release" below). With the network off, on a Mac that had never looked up the release's notarization ticket, the image mounted with no prompt and the app launched out of it after macOS's usual first-open confirmation ("Signing for release" below).
 

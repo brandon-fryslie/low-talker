@@ -109,6 +109,16 @@ targetTemplates:
         copy:
           destination: wrapper
           subpath: Contents/MacOS
+      # The CLI, signed on copy with the app's identity, so the helper this app registers
+      # admits it on a Mac with no checkout. One tool in both bundles, like the helper:
+      # which installation it acts on is read from the bundle it sits in, never built into
+      # it. In Helpers and not beside the helper, because `lowtalker` and the release app's
+      # own `LowTalker` are one file name on a case-insensitive volume.
+      - target: lowtalker
+        embed: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers
       # The input method bundle, carried the way the helper is so a copy of the app has
       # everything it delivers with. Unlike the helper, it is a bundle of its own with its
       # own identifier, so there is one target per flavor rather than one tool embedded
@@ -382,6 +392,32 @@ targets:
       inputSourceIdentifier: ai.promptctl.low-talker.dev.inputmethod.dictation.text
       inputMethodConnectionName: ai.promptctl.low-talker.dev.inputmethod.dictation_Connection
       inputMethodPortName: ai.promptctl.low-talker.dev.inputmethod.dictation.insert
+
+  # The CLI, built here from the entry Package.swift builds `.build/debug/lowtalker` from,
+  # over the library holding every command, so the copy an app carries is the program a
+  # checkout runs. `make cli` signs that build with this identifier too, so both builds are
+  # one code identity - which is also the key the Neural Engine files its compiled model
+  # under, so either copy warms the other's cache.
+  lowtalker:
+    type: tool
+    platform: macOS
+    sources:
+      - Sources/lowtalker
+    dependencies:
+      - package: low-talker
+        product: LowTalkerCommands
+    # Hardened, as every target here is, and so refused the microphone without this:
+    # `record`, `mic` and `dictate` listen. The same entitlement the app carries, for the
+    # same measured reason written above it.
+    entitlements:
+      path: App/Generated/lowtalker.entitlements
+      properties:
+        com.apple.security.device.audio-input: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.promptctl.low-talker.cli
+        # Passed by hand for the reason the helper's is, below.
+        OTHER_CODE_SIGN_FLAGS: $(inherited) --identifier $(PRODUCT_BUNDLE_IDENTIFIER)
 
   # The root keyboard helper, built here from the same sources Package.swift builds it
   # from, because an Xcode app can embed an Xcode tool and cannot embed a package's
