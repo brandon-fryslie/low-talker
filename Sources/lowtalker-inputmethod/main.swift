@@ -93,9 +93,9 @@ func secureInputHolder() -> String? {
 /// A door that will not open is not the end of this process, unlike the server above it.
 /// The controller's whole promise is that every key passes through untouched, so a person
 /// with this source selected keeps a working keyboard even when nothing here can insert.
-/// The fault says which door and why: the name already held by another instance of this
-/// input method, whose own cursor then answers the app, or this bundle unable to say who
-/// its app is, so nobody may insert at all. [LAW:no-silent-failure]
+/// The fault names the `InsertionPort.NotHosted` case that stopped it - most often the name
+/// already held by another instance of this input method, whose own cursor then answers the
+/// app. [LAW:no-silent-failure]
 let insertions: InsertionPort? = {
     do {
         return try InsertionPort(flavor: flavor, queue: .main, told: { event in

@@ -74,6 +74,14 @@ enum Probe {
     private static func signing(as identifier: String, hardened: Bool) throws -> (url: URL, identity: PeerIdentity, certificate: String) {
         let copy = FileManager.default.temporaryDirectory.appending(path: "insertion-probe-\(UUID().uuidString)")
         try FileManager.default.copyItem(at: try url(), to: copy)
+        // The caller removes the copy it is handed; one that never reaches it is removed here.
+        do { return try sign(copy, as: identifier, hardened: hardened) } catch {
+            try? FileManager.default.removeItem(at: copy)
+            throw error
+        }
+    }
+
+    private static func sign(_ copy: URL, as identifier: String, hardened: Bool) throws -> (url: URL, identity: PeerIdentity, certificate: String) {
         let name = try run(repository.appending(path: "scripts/signing-identity"), []).trimmingCharacters(in: .whitespacesAndNewlines)
         _ = try run(
             URL(fileURLWithPath: "/usr/bin/codesign"),
