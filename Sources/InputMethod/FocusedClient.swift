@@ -122,10 +122,12 @@ public final class FocusedClient {
 /// terminals, browsers and Electron apps that no synthesised keystroke would.
 ///
 /// [LAW:no-ambient-temporal-coupling] exception: `@unchecked`, because `IMKTextInput` is a
-/// proxy the language cannot see into. What makes it sound is who calls it: the name is
-/// read once, on the main thread, as the cursor is made, and every commit after that runs
-/// on `Committer`'s one serial queue. Called from there, a commit reaches the app and
-/// leaves the main thread free (measured on low-input-method-s71.c7d).
+/// proxy the language cannot see into. This type calls it twice: the name once, on the main
+/// thread, as the cursor is made, and every commit on its app's serial queue in `Committer`.
+/// Measured on low-input-method-s71.c7d: committed from there, the words reach the app, in
+/// order, and the main thread stays free. Not measured: whether IMK tolerates the main
+/// thread making a new cursor over the same client, by a reactivation, at the instant a
+/// commit is in flight. That window is as long as the commit, which returns at once.
 final class Client: TextCursor, @unchecked Sendable {
     private let client: IMKTextInput
     let application: String

@@ -91,6 +91,20 @@ import Testing
         #expect(stopped.performed.isEmpty)
     }
 
+    /// Words an app has not taken yet stop the route by that name, never as a refusal: they
+    /// may still land, and nothing here sends them again.
+    @Test func wordsNotYetTakenStopTheRouteByName() async throws {
+        let late = NotYetTaken(characters: 11, into: "com.apple.TextEdit")
+        let inputMethod = AnInputMethod { _ in throw late }
+        let stopped = try await #require(throws: RouteStopped.self) {
+            try await Executor(insertingThrough: inputMethod)
+                .perform([.insertText(text: "héllo there", target: .focus)], in: Self.textEdit, on: Self.us, since: .now)
+        }
+
+        #expect(stopped.cause as? NotYetTaken == late)
+        #expect(stopped.performed.isEmpty)
+    }
+
     /// Every way the channel fails stops the route the same way, by its own name.
     @Test(arguments: [
         Unreachable.nothingIsListening(port: Self.port),

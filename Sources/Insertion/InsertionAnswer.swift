@@ -18,6 +18,27 @@ public enum InsertionAnswer: Codable, Equatable, Sendable {
     case inserted(characters: Int, into: String)
     /// Not committed, and why.
     case refused(Refusal)
+    /// Handed to the client in front, which did not take them within the input method's
+    /// bound. Neither of the others: the words are on their way and land if the app
+    /// recovers, so this is never a refusal and must never be retried.
+    case notYetTaken(characters: Int, into: String)
+}
+
+/// Words handed to an app that did not take them in time: they land if it recovers.
+/// Thrown past `InputMethodInserter` like a refusal, because the words are not at the
+/// cursor now, and apart from one, because they may yet be. [LAW:types-are-the-program]
+public struct NotYetTaken: Error, Equatable, Sendable, CustomStringConvertible {
+    public let characters: Int
+    public let into: String
+
+    public init(characters: Int, into: String) {
+        self.characters = characters
+        self.into = into
+    }
+
+    public var description: String {
+        "\(into) did not take the \(characters) characters handed to it in time; they land if it recovers, so do not dictate them again"
+    }
 }
 
 /// Words committed at the cursor: how many, and the app whose client took them.
@@ -61,12 +82,6 @@ public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, 
     /// signed by another certificate than the app fails the app's own check of who answered
     /// first, and that is the error it reports. [LAW:no-silent-failure]
     case senderIsNotThisInstallationsApp
-    /// Handing the words to the app in front did not finish within the input method's
-    /// bound. The words are on their way to it and land if it recovers. Its own reason
-    /// because it is the one refusal whose words may still appear, so it must never be
-    /// retried.
-    case clientIsNotAnswering
-
     public var description: String {
         switch self {
         case .noClientHasFocus: "no client has focus"
@@ -75,8 +90,6 @@ public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, 
         case .secureInputIsOn: "an app has secure keyboard entry on, and macOS switches input methods off while it does"
         case .senderIsNotThisInstallationsApp:
             "the input method takes words only from this installation's app, signed by the certificate that signed it, and this process is not that app"
-        case .clientIsNotAnswering:
-            "the app in front did not take the words in time; they are queued to it and land if it recovers"
         }
     }
 }

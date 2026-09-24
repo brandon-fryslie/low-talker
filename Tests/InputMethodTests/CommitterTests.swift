@@ -13,13 +13,16 @@ import Testing
     /// A cursor in some app, which records what it was given and, when told to, holds each
     /// commit until the test lets it go.
     private final class Cursor: TextCursor, @unchecked Sendable {
-        let application = "com.example.editor"
+        let application: String
         private let lock = NSLock()
         private var landed: [String] = []
         private var onMain: [Bool] = []
         private let held: DispatchSemaphore?
 
-        init(holding: Bool = false) { held = holding ? DispatchSemaphore(value: 0) : nil }
+        init(in application: String = "com.example.editor", holding: Bool = false) {
+            self.application = application
+            held = holding ? DispatchSemaphore(value: 0) : nil
+        }
 
         func commit(_ text: String) {
             held?.wait()
@@ -64,16 +67,16 @@ import Testing
         #expect(cursor.committed == ["one", "two", "three"])
     }
 
-    /// An app that does not take the words in time is refused by name - and the words are
+    /// An app that does not take the words in time is answered by name - and the words are
     /// not lost with it, nor committed twice: they land when the app comes back, once
     /// each, in the order they were asked for. Every answer here is given while the cursor
     /// is still held, so no runner stall can turn one into the other.
-    @Test func commitsThatDoNotFinishAreRefusedByNameAndStillLandOnceInOrder() {
+    @Test func wordsNotTakenInTimeAreSaidByNameAndStillLandOnceInOrder() {
         let hung = Cursor(holding: true)
         let committer = Committer(bound: .milliseconds(50), label: #function)
 
-        #expect(committer.commit("first", at: hung) == .refused(.clientIsNotAnswering))
-        #expect(committer.commit("second", at: hung) == .refused(.clientIsNotAnswering))
+        #expect(committer.commit("first", at: hung) == .notYetTaken(characters: 5, into: hung.application))
+        #expect(committer.commit("second", at: hung) == .notYetTaken(characters: 6, into: hung.application))
         #expect(hung.committed.isEmpty)
 
         hung.release()
@@ -81,6 +84,25 @@ import Testing
         let deadline = ContinuousClock.now + Self.unspendable
         while hung.committed.count < 2, ContinuousClock.now < deadline { Thread.sleep(forTimeInterval: 0.01) }
         #expect(hung.committed == ["first", "second"])
+    }
+
+    /// A hung app costs only its own words: the person switches to another app and
+    /// dictates, and those words go straight in rather than waiting behind the hung one's.
+    @Test func aHungAppDoesNotHoldAnotherAppsWords() {
+        let hung = Cursor(in: "com.example.hung", holding: true)
+        let elsewhere = Cursor(in: "com.example.elsewhere")
+        let committer = Committer(bound: .milliseconds(50), label: #function)
+        _ = committer.commit("stuck", at: hung)
+
+        // Waited for rather than read off the answer, so a runner stall past the small
+        // bound cannot fail it: behind a shared queue these words would never land at all
+        // while the hung app is held.
+        _ = committer.commit("moved on", at: elsewhere)
+        let deadline = ContinuousClock.now + Self.unspendable
+        while elsewhere.committed.isEmpty, ContinuousClock.now < deadline { Thread.sleep(forTimeInterval: 0.01) }
+        #expect(elsewhere.committed == ["moved on"])
+        #expect(hung.committed.isEmpty)
+        hung.release()
     }
 
     /// The input method's answer naming a hung app has to reach the app before the app

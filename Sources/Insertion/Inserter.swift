@@ -12,8 +12,9 @@ import DarwinCalls
 /// outlives whatever carries it.
 public protocol Inserter: Sendable {
     /// Inserts `text` at the cursor, or throws why it did not: a `Refusal` when the input
-    /// method looked and would not, and otherwise whatever stopped the question reaching it,
-    /// which the channel below names in its own types.
+    /// method looked and would not, `NotYetTaken` when the app has not taken them yet, and
+    /// otherwise whatever stopped the question reaching it, which the channel below names
+    /// in its own types.
     ///
     /// **Blocking, and not to be called on the main actor or from a task.** The one that
     /// crosses to the input method holds its thread in the kernel for up to its timeout, so
@@ -138,11 +139,13 @@ public struct InputMethodInserter: Inserter {
         guard let answer = Wire.answer(of: data) else {
             throw Unreachable.answerWasNotReadable(port: portName, bytes: data.count, words: .mayHaveLanded)
         }
-        // [LAW:parse-dont-validate] The wire's sum ends here: past this line a refusal is a
-        // failure thrown like the others, and a caller holds words inserted or nothing.
+        // [LAW:parse-dont-validate] The wire's sum ends here: past this line a refusal or
+        // words not yet taken is a failure thrown like the others, and a caller holds words
+        // inserted or nothing.
         switch answer {
         case .inserted(let characters, let into): return Inserted(characters: characters, into: into)
         case .refused(let refusal): throw refusal
+        case .notYetTaken(let characters, let into): throw NotYetTaken(characters: characters, into: into)
         }
     }
 
