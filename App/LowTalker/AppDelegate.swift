@@ -276,6 +276,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switchesInFlight += 1
         await this.value
         switchesInFlight -= 1
+        settleOwedReading()
     }
 
     /// How many switches are queued or running. While any is, the loop is being rebuilt by
@@ -534,6 +535,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .driverExtension, .keyboardSetupAssistant:
             break
         }
+        // A grant the chosen delivery cannot deliver without was just asked for: once it
+        // reads as met, the loop is rebuilt so the delivery's install finishes the job -
+        // for the input method, selecting it - whether or not the loop is up.
+        if failure == nil, row.stopsDictation, let delivery = chosenDelivery, row.serves == .delivery(delivery) {
+            deliveryGrantAsked = true
+        }
         return failure
     }
 
@@ -641,7 +648,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func comeUp() async {
         guard let setup = chosenSetup, !quitting, !comingUp else { return }
         comingUp = true
-        defer { comingUp = false }
+        defer {
+            comingUp = false
+            settleOwedReading()
+        }
         do {
             // A capture already running is left running: the microphone was held before, and
             // what came up short was the hotkey or the delivery, which `choose` rebuilds.
@@ -679,21 +689,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// True while `comeUp` runs, so readings taken meanwhile do not start a second one.
     private var comingUp = false
 
-    /// Brings the loop up when it is down for a grant and every row that stops dictation is
-    /// now met: a step in setup was allowed, or a switch was turned on in System Settings.
+    /// Once every row that stops dictation is met: brings the loop up when it is down for a
+    /// grant, and rebuilds a loop that is up when the chosen delivery's own grant was just
+    /// asked for, so its install finishes - the input method switched back on is selected.
     ///
     /// [LAW:dataflow-not-control-flow] Decided from where things stand, not from a
     /// difference between two readings, so it holds however the grant arrived and whichever
     /// reading first sees it. [LAW:effects-at-boundaries] Reading has no effects; this is the
     /// one place a reading is acted on, called after a request, when setup comes back to the
-    /// front, and when the menu opens. Never while a switch is rebuilding the loop or
-    /// `comeUp` is already running, and never while quitting.
-    /// [LAW:no-ambient-temporal-coupling]
+    /// front, and when the menu opens. A reading that arrives while a switch or `comeUp` is
+    /// running is owed to the moment it ends, never dropped, and never acted on while
+    /// quitting. [LAW:no-ambient-temporal-coupling]
     private func comeUpIfGranted(_ readiness: Readiness) {
-        guard downForAGrant, !comingUp, switchesInFlight == 0, !quitting,
-              readiness.unmet.allSatisfy({ !$0.row.stopsDictation }) else { return }
-        log.notice("setup: what dictation waited on is granted; bringing it up")
-        Task { await comeUp() }
+        guard !quitting else { return }
+        // A switch or a comeUp in flight may have read the grants before this reading did,
+        // so the reading is owed to the moment it ends rather than dropped.
+        guard !comingUp, switchesInFlight == 0 else {
+            readingOwed = true
+            return
+        }
+        guard readiness.unmet.allSatisfy({ !$0.row.stopsDictation }), let setup = chosenSetup else { return }
+        if downForAGrant {
+            deliveryGrantAsked = false
+            log.notice("setup: what dictation waited on is granted; bringing it up")
+            Task { await comeUp() }
+        } else if deliveryGrantAsked, listening?.hotkey.isWatching == true {
+            deliveryGrantAsked = false
+            log.notice("setup: the delivery's grant arrived; rebuilding the loop to finish installing it")
+            Task { await choose(setup) }
+        }
+    }
+
+    /// Set when a reading reached `comeUpIfGranted` while a switch or a comeUp was running,
+    /// and settled - with a fresh reading - by whichever of them ends last.
+    private var readingOwed = false
+
+    /// Set when a request for the chosen delivery's own grant went through; cleared once the
+    /// loop has been rebuilt behind it.
+    private var deliveryGrantAsked = false
+
+    /// The one place an owed reading is paid: once nothing is rebuilding the loop.
+    private func settleOwedReading() {
+        guard readingOwed, switchesInFlight == 0, !comingUp else { return }
+        readingOwed = false
+        comeUpIfGranted(readReadiness())
     }
 
     /// Quitting waits for the sessions, the way `lowtalker dictate` waits on its
