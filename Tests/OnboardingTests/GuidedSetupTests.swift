@@ -38,6 +38,16 @@ import Testing
         }
     }
 
+    /// The driver's dialog is the one macOS words with another product's name, so its step
+    /// says that name before the person meets it, rather than leaving a prompt that names
+    /// something they never installed.
+    @Test(arguments: Flavor.allCases)
+    func theDriverStepNamesWhatMacOSWillCallTheDriver(flavor: Flavor) {
+        let why = Requirement.Row.driverExtension.explanation(for: flavor).why
+        #expect(why.contains("“Karabiner-VirtualHIDDevice-Manager” would like to use a new driver extension"))
+        #expect(why.contains("org.pqrs.Karabiner-DriverKit-VirtualHIDDevice"))
+    }
+
     /// A step the app can ask macOS about has a button saying what it asks; the two it
     /// cannot ask about - the driver, which an administrator installs, and the assistant,
     /// which the helper answers - have none, so no button promises a dialog that never comes.

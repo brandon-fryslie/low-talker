@@ -23,16 +23,20 @@ public enum DriverProbe {
     /// The package's two payload trees. `DriverInstall.remove` deletes exactly these, and
     /// detection and deletion disagreeing about where the package lives is the one mistake
     /// removal cannot walk back.
-    public static let managerApp = "/Applications/.Karabiner-VirtualHIDDevice-Manager.app"
+    public static var managerApp: String { "/Applications/.\(managerName).app" }
     public static let supportDirectory = "/Library/Application Support/org.pqrs/Karabiner-DriverKit-VirtualHIDDevice"
+
+    /// The app that asks macOS to activate the driver, and so the name macOS's own
+    /// notice and System Settings put on the request - not low-talker's.
+    public static let managerName = "Karabiner-VirtualHIDDevice-Manager"
 
     /// The Manager binary inside that app, which is what asks macOS to activate the
     /// driver and to withdraw it.
     ///
-    /// Built from `managerApp` rather than written out beside it, so the two cannot come
-    /// to name different installs. [LAW:one-source-of-truth]
+    /// Built from `managerName` rather than written out beside it, so the app, its binary
+    /// and the name a person is warned of cannot come to differ. [LAW:one-source-of-truth]
     public static var managerExecutable: String {
-        "\(managerApp)/Contents/MacOS/Karabiner-VirtualHIDDevice-Manager"
+        "\(managerApp)/Contents/MacOS/\(managerName)"
     }
 
     /// Every reading, taken now.
