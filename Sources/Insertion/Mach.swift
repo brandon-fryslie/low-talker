@@ -92,7 +92,13 @@ enum Mach {
         payload.copyBytes(to: UnsafeMutableRawBufferPointer(start: buffer + headerSize + countSize, count: payload.count))
         let options = MACH_SEND_MSG | (timeout == nil ? 0 : MACH_SEND_TIMEOUT)
         let status = mach_msg(header, options, mach_msg_size_t(size), 0, Mach.noPort, timeout.map(milliseconds) ?? 0, Mach.noPort)
-        if pseudoReceived(status) { mach_msg_destroy(header) }
+        // A message handed back keeps its ports where they were sent, so the answer's right is
+        // in the local field, which `mach_msg_destroy` never reads: it takes a received
+        // message's local port to hold no right at all.
+        if pseudoReceived(status) {
+            mach_msg_destroy(header)
+            if header.pointee.msgh_local_port != Mach.noPort { mach_port_deallocate(mach_task_self_, header.pointee.msgh_local_port) }
+        }
         return status
     }
 

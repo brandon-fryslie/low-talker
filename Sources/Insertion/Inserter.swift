@@ -104,7 +104,7 @@ public struct InputMethodInserter: Inserter {
         }
         defer { mach_port_deallocate(mach_task_self_, remote) }
         let reply: ReceiveRight
-        do throws(ReceiveRight.NotAllocated) { reply = try ReceiveRight(sendable: false) } catch { throw Unreachable.failed(port: portName, status: error.status) }
+        do throws(ReceiveRight.NotAllocated) { reply = try ReceiveRight(sendable: false) } catch { throw Unreachable.failed(port: portName, status: error.status, words: .notSent) }
         let phase = timeout / 4
         // Who holds the name is asked before a word is said to it. A name anyone can compute
         // is a name anyone can register first, and checking only the answer to the words
@@ -112,7 +112,7 @@ public struct InputMethodInserter: Inserter {
         // receive right the greeting is answered from is the one the words go to, and only
         // its holder can move it, so the process that answered is the process that hears.
         let greeting = try roundTrip(
-            Data(), id: Wire.greeting, to: remote, answeredOn: reply, by: answerer, within: phase,
+            Data(), id: Wire.greeting, to: remote, answeredOn: reply, by: answerer, within: phase, once: .notSent,
             unanswered: .didNotSayWhoItIs(port: portName, after: phase),
             // Dropped unanswered before any words went, which is a far end not answering.
             abandoned: .nothingIsListening(port: portName))
@@ -120,17 +120,17 @@ public struct InputMethodInserter: Inserter {
         // refusal to, which is thrown by name like any other.
         if let said = greeting.payload, !said.isEmpty {
             guard case .refused(let refusal)? = Wire.answer(of: said) else {
-                throw Unreachable.answerWasNotReadable(port: portName, bytes: said.count)
+                throw Unreachable.answerWasNotReadable(port: portName, bytes: said.count, words: .notSent)
             }
             throw refusal
         }
         let received = try roundTrip(
-            Wire.request(text), id: Wire.insert, to: remote, answeredOn: reply, by: answerer, within: phase,
+            Wire.request(text), id: Wire.insert, to: remote, answeredOn: reply, by: answerer, within: phase, once: .mayHaveLanded,
             unanswered: .answerDidNotArrive(port: portName, after: phase),
             abandoned: .answerWasAbandoned(port: portName))
         let data = received.payload ?? Data()
         guard let answer = Wire.answer(of: data) else {
-            throw Unreachable.answerWasNotReadable(port: portName, bytes: data.count)
+            throw Unreachable.answerWasNotReadable(port: portName, bytes: data.count, words: .mayHaveLanded)
         }
         // [LAW:parse-dont-validate] The wire's sum ends here: past this line a refusal is a
         // failure thrown like the others, and a caller holds words inserted or nothing.
@@ -142,11 +142,13 @@ public struct InputMethodInserter: Inserter {
 
     /// One message out and its answer back, from `answerer` and nobody else, each half
     /// bounded by `phase`. What differs between the greeting and the words is only what a
-    /// silence or a dropped question means, so that is all the caller says.
+    /// silence or a dropped question means, and where the words are `once` the message is
+    /// in the far end's queue, so that is all the caller says. Before then they are not sent,
+    /// whichever message this is: a send the kernel refuses leaves nothing queued.
     /// [LAW:one-type-per-behavior]
     private func roundTrip(
         _ payload: Data, id: mach_msg_id_t, to remote: mach_port_t, answeredOn reply: ReceiveRight,
-        by answerer: PeerIdentity, within phase: Duration, unanswered: Unreachable, abandoned: Unreachable
+        by answerer: PeerIdentity, within phase: Duration, once words: Words, unanswered: Unreachable, abandoned: Unreachable
     ) throws -> Mach.Received {
         let sent = Mach.send(
             payload, id: id, to: remote, disposition: mach_msg_type_name_t(MACH_MSG_TYPE_COPY_SEND),
@@ -161,13 +163,13 @@ public struct InputMethodInserter: Inserter {
         case MACH_SEND_INVALID_DEST:
             throw Unreachable.nothingIsListening(port: portName)
         default:
-            throw Unreachable.failed(port: portName, status: sent)
+            throw Unreachable.failed(port: portName, status: sent, words: .notSent)
         }
         let received: Mach.Received
         switch Mach.receive(on: reply.port, timeout: phase) {
         case .received(let arrived): received = arrived
         case .failed(MACH_RCV_TIMED_OUT): throw unanswered
-        case .failed(let status): throw Unreachable.failed(port: portName, status: status)
+        case .failed(let status): throw Unreachable.failed(port: portName, status: status, words: words)
         }
         received.discardReply()
         // The kernel's word that the right the answer was to come back on was destroyed
@@ -176,7 +178,7 @@ public struct InputMethodInserter: Inserter {
         do throws(PeerIdentity.NotAdmitted) {
             try answerer.admits(received.sender)
         } catch {
-            throw Unreachable.answeredByAStranger(port: portName, pid: received.sender.pid, because: error, required: answerer)
+            throw Unreachable.answeredByAStranger(port: portName, pid: received.sender.pid, because: error, required: answerer, words: words)
         }
         return received
     }

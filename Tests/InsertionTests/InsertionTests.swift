@@ -228,7 +228,7 @@ private let anEditor = "com.example.editor"
         let us = try OwnProcess.identity()
         let elsewhere = PeerIdentity.adHoc(cdhash: String(repeating: "0", count: 40))
         let asking = InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend, answerer: .success(elsewhere))
-        await #expect(throws: Unreachable.answeredByAStranger(port: name, pid: getpid(), because: .someoneElse(us), required: elsewhere)) {
+        await #expect(throws: Unreachable.answeredByAStranger(port: name, pid: getpid(), because: .someoneElse(us), required: elsewhere, words: .notSent)) {
             try await asking.insert("hello")
         }
         #expect(seen.text == nil)
@@ -340,6 +340,32 @@ private let anEditor = "com.example.editor"
         withExtendedLifetime(port) {}
     }
 
+    /// A send that times out hands its message back with the answer's right in it, and
+    /// that right is let go with the rest. Let go, a send-once right says so: the kernel
+    /// tells the port it named that no answer is coming. Held, it says nothing, ever.
+    @Test func aSendThatTimesOutLetsGoOfTheWayBack() throws {
+        let far = try ReceiveRight(sendable: true)
+        let reply = try ReceiveRight(sendable: false)
+        var filled = false
+        for _ in 0 ..< 64 where !filled {
+            filled = Mach.send(
+                Data("x".utf8), id: 0, to: far.port, disposition: mach_msg_type_name_t(MACH_MSG_TYPE_COPY_SEND),
+                replyTo: Mach.noPort, timeout: .zero) == MACH_SEND_TIMED_OUT
+        }
+        try #require(filled, "the queue never filled, so no send can time out")
+
+        let sent = Mach.send(
+            Data("x".utf8), id: 0, to: far.port, disposition: mach_msg_type_name_t(MACH_MSG_TYPE_COPY_SEND),
+            replyTo: reply.port, timeout: .zero)
+
+        #expect(sent == MACH_SEND_TIMED_OUT)
+        guard case .received(let told) = Mach.receive(on: reply.port, timeout: .zero) else {
+            Issue.record("the way back is still held: nothing told the reply port no answer is coming")
+            return
+        }
+        #expect(told.id == Mach.answerAbandoned)
+    }
+
     /// A live input method that does not finish in time is not a missing one, and the two
     /// are not said the same way.
     @Test func anAnswerThatDoesNotArriveIsSaidByName() async throws {
@@ -399,12 +425,16 @@ private let anEditor = "com.example.editor"
 
     /// An answer nobody can read is a skew between the two halves, and saying so names the
     /// only thing that fixes it. Never mistaken for a refusal: a refusal is a fact about
-    /// the cursor, and this is a fact about the build.
-    @Test func anAnswerNobodyCanReadIsSaidByName() async throws {
+    /// the cursor, and this is a fact about the build. Said with where the words were: an
+    /// unreadable greeting stopped them, an unreadable answer to them came after they went.
+    @Test(arguments: [(Wire.greeting, Words.notSent), (Wire.insert, Words.mayHaveLanded)])
+    func anAnswerNobodyCanReadIsSaidByName(garbled: mach_msg_id_t, words: Words) async throws {
         let name = aPortNobodyElseUses()
-        let port = try InsertionPort(portName: name, queue: DispatchQueue(label: name), told: { _ in }) { _ in Data("nonsense".utf8) }
+        let port = try InsertionPort(portName: name, queue: DispatchQueue(label: name), told: { _ in }) {
+            $0.id == garbled ? Data("nonsense".utf8) : Data()
+        }
 
-        await #expect(throws: Unreachable.answerWasNotReadable(port: name, bytes: 8)) {
+        await #expect(throws: Unreachable.answerWasNotReadable(port: name, bytes: 8, words: words)) {
             try await inserter(name).insert("hello")
         }
         withExtendedLifetime(port) {}

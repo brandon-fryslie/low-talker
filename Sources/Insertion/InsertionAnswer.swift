@@ -74,6 +74,26 @@ public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, 
     }
 }
 
+/// Where the words were when the channel failed, which is what decides whether saying them
+/// again could put them at the cursor twice.
+///
+/// A property of the moment, not of the failure: the same fault before the words were sent
+/// and after is one case holding each of these, never two spellings of it.
+/// [LAW:one-source-of-truth]
+public enum Words: Equatable, Sendable, CustomStringConvertible {
+    /// The channel failed before the words were sent.
+    case notSent
+    /// The words went out, and nothing came back to say what became of them.
+    case mayHaveLanded
+
+    public var description: String {
+        switch self {
+        case .notSent: "the words were not sent"
+        case .mayHaveLanded: "the words may have landed"
+        }
+    }
+}
+
 /// The transport failing to carry the question, which is never an answer. [LAW:no-silent-failure]
 /// Nothing here is retried and nothing is guessed: each case says what the channel did.
 public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
@@ -87,14 +107,15 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
     /// The far end took the request and let go of the way back without answering.
     case answerWasAbandoned(port: String)
     /// Whatever answered is not this installation's input method. Found out from its answer
-    /// to the greeting, so the words were never sent to it.
-    case answeredByAStranger(port: String, pid: pid_t, because: PeerIdentity.NotAdmitted, required: PeerIdentity)
+    /// to the greeting, before the words go; after them it is the input method gone before
+    /// the kernel could say who had answered.
+    case answeredByAStranger(port: String, pid: pid_t, because: PeerIdentity.NotAdmitted, required: PeerIdentity, words: Words)
     /// A Mach status none of the others names, which is the arm every unknown status takes.
-    case failed(port: String, status: kern_return_t)
+    case failed(port: String, status: kern_return_t, words: Words)
     /// Bytes came back that are not an answer, which is what an input method left running
     /// from before an update says: it described what it did in a shape this end no longer
     /// reads.
-    case answerWasNotReadable(port: String, bytes: Int)
+    case answerWasNotReadable(port: String, bytes: Int, words: Words)
 
     public var description: String {
         switch self {
@@ -108,12 +129,12 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
             "the input method on \(port) did not say who it is within \(after), so the words were not sent"
         case let .answerWasAbandoned(port):
             "the input method on \(port) took the request and went away without answering, so the words may have landed"
-        case let .answeredByAStranger(port, pid, because, required):
-            "pid \(pid) answered on \(port) and is not this installation's input method, \(required) - \(because) - so the words were not sent to it"
-        case let .failed(port, status):
-            "the request to \(port) failed: \(Mach.describe(status)), so the words may have landed"
-        case let .answerWasNotReadable(port, bytes):
-            "the input method on \(port) answered \(bytes) bytes that are not an answer, so the words may have landed"
+        case let .answeredByAStranger(port, pid, because, required, words):
+            "pid \(pid) answered on \(port) and is not this installation's input method, \(required) - \(because) - so \(words)"
+        case let .failed(port, status, words):
+            "the request to \(port) failed: \(Mach.describe(status)), so \(words)"
+        case let .answerWasNotReadable(port, bytes, words):
+            "the input method on \(port) answered \(bytes) bytes that are not an answer, so \(words)"
         }
     }
 }

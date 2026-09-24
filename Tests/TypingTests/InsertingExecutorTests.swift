@@ -97,9 +97,9 @@ import Testing
         .requestWasNotTaken(port: Self.port, after: .seconds(2)),
         .answerDidNotArrive(port: Self.port, after: .seconds(2)),
         .answerWasAbandoned(port: Self.port),
-        .answeredByAStranger(port: Self.port, pid: 42, because: .someoneElse(.adHoc(cdhash: "00")), required: .signed(identifier: "x", certificate: "00")),
-        .failed(port: Self.port, status: -1),
-        .answerWasNotReadable(port: Self.port, bytes: 42),
+        .answeredByAStranger(port: Self.port, pid: 42, because: .someoneElse(.adHoc(cdhash: "00")), required: .signed(identifier: "x", certificate: "00"), words: .notSent),
+        .failed(port: Self.port, status: -1, words: .mayHaveLanded),
+        .answerWasNotReadable(port: Self.port, bytes: 42, words: .mayHaveLanded),
     ])
     func aChannelThatFailsStopsTheRouteByName(why: Unreachable) async throws {
         let inputMethod = AnInputMethod { _ in throw why }
