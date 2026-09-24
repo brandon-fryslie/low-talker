@@ -34,7 +34,8 @@ public enum DriverInstall {
     /// own copy is installed with the network off - verifies it, installs it, and asks
     /// macOS to activate the driver.
     public static func install(from source: URL?, scratch: URL = scratch) throws -> Ending {
-        if let warning = warning(about: DriverProbe.elementsReceipt { try elementsReceiptRead() }) { say(warning) }
+        try refuseRoot(getuid())
+        if let warning = warning(about: try DriverProbe.facts().elementsReceipt) { say(warning) }
         try withPackage(from: source, scratch: scratch) { package in
             say("==> installing (sudo)")
             try require(Command("/usr/bin/sudo", "/usr/sbin/installer", "-pkg", package.url.path, "-target", "/"), "the installer")
@@ -51,7 +52,7 @@ public enum DriverInstall {
         try require(Command(DriverProbe.managerExecutable, "activate"), "the Manager's activation")
         // The Manager exits 0 even when handed a bare usage error, so its exit status proves
         // little and the state reading is the only honest report. [LAW:verifiable-goals]
-        return try installed(DriverState(DriverProbe.facts()))
+        return try installed(reported(DriverProbe.facts()))
     }
 
     /// The verified package, copied into `directory` under its release name, for a release
@@ -68,19 +69,23 @@ public enum DriverInstall {
 
     /// Deactivates the extension, deletes both payload trees, and forgets the receipt.
     public static func remove() throws -> Ending {
+        try refuseRoot(getuid())
+        // One reading answers the first three questions: where removal stands, whether
+        // Karabiner-Elements shares the files, and whether the extension is registered.
         // A machine already at the end of removal has nothing left to withdraw, and the
-        // Manager that would do the withdrawing is the thing removal deletes. Reading the
-        // state first lets a second `remove` say where the machine actually stands.
-        if let ending = removed(DriverState(try DriverProbe.facts())) { return ending }
+        // Manager that would do the withdrawing is the thing removal deletes, so a second
+        // `remove` says where the machine actually stands.
+        let before = try reading({ try DriverProbe.facts() },
+            or: "could not read where the driver stands, and removal deletes what nothing here could put back; refusing to guess")
+        if let ending = removed(DriverState(before)) { return ending }
 
-        if let blocker = blocker(DriverProbe.elementsReceipt { try elementsReceiptRead() }) { throw blocker }
+        if let blocker = blocker(before.elementsReceipt) { throw blocker }
 
         // [LAW:no-ambient-temporal-coupling] Deactivation must precede file removal, and the
         // order is not a preference. Only the Manager can withdraw the extension, and
         // removing the files deletes the Manager; the other way round strands the
         // registration with nothing left on the machine able to retract it.
-        let registered = try reading(DriverProbe.registration,
-            or: "could not read whether the extension is still registered, and deleting the Manager while it is would strand the registration with nothing able to retract it; refusing to guess")
+        let registered = before.registration
         if needsWithdrawal(registered) {
             say("==> deactivating the driver extension")
             guard FileManager.default.isExecutableFile(atPath: DriverProbe.managerExecutable) else {
@@ -105,7 +110,7 @@ public enum DriverInstall {
             try require(Command("/usr/bin/sudo", "/usr/sbin/pkgutil", "--forget", DriverProbe.bundleID), "forgetting the receipt")
         }
 
-        let after = DriverState(try DriverProbe.facts())
+        let after = reported(try DriverProbe.facts())
         guard let ending = removed(after) else {
             throw DriverInstallRefusal("after removal, the driver is '\(after.rawValue)', which is not a state removing can leave behind")
         }
@@ -205,11 +210,20 @@ public enum DriverInstall {
 
     /// Deleting the files while the extension is still registered is the one ordering
     /// mistake removal can make, and it cannot be undone without reinstalling.
+    ///
+    /// The same question `needsWithdrawal` asks, asked again after the Manager ran, so the
+    /// two can never classify a registration differently. [LAW:single-enforcer]
     static func confirmWithdrawn(_ registration: Registration) throws {
-        switch registration {
-        case .unregistered, .pendingReboot: return
-        case .enabled, .disabled, .waiting, .unknown, .ambiguous:
+        guard !needsWithdrawal(registration) else {
             throw DriverInstallRefusal("the extension is still registered as '\(registration.rawValue)' after deactivation; refusing to delete the Manager that is the only thing able to withdraw it")
+        }
+    }
+
+    /// Both verbs need the console user: macOS attributes the activation request to
+    /// whoever asks, so a request made as root is one the person's approval never answers.
+    static func refuseRoot(_ uid: uid_t) throws {
+        guard uid != 0 else {
+            throw DriverInstallRefusal("run this as yourself, not under sudo: macOS attributes the driver's activation to whoever asks, and your approval answers only your own request. It asks for your password itself for the file steps.")
         }
     }
 
@@ -229,7 +243,7 @@ public enum DriverInstall {
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         let owner = (try FileManager.default.attributesOfItem(atPath: scratch.path)[.ownerAccountID] as? NSNumber)?.uint32Value
         guard owner == getuid() else {
-            throw DriverInstallRefusal("\(scratch.path) is owned by uid \(owner.map(String.init) ?? "unknown") and not by you, so nothing put into it can be trusted; remove it, or set TMPDIR and run again")
+            throw DriverInstallRefusal("\(scratch.path) is owned by uid \(owner.map(String.init) ?? "unknown") and not by you, so nothing put into it can be trusted; remove it and run again")
         }
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: scratch.path)
         var template = Array(scratch.appending(path: "run.XXXXXX").path.utf8CString)
@@ -243,9 +257,8 @@ public enum DriverInstall {
         let landed = run.appending(path: "driver.pkg")
         let package: VerifiedPackage
         if let source {
-            guard FileManager.default.fileExists(atPath: source.path) else { throw DriverInstallRefusal("there is no package at \(source.path)") }
             say("==> taking \(source.path)")
-            try FileManager.default.copyItem(at: source, to: landed)
+            try land(source, at: landed)
             package = try DriverPackage.verify(landed, as: "the package at \(source.path)")
         } else {
             say("==> downloading \(DriverPackage.url)")
@@ -255,8 +268,20 @@ public enum DriverInstall {
         return try body(package)
     }
 
-    private static func elementsReceiptRead() throws -> Command.Output {
-        try Command("/usr/sbin/pkgutil", "--pkg-info", DriverProbe.elementsReceiptID).run()
+    /// A carried package's bytes, written to `landed`. The bytes and never the entry: a link
+    /// copied as a link would leave the file it points at - someone else's to rewrite - as
+    /// the one `installer` reads after the check.
+    static func land(_ source: URL, at landed: URL) throws {
+        guard isFile(source) else { throw DriverInstallRefusal("there is no package at \(source.path), or it is not a file") }
+        try Data(contentsOf: source).write(to: landed)
+    }
+
+    /// The readings behind a verdict, shown with it the way `lowtalker driver state` shows
+    /// them, so an ending or a refusal can be checked against what it was derived from.
+    private static func reported(_ facts: DriverFacts) -> DriverState {
+        let state = DriverState(facts)
+        say("\(facts)\nverdict            \(state.rawValue)")
+        return state
     }
 
     /// A reading removal cannot act without, with the sentence that says what refusing to

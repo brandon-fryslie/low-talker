@@ -39,14 +39,28 @@ public struct Command {
     /// sudo has to reach them for a password, and an installer's progress is theirs to
     /// watch. Its standard output goes to this process's standard error, so a verb whose
     /// own stdout is a value a caller reads - a path, a verdict - keeps it clean.
+    ///
+    /// Spawned directly and not through `Process`, which puts its child in a process group
+    /// of its own - measured: the child's pgid was its own pid. A child outside the
+    /// terminal's foreground group is stopped the moment sudo opens the terminal to ask for
+    /// a password, and Ctrl-C never reaches it. This child stays in ours.
     public func perform() throws -> Int32 {
-        let process = Process()
-        process.executableURL = tool
-        process.arguments = arguments
-        process.standardOutput = FileHandle.standardError
-        try process.run()
-        process.waitUntilExit()
-        return process.terminationStatus
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        posix_spawn_file_actions_adddup2(&actions, STDERR_FILENO, STDOUT_FILENO)
+        let argv = ([tool.path] + arguments).map { strdup($0) } + [nil]
+        defer { argv.forEach { free($0) } }
+        var pid: pid_t = 0
+        let spawned = posix_spawn(&pid, tool.path, &actions, nil, argv, environ)
+        guard spawned == 0 else { throw POSIXError(POSIXErrorCode(rawValue: spawned) ?? .EIO) }
+        var status: Int32 = 0
+        while waitpid(pid, &status, 0) == -1 {
+            guard errno == EINTR else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        }
+        // WIFEXITED / WEXITSTATUS, which Swift cannot import as macros; a child ended by a
+        // signal reports 128 plus the signal, the way a shell does.
+        return status & 0x7f == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f)
     }
 
     public func run() throws -> Output {

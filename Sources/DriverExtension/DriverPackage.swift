@@ -46,7 +46,7 @@ public enum DriverPackage {
     ///
     /// `what` names the package in the refusal.
     public static func verify(_ file: URL, as what: String) throws -> VerifiedPackage {
-        guard FileManager.default.fileExists(atPath: file.path) else { throw DriverInstallRefusal("\(what) is not there") }
+        guard isFile(file) else { throw DriverInstallRefusal("\(what) is not there, or is not a file") }
         let digest = SHA256.hash(data: try Data(contentsOf: file, options: .mappedIfSafe))
         guard digest.map({ String(format: "%02x", $0) }).joined() == sha256 else {
             throw DriverInstallRefusal("\(what) does not match the checksum pinned for \(version)")
@@ -62,6 +62,13 @@ public enum DriverPackage {
         }
         return VerifiedPackage(url: file)
     }
+}
+
+/// Whether a regular file is at `url`, a link to one counting. A flat `.pkg` is one file;
+/// a directory there is not a package this program installs.
+func isFile(_ url: URL) -> Bool {
+    var directory: ObjCBool = false
+    return FileManager.default.fileExists(atPath: url.path, isDirectory: &directory) && !directory.boolValue
 }
 
 /// A package file `DriverPackage.verify` has judged to be the pinned release. Only that

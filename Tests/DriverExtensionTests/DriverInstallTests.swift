@@ -95,7 +95,7 @@ import Testing
             try DriverPackage.verify(impostor, as: "the impostor")
         }
         // A path with nothing at it is its own refusal, not a checksum that failed.
-        #expect(throws: DriverInstallRefusal("the absentee is not there")) {
+        #expect(throws: DriverInstallRefusal("the absentee is not there, or is not a file")) {
             try DriverPackage.verify(root.appending(path: "absent.pkg"), as: "the absentee")
         }
     }
@@ -120,9 +120,45 @@ import Testing
         #expect(mode == 0o700)
         #expect(try FileManager.default.contentsOfDirectory(atPath: scratch.path).isEmpty)
 
-        #expect(throws: DriverInstallRefusal("there is no package at \(root.appending(path: "absent.pkg").path)")) {
+        #expect(throws: DriverInstallRefusal("there is no package at \(root.appending(path: "absent.pkg").path), or it is not a file")) {
             try DriverInstall.withPackage(from: root.appending(path: "absent.pkg"), scratch: scratch) { _ in }
         }
+        // A directory is not a flat package, and is refused before anything is copied.
+        #expect(throws: DriverInstallRefusal("there is no package at \(root.path), or it is not a file")) {
+            try DriverInstall.withPackage(from: root, scratch: scratch) { _ in }
+        }
+    }
+
+    /// A carried package reached through a link lands as bytes, so the file judged is a file
+    /// of this program's own and not an entry pointing at someone else's.
+    @Test func aLinkedPackageLandsAsBytesNotAsTheLink() throws {
+        let root = scratchRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let target = root.appending(path: "target.pkg")
+        try Data("not the pinned package\n".utf8).write(to: target)
+        let link = root.appending(path: "link.pkg")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+
+        let landed = root.appending(path: "landed.pkg")
+        try DriverInstall.land(link, at: landed)
+        try Data("rewritten after the check\n".utf8).write(to: target)
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: landed.path)) == nil)
+        #expect(try Data(contentsOf: landed) == Data("not the pinned package\n".utf8))
+    }
+
+    @Test func rootIsRefusedAndEveryoneElseIsNot() {
+        #expect(throws: DriverInstallRefusal.self) { try DriverInstall.refuseRoot(0) }
+        #expect(throws: Never.self) { try DriverInstall.refuseRoot(501) }
+    }
+
+    /// A command performed in front of the person stays in this process's group, which is
+    /// what lets sudo ask for a password on the terminal and Ctrl-C reach it; its exit
+    /// status comes back as the shell would report it.
+    @Test func aPerformedCommandSharesOurProcessGroupAndReportsItsStatus() throws {
+        #expect(try Command("/bin/sh", "-c", "exit 3").perform() == 3)
+        let ours = getpgrp()
+        #expect(try Command("/bin/sh", "-c", "[ \"$(ps -o pgid= -p $$ | tr -d ' ')\" = \"\(ours)\" ]").perform() == 0)
     }
 
     /// The URL is built from the version and the file name, so a bump cannot leave it
