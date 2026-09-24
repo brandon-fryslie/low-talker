@@ -3,12 +3,8 @@ import Testing
 @testable import DriverExtension
 
 /// What installing and removing decide, asserted against every reading that decides it.
-///
-/// Nothing here touches the machine's driver: the decisions are pure functions of a
-/// reading, and the one effect exercised - landing a package in scratch - is pointed at a
-/// directory of the suite's own and handed bytes that are not the pin, so nothing reaches
-/// the installer. Installing the pinned bytes is checked live, and README.md records it.
-/// [LAW:behavior-not-structure]
+/// Nothing here touches the machine's driver; installing the pinned bytes is checked live,
+/// and README.md records it. [LAW:behavior-not-structure]
 @Suite struct DriverInstallTests {
     static let cli = "/Applications/LowTalker Dev.app/Contents/Helpers/lowtalker"
 
