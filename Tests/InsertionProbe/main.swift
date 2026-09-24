@@ -17,7 +17,7 @@ import Foundation
 let arguments = Array(CommandLine.arguments.dropFirst())
 let inserter: InputMethodInserter
 let text: String
-if arguments.count == 3, arguments[0] == "--flavor", let flavor = Flavor(rawValue: arguments[1]) {
+if arguments.count == 3, arguments[0] == "--flavor", let flavor = Flavor(word: arguments[1]) {
     inserter = InputMethodInserter(flavor: flavor)
     text = arguments[2]
 } else if arguments.count == 3, let answerer = try? JSONDecoder().decode(PeerIdentity.self, from: Data(arguments[1].utf8)) {

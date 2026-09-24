@@ -3,7 +3,6 @@ import Flavors
 import Foundation
 @testable import Insertion
 import DarwinCalls
-import Security
 import Testing
 
 /// What goes onto the wire comes back off it.
@@ -290,7 +289,9 @@ private let anEditor = "com.example.editor"
 /// Named, because each one means something different to do.
 ///
 /// All but `failed`, which is the bucket for a Mach status nothing here asks for - a channel
-/// that broke under us - and there is no way to ask the kernel for one.
+/// that broke under us - and there is no way to ask the kernel for one; and
+/// `answeredByAStranger`, which is a question of who answered and is held with the others
+/// like it, in `SenderTests`.
 @Suite struct UnreachableTests {
     @Test func nothingListeningIsSaidByName() async {
         let name = aPortNobodyElseUses()
@@ -370,7 +371,9 @@ private let anEditor = "com.example.editor"
     /// are not said the same way.
     @Test func anAnswerThatDoesNotArriveIsSaidByName() async throws {
         let name = aPortNobodyElseUses()
-        let port = try hostInsertion(name: name) { text in
+        // Told nothing, because the answer this port finally sends goes to a sender that
+        // stopped listening long before, and is reported after this case has ended.
+        let port = try InsertionPort(portName: name, senders: try OwnProcess.identity(), queue: DispatchQueue(label: name), told: { _ in }) { text in
             Thread.sleep(forTimeInterval: 30)
             return .inserted(characters: text.count, into: anEditor)
         }

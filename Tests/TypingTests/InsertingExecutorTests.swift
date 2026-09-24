@@ -96,6 +96,7 @@ import Testing
         Unreachable.nothingIsListening(port: Self.port),
         .requestWasNotTaken(port: Self.port, after: .seconds(2)),
         .answerDidNotArrive(port: Self.port, after: .seconds(2)),
+        .didNotSayWhoItIs(port: Self.port, after: .seconds(2)),
         .answerWasAbandoned(port: Self.port),
         .answeredByAStranger(port: Self.port, pid: 42, because: .someoneElse(.adHoc(cdhash: "00")), required: .signed(identifier: "x", certificate: "00"), words: .notSent),
         .failed(port: Self.port, status: -1, words: .mayHaveLanded),
