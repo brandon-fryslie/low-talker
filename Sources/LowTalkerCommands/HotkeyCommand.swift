@@ -4,6 +4,7 @@ import Flavors
 import Foundation
 import KeyboardLayout
 import LowTalkerCore
+import Onboarding
 import Typing
 
 /// Watches this installation's hotkey from the command line, so a hold, a tap, and the

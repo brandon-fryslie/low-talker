@@ -1,16 +1,19 @@
 import DriverExtension
 import Flavors
+import LowTalkerCore
 
-/// One thing that must hold before low-talker can type, as this Mac actually stands.
+/// One thing that must hold before low-talker can hear and type, as this Mac actually stands.
 ///
-/// [LAW:one-type-per-behavior] Four very different facts - a driver extension's
-/// registration, a launchd job's hold on a Mach service, an approval only a person can
-/// give, a cached answer from a setup assistant - are one type with four instances,
-/// because what a reader does with them does not differ: read what is there, and do the
-/// step when there is one. Four requirement types would be four renderings of one shape.
+/// [LAW:one-type-per-behavior] Very different facts - a privacy grant only a person can
+/// give, an input method macOS switches on, a driver extension's registration, a launchd
+/// job's hold on a Mach service, a cached answer from a setup assistant - are one type with
+/// one instance per row, because what a reader does with them does not differ: read what is
+/// there, and do the step when there is one. A type per requirement would be a rendering
+/// per requirement of one shape.
 public struct Requirement: Sendable, Hashable {
-    /// What must hold, in the words the menu and the CLI both use.
-    public let name: String
+    /// Which requirement this is. Its name, its explanation and what asking for it does are
+    /// all read off the row, so no reader keeps a second copy of any of them.
+    public let row: Row
     /// What was read off this Mac. Shown whether or not there is a step, because a
     /// requirement that says only "not ready" is one nobody can act on or report.
     public let reads: String
@@ -20,26 +23,84 @@ public struct Requirement: Sendable, Hashable {
     /// first.
     public let step: String?
 
+    /// What must hold, in the words the menu, the CLI and the guided setup all use.
+    public var name: String { row.rawValue }
+
     public var met: Bool { step == nil }
 
-    public init(name: String, reads: String, step: String?) {
-        self.name = name
+    public init(row: Row, reads: String, step: String?) {
+        self.row = row
         self.reads = reads
         self.step = step
     }
 }
 
 public extension Requirement {
-    /// What each row is called, in the order onboarding prints them.
+    /// Every requirement there is, in the order onboarding prints them and the guided setup
+    /// walks them: what hearing needs, then what the chosen hotkey needs, then what the
+    /// chosen delivery needs.
     ///
-    /// One home for the three names, because four readers say them: the factory that
-    /// builds each row, the row a failed reading becomes, the readings table `make
-    /// check-docs` holds README to, and the tests. Spelled out at each of those, they
-    /// are four clocks. [LAW:one-source-of-truth]
+    /// This is the one list of what low-talker asks of a Mac. The CLI prints it, the menu
+    /// shows it, and the guided setup is a walk over it, so a grant added here reaches every
+    /// surface and a grant missing here is missing from all of them. [LAW:one-source-of-truth]
     enum Row: String, Sendable, Hashable, CaseIterable {
+        case microphone = "Microphone"
+        case inputMonitoring = "Input Monitoring"
+        case accessibility = "Accessibility"
+        case inputMethod = "Input method"
         case driverExtension = "Driver extension"
         case keyboardHelper = "Keyboard helper"
         case keyboardSetupAssistant = "Keyboard Setup Assistant"
+
+        /// What a row is needed for: hearing at all, one way of hearing the hotkey, or one
+        /// way of delivering the words.
+        public enum Serves: Sendable, Hashable {
+            case everySetup
+            case hearing(HotkeySource)
+            case delivery(Delivery)
+        }
+
+        /// [LAW:dataflow-not-control-flow] Which setups need a row is a value on the row, so
+        /// choosing a hotkey or a delivery changes the list by what it holds, and no surface
+        /// decides for itself which rows to show.
+        public var serves: Serves {
+            switch self {
+            case .microphone: .everySetup
+            case .inputMonitoring, .accessibility: .hearing(.eventTap)
+            case .inputMethod: .delivery(.inputMethod)
+            case .driverExtension, .keyboardHelper, .keyboardSetupAssistant: .delivery(.virtualKeyboard)
+            }
+        }
+
+        /// Whether any of these setups needs this row. The app passes the one setup it has;
+        /// the CLI, which has none, passes every choice there is and gets every row.
+        public func isNeeded(deliveries: [Delivery], sources: [HotkeySource]) -> Bool {
+            switch serves {
+            case .everySetup: true
+            case .hearing(let source): sources.contains(source)
+            case .delivery(let delivery): deliveries.contains(delivery)
+            }
+        }
+
+        /// Whether only the app itself can read this row.
+        ///
+        /// macOS keys these grants to the app that holds them, so another process asking
+        /// about them is told about itself: a CLI run from a terminal reading the
+        /// microphone grant would report the terminal's. A reading of the wrong app is worse
+        /// than none, so these rows are read by the app and named, unread, everywhere else.
+        /// [LAW:no-silent-failure]
+        public var readOnlyByTheApp: Bool {
+            switch self {
+            case .microphone, .inputMonitoring, .accessibility: true
+            case .inputMethod, .driverExtension, .keyboardHelper, .keyboardSetupAssistant: false
+            }
+        }
+
+        /// The rows a person must allow before this hotkey hears anything: the grants it
+        /// asks for, read off the list rather than kept beside it.
+        public static func grants(for source: HotkeySource) -> [Row] {
+            allCases.filter { $0.serves == .hearing(source) }
+        }
     }
 
     /// A requirement whose fact could not be read.
@@ -50,7 +111,16 @@ public extension Requirement {
     /// never lets `ready` come out true on the strength of a reading nobody took.
     /// [LAW:no-silent-failure]
     static func unreadable(_ row: Row, _ error: any Error) -> Requirement {
-        Requirement(name: row.rawValue, reads: "could not be read", step: "\(error)")
+        Requirement(row: row, reads: "could not be read", step: "\(error)")
+    }
+}
+
+public extension HotkeySource {
+    /// What macOS asks of the user before this hearing hears anything, as a menu says it,
+    /// named from the rows it needs. [LAW:one-source-of-truth]
+    var asks: String {
+        let grants = Requirement.Row.grants(for: self).map(\.rawValue)
+        return grants.isEmpty ? "needs nothing" : "needs " + grants.joined(separator: " and ")
     }
 }
 
@@ -70,22 +140,130 @@ extension Requirement: CustomStringConvertible {
 
 /// Where this Mac stands against everything low-talker needs, as one list.
 ///
-/// This is what `lowtalker onboard` prints and what the menu-bar app shows. It is
-/// computed rather than printed so a test can read it as a value, and so both surfaces
-/// say the same words without either spelling them a second time.
+/// This is what `lowtalker onboard` prints, what the menu-bar app shows, and what its guided
+/// setup walks. It is computed rather than printed so a test can read it as a value, and so
+/// every surface says the same words without any of them spelling them a second time.
 /// [LAW:effects-at-boundaries]
 public struct Readiness: Sendable, CustomStringConvertible {
     public let requirements: [Requirement]
+    /// Rows the setup needs that this reader could not read, because only the app can.
+    /// Named rather than dropped, so a list read from the CLI does not pass for the whole.
+    public let notReadHere: [Requirement.Row]
 
-    public init(_ requirements: [Requirement]) { self.requirements = requirements }
+    public init(_ requirements: [Requirement], notReadHere: [Requirement.Row] = []) {
+        self.requirements = requirements
+        self.notReadHere = notReadHere
+    }
 
-    /// Nothing is left for anyone to do.
+    /// Nothing this reader could read is left for anyone to do.
     public var ready: Bool { requirements.allSatisfy(\.met) }
+
+    /// The requirements with something left to do, in the list's order.
+    public var unmet: [Requirement] { requirements.filter { !$0.met } }
 
     /// Every requirement, every time, in a fixed order - the met ones included. A list
     /// that showed only what was wrong would leave a reader unable to tell "checked and
     /// fine" from "never checked". [LAW:dataflow-not-control-flow]
-    public var description: String { requirements.map(\.description).joined(separator: "\n") }
+    ///
+    /// The rows this reader could not read sit where the list puts them, so the CLI's
+    /// printout and the app's menu run in one order.
+    public var description: String {
+        let read = requirements.map { (row: $0.row, text: $0.description) }
+        let unread = notReadHere.map { (row: $0, text: "\($0.rawValue): only the app can read this; see Set Up in its menu") }
+        let order = Requirement.Row.allCases
+        return (read + unread)
+            .sorted { order.firstIndex(of: $0.row)! < order.firstIndex(of: $1.row)! }
+            .map(\.text).joined(separator: "\n")
+    }
+}
+
+// MARK: - what only the app can read
+
+/// Where each privacy grant is switched on by hand. Named once, because every step that
+/// sends a reader to one of these panes spells it from here.
+private func privacyPane(_ row: Requirement.Row) -> String {
+    "System Settings > Privacy & Security > \(row.rawValue)"
+}
+
+public extension Requirement {
+    /// The microphone, which every setup needs: nothing is heard without it.
+    ///
+    /// - Parameter withheld: why macOS withholds it, or nil when it is allowed.
+    static func microphone(_ withheld: MicrophoneAuthorization.Withheld?, flavor: Flavor) -> Requirement {
+        Requirement(row: .microphone, reads: reads(forMicrophone: withheld), step: step(forMicrophone: withheld, flavor: flavor))
+    }
+
+    private static func reads(forMicrophone withheld: MicrophoneAuthorization.Withheld?) -> String {
+        switch withheld {
+        case nil: "allowed"
+        case .notDetermined: "not asked yet"
+        case .denied: "turned off"
+        case .restricted: "restricted by policy"
+        }
+    }
+
+    private static func step(forMicrophone withheld: MicrophoneAuthorization.Withheld?, flavor: Flavor) -> String? {
+        switch withheld {
+        case nil:
+            nil
+        case .notDetermined:
+            """
+            \(flavor.displayName) asks for it only when you press Allow in
+            \(GuidedSetup.title(for: flavor)), in its menu.
+            """
+        case .denied:
+            """
+            Turn on \(flavor.displayName) in
+            \(privacyPane(.microphone)).
+            """
+        case .restricted:
+            """
+            A policy on this Mac forbids it, and only whoever manages
+            this Mac can change that.
+            """
+        }
+    }
+
+    /// Input Monitoring, which the event tap needs to read the keys.
+    static func inputMonitoring(held: Bool, flavor: Flavor) -> Requirement {
+        privacyGrant(.inputMonitoring, held: held, flavor: flavor)
+    }
+
+    /// Accessibility, which the event tap needs to hold the chord back from the app in front.
+    static func accessibility(held: Bool, flavor: Flavor) -> Requirement {
+        privacyGrant(.accessibility, held: held, flavor: flavor)
+    }
+
+    /// [LAW:one-type-per-behavior] The two grants read, word and step, the same way; only
+    /// the row differs.
+    private static func privacyGrant(_ row: Row, held: Bool, flavor: Flavor) -> Requirement {
+        Requirement(row: row, reads: reads(forGrantHeld: held), step: held ? nil : """
+            Allow it in \(GuidedSetup.title(for: flavor)), in its menu, or turn on
+            \(flavor.displayName) in \(privacyPane(row)).
+            """)
+    }
+
+    private static func reads(forGrantHeld held: Bool) -> String {
+        held ? "allowed" : "not allowed"
+    }
+}
+
+// MARK: - the input method
+
+public extension Requirement {
+    /// Whether this installation's input method is switched on. macOS asks the person before
+    /// an app may switch one on, so this is a grant, and the one the input method delivery
+    /// waits on. Copying and registering it ask nobody, and the app does both on its own.
+    static func inputMethod(switchedOn: Bool, flavor: Flavor) -> Requirement {
+        Requirement(row: .inputMethod, reads: reads(forSwitchedOn: switchedOn), step: switchedOn ? nil : """
+            Switch it on in \(GuidedSetup.title(for: flavor)), in the
+            \(flavor.displayName) menu. macOS asks you once to allow it.
+            """)
+    }
+
+    private static func reads(forSwitchedOn switchedOn: Bool) -> String {
+        switchedOn ? "switched on" : "switched off"
+    }
 }
 
 // MARK: - the driver extension
@@ -116,7 +294,7 @@ public extension Requirement {
     ///   the driver names. Each app carries one, so this is never a path only a clone has:
     ///   the CLI passes its own, the app the one inside its bundle.
     static func driverExtension(_ state: DriverState, cli: String) -> Requirement {
-        Requirement(name: Row.driverExtension.rawValue, reads: reads(for: state), step: step(for: state, cli: cli))
+        Requirement(row: .driverExtension, reads: reads(for: state), step: step(for: state, cli: cli))
     }
 
     /// The verdict word itself. Named as a reading rather than reached through
@@ -276,7 +454,7 @@ public extension Requirement {
     /// from the value that holds both. Passing a name instead lets a step address one copy
     /// while naming the other's, which is the confusion the two flavors exist to prevent.
     static func keyboardHelper(_ standing: HelperStanding, flavor: Flavor) -> Requirement {
-        Requirement(name: Row.keyboardHelper.rawValue, reads: reads(for: standing), step: step(for: standing, flavor: flavor))
+        Requirement(row: .keyboardHelper, reads: reads(for: standing), step: step(for: standing, flavor: flavor))
     }
 
     private static func reads(for standing: HelperStanding) -> String {
@@ -301,9 +479,9 @@ public extension Requirement {
             """
         case .noJob:
             """
-            launchd holds no job for the helper. Launch \(flavor.displayName) once - it
-            registers on every launch - and turn it on in
-            \(loginItemsPane) if it asks.
+            launchd holds no job for the helper. \(flavor.displayName) registers it
+            when you press Allow in \(GuidedSetup.title(for: flavor)), in its
+            menu; then turn it on in \(loginItemsPane).
             """
         case .anotherJobHoldsTheService:
             """
@@ -368,7 +546,7 @@ public extension Requirement {
     ///   function of what onboarding read. [LAW:effects-at-boundaries]
     static func keyboardSetupAssistant(answered: Bool, aHelperHasRun: Bool, helperSubsystem: String) -> Requirement {
         Requirement(
-            name: Row.keyboardSetupAssistant.rawValue,
+            row: .keyboardSetupAssistant,
             reads: reads(forAnswered: answered),
             step: answered ? nil : step(aHelperHasRun: aHelperHasRun, helperSubsystem: helperSubsystem)
         )
@@ -431,7 +609,11 @@ public extension Requirement {
     /// being the one thing every row says when the machine could not be read, and README
     /// describes it once as exactly that.
     static var readings: [(row: Row, reading: String)] {
-        DriverState.allCases.map { (row: Row.driverExtension, reading: reads(for: $0)) }
+        ([nil] + MicrophoneAuthorization.Withheld.allCases).map { (row: Row.microphone, reading: reads(forMicrophone: $0)) }
+            + [true, false].map { (row: Row.inputMonitoring, reading: reads(forGrantHeld: $0)) }
+            + [true, false].map { (row: Row.accessibility, reading: reads(forGrantHeld: $0)) }
+            + [true, false].map { (row: Row.inputMethod, reading: reads(forSwitchedOn: $0)) }
+            + DriverState.allCases.map { (row: Row.driverExtension, reading: reads(for: $0)) }
             + HelperStanding.allCases.map { (row: Row.keyboardHelper, reading: reads(for: $0)) }
             + [true, false].map { (row: Row.keyboardSetupAssistant, reading: reads(forAnswered: $0)) }
     }

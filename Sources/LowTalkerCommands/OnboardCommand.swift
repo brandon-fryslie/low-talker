@@ -1,5 +1,6 @@
 import ArgumentParser
 import Flavors
+import LowTalkerCore
 import Onboarding
 
 /// Everything that must hold before low-talker can type, read off this Mac, with the
@@ -22,11 +23,17 @@ struct OnboardCommand: ParsableCommand {
     @OptionGroup var installation: FlavorOption
 
     func run() throws {
-        // Nil, not false: `SMAppService` answers only the bundle that asks, so a CLI has
-        // no registration of its own to put the question to. From here launchd's "no job"
-        // covers both a helper never registered and one registered and waiting for its
-        // click, and saying so beats answering no on the app's behalf.
-        let readiness = OnboardingProbe.readiness(flavor: installation.flavor, approvalPending: nil, cli: LowTalker.path)
+        // Read from elsewhere, not as the app: `SMAppService` answers only the bundle that
+        // asks, and macOS keys the privacy grants to the app that holds them, so a CLI can
+        // read neither. From here launchd's "no job" covers both a helper never registered
+        // and one registered and waiting for its click, and the grants only the app can read
+        // are named, unread, rather than read as the terminal's.
+        //
+        // Every delivery and every hotkey source: the CLI does not know which the app chose,
+        // so it prints the rows of every choice.
+        let readiness = OnboardingProbe.readiness(
+            flavor: installation.flavor, deliveries: Delivery.allCases, sources: HotkeySource.allCases,
+            reader: .elsewhere, cli: LowTalker.path)
         print(readiness)
         // The code is a value computed the one way every time, rather than an exit taken
         // on some runs and not others. [LAW:dataflow-not-control-flow]

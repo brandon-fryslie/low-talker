@@ -144,9 +144,9 @@ The default is now `large-v3-v20240930_turbo_632MB`, replacing `large-v3-v202409
     swift run lowtalker mic request    # prompt if never asked, then print the answer
     swift run lowtalker mic watch      # print every change until interrupted
 
-For `mic` and `mic request` the exit status is 0 when access is granted and 1 otherwise; `watch` runs until interrupted. macOS charges a terminal command's microphone use to the terminal, so these answers are the terminal's; the app asks on its own behalf the first time it launches. macOS posts no notification when the switch is flipped in System Settings, so a change is only seen by reading the status again; `watch` reads it once a second.
+For `mic` and `mic request` the exit status is 0 when access is granted and 1 otherwise; `watch` runs until interrupted. macOS charges a terminal command's microphone use to the terminal, so these answers are the terminal's; the app asks on its own behalf, from the microphone step of its guided setup ("The guided setup" below), and never at launch. macOS posts no notification when the switch is flipped in System Settings, so a change is only seen by reading the status again; `watch` reads it once a second.
 
-To see the first-launch prompt again, forget the app's decision and relaunch:
+To see the app's microphone step and its prompt again, forget the app's decision and relaunch:
 
     tccutil reset Microphone ai.promptctl.low-talker
 
@@ -184,7 +184,7 @@ Each press prints `began` as the key goes down. A release after the threshold (2
 
 Which chord that is depends on the installation, and the CLI built here defaults to the development one: `lowtalker hotkey` watches Right Option and Right Command together unless `--flavor release` is passed, in which case it watches Right Option alone. Every command that reaches a helper or reads a config takes the same `--flavor`, and defaults the same way: to the installation whose app carries the binary, and to the development copy for `.build/debug/lowtalker`, which no app carries ("The CLI without a checkout" above).
 
-The tap needs Input Monitoring and Accessibility. macOS charges a terminal command's tap to the terminal, so the command fails with `the session refused an event tap` until the terminal has both under System Settings > Privacy & Security; the app asks on its own behalf.
+The tap needs Input Monitoring and Accessibility, and no tap is created until both are held: creating one without them is what makes macOS raise its own dialog, unasked. macOS charges a terminal command's tap to the terminal, so the command fails with `this hotkey needs Input Monitoring and Accessibility` until the terminal has both under System Settings > Privacy & Security; the app asks on its own behalf, from its guided setup.
 
     .build/debug/lowtalker hotkey --heard-by registeredHotKey   # the registered hot key, needing neither
 
@@ -314,7 +314,7 @@ The app gives you what you dictate one of two ways, and asks which the first tim
 - **Input method.** The words are committed where your cursor is by this app's own macOS input method, through the text input system, so nothing is posted as a key and nothing asks for an administrator.
 - **Virtual keyboard.** The words are typed where you are. This is the driver extension and the root helper described under "The virtual keyboard driver", and the approvals under "What is left to set up".
 
-The status menu lists both under "Delivery" with the current one checked, and choosing the other takes effect at once: a press still open is ended, sessions in flight finish, and a loop with the new delivery comes up behind the same hotkey. Choosing the virtual keyboard registers the helper, and when the driver, the helper or Keyboard Setup Assistant still needs something, an alert lists the steps. Choosing the input method installs it. The choice is kept per installation in its defaults, under `inputMethod` — the spelling from before the rename, kept because the word on disk is every installed copy's stored answer; `defaults delete ai.promptctl.low-talker.dev inputMethod` makes the development copy ask again at its next launch.
+The status menu lists both under "Delivery" with the current one checked, and choosing the other takes effect at once: a press still open is ended, sessions in flight finish, and a loop with the new delivery comes up behind the same hotkey. Choosing either opens the guided setup when the new delivery still needs something ("The guided setup" below): the virtual keyboard's helper is registered from its step there, and the input method is copied and registered at once but switched on only from its step, since switching it on is what macOS asks the person about. The choice is kept per installation in its defaults, under `inputMethod` — the spelling from before the rename, kept because the word on disk is every installed copy's stored answer; `defaults delete ai.promptctl.low-talker.dev inputMethod` makes the development copy ask again at its next launch.
 
 ### The hotkey source
 
@@ -481,7 +481,7 @@ XPC costs about 1 ms per character. 1400 characters landed complete through the 
 
 The same helper is registered in two ways, and only one of them can be live at a time.
 
-The shipped app bundles the helper and a plist at `Contents/Library/LaunchDaemons/ai.promptctl.low-talker.keyboardd.plist`, label `ai.promptctl.low-talker.keyboardd`, and registers it with `SMAppService.daemon` on every launch. On the first launch of an install the menu item and the log read "Keyboard helper: waiting for approval in Login Items & Extensions", and the step printed under that line says to turn LowTalker on in System Settings > General > Login Items & Extensions, which is where the approval click happens ("What is left to set up" below). On this Mac the app-owned Background Task Management record appears in `sfltool dumpbtm` as type daemon parented to the app bundle, disposition disallowed until approved. Once approved it reads `Disposition: [enabled, allowed, not notified] (0x3)`, and launchd runs the daemon: on 2026-09-21 `launchctl print system/ai.promptctl.low-talker.keyboardd` showed it `running`, submitted by `smd`, managed by `com.apple.xpc.ServiceManagement`, with `--flavor release` among its arguments.
+The shipped app bundles the helper and a plist at `Contents/Library/LaunchDaemons/ai.promptctl.low-talker.keyboardd.plist`, label `ai.promptctl.low-talker.keyboardd`, and registers it with `SMAppService.daemon` when the person presses Allow Keyboard Helper in the guided setup, never at launch. After that the menu item and the log read "Keyboard helper: waiting for approval in Login Items & Extensions", and the step printed under that line says to turn LowTalker on in System Settings > General > Login Items & Extensions, which is where the approval click happens ("What is left to set up" below). On this Mac the app-owned Background Task Management record appears in `sfltool dumpbtm` as type daemon parented to the app bundle, disposition disallowed until approved. Once approved it reads `Disposition: [enabled, allowed, not notified] (0x3)`, and launchd runs the daemon: on 2026-09-21 `launchctl print system/ai.promptctl.low-talker.keyboardd` showed it `running`, submitted by `smd`, managed by `com.apple.xpc.ServiceManagement`, with `--flavor release` among its arguments.
 
 `scripts/keyboard-helper` is the dev and agent path, which needs no approval from anyone:
 
@@ -635,13 +635,17 @@ On inferno.local (Mac16,6, macOS 26.5.1, System Integrity Protection enabled): `
     make cli
     .build/debug/lowtalker onboard
 
-prints everything that must hold before low-talker can type, read off this Mac now, with the step for whatever is missing indented under it. On this Mac today:
+prints everything that must hold before low-talker can hear and type, read off this Mac now, with the step for whatever is missing indented under it. On a Mac whose development helper was never registered:
 
+    Microphone: only the app can read this; see Set Up in its menu
+    Input Monitoring: only the app can read this; see Set Up in its menu
+    Accessibility: only the app can read this; see Set Up in its menu
+    Input method: switched on
     Driver extension: running
     Keyboard helper: not registered
-      launchd holds no job for the helper. Launch LowTalker Dev once - it
-      registers on every launch - and turn it on in
-      System Settings > General > Login Items & Extensions if it asks.
+      launchd holds no job for the helper. LowTalker Dev registers it
+      when you press Allow in Set Up LowTalker Dev…, in its
+      menu; then turn it on in System Settings > General > Login Items & Extensions.
     Keyboard Setup Assistant: answered for this keyboard
 
 and, on a Mac whose helper has not started yet, that last row instead reads:
@@ -654,9 +658,9 @@ and, on a Mac whose helper has not started yet, that last row instead reads:
 
 Both transcripts are illustrative. `make check-docs` holds this file to the reading words — `running`, `will ask on first use`, and the rest — but nothing checks the indented step text under them against the strings in `Requirement`. Read those steps for their shape; their wording can drift from the program's without anything failing.
 
-Every row is `Name: what was read`, and the exit status is 0 when nothing is left to do and 2 when something is. All three requirements are printed every time, met or not, since a list that showed only what was wrong leaves a reader unable to tell "checked and fine" from "never checked". A fact that could not be read is a row of its own reading `could not be read`, with the reason as its step, and it never counts as met, so a reading nobody managed to take can never come out as ready.
+Every row is `Name: what was read`, and the exit status is 0 when nothing the CLI can read is left to do and 2 when something is. The CLI does not know which delivery and hotkey the app chose, so it prints the rows of every choice. Three rows are the app's own: macOS keys the Microphone, Input Monitoring and Accessibility grants to the app that holds them, so a CLI asking would be told about its terminal. Those are named and never read from here, and the menu and the guided setup read them. Every row is printed every time, met or not, since a list that showed only what was wrong leaves a reader unable to tell "checked and fine" from "never checked". A fact that could not be read is a row of its own reading `could not be read`, with the reason as its step, and it never counts as met, so a reading nobody managed to take can never come out as ready.
 
-The menu-bar app's status menu shows the same list in the same words while the virtual keyboard is its delivery, and does not read it while the clipboard is. Both surfaces read one list, assembled in `OnboardingProbe.readiness` and nowhere else. The app has no words of its own for `SMAppService.Status` any more: the private `describe(_:)` that turned that enum into user-facing text is gone, so the app and the CLI cannot say different things about the same fact. The menu holds no state either. It is emptied and rebuilt from a fresh reading every time it is about to be shown, in `NSMenuDelegate.menuNeedsUpdate`. Measured on this Mac, that reading makes the menu wait about 220 ms, spent almost entirely in the driver probe's subprocesses. It is paid on every open rather than cached because a cached reading is stale exactly when it matters: right after the user has given the approval the menu was telling them to give.
+The menu-bar app's status menu shows the same list in the same words, holding only the rows the chosen delivery and hotkey need: the event tap's two grants appear only while the event tap is the hotkey source, the input method's row only while it is the delivery, and the driver, helper and assistant only while the virtual keyboard is. All three surfaces, the CLI, the menu and the guided setup, read one list, assembled in `OnboardingProbe.readiness` and nowhere else. The app has no words of its own for `SMAppService.Status` any more: the private `describe(_:)` that turned that enum into user-facing text is gone, so the app and the CLI cannot say different things about the same fact. The menu holds no state either. It is emptied and rebuilt from a fresh reading every time it is about to be shown, in `NSMenuDelegate.menuNeedsUpdate`. Measured on this Mac, that reading makes the menu wait about 220 ms, spent almost entirely in the driver probe's subprocesses. It is paid on every open rather than cached because a cached reading is stale exactly when it matters: right after the user has given the approval the menu was telling them to give.
 
 The driver extension's row reads whichever of the nine verdict words above `lowtalker driver` returns, and each word has its own step, because they are not degrees of one problem: `absent` wants an install, `awaiting-approval` wants the click in Login Items & Extensions, `pending-reboot` wants a restart.
 
@@ -694,10 +698,45 @@ So the helper's row reads one of five things:
 - `answering` means the app's job holds the service, and there is nothing to do.
 - `registered, but another job holds the service` is a lost name whose holder the app cannot identify. launchd refuses a second job under this installation's label at bootstrap, so the holder is one of two things no label governs: a helper left running from a terminal, or a job filed under some *other* label that names this service — which is what every installation predating the joined labels looks like, and the one a reader misses. Its step names both, `pgrep -fl lowtalker-keyboardd` and `sudo grep -l <service> /Library/LaunchDaemons/*.plist`.
 - `a bootstrapped job holds the label, so this app's registration never ran` is the holder the app *can* name. `launchctl bootstrap` refuses a duplicate label, but `SMAppService.register()` is not `bootstrap` and gets no such refusal: a plist job already under the label simply stays, and the app's own copy never spawns. Told apart from the row above by what launchd answers with — a job bootstrapped from a plist reports `path = /Library/LaunchDaemons/…`, where the app's reports `path = (submitted by smd.N)`. Its step names `scripts/keyboard-helper uninstall <flavor>`, which is the plist that has to go.
-- `not registered` says to launch this installation's app once, since it registers on every launch.
+- `not registered` says to press Allow in the app's guided setup, which is the only place the app registers it.
 - `waiting for approval in Login Items & Extensions` says to turn this installation on in System Settings > General > Login Items & Extensions.
 
-The third of those is what this Mac is in right now for the development copy: launchd holds no job under `ai.promptctl.low-talker.keyboardd.dev`, so `lowtalker onboard` and the menu both read `Keyboard helper: not registered` and say to launch the app once, which is the output above.
+The third of those is what this Mac is in right now for the development copy: launchd holds no job under `ai.promptctl.low-talker.keyboardd.dev`, so `lowtalker onboard` and the menu both read `Keyboard helper: not registered` and send the reader to the guided setup, which is the output above.
+
+### The guided setup
+
+The app launches without raising any system dialog: no Microphone, Input Monitoring, Accessibility, Login Items or input method prompt, and no driver request. Launch reads every grant, which asks nothing, and brings dictation up as far as what is already granted allows. What is missing is asked for from Set Up LowTalker… in the menu (Set Up LowTalker Dev… for the development copy), which opens on its own after the launch that asks which delivery and hotkey to use. The menu item says how many steps are left.
+
+The setup is a walk over the same list the menu shows, one requirement per page. Each page says why the app asks, what the grant lets you do, and what still works if you skip it, before the button that makes macOS ask. Pressing that button raises one system dialog, naming the app. Skip for Now moves on and leaves the app running; skipped steps wait on the last page, each with what skipping it costs and a button back to it. The page is redrawn from a fresh reading whenever the window comes back to the front, so a switch turned on in System Settings clears its step there without a relaunch, and dictation comes up behind the grant.
+
+| Step | Shown when | What the button does |
+|---|---|---|
+| Microphone | always | asks for the microphone (`AVCaptureDevice.requestAccess`) |
+| Input Monitoring | the hotkey source is the event tap | asks to read the keyboard (`CGRequestListenEventAccess`) |
+| Accessibility | the hotkey source is the event tap | asks to act on other apps' input (`AXIsProcessTrustedWithOptions`, with the prompt) |
+| Input method | the delivery is the input method | switches this installation's input method on (`TISEnableInputSource`), which macOS asks about |
+| Driver extension | the delivery is the virtual keyboard | nothing: an administrator installs it with `lowtalker driver install`, so the page names that and opens Login Items & Extensions |
+| Keyboard helper | the delivery is the virtual keyboard | registers the helper (`SMAppService.register`), which lands it in Login Items & Extensions |
+| Keyboard Setup Assistant | the delivery is the virtual keyboard | nothing: the helper answers it as it starts |
+
+Those are the only places the app calls anything that can put a dialog on screen. The keyboard tap is not created until both of its grants are held, and the input method is copied and registered at launch but never switched on there.
+
+So the microphone's row reads one of four things:
+
+- `allowed` means the app can hear.
+- `not asked yet` means macOS has never been asked, and the setup's Allow button is what asks.
+- `turned off` means the person declined or switched it off since, and only System Settings > Privacy & Security > Microphone turns it back on.
+- `restricted by policy` means whoever manages this Mac has forbidden it.
+
+So each of the event tap's two rows, Input Monitoring and Accessibility, reads one of two things:
+
+- `allowed` means the app holds the grant.
+- `not allowed` means it does not, and the step names the Privacy & Security pane to turn it on in.
+
+So the input method's row reads one of two things:
+
+- `switched on` means macOS lists this installation's input method as on, and the app selects it itself.
+- `switched off` means it is not on yet, whether or not it has been copied and registered.
 
 The app logs every reading it takes, so an agent can read back what the menu is showing without a screen:
 

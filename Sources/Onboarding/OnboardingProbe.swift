@@ -1,7 +1,9 @@
 import DriverExtension
 import Flavors
 import Foundation
+import InputSource
 import KeyboardService
+import LowTalkerCore
 
 /// Reading this Mac for the two facts onboarding takes for itself: which launchd job
 /// holds the helper's Mach service, and whether Keyboard Setup Assistant already has an
@@ -115,40 +117,97 @@ public enum OnboardingProbe {
     }
 }
 
-public extension OnboardingProbe {
-    /// Everything that must hold before low-talker can type, read off this Mac now.
+/// Who is reading the list, which decides what can be read at all.
+public enum OnboardingReader: Sendable, Hashable {
+    /// The app itself, which holds its own privacy grants and its own `SMAppService`
+    /// registration, and so can read every row.
     ///
-    /// The list is assembled here and nowhere else. `lowtalker onboard` and the menu-bar
-    /// app are two views of one list rather than two lists that happen to agree, and a
-    /// surface that built its own would drift the first time a requirement was added to
-    /// only one of them - which is exactly what low-hotkey-a6m.2 is about to do.
-    /// [LAW:one-source-of-truth]
+    /// - Parameter helperAwaitingApproval: what `SMAppService` told the app about the
+    ///   helper's registration. See `HelperStanding.sharpenedByTheAppsOwnRegistration`.
+    case theApp(helperAwaitingApproval: Bool)
+    /// Any other process - the CLI. It reads what belongs to the Mac and names the rows
+    /// that belong to the app, unread. See `Requirement.Row.readOnlyByTheApp`.
+    case elsewhere
+
+    /// What this reader can say about the helper's registration: nil from a reader that
+    /// has none to ask about, which is not the same as "not waiting".
+    var helperAwaitingApproval: Bool? {
+        switch self {
+        case .theApp(let waiting): waiting
+        case .elsewhere: nil
+        }
+    }
+
+    func canRead(_ row: Requirement.Row) -> Bool {
+        switch self {
+        case .theApp: true
+        case .elsewhere: !row.readOnlyByTheApp
+        }
+    }
+}
+
+public extension OnboardingProbe {
+    /// Everything that must hold before low-talker can hear and type, read off this Mac now.
+    ///
+    /// The list is assembled here and nowhere else. `lowtalker onboard`, the menu-bar app
+    /// and its guided setup are views of one list rather than lists that happen to agree,
+    /// and a surface that built its own would drift the first time a requirement was added
+    /// to only one of them. [LAW:one-source-of-truth]
+    ///
+    /// Reading never asks: nothing here can put a system dialog on screen, which is what
+    /// lets the app read the list at launch and every time its menu opens.
     ///
     /// - Parameter flavor: which installation is being read. The two run side by side and
-    ///   each has its own helper, service and label, so every reading below is a reading
-    ///   about one of them and there is no such thing as the readiness of "the app".
-    /// - Parameter approvalPending: what `SMAppService` told the app that owns the
-    ///   helper's registration, and nil from a caller that owns none. See
-    ///   `HelperStanding.sharpenedByTheAppsOwnRegistration(approvalPending:)`.
+    ///   each has its own helper, service, label and grants, so every reading below is a
+    ///   reading about one of them and there is no such thing as the readiness of "the app".
+    /// - Parameter deliveries: the deliveries whose rows to read - the app's one choice, or
+    ///   every delivery from a reader that has none.
+    /// - Parameter sources: the hotkey sources whose rows to read, the same way.
+    /// - Parameter reader: who is asking, which decides the rows only the app can read.
     /// - Parameter cli: the lowtalker binary the driver's steps name; see
     ///   `Requirement.driverExtension(_:cli:)`.
-    static func readiness(flavor: Flavor, approvalPending: Bool?, cli: String) -> Readiness {
-        // The helper's row is read before the assistant's because the assistant's step
-        // depends on it: the answer is filed BY the helper, so what is left to do about a
-        // missing answer is a different thing depending on whether the helper has run.
-        // The dependency is in the data rather than in the order two independent readings
-        // happen to be taken in. [LAW:no-ambient-temporal-coupling]
-        let helper = helperRow(flavor: flavor, approvalPending: approvalPending)
-        return Readiness(driverRow(cli: cli) + helper.rows + keyboardSetupAssistantRow(flavor: flavor, aHelperHasRun: helper.aHelperHasRun))
+    static func readiness(
+        flavor: Flavor, deliveries: [Delivery], sources: [HotkeySource], reader: OnboardingReader, cli: String
+    ) -> Readiness {
+        let needed = Requirement.Row.allCases.filter { $0.isNeeded(deliveries: deliveries, sources: sources) }
+        // The helper's standing is read at most once and only if asked for, because two
+        // rows want it: its own, and the assistant's, whose step depends on whether a
+        // helper has run. The dependency is in the data rather than in the order the rows
+        // happen to be read in. [LAW:no-ambient-temporal-coupling]
+        lazy var helper = helperRow(flavor: flavor, approvalPending: reader.helperAwaitingApproval)
+        var requirements: [Requirement] = []
+        for row in needed where reader.canRead(row) {
+            switch row {
+            case .microphone:
+                let withheld: MicrophoneAuthorization.Withheld? = switch MicrophonePermission().current {
+                case .granted: nil
+                case .withheld(let reason): reason
+                }
+                requirements.append(.microphone(withheld, flavor: flavor))
+            case .inputMonitoring:
+                requirements.append(.inputMonitoring(held: EventTapAccess.inputMonitoring, flavor: flavor))
+            case .accessibility:
+                requirements.append(.accessibility(held: EventTapAccess.accessibility, flavor: flavor))
+            case .inputMethod:
+                requirements.append(.inputMethod(switchedOn: InputSourceInstaller.isSwitchedOn(flavor), flavor: flavor))
+            case .driverExtension:
+                requirements.append(driverRow(cli: cli))
+            case .keyboardHelper:
+                requirements.append(helper.row)
+            case .keyboardSetupAssistant:
+                requirements.append(keyboardSetupAssistantRow(flavor: flavor, aHelperHasRun: helper.aHelperHasRun))
+            }
+        }
+        return Readiness(requirements, notReadHere: needed.filter { !reader.canRead($0) })
     }
 
     /// Each reading is taken and turned into its row here, at the edge, and a reading
     /// that failed becomes a row saying so rather than ending the report: three
     /// requirements a reader could have acted on are worth more than one error.
     /// [LAW:effects-at-boundaries]
-    private static func driverRow(cli: String) -> [Requirement] {
-        do { return [.driverExtension(DriverState(try DriverProbe.facts()), cli: cli)] }
-        catch { return [.unreadable(.driverExtension, error)] }
+    private static func driverRow(cli: String) -> Requirement {
+        do { return .driverExtension(DriverState(try DriverProbe.facts()), cli: cli) }
+        catch { return .unreadable(.driverExtension, error) }
     }
 
     /// The helper's row, and the one thing about it the assistant's row needs.
@@ -164,24 +223,23 @@ public extension OnboardingProbe {
     /// beside it - the helper's own, which reads `could not be read` and names the
     /// reason - so the failure is reported where it belongs rather than inferred from the
     /// assistant's step. [LAW:no-silent-failure]
-    private static func helperRow(flavor: Flavor, approvalPending: Bool?) -> (rows: [Requirement], aHelperHasRun: Bool) {
+    private static func helperRow(flavor: Flavor, approvalPending: Bool?) -> (row: Requirement, aHelperHasRun: Bool) {
         do {
             let standing = try helperStanding(
                 label: flavor.launchdLabel,
                 service: flavor.machServiceName)
                 .sharpenedByTheAppsOwnRegistration(approvalPending: approvalPending)
-            return ([.keyboardHelper(standing, flavor: flavor)],
-                    standing.aHelperHasRun)
-        } catch { return ([.unreadable(.keyboardHelper, error)], false) }
+            return (.keyboardHelper(standing, flavor: flavor), standing.aHelperHasRun)
+        } catch { return (.unreadable(.keyboardHelper, error), false) }
     }
 
-    private static func keyboardSetupAssistantRow(flavor: Flavor, aHelperHasRun: Bool) -> [Requirement] {
+    private static func keyboardSetupAssistantRow(flavor: Flavor, aHelperHasRun: Bool) -> Requirement {
         do {
-            return [.keyboardSetupAssistant(
+            return .keyboardSetupAssistant(
                 answered: try keyboardSetupAssistantAnswered(),
                 aHelperHasRun: aHelperHasRun,
-                helperSubsystem: flavor.machServiceName)]
-        } catch { return [.unreadable(.keyboardSetupAssistant, error)] }
+                helperSubsystem: flavor.machServiceName)
+        } catch { return .unreadable(.keyboardSetupAssistant, error) }
     }
 }
 

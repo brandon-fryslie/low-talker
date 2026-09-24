@@ -4,7 +4,8 @@
 /// What differs between the two is what macOS asks for and what it allows in return: an
 /// event tap sees every key, so its chord can be modifiers alone, and it needs Input
 /// Monitoring and Accessibility; a registered hot key needs nothing, and macOS will only
-/// register a chord that has a key in it.
+/// register a chord that has a key in it. Which grants each needs is Onboarding's list to
+/// say, as `Requirement.Row.grants(for:)`, and every surface that names them reads it there.
 ///
 /// [LAW:locality-or-seam] Everything a reader of a hearing needs to know about it is a
 /// value read off it here, so a new hearing is a new case in this file and its chord and
@@ -18,14 +19,6 @@ public enum HotkeySource: String, CaseIterable, Sendable, CustomStringConvertibl
 
     /// The spelling a stored choice is kept under, which is the case name.
     public var description: String { rawValue }
-
-    /// What macOS asks of the user before this hearing hears anything, as a menu says it.
-    public var asks: String {
-        switch self {
-        case .eventTap: "needs Input Monitoring and Accessibility"
-        case .registeredHotKey: "needs nothing"
-        }
-    }
 
     /// Whether this hearing tells a left modifier from a right one. An event tap reads the
     /// device-side flag bits; Carbon matches Control, Option, Shift and Command whichever
