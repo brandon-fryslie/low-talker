@@ -19,6 +19,8 @@ import Testing
         .refused(.requestWasNotText),
         .refused(.secureInputIsOn),
         .refused(.senderIsNotThisInstallationsApp),
+        .refused(.inputMethodIsBusy),
+        .notYetTaken(characters: 5, into: "com.example.editor"),
     ])
     func everyAnswerSurvivesTheCrossing(answer: InsertionAnswer) {
         #expect(Wire.answer(of: Wire.answer(answer)) == answer)
@@ -113,6 +115,16 @@ private let anEditor = "com.example.editor"
         let port = try hostInsertion(name: name) { _ in .refused(.noClientHasFocus) }
 
         await #expect(throws: Refusal.noClientHasFocus) { try await inserter(name).insert("hello") }
+        withExtendedLifetime(port) {}
+    }
+
+    /// Words the app in front has not taken yet cross the wire as their own answer and are
+    /// thrown past it by that name - never as a refusal, since they may still land.
+    @Test func wordsNotYetTakenAreThrownByName() async throws {
+        let name = aPortNobodyElseUses()
+        let port = try hostInsertion(name: name) { .notYetTaken(characters: $0.count, into: anEditor) }
+
+        await #expect(throws: NotYetTaken(characters: 5, into: anEditor)) { try await inserter(name).insert("hello") }
         withExtendedLifetime(port) {}
     }
 

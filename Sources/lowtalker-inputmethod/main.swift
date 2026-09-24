@@ -79,13 +79,20 @@ func secureInputHolder() -> String? {
     return NSRunningApplication(processIdentifier: pid)?.localizedName ?? "process \(pid)"
 }
 
+/// Where the insert port's commits run, one serial queue per app, off the main thread. Held
+/// for the life of the process like everything else opened here.
+let committer = Committer(label: "\(flavor.inputMethodPortName).commits")
+
 /// The app's door, beside the text input system's. Held for the life of the process for
 /// the same reason the server is: released, the app's next request finds nothing listening.
 ///
-/// Answered on the main queue, so its answers run where `FocusedClient` and every
-/// `IMKInputController` callback already run and the two never race.
-/// [LAW:no-ambient-temporal-coupling] `assumeIsolated` is that sentence made checkable: if
-/// this ever answered anywhere else it would stop here rather than corrupt a client.
+/// Answered on a queue of its own and never on the main one, which is where every key this
+/// source passes through is handled. An insert asks the main actor only which cursor is in
+/// front - where `FocusedClient` and every `IMKInputController` callback already run, so
+/// the two never race - and then hands the words to the `Committer`, off the main thread.
+/// Both waits are bounded by the committer, so a hung app costs the person an insert
+/// answered by name and not a dead keyboard. [LAW:no-ambient-temporal-coupling]
+/// `assumeIsolated` inside the ask is that sentence made checkable.
 ///
 /// Only this installation's app gets through; every other sender is refused by the port
 /// before its words are read, and the refusal is logged here with what was required.
@@ -98,26 +105,33 @@ func secureInputHolder() -> String? {
 /// app. [LAW:no-silent-failure]
 let insertions: InsertionPort? = {
     do {
-        return try InsertionPort(flavor: flavor, queue: .main, told: { event in
+        return try InsertionPort(flavor: flavor, queue: DispatchQueue(label: flavor.inputMethodPortName), told: { event in
             logger.error("\(String(describing: event), privacy: .public)")
         }) { text in
-            MainActor.assumeIsolated {
-                // Read here, where the effects are, and handed to the decision as a value.
-                // [LAW:effects-at-boundaries]
-                let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-                let securing = secureInputHolder()
-                let answer = FocusedClient.shared.insert(text, whileInFrontIs: frontmost, secureInputIsOn: securing != nil)
-                // The app in front is named because the refusal that matters here is the
-                // one where it is not the app holding the cursor, and a line saying only
-                // the outcome leaves a reader with the question it was written to answer.
-                logger.notice("""
-                    insert of \(text.count, privacy: .public) characters: \
-                    \(String(describing: answer), privacy: .public), \
-                    with \(frontmost ?? "nothing", privacy: .public) in front\
-                    \(securing.map { ", secure input held by \($0)" } ?? "", privacy: .public)
-                    """)
-                return answer
+            // Read on the main actor, where the effects are, and handed to the decision as
+            // values. [LAW:effects-at-boundaries] Asked within the committer's bound, like
+            // the commit, so the whole answer is one this process keeps.
+            let seen = committer.ask(on: .main) {
+                MainActor.assumeIsolated {
+                    let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+                    let securing = secureInputHolder()
+                    return (frontmost: frontmost, securing: securing, cursor: FocusedClient.shared.cursor(whileInFrontIs: frontmost, secureInputIsOn: securing != nil))
+                }
             }
+            let answer = committer.answer(text, at: seen?.cursor)
+            // The app in front is named because the refusal that matters here is the one
+            // where it is not the app holding the cursor, and a line saying only the outcome
+            // leaves a reader with the question it was written to answer. A main thread that
+            // did not look is said as not knowing, never as nothing in front.
+            // [LAW:no-silent-failure]
+            let context = seen.map { seen in
+                "with \(seen.frontmost ?? "nothing") in front" + (seen.securing.map { ", secure input held by \($0)" } ?? "")
+            } ?? "without knowing what is in front, since the main thread did not look in time"
+            logger.notice("""
+                insert of \(text.count, privacy: .public) characters: \
+                \(String(describing: answer), privacy: .public), \(context, privacy: .public)
+                """)
+            return answer
         }
     } catch {
         logger.fault("""

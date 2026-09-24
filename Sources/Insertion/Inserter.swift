@@ -12,8 +12,9 @@ import DarwinCalls
 /// outlives whatever carries it.
 public protocol Inserter: Sendable {
     /// Inserts `text` at the cursor, or throws why it did not: a `Refusal` when the input
-    /// method looked and would not, and otherwise whatever stopped the question reaching it,
-    /// which the channel below names in its own types.
+    /// method looked and would not, `NotYetTaken` when the app has not taken them yet, and
+    /// otherwise whatever stopped the question reaching it, which the channel below names
+    /// in its own types.
     ///
     /// **Blocking, and not to be called on the main actor or from a task.** The one that
     /// crosses to the input method holds its thread in the kernel for up to its timeout, so
@@ -76,10 +77,15 @@ public struct InputMethodInserter: Inserter {
     /// rather than inserting through whoever answers. [LAW:no-silent-failure]
     private let answerer: Result<PeerIdentity, PeerIdentity.Unreadable>
 
+    /// What the app gives each insert, split evenly across its four phases. The input
+    /// method's own bound on a client is set beneath one phase, so its answer naming a hung
+    /// app arrives before this end stops listening; `CommitterTests` holds the two apart.
+    public static let standardTimeout = Duration.seconds(5)
+
     /// `flavor` says which installation's input method this reaches. No default, for the
     /// reason `HelperConnection` has none: both copies run at once, and a channel that
     /// guessed would put one installation's words in the other's window.
-    public init(flavor: Flavor, timeout: Duration = .seconds(5)) {
+    public init(flavor: Flavor, timeout: Duration = standardTimeout) {
         self.init(
             portName: flavor.inputMethodPortName, timeout: timeout,
             answerer: Result { () throws(PeerIdentity.Unreadable) in
@@ -133,11 +139,13 @@ public struct InputMethodInserter: Inserter {
         guard let answer = Wire.answer(of: data) else {
             throw Unreachable.answerWasNotReadable(port: portName, bytes: data.count, words: .mayHaveLanded)
         }
-        // [LAW:parse-dont-validate] The wire's sum ends here: past this line a refusal is a
-        // failure thrown like the others, and a caller holds words inserted or nothing.
+        // [LAW:parse-dont-validate] The wire's sum ends here: past this line a refusal or
+        // words not yet taken is a failure thrown like the others, and a caller holds words
+        // inserted or nothing.
         switch answer {
         case .inserted(let characters, let into): return Inserted(characters: characters, into: into)
         case .refused(let refusal): throw refusal
+        case .notYetTaken(let characters, let into): throw NotYetTaken(characters: characters, into: into)
         }
     }
 

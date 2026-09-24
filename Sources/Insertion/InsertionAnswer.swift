@@ -4,9 +4,10 @@ import Foundation
 /// What the input method did with the text it was asked to insert.
 ///
 /// The shape the answer crosses the wire in, which is the only reason it is a sum: the far
-/// end has to be able to say either. Past `InputMethodInserter` a refusal is thrown like
-/// any other failure, because to the caller it is one - the words are not at the cursor,
-/// and nothing here puts them anywhere else. [LAW:types-are-the-program]
+/// end has to be able to say any of these. Past `InputMethodInserter` a refusal or words
+/// not yet taken is thrown like any other failure, because to the caller it is one - the
+/// words are not at the cursor now, and nothing here puts them anywhere else.
+/// [LAW:types-are-the-program]
 public enum InsertionAnswer: Codable, Equatable, Sendable {
     /// Committed into the client in front, replacing nothing.
     ///
@@ -18,6 +19,27 @@ public enum InsertionAnswer: Codable, Equatable, Sendable {
     case inserted(characters: Int, into: String)
     /// Not committed, and why.
     case refused(Refusal)
+    /// Handed to the client in front, which did not take them within the input method's
+    /// bound. Neither of the others: the words are on their way and land if the app
+    /// recovers, so this is never a refusal and must never be retried.
+    case notYetTaken(characters: Int, into: String)
+}
+
+/// Words handed to an app that did not take them in time: they land if it recovers.
+/// Thrown past `InputMethodInserter` like a refusal, because the words are not at the
+/// cursor now, and apart from one, because they may yet be. [LAW:types-are-the-program]
+public struct NotYetTaken: Error, Equatable, Sendable, CustomStringConvertible {
+    public let characters: Int
+    public let into: String
+
+    public init(characters: Int, into: String) {
+        self.characters = characters
+        self.into = into
+    }
+
+    public var description: String {
+        "\(into) did not take the \(characters) characters handed to it in time; they land if it recovers, so do not dictate them again"
+    }
 }
 
 /// Words committed at the cursor: how many, and the app whose client took them.
@@ -61,6 +83,10 @@ public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, 
     /// signed by another certificate than the app fails the app's own check of who answered
     /// first, and that is the error it reports. [LAW:no-silent-failure]
     case senderIsNotThisInstallationsApp
+    /// The input method's main thread did not say which cursor is in front in time, so
+    /// nothing was committed. It is where IMK makes its own calls into apps, and a hung
+    /// app holds it there for up to 3 s at a time (measured on low-input-method-s71.c7d).
+    case inputMethodIsBusy
 
     public var description: String {
         switch self {
@@ -70,6 +96,8 @@ public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, 
         case .secureInputIsOn: "an app has secure keyboard entry on, and macOS switches input methods off while it does"
         case .senderIsNotThisInstallationsApp:
             "the input method takes words only from this installation's app, signed by the certificate that signed it, and this process is not that app"
+        case .inputMethodIsBusy:
+            "the input method was held up by an app that is not answering and did not look for the cursor in time; nothing was inserted"
         }
     }
 }

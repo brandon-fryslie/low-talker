@@ -17,9 +17,11 @@ import DarwinCalls
 /// that fails is answered `senderIsNotThisInstallationsApp` and told to `turnedAway` - the
 /// insert closure never sees it. [LAW:single-enforcer]
 ///
-/// Both closures run on `queue`, one request at a time. That is the whole of the
-/// concurrency story here: host it on the queue the thing it inserts into lives on, and
-/// the two never race. [LAW:no-ambient-temporal-coupling]
+/// Both closures run on `queue`, one request at a time, and the answer is sent when the
+/// closure returns. Whatever the closure touches that lives elsewhere, it reaches itself:
+/// the input method hosts this on a queue of its own and asks the main actor only which
+/// cursor is in front, so a slow answer never holds the keys the main thread handles.
+/// [LAW:no-ambient-temporal-coupling]
 ///
 /// Held for the life of the process by whoever makes it. Released, the port closes and the
 /// app's next request finds nothing listening; a request already being answered finishes
