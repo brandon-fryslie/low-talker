@@ -23,15 +23,15 @@ scripts=$(dirname "$0")
 app=$("$scripts/sign-release" "$@")
 
 # A release whose build number did not rise is one no updater or crash report can tell from
-# the last: project.yml's CURRENT_PROJECT_VERSION is bumped by hand, so it is held here, on
-# the built app, against the release tags of the same version (v0.1.0-alpha.3 is build 3).
-# Read from origin, not local tags, which a fresh clone may not have. [LAW:no-silent-failure]
-short=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$app/Contents/Info.plist")
+# the last. project.yml's CURRENT_PROJECT_VERSION counts releases and is raised by hand, so
+# the Nth release is build N: it must exceed the number of release tags already on origin,
+# of every version. A tag's own suffix is no substitute, since alpha, beta and rc each count
+# again from 1. Read from origin, not local tags, which a fresh clone may not have.
+# [LAW:no-silent-failure]
 build=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$app/Contents/Info.plist")
-tags=$(git -C "$scripts/.." ls-remote --tags --refs origin "v$short-*")
-last=$(printf '%s\n' "$tags" | sed -nE 's/.*\.([0-9]+)$/\1/p' | sort -n | tail -1)
-if [ -n "$last" ] && [ "$build" -le "$last" ]; then
-  echo "release: $app is $short ($build), but v$short-*.$last is already released; raise CURRENT_PROJECT_VERSION in project.yml" >&2
+released=$(git -C "$scripts/.." ls-remote --tags --refs origin "v*" | wc -l | tr -d ' ')
+if [ "$build" -le "$released" ]; then
+  echo "release: $app is build $build, but $released releases are already tagged; raise CURRENT_PROJECT_VERSION in project.yml" >&2
   exit 1
 fi
 

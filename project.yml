@@ -28,8 +28,8 @@ settings:
     # before low-packaging-0rc shipped with no version at all. LaunchServices keys a
     # bundle's registration by it, and every input method macOS ships carries both.
     # CURRENT_PROJECT_VERSION counts releases, so it rises with each one; v0.1.0-alpha.3 was
-    # the third. scripts/release refuses a build number no higher than the last release tag
-    # of the same version.
+    # the third. scripts/release refuses a build number no higher than the count of release
+    # tags already pushed.
     MARKETING_VERSION: 0.1.0
     CURRENT_PROJECT_VERSION: "4"
   # A build to hand to someone else: the Developer ID certificate, which Gatekeeper trusts
