@@ -539,7 +539,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case .success(nil):
                 failure = "Allow Accessibility first. Input Monitoring comes with it."
             case .success(.undecided):
-                failure = await askInAFreshProcess(.inputMonitoring)
+                EventTapAccess.askForInputMonitoring()
             case .success(.denied):
                 failure = openPaneAfterANo(.inputMonitoring)
             case .success(.granted):
@@ -569,19 +569,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             deliveryGrantAsked = true
         }
         return failure
-    }
-
-    /// Asks macOS for `grant` from the carried CLI, which is credited to this app; see
-    /// `PrivacyReading.asking`. Answers with what went wrong, or nil.
-    private func askInAFreshProcess(_ grant: PrivacyGrant) async -> String? {
-        do {
-            let after = try await PrivacyReading.asking(for: grant, by: Self.carriedCLI)
-            log.notice("privacy after asking for \(grant.rawValue, privacy: .public): \(after.line, privacy: .public)")
-            return nil
-        } catch {
-            log.error("privacy: asking for \(grant.rawValue, privacy: .public): \(error.description, privacy: .public)")
-            return error.description
-        }
     }
 
     /// Opens a grant's System Settings pane after macOS was already answered no, and says why.

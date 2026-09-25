@@ -41,23 +41,10 @@ public struct PrivacyReading: Sendable, Hashable {
         try PrivacyReading(line: run(reader, ["grants"], within: .seconds(10)), accessibility: EventTapAccess.accessibility)
     }
 
-    /// Asks macOS for `grant` from a fresh process, then reads again. The asking is done
-    /// there for the reason the reading is: this app's own process can answer a request
-    /// from what it read before and never reach tccd - measured on studious, where the
-    /// app's `CGRequestListenEventAccess` after a reset sent tccd nothing and showed no
-    /// dialog. Off the main actor, since a request waits for the person's answer.
-    public static func asking(for grant: PrivacyGrant, by reader: String) async throws(PrivacyReadingFailure) -> PrivacyReading {
-        let result = await Task.detached {
-            Result { () throws(PrivacyReadingFailure) in try run(reader, ["grants", "--ask", grant.rawValue], within: .seconds(300)) }
-        }.value
-        return try PrivacyReading(line: result.get(), accessibility: EventTapAccess.accessibility)
-    }
-
     /// Runs the reader and answers with the line it printed.
     ///
     /// - Parameter deadline: past this the reader is stuck, and is ended. A read launched
-    ///   in 10-20 ms on studious; the first run of a new binary is checked by macOS first,
-    ///   and a request may wait on the person.
+    ///   in 10-20 ms on studious; the first run of a new binary is checked by macOS first.
     private static func run(_ reader: String, _ arguments: [String], within deadline: DispatchTimeInterval) throws(PrivacyReadingFailure) -> String {
         let command = "\(reader) \(arguments.joined(separator: " "))"
         let process = Process()
@@ -113,20 +100,6 @@ public struct PrivacyReading: Sendable, Hashable {
     /// minted from the same answer the setup shows. Asking still asks this process.
     public var microphonePermission: MicrophonePermission {
         MicrophonePermission(authority: ReadMicrophoneAuthority(read: microphone))
-    }
-}
-
-/// A grant asked for from a fresh process. Only Input Monitoring: the app's own request for
-/// it was measured sending tccd nothing, while the microphone's and Accessibility's, asked
-/// in the app, each raised their dialog.
-public enum PrivacyGrant: String, Sendable, CaseIterable {
-    case inputMonitoring = "input-monitoring"
-
-    /// Raises macOS's dialog for this grant, when macOS still shows one.
-    public func ask() async {
-        switch self {
-        case .inputMonitoring: _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
-        }
     }
 }
 

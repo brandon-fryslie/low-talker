@@ -28,6 +28,12 @@ public enum EventTapAccess {
     /// is how macOS comes to raise its dialog on its own, unasked.
     public static var held: Bool { inputMonitoring && accessibility }
 
+    /// Raises macOS's Input Monitoring dialog. macOS shows it once per app; after an
+    /// answer, the switch in System Settings is the only way to change it.
+    public static func askForInputMonitoring() {
+        _ = CGRequestListenEventAccess()
+    }
+
     /// Raises macOS's Accessibility dialog. The option key is spelled out rather than read
     /// from `kAXTrustedCheckOptionPrompt`, a C global Swift 6 will not read from a
     /// nonisolated context; the string is that constant's documented value.
