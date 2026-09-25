@@ -114,6 +114,8 @@ import Testing
         let waiting = Requirement.inputMonitoring(held: false, accessibilityHeld: false, flavor: Self.flavor)
         #expect(!waiting.met)
         #expect(waiting.step?.contains("Accessibility") == true)
+        #expect(waiting.waitsOn == .accessibility)
+        #expect(Requirement.inputMonitoring(held: false, accessibilityHeld: true, flavor: Self.flavor).waitsOn == nil)
     }
 
     /// Each event-tap grant's step names its own pane and the installation to switch on.
