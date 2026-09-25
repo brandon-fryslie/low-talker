@@ -37,9 +37,23 @@ public struct PrivacyReading: Sendable, Hashable {
     /// A fresh reading, taken by `reader grants` - the carried CLI - as a process this one
     /// starts, so it is credited to this app.
     public static func taken(by reader: String) throws(PrivacyReadingFailure) -> PrivacyReading {
+        try run(reader, ["grants"])
+    }
+
+    /// Asks macOS for `grant` from a fresh process, then reads again. The asking is done
+    /// there for the reason the reading is: this app's own process can answer a request
+    /// from what it read before and never reach tccd - measured on studious, where the
+    /// app's `CGRequestListenEventAccess` after a reset sent tccd nothing and showed no
+    /// dialog. Off the main actor, since a request waits for the person's answer.
+    public static func asking(for grant: PrivacyGrant, by reader: String) async throws(PrivacyReadingFailure) -> PrivacyReading {
+        let result = await Task.detached { Result { () throws(PrivacyReadingFailure) in try run(reader, ["grants", "--ask", grant.rawValue]) } }.value
+        return try result.get()
+    }
+
+    private static func run(_ reader: String, _ arguments: [String]) throws(PrivacyReadingFailure) -> PrivacyReading {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: reader)
-        process.arguments = ["grants"]
+        process.arguments = arguments
         let output = Pipe()
         process.standardOutput = output
         do { try process.run() } catch { throw PrivacyReadingFailure("\(reader) did not start: \(error)") }
@@ -47,7 +61,7 @@ public struct PrivacyReading: Sendable, Hashable {
         process.waitUntilExit()
         let line = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         guard process.terminationStatus == 0 else {
-            throw PrivacyReadingFailure("\(reader) grants exited \(process.terminationStatus)")
+            throw PrivacyReadingFailure("\(reader) \(arguments.joined(separator: " ")) exited \(process.terminationStatus)")
         }
         return try PrivacyReading(line: line)
     }
@@ -79,6 +93,22 @@ public struct PrivacyReading: Sendable, Hashable {
     /// minted from the same answer the setup shows. Asking still asks this process.
     public var microphonePermission: MicrophonePermission {
         MicrophonePermission(authority: ReadMicrophoneAuthority(read: microphone))
+    }
+}
+
+/// A grant this process can ask macOS for. Accessibility is not here: its request opens
+/// System Settings from the app itself, which reads it live.
+public enum PrivacyGrant: String, Sendable, CaseIterable {
+    case microphone
+    case inputMonitoring = "input-monitoring"
+
+    /// Raises macOS's dialog for this grant, when macOS still shows one, and waits for it
+    /// to be answered.
+    public func ask() async {
+        switch self {
+        case .microphone: _ = await SystemMicrophoneAuthority().requestAccess()
+        case .inputMonitoring: _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+        }
     }
 }
 

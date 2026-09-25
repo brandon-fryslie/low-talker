@@ -519,7 +519,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // shows nothing, so a decided "no" is said here and the pane opened instead.
             switch readPrivacy().map({ $0.microphonePermission.current }) {
             case .success(.withheld(.notDetermined)):
-                _ = await MicrophonePermission().request()
+                failure = await askInAFreshProcess(.microphone)
             case .success(.withheld(.denied)):
                 failure = openPaneAfterANo(.microphone)
             case .success(.withheld(.restricted)):
@@ -533,7 +533,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // The same: macOS asks once, and a decided "no" is answered with the pane.
             switch readPrivacy().map(\.inputMonitoring) {
             case .success(.undecided):
-                EventTapAccess.askForInputMonitoring()
+                failure = await askInAFreshProcess(.inputMonitoring)
             case .success(.denied):
                 failure = openPaneAfterANo(.inputMonitoring)
             case .success(.granted):
@@ -563,6 +563,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             deliveryGrantAsked = true
         }
         return failure
+    }
+
+    /// Asks macOS for `grant` from the carried CLI, which is credited to this app; see
+    /// `PrivacyReading.asking`. Answers with what went wrong, or nil.
+    private func askInAFreshProcess(_ grant: PrivacyGrant) async -> String? {
+        do {
+            let after = try await PrivacyReading.asking(for: grant, by: Self.carriedCLI)
+            log.notice("privacy after asking for \(grant.rawValue, privacy: .public): \(after.line, privacy: .public)")
+            return nil
+        } catch {
+            log.error("privacy: asking for \(grant.rawValue, privacy: .public): \(error.description, privacy: .public)")
+            return error.description
+        }
     }
 
     /// Opens a grant's System Settings pane after macOS was already answered no, and says why.

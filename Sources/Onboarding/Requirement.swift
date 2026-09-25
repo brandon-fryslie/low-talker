@@ -241,20 +241,11 @@ public extension Requirement {
         case nil:
             nil
         case .notDetermined:
-            """
-            \(flavor.displayName) asks for it only when you press Allow in
-            \(GuidedSetup.title(for: flavor)), in its menu.
-            """
+            "Allow it in \(GuidedSetup.title(for: flavor))"
         case .denied:
-            """
-            Turn on \(flavor.displayName) in
-            \(privacyPane(.microphone)).
-            """
+            "Turn on \(flavor.displayName) in \(privacyPane(.microphone))."
         case .restricted:
-            """
-            A policy on this Mac forbids it, and only whoever manages
-            this Mac can change that.
-            """
+            "A policy on this Mac blocks it."
         }
     }
 
@@ -271,10 +262,7 @@ public extension Requirement {
     /// [LAW:one-type-per-behavior] The two grants read, word and step, the same way; only
     /// the row differs.
     private static func privacyGrant(_ row: Row, held: Bool, flavor: Flavor) -> Requirement {
-        Requirement(row: row, reads: reads(forGrantHeld: held), step: held ? nil : """
-            Allow it in \(GuidedSetup.title(for: flavor)), in its menu, or turn on
-            \(flavor.displayName) in \(privacyPane(row)).
-            """)
+        Requirement(row: row, reads: reads(forGrantHeld: held), step: held ? nil : "Allow it in \(GuidedSetup.title(for: flavor)) or \(privacyPane(row)).")
     }
 
     private static func reads(forGrantHeld held: Bool) -> String {
@@ -289,10 +277,7 @@ public extension Requirement {
     /// an app may switch one on, so this is a grant, and the one the input method delivery
     /// waits on. Copying and registering it ask nobody, and the app does both on its own.
     static func inputMethod(switchedOn: Bool, flavor: Flavor) -> Requirement {
-        Requirement(row: .inputMethod, reads: reads(forSwitchedOn: switchedOn), step: switchedOn ? nil : """
-            Switch it on in \(GuidedSetup.title(for: flavor)), in the
-            \(flavor.displayName) menu. macOS asks you once to allow it.
-            """)
+        Requirement(row: .inputMethod, reads: reads(forSwitchedOn: switchedOn), step: switchedOn ? nil : "Switch it on in \(GuidedSetup.title(for: flavor))")
     }
 
     private static func reads(forSwitchedOn switchedOn: Bool) -> String {
