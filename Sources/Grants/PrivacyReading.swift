@@ -13,16 +13,18 @@ import IOKit.hid
 ///
 /// Accessibility is the exception, read by the app itself: its own reading is live (it read
 /// "allowed" 3 s after a grant on studious). Checking it, from any process, files the app in
-/// the Accessibility list switched off; see `Requirement.inputMonitoring`.
+/// the Accessibility list switched off, so it is checked only for a setup that needs it; see
+/// `Requirement.inputMonitoring`.
 ///
 /// [LAW:one-source-of-truth] One reader answers the setup, the menu, and the gates on the
 /// microphone and the tap; each takes a reading at the moment it decides.
 public struct PrivacyReading: Sendable, Hashable {
     public let microphone: AVAuthorizationStatus
     public let inputMonitoring: InputMonitoringAccess
-    public let accessibility: Bool
+    /// Nil when the setup needs no Accessibility, so it was not checked.
+    public let accessibility: Bool?
 
-    public init(microphone: AVAuthorizationStatus, inputMonitoring: InputMonitoringAccess, accessibility: Bool) {
+    public init(microphone: AVAuthorizationStatus, inputMonitoring: InputMonitoringAccess, accessibility: Bool?) {
         self.microphone = microphone
         self.inputMonitoring = inputMonitoring
         self.accessibility = accessibility
@@ -36,36 +38,42 @@ public struct PrivacyReading: Sendable, Hashable {
     }
 
     /// A fresh reading, taken by `reader grants` - the carried CLI - as a process this one
-    /// starts, so it is credited to this app.
-    public static func taken(by reader: String) throws(PrivacyReadingFailure) -> PrivacyReading {
-        try PrivacyReading(line: run(reader, ["grants"], within: .seconds(10)), accessibility: EventTapAccess.accessibility)
+    /// starts, so it is credited to this app; Accessibility is checked here, and only when
+    /// `checkingAccessibility`.
+    public static func taken(by reader: String, checkingAccessibility: Bool) throws(PrivacyReadingFailure) -> PrivacyReading {
+        try PrivacyReading(
+            line: run(reader, ["grants"], withinSeconds: 10),
+            accessibility: checkingAccessibility ? EventTapAccess.accessibility : nil)
     }
 
     /// Runs the reader and answers with the line it printed.
     ///
     /// - Parameter deadline: past this the reader is stuck, and is ended. A read launched
     ///   in 10-20 ms on studious; the first run of a new binary is checked by macOS first.
-    private static func run(_ reader: String, _ arguments: [String], within deadline: DispatchTimeInterval) throws(PrivacyReadingFailure) -> String {
+    ///   Output is read after exit: the line is a few dozen bytes, inside a pipe's buffer.
+    private static func run(_ reader: String, _ arguments: [String], withinSeconds deadline: Int) throws(PrivacyReadingFailure) -> String {
         let command = "\(reader) \(arguments.joined(separator: " "))"
         let process = Process()
         process.executableURL = URL(fileURLWithPath: reader)
         process.arguments = arguments
         let output = Pipe()
         process.standardOutput = output
+        let complaint = Pipe()
+        process.standardError = complaint
         let exited = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in exited.signal() }
         do { try process.run() } catch { throw PrivacyReadingFailure("\(command) did not start: \(error)") }
-        // The line is a few dozen bytes, well inside a pipe's buffer, so waiting before
-        // reading cannot deadlock.
-        guard exited.wait(timeout: .now() + deadline) == .success else {
+        guard exited.wait(timeout: .now() + .seconds(deadline)) == .success else {
             process.terminate()
-            throw PrivacyReadingFailure("\(command) did not answer within \(deadline)")
+            throw PrivacyReadingFailure("\(command) did not answer within \(deadline) s")
         }
         let line = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard process.terminationReason == .exit, process.terminationStatus == 0 else {
             let how = process.terminationReason == .uncaughtSignal ? "crashed with signal" : "exited"
-            throw PrivacyReadingFailure("\(command) \(how) \(process.terminationStatus)")
+            let said = String(decoding: complaint.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            throw PrivacyReadingFailure("\(command) \(how) \(process.terminationStatus)\(said.isEmpty ? "" : ": \(said)")")
         }
         return line
     }
@@ -80,21 +88,24 @@ public struct PrivacyReading: Sendable, Hashable {
 
     /// [LAW:parse-dont-validate] The one place the printed line becomes a reading, with
     /// Accessibility read by the process taking it.
-    public init(line: String, accessibility: Bool) throws(PrivacyReadingFailure) {
+    public init(line: String, accessibility: Bool?) throws(PrivacyReadingFailure) {
         let fields = Dictionary(
             line.split(separator: " ").map { field in
                 let pair = field.split(separator: "=", maxSplits: 1).map(String.init)
                 return (pair.first ?? "", pair.count == 2 ? pair[1] : "")
             },
             uniquingKeysWith: { first, _ in first })
-        guard let microphone = fields["microphone"].flatMap(Int.init).flatMap(AVAuthorizationStatus.init(rawValue:)),
+        // An imported enum's init(rawValue:) accepts any Int, so the four known values are
+        // named here: an unknown one is a line this build cannot read, not a crash later.
+        let known: [AVAuthorizationStatus] = [.notDetermined, .restricted, .denied, .authorized]
+        guard let microphone = fields["microphone"].flatMap(Int.init).flatMap({ raw in known.first { $0.rawValue == raw } }),
               let inputMonitoring = fields["inputMonitoring"].flatMap(InputMonitoringAccess.init(rawValue:))
         else { throw PrivacyReadingFailure("unreadable grants line \"\(line)\"") }
         self.init(microphone: microphone, inputMonitoring: inputMonitoring, accessibility: accessibility)
     }
 
     /// Both grants an event tap needs. See `EventTapAccess`.
-    public var eventTapHeld: Bool { inputMonitoring == .granted && accessibility }
+    public var eventTapHeld: Bool { inputMonitoring == .granted && accessibility == true }
 
     /// The microphone as `MicrophonePermission` sees it through this reading, so a grant is
     /// minted from the same answer the setup shows. Asking still asks this process.

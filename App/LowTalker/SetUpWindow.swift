@@ -122,7 +122,11 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
         // Asked once in this walk and still unmet: macOS will not show most of these
         // dialogs a second time, so the page offers System Settings where the button was.
         let askedAlready = asked.contains(row)
-        let ask = askedAlready ? nil : row.askTitle.map { title in button(title) { [unowned self] in request(row) } }
+        // A step waiting on another has nothing to ask yet; its way forward is that step.
+        let back = requirement.waitsOn.map { earlier in
+            button("Set Up \(earlier.rawValue)…") { [unowned self] in walk.revisit(earlier); failure = nil; draw(shown) }
+        }
+        let ask = askedAlready || back != nil ? nil : row.askTitle.map { title in button(title) { [unowned self] in request(row) } }
         add(label(left == 1 ? "1 step left" : "\(left) steps left", size: 11, color: .secondaryLabelColor))
         add(label(requirement.name, size: 20, weight: .semibold))
         add(label("Now: \(requirement.reads)", size: 12, color: .secondaryLabelColor))
@@ -143,10 +147,10 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
         // Every step can be read again by hand: a grant made where this window cannot see
         // it arriving - System Settings left open beside it - clears its step here.
         let checkAgain = button("Check Again") { [unowned self] in redrawFromAFreshReading() }
-        let openSettings = row.settingsPane.map { pane in button("Open System Settings") { NSWorkspace.shared.open(pane) } }
+        let openSettings = back != nil ? nil : row.settingsPane.map { pane in button("Open System Settings") { NSWorkspace.shared.open(pane) } }
         // The default is the one button that makes macOS ask, so Return is the person
         // choosing to be asked; once asked, System Settings; otherwise a fresh reading.
-        let primary = ask ?? openSettings ?? checkAgain
+        let primary = back ?? ask ?? openSettings ?? checkAgain
         let others = [checkAgain, openSettings, ask].compactMap { $0 }.filter { $0 !== primary }
         primary.keyEquivalent = "\r"
         primary.isEnabled = !asking

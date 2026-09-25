@@ -15,16 +15,18 @@ import Testing
         #expect(try PrivacyReading(line: reading.line, accessibility: reading.accessibility) == reading)
     }
 
-    @Test(arguments: ["", "microphone=3", "microphone=3 inputMonitoring=maybe", "garbage"])
+    @Test(arguments: ["", "microphone=3", "microphone=3 inputMonitoring=maybe", "microphone=9 inputMonitoring=granted", "garbage"])
     func aLineMissingAGrantIsRefused(line: String) {
         #expect(throws: PrivacyReadingFailure.self) { try PrivacyReading(line: line, accessibility: true) }
     }
 
-    /// The tap needs both of its grants; either one alone is not enough.
+    /// The tap needs both of its grants; either one alone is not enough, and an
+    /// Accessibility never checked is not held.
     @Test func theTapIsHeldOnlyWithBothOfItsGrants() {
         #expect(PrivacyReading(microphone: .denied, inputMonitoring: .granted, accessibility: true).eventTapHeld)
         #expect(!PrivacyReading(microphone: .authorized, inputMonitoring: .denied, accessibility: true).eventTapHeld)
         #expect(!PrivacyReading(microphone: .authorized, inputMonitoring: .granted, accessibility: false).eventTapHeld)
+        #expect(!PrivacyReading(microphone: .authorized, inputMonitoring: .granted, accessibility: nil).eventTapHeld)
     }
 
     /// The microphone grant is minted from the reading, not from this process's own answer.

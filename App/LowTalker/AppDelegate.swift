@@ -535,7 +535,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // 2026-09-25), and tccd answers Input Monitoring from that row: while
             // Accessibility is off, no Input Monitoring dialog can show. Allowing
             // Accessibility brings Input Monitoring with it. See `EventTapAccess`.
-            switch readPrivacy().map({ $0.accessibility ? $0.inputMonitoring : nil }) {
+            switch readPrivacy().map({ $0.accessibility == true ? $0.inputMonitoring : nil }) {
             case .success(nil):
                 failure = "Allow Accessibility first. Input Monitoring comes with it."
             case .success(.undecided):
@@ -705,6 +705,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let (whereToAllow, awaitsGrant) = switch error {
             case MicrophoneAuthorization.Withheld.notDetermined, MicrophoneAuthorization.Withheld.denied:
                 ("; allow it in \(GuidedSetup.title(for: Self.flavor)) in this menu", true)
+            // A reading that failed is retried by the next one that succeeds.
+            case is PrivacyReadingFailure: ("", true)
             default: ("", false)
             }
             downForAGrant = awaitsGrant
@@ -954,7 +956,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// The app's privacy grants as they stand now, read by the carried CLI in a process of
     /// its own, because this process keeps the answers it read first. See `PrivacyReading`.
     private func readPrivacy() -> Result<PrivacyReading, PrivacyReadingFailure> {
-        let reading = Result { () throws(PrivacyReadingFailure) in try PrivacyReading.taken(by: Self.carriedCLI) }
+        let (delivery, source) = shownChoices
+        let checkingAccessibility = OnboardingProbe.needed(delivery: delivery, source: source).contains(.accessibility)
+        let reading = Result { () throws(PrivacyReadingFailure) in
+            try PrivacyReading.taken(by: Self.carriedCLI, checkingAccessibility: checkingAccessibility)
+        }
         switch reading {
         case .success(let privacy): log.notice("privacy: \(privacy.line, privacy: .public)")
         case .failure(let failure): log.error("privacy: \(failure.description, privacy: .public)")

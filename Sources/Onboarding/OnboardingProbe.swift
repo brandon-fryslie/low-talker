@@ -159,6 +159,15 @@ public enum OnboardingReader: Sendable, Hashable {
 }
 
 public extension OnboardingProbe {
+    /// The rows a setup needs: a choice not made yet could go either way, so it counts
+    /// every answer to it. [LAW:one-source-of-truth] The app asks this too, before deciding
+    /// whether to check Accessibility at all.
+    static func needed(delivery: Delivery?, source: HotkeySource?) -> [Requirement.Row] {
+        let deliveries: [Delivery] = delivery.map { [$0] } ?? Delivery.allCases
+        let sources: [HotkeySource] = source.map { [$0] } ?? HotkeySource.allCases
+        return Requirement.Row.allCases.filter { $0.isNeeded(deliveries: deliveries, sources: sources) }
+    }
+
     /// Everything that must hold before low-talker can hear and type, read off this Mac now.
     ///
     /// The list is assembled here and nowhere else. `lowtalker onboard`, the menu-bar app
@@ -184,9 +193,7 @@ public extension OnboardingProbe {
     static func readiness(
         flavor: Flavor, delivery: Delivery?, source: HotkeySource?, reader: OnboardingReader, cli: String
     ) -> Readiness {
-        let deliveries: [Delivery] = delivery.map { [$0] } ?? Delivery.allCases
-        let sources: [HotkeySource] = source.map { [$0] } ?? HotkeySource.allCases
-        let needed = Requirement.Row.allCases.filter { $0.isNeeded(deliveries: deliveries, sources: sources) }
+        let needed = needed(delivery: delivery, source: source)
         // The helper's standing is read at most once and only if asked for, because two
         // rows want it: its own, and the assistant's, whose step depends on whether a
         // helper has run. The dependency is in the data rather than in the order the rows
@@ -205,11 +212,12 @@ public extension OnboardingProbe {
                 })
             case .inputMonitoring:
                 requirements.append(.privacy(.inputMonitoring, reader.privacy, flavor: flavor) {
-                    .inputMonitoring(held: $0.inputMonitoring == .granted, accessibilityHeld: $0.accessibility, flavor: flavor)
+                    // Accessibility is read whenever this row is: both serve the event tap.
+                    .inputMonitoring(held: $0.inputMonitoring == .granted, accessibilityHeld: $0.accessibility == true, flavor: flavor)
                 })
             case .accessibility:
                 requirements.append(.privacy(.accessibility, reader.privacy, flavor: flavor) {
-                    .accessibility(held: $0.accessibility, flavor: flavor)
+                    .accessibility(held: $0.accessibility == true, flavor: flavor)
                 })
             case .inputMethod:
                 requirements.append(.inputMethod(switchedOn: InputSourceInstaller.isSwitchedOn(flavor), flavor: flavor))

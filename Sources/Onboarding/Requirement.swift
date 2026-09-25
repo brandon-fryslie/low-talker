@@ -23,16 +23,19 @@ public struct Requirement: Sendable, Hashable {
     /// facts, and a reader that cannot tell them apart will print the second as the
     /// first.
     public let step: String?
+    /// The row this one waits on, when it cannot be asked for until that one is met.
+    public let waitsOn: Row?
 
     /// What must hold, in the words the menu, the CLI and the guided setup all use.
     public var name: String { row.rawValue }
 
     public var met: Bool { step == nil }
 
-    public init(row: Row, reads: String, step: String?) {
+    public init(row: Row, reads: String, step: String?, waitsOn: Row? = nil) {
         self.row = row
         self.reads = reads
         self.step = step
+        self.waitsOn = waitsOn
     }
 }
 
@@ -216,7 +219,7 @@ public extension Requirement {
         switch reading {
         case .success(let reading): build(reading)
         case .failure(let failure):
-            Requirement(row: row, reads: "could not be read: \(failure)", step: "Press Check Again. If it stays, reinstall \(flavor.displayName).")
+            Requirement(row: row, reads: "could not be read: \(failure)", step: "Try again in a moment. If it stays, reinstall \(flavor.displayName).")
         }
     }
 
@@ -255,7 +258,9 @@ public extension Requirement {
     static func inputMonitoring(held: Bool, accessibilityHeld: Bool, flavor: Flavor) -> Requirement {
         accessibilityHeld || held
             ? privacyGrant(.inputMonitoring, held: held, flavor: flavor)
-            : Requirement(row: .inputMonitoring, reads: reads(forGrantHeld: held), step: "Allow Accessibility first. This comes with it.")
+            : Requirement(
+                row: .inputMonitoring, reads: reads(forGrantHeld: held),
+                step: "Allow Accessibility first. This comes with it.", waitsOn: .accessibility)
     }
 
     /// Accessibility, which the event tap needs to hold the chord back from the app in front.
