@@ -12,8 +12,8 @@ import IOKit.hid
 /// off" for 24 s after it was allowed, and sent tccd no query in that time; a fresh process
 /// queries tccd on every call, and tccd names the launching app as the subject.
 ///
-/// [LAW:one-source-of-truth] One reading answers the setup, the menu, and the gates on the
-/// microphone and the tap, so what is shown and what is allowed cannot disagree.
+/// [LAW:one-source-of-truth] One reader answers the setup, the menu, and the gates on the
+/// microphone and the tap; each takes a reading at the moment it decides.
 public struct PrivacyReading: Sendable, Hashable {
     public let microphone: AVAuthorizationStatus
     public let inputMonitoring: InputMonitoringAccess
@@ -30,8 +30,8 @@ public struct PrivacyReading: Sendable, Hashable {
     public static func here() -> PrivacyReading {
         PrivacyReading(
             microphone: AVCaptureDevice.authorizationStatus(for: .audio),
-            inputMonitoring: InputMonitoringAccess(IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)),
-            accessibility: AXIsProcessTrusted())
+            inputMonitoring: InputMonitoringAccess(held: EventTapAccess.inputMonitoring, IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)),
+            accessibility: EventTapAccess.accessibility)
     }
 
     /// A fresh reading, taken by `reader grants` - the carried CLI - as a process this one
@@ -50,18 +50,31 @@ public struct PrivacyReading: Sendable, Hashable {
         return try result.get()
     }
 
+    /// How long a reading may take. A launch measured 10-20 ms on studious; a reader that
+    /// has not answered by this is stuck, and the app's menu waits on it.
+    private static let deadline: DispatchTimeInterval = .seconds(2)
+
     private static func run(_ reader: String, _ arguments: [String]) throws(PrivacyReadingFailure) -> PrivacyReading {
+        let command = "\(reader) \(arguments.joined(separator: " "))"
         let process = Process()
         process.executableURL = URL(fileURLWithPath: reader)
         process.arguments = arguments
         let output = Pipe()
         process.standardOutput = output
-        do { try process.run() } catch { throw PrivacyReadingFailure("\(reader) did not start: \(error)") }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        let line = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard process.terminationStatus == 0 else {
-            throw PrivacyReadingFailure("\(reader) \(arguments.joined(separator: " ")) exited \(process.terminationStatus)")
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
+        do { try process.run() } catch { throw PrivacyReadingFailure("\(command) did not start: \(error)") }
+        // The line is a few dozen bytes, well inside a pipe's buffer, so waiting before
+        // reading cannot deadlock.
+        guard exited.wait(timeout: .now() + deadline) == .success else {
+            process.terminate()
+            throw PrivacyReadingFailure("\(command) did not answer within \(deadline)")
+        }
+        let line = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard process.terminationReason == .exit, process.terminationStatus == 0 else {
+            let how = process.terminationReason == .uncaughtSignal ? "crashed with signal" : "exited"
+            throw PrivacyReadingFailure("\(command) \(how) \(process.terminationStatus)")
         }
         return try PrivacyReading(line: line)
     }
@@ -117,7 +130,14 @@ public enum InputMonitoringAccess: String, Sendable {
     case denied
     case undecided
 
-    init(_ access: IOHIDAccessType) {
+    /// `held` is `EventTapAccess.inputMonitoring`, which is the measured answer to whether
+    /// the tap hears keys: it reads true from Accessibility alone, where IOHID may still say
+    /// unknown. IOHID only tells a "no" from never asked. [LAW:one-source-of-truth]
+    init(held: Bool, _ access: IOHIDAccessType) {
+        if held {
+            self = .granted
+            return
+        }
         self = switch access {
         case kIOHIDAccessTypeGranted: .granted
         case kIOHIDAccessTypeDenied: .denied

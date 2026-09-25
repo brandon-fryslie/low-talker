@@ -128,9 +128,9 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
         add(label("Now: \(requirement.reads)", size: 12, color: .secondaryLabelColor))
         add(label(explanation.why, size: 13))
         add(label("If you skip it: \(explanation.ifSkipped)", size: 12, color: .secondaryLabelColor))
-        // The step's own words only where the page has no button that does it: a driver
-        // waiting on an administrator, a grant macOS will not ask about again.
-        if ask == nil, !requirement.stepLines.isEmpty {
+        // The step's own words, for what the explanation cannot know - a helper held by a
+        // stale job, a grant switched off - except words sending the reader to this page.
+        if let step = requirement.step, !step.contains(GuidedSetup.title(for: flavor)) {
             add(label(requirement.stepLines.joined(separator: " "), size: 12, color: .secondaryLabelColor))
         }
         if askedAlready {
