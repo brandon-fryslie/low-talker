@@ -304,11 +304,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // The tap's grants from a fresh reading: this process's own answer can be the one it
         // had before the person allowed them. See `PrivacyReading`.
         let hotkey = Hotkey(for: Self.flavor, heardBy: setup.source) { [unowned self] in
-            // A reading that failed is logged by `readPrivacy` and shown on the grant's row.
-            switch readPrivacy() {
-            case .success(let privacy): privacy.eventTapHeld
-            case .failure: false
-            }
+            // A reading that failed is its own error, not a missing grant. [LAW:no-silent-failure]
+            try readPrivacy().get().eventTapHeld
         }
         let dictation = Dictation(
             capture: capture,
@@ -335,6 +332,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if case KeyboardTapError.notAllowed = error {
                     LoopRefusal(awaitingGrant: "\(error); allow them in \(GuidedSetup.title(for: Self.flavor)) in this menu")
                 }
+                // A reading that failed is said as itself, and the next good one retries.
+                else if error is PrivacyReadingFailure { LoopRefusal(awaitingGrant: "\(error)") }
                 else { LoopRefusal(stringLiteral: "\(error)") }
             }
         }
@@ -517,7 +516,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .microphone:
             // macOS asks about the microphone once. Past that, requesting answers at once and
             // shows nothing, so a decided "no" is said here and the pane opened instead.
-            switch readPrivacy().map({ $0.microphonePermission.current }) {
+            switch readPrivacy().map(\.microphoneAuthorization) {
             case .success(.withheld(.notDetermined)):
                 // Asked here, as measured on studious 2026-09-24: one dialog, naming the app.
                 _ = await MicrophonePermission().request()
@@ -691,7 +690,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Restarting it would close and reopen an engine the resting mode holds open.
             if capture.atRest == nil {
                 let config = try Config.load(for: Self.flavor).config
-                try capture.start(try readPrivacy().get().microphonePermission.current.grant(), atRest: config.microphone)
+                try capture.start(try readPrivacy().get().microphoneAuthorization.grant(), atRest: config.microphone)
                 // Readied before the hotkey goes up, so the first press opens a microphone
                 // already reached rather than paying for reaching one.
                 capture.waitUntilReadied()

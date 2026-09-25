@@ -50,7 +50,7 @@ public struct PrivacyReading: Sendable, Hashable {
     ///
     /// - Parameter deadline: past this the reader is stuck, and is ended. A read launched
     ///   in 10-20 ms on studious; the first run of a new binary is checked by macOS first.
-    ///   Output is read after exit: the line is a few dozen bytes, inside a pipe's buffer.
+    ///   Both pipes are drained while it runs, so a long crash report cannot stall it.
     private static func run(_ reader: String, _ arguments: [String], withinSeconds deadline: Int) throws(PrivacyReadingFailure) -> String {
         let command = "\(reader) \(arguments.joined(separator: " "))"
         let process = Process()
@@ -63,17 +63,16 @@ public struct PrivacyReading: Sendable, Hashable {
         let exited = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in exited.signal() }
         do { try process.run() } catch { throw PrivacyReadingFailure("\(command) did not start: \(error)") }
+        let said = Drained(output), complained = Drained(complaint)
         guard exited.wait(timeout: .now() + .seconds(deadline)) == .success else {
             process.terminate()
             throw PrivacyReadingFailure("\(command) did not answer within \(deadline) s")
         }
-        let line = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let line = said.text
         guard process.terminationReason == .exit, process.terminationStatus == 0 else {
             let how = process.terminationReason == .uncaughtSignal ? "crashed with signal" : "exited"
-            let said = String(decoding: complaint.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            throw PrivacyReadingFailure("\(command) \(how) \(process.terminationStatus)\(said.isEmpty ? "" : ": \(said)")")
+            let why = complained.text
+            throw PrivacyReadingFailure("\(command) \(how) \(process.terminationStatus)\(why.isEmpty ? "" : ": \(why)")")
         }
         return line
     }
@@ -107,10 +106,11 @@ public struct PrivacyReading: Sendable, Hashable {
     /// Both grants an event tap needs. See `EventTapAccess`.
     public var eventTapHeld: Bool { inputMonitoring == .granted && accessibility == true }
 
-    /// The microphone as `MicrophonePermission` sees it through this reading, so a grant is
-    /// minted from the same answer the setup shows. Asking still asks this process.
-    public var microphonePermission: MicrophonePermission {
-        MicrophonePermission(authority: ReadMicrophoneAuthority(read: microphone))
+    /// The microphone as this reading found it, so a grant is minted from the same answer
+    /// the setup shows. Only the authorization leaves here: asking is not something a reading
+    /// can do. [LAW:types-are-the-program]
+    public var microphoneAuthorization: MicrophoneAuthorization {
+        MicrophonePermission(authority: ReadMicrophoneAuthority(read: microphone)).current
     }
 }
 
@@ -139,14 +139,35 @@ public enum InputMonitoringAccess: String, Sendable {
     }
 }
 
-public struct PrivacyReadingFailure: Error, Hashable, CustomStringConvertible {
+public struct PrivacyReadingFailure: Error, Hashable, Sendable, CustomStringConvertible {
     public let description: String
     public init(_ description: String) { self.description = description }
 }
 
-/// A status already read, and asking done by this process.
+/// A status already read. Never asked: it lives only inside `microphoneAuthorization`.
 private struct ReadMicrophoneAuthority: MicrophoneAuthority {
     let read: AVAuthorizationStatus
     func status() -> AVAuthorizationStatus { read }
-    func requestAccess() async -> Bool { await SystemMicrophoneAuthority().requestAccess() }
+    func requestAccess() async -> Bool { preconditionFailure("a reading is never asked") }
+}
+
+/// A pipe read to its end on a queue of its own from the moment the reader starts, so the
+/// reader never blocks on a full pipe whatever it writes.
+private final class Drained: @unchecked Sendable {
+    private var data = Data()
+    private let done = DispatchGroup()
+
+    init(_ pipe: Pipe) {
+        done.enter()
+        DispatchQueue.global().async { [self] in
+            data = pipe.fileHandleForReading.readDataToEndOfFile()
+            done.leave()
+        }
+    }
+
+    /// Everything written, once the writer has closed its end; trimmed.
+    var text: String {
+        done.wait()
+        return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }

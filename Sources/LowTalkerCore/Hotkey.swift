@@ -219,10 +219,11 @@ public final class Hotkey {
     /// hearing's tap. [LAW:one-source-of-truth] The one place a hearing becomes the pair, so
     /// a chord can never be handed to a tap that cannot hear it.
     ///
-    /// - Parameter granted: whether the event tap's grants are held; see `GrantedKeyboardTap`.
+    /// - Parameter granted: whether the event tap's grants are held, throwing when that
+    ///   could not be read; see `GrantedKeyboardTap`.
     public convenience init(
         for flavor: Flavor, heardBy hearing: HotkeySource, tapThreshold: Duration = defaultTapThreshold,
-        granted: @escaping @MainActor () -> Bool = { EventTapAccess.held }
+        granted: @escaping @MainActor () throws -> Bool = { EventTapAccess.held }
     ) {
         let tap: any KeyboardTap = switch hearing {
         case .eventTap: GrantedKeyboardTap(granted: granted)

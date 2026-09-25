@@ -204,7 +204,7 @@ public extension OnboardingProbe {
             switch row {
             case .microphone:
                 requirements.append(.privacy(.microphone, reader.privacy, flavor: flavor) { reading in
-                    let withheld: MicrophoneAuthorization.Withheld? = switch reading.microphonePermission.current {
+                    let withheld: MicrophoneAuthorization.Withheld? = switch reading.microphoneAuthorization {
                     case .granted: nil
                     case .withheld(let reason): reason
                     }

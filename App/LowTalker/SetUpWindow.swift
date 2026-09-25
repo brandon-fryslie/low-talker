@@ -13,8 +13,8 @@ import Onboarding
 ///
 /// [LAW:effects-at-boundaries] It asks macOS for nothing itself. `ask` is the app's, and the
 /// window calls it only from the button a person pressed. Drawing reads and does nothing
-/// else; the two moments a grant may just have arrived - a request answered, and the window
-/// coming back to the front - hand the reading they drew to `settle`, which is the app's.
+/// else; the moments a grant may just have arrived - a request answered, the window coming
+/// back to the front, and Check Again - hand the reading they drew to `settle`, the app's.
 @MainActor
 final class SetUpWindow: NSObject, NSWindowDelegate {
     private let flavor: Flavor

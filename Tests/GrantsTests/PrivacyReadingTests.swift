@@ -32,8 +32,8 @@ import Testing
     /// The microphone grant is minted from the reading, not from this process's own answer.
     @Test func theMicrophoneGrantFollowsTheReading() {
         let granted = PrivacyReading(microphone: .authorized, inputMonitoring: .undecided, accessibility: false)
-        #expect((try? granted.microphonePermission.current.grant()) != nil)
+        #expect((try? granted.microphoneAuthorization.grant()) != nil)
         let denied = PrivacyReading(microphone: .denied, inputMonitoring: .undecided, accessibility: false)
-        #expect((try? denied.microphonePermission.current.grant()) == nil)
+        #expect((try? denied.microphoneAuthorization.grant()) == nil)
     }
 }
