@@ -10,7 +10,7 @@ struct GrantsCommand: AsyncParsableCommand {
         abstract: "Print the privacy grants macOS credits to whoever started this process.",
         shouldDisplay: false)
 
-    @Option(help: "Ask macOS for this grant first: microphone or input-monitoring.")
+    @Option(help: "Ask macOS for this grant first: input-monitoring.")
     var ask: PrivacyGrant?
 
     func run() async {

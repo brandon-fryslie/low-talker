@@ -519,7 +519,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // shows nothing, so a decided "no" is said here and the pane opened instead.
             switch readPrivacy().map({ $0.microphonePermission.current }) {
             case .success(.withheld(.notDetermined)):
-                failure = await askInAFreshProcess(.microphone)
+                // Asked here, as measured on studious 2026-09-24: one dialog, naming the app.
+                _ = await MicrophonePermission().request()
             case .success(.withheld(.denied)):
                 failure = openPaneAfterANo(.microphone)
             case .success(.withheld(.restricted)):

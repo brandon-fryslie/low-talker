@@ -96,17 +96,15 @@ public struct PrivacyReading: Sendable, Hashable {
     }
 }
 
-/// A grant this process can ask macOS for. Accessibility is not here: its request opens
-/// System Settings from the app itself, which reads it live.
+/// A grant asked for from a fresh process. Only Input Monitoring: the app's own request for
+/// it was measured sending tccd nothing, while the microphone's and Accessibility's, asked
+/// in the app, each raised their dialog.
 public enum PrivacyGrant: String, Sendable, CaseIterable {
-    case microphone
     case inputMonitoring = "input-monitoring"
 
-    /// Raises macOS's dialog for this grant, when macOS still shows one, and waits for it
-    /// to be answered.
+    /// Raises macOS's dialog for this grant, when macOS still shows one.
     public func ask() async {
         switch self {
-        case .microphone: _ = await SystemMicrophoneAuthority().requestAccess()
         case .inputMonitoring: _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
         }
     }
