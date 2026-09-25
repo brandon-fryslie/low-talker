@@ -38,10 +38,9 @@ public struct GuidedSetup: Sendable, Equatable {
 }
 
 /// Why a requirement is asked for, in the words a person reads before macOS asks them
-/// anything: why, what it lets them do, and what still works if they say no.
+/// anything: what it is for, and what happens without it. One sentence each, at most two.
 public struct Explanation: Sendable, Hashable {
     public let why: String
-    public let enables: String
     public let ifSkipped: String
 }
 
@@ -49,89 +48,40 @@ public extension Requirement.Row {
     /// This step's explanation, naming the installation it is shown in.
     ///
     /// [LAW:types-are-the-program] An exhaustive switch, so a row added to the list cannot
-    /// compile without the three answers a person needs before being asked for it.
+    /// compile without the answers a person needs before being asked for it.
     func explanation(for flavor: Flavor) -> Explanation {
         let app = flavor.displayName
-        let otherHotkey = """
-            That hotkey stays off. You can still dictate: choose the other hotkey under \
-            Hotkey source in the menu. macOS hands that one to \(app) directly, and it needs \
-            no permission.
-            """
-        let otherDeliveryThanTheVirtualKeyboard = """
-            The virtual keyboard can't type. You can choose Input Method under Delivery in \
-            the menu instead; it needs no driver and no helper.
-            """
+        let otherHotkey = "The hotkey stays off. The other hotkey, under Hotkey source in the menu, needs no permission."
+        let otherDelivery = "\(app) can't type. Input Method, under Delivery in the menu, needs no driver."
         return switch self {
         case .microphone:
             Explanation(
-                why: """
-                    \(app) turns what you say into text, so it has to hear you. It listens \
-                    only while you hold or tap your dictation key, and what it hears never \
-                    leaves this Mac.
-                    """,
-                enables: "Dictation: you speak, and your words appear where you are typing.",
-                ifSkipped: """
-                    Nothing can be dictated. \(app) stays in the menu bar, and you can come \
-                    back to this step from \(GuidedSetup.title(for: flavor)) at any time.
-                    """)
-        case .inputMonitoring:
-            Explanation(
-                why: """
-                    Your dictation key is one you already have, like Right Option. To notice \
-                    you pressing it, \(app) has to watch the keyboard. It looks for that one \
-                    key and ignores the rest: nothing you type is kept or sent anywhere.
-                    """,
-                enables: "Starting dictation with a modifier key on its own.",
-                ifSkipped: otherHotkey)
+                why: "\(app) listens only while you hold your dictation key. Audio stays on this Mac.",
+                ifSkipped: "\(app) can't hear you.")
         case .accessibility:
             Explanation(
-                why: """
-                    When you press your dictation key, \(app) stops that key press from also \
-                    reaching the app you are typing in, so the app does not react to it. \
-                    macOS counts that as controlling your computer, which is why it asks.
-                    """,
-                enables: "Dictating into any app without the hotkey leaking into it.",
+                why: "Stops your dictation key from also reaching the app you're typing in.",
+                ifSkipped: otherHotkey)
+        case .inputMonitoring:
+            Explanation(
+                why: "Lets \(app) notice your dictation key. Every other key is ignored.",
                 ifSkipped: otherHotkey)
         case .inputMethod:
             Explanation(
-                why: """
-                    \(app) puts your words at your cursor through its own input method, the \
-                    same kind of add-on macOS uses for typing in other languages. macOS asks \
-                    you before any app switches one on.
-                    """,
-                enables: "Your words appear at the cursor in whatever app you are using.",
-                ifSkipped: """
-                    Your words cannot reach the cursor. You can choose Virtual Keyboard \
-                    under Delivery in the menu instead.
-                    """)
+                why: "Puts your words at the cursor in any app.",
+                ifSkipped: "Your words can't reach the cursor. Virtual Keyboard, under Delivery in the menu, is the other way.")
         case .driverExtension:
             Explanation(
-                why: """
-                    The virtual keyboard types your words the way a real keyboard would, and \
-                    macOS needs a small driver for that. Installing it takes an \
-                    administrator's password, and then macOS asks you to approve it in \
-                    System Settings.
-                    """,
-                enables: "Typing your words into any app, including ones that do not work with input methods.",
-                ifSkipped: otherDeliveryThanTheVirtualKeyboard)
+                why: "The virtual keyboard needs a driver. Installing it takes an administrator password, then an approval in System Settings.",
+                ifSkipped: otherDelivery)
         case .keyboardHelper:
             Explanation(
-                why: """
-                    A small helper runs in the background to drive the virtual keyboard. \
-                    macOS lists it in Login Items & Extensions, and it waits there until you \
-                    turn it on.
-                    """,
-                enables: "Typing through the virtual keyboard.",
-                ifSkipped: otherDeliveryThanTheVirtualKeyboard)
+                why: "A background helper drives the virtual keyboard. macOS keeps it off until you allow it.",
+                ifSkipped: otherDelivery)
         case .keyboardSetupAssistant:
             Explanation(
-                why: """
-                    The first time a new keyboard appears, macOS opens a window asking what \
-                    kind it is, and that window would take your first dictation. \(app)'s \
-                    helper answers it for the virtual keyboard as it starts.
-                    """,
-                enables: "Your first dictation goes to your app, not into a setup window.",
-                ifSkipped: "Nothing here needs you. This clears itself once the keyboard helper is running.")
+                why: "\(app)'s helper answers the macOS keyboard setup window, so it doesn't take your first dictation.",
+                ifSkipped: "Nothing to do. This clears once the helper runs.")
         }
     }
 

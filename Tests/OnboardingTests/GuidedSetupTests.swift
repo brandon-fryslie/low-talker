@@ -12,13 +12,13 @@ import Testing
 
     // MARK: - the words before the dialog
 
-    /// Every step says why, what it lets you do, and what happens if you skip it, before
-    /// anything is asked of macOS. A step missing any of the three is the unexplained
-    /// prompt this setup exists to replace.
+    /// Every step says what it is for and what happens if you skip it, before anything is
+    /// asked of macOS. A step missing either is the unexplained prompt this setup exists to
+    /// replace.
     @Test(arguments: Requirement.Row.allCases, Flavor.allCases)
-    func everyStepExplainsWhyWhatItEnablesAndWhatSkippingCosts(row: Requirement.Row, flavor: Flavor) {
+    func everyStepExplainsWhyAndWhatSkippingCosts(row: Requirement.Row, flavor: Flavor) {
         let explanation = row.explanation(for: flavor)
-        for (part, text) in [("why", explanation.why), ("enables", explanation.enables), ("if skipped", explanation.ifSkipped)] {
+        for (part, text) in [("why", explanation.why), ("if skipped", explanation.ifSkipped)] {
             #expect(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "\(row.rawValue) has no \(part)")
         }
     }
@@ -28,7 +28,7 @@ import Testing
     /// pass a part hardcoding the release name; a part that names the app is required to
     /// differ between the two instead.
     @Test func aStepNamingTheAppNamesTheInstallationItIsShownIn() {
-        let parts: [(name: String, of: (Explanation) -> String)] = [("why", \.why), ("enables", \.enables), ("if skipped", \.ifSkipped)]
+        let parts: [(name: String, of: (Explanation) -> String)] = [("why", \.why), ("if skipped", \.ifSkipped)]
         for row in Requirement.Row.allCases {
             for part in parts {
                 let texts = Flavor.allCases.map { part.of(row.explanation(for: $0)) }

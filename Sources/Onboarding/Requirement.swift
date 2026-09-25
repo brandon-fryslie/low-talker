@@ -207,6 +207,19 @@ private func privacyPane(_ row: Requirement.Row) -> String {
 }
 
 public extension Requirement {
+    /// A grant's row from the app's reading, or a row saying the reading failed: a grant
+    /// that could not be read is unmet, and says why. [LAW:no-silent-failure]
+    static func privacy(
+        _ row: Row, _ reading: Result<PrivacyReading, PrivacyReadingFailure>, flavor: Flavor,
+        _ build: (PrivacyReading) -> Requirement
+    ) -> Requirement {
+        switch reading {
+        case .success(let reading): build(reading)
+        case .failure(let failure):
+            Requirement(row: row, reads: "could not be read: \(failure)", step: "Quit and reopen \(flavor.displayName).")
+        }
+    }
+
     /// The microphone, which every setup needs: nothing is heard without it.
     ///
     /// - Parameter withheld: why macOS withholds it, or nil when it is allowed.

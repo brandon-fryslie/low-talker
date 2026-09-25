@@ -2,6 +2,7 @@ import Carbon.HIToolbox
 import Choices
 import Dispatch
 import Flavors
+import Grants
 
 /// The system switching the keyboard tap off for being slow to answer. The events in
 /// between were lost.
@@ -217,9 +218,14 @@ public final class Hotkey {
     /// An installation's hotkey as `hearing` hears it: that hearing's chord, through that
     /// hearing's tap. [LAW:one-source-of-truth] The one place a hearing becomes the pair, so
     /// a chord can never be handed to a tap that cannot hear it.
-    public convenience init(for flavor: Flavor, heardBy hearing: HotkeySource, tapThreshold: Duration = defaultTapThreshold) {
+    ///
+    /// - Parameter granted: whether the event tap's grants are held; see `GrantedKeyboardTap`.
+    public convenience init(
+        for flavor: Flavor, heardBy hearing: HotkeySource, tapThreshold: Duration = defaultTapThreshold,
+        granted: @escaping @MainActor () -> Bool = { EventTapAccess.held }
+    ) {
         let tap: any KeyboardTap = switch hearing {
-        case .eventTap: GrantedKeyboardTap()
+        case .eventTap: GrantedKeyboardTap(granted: granted)
         case .registeredHotKey: RegisteredHotKeys()
         }
         self.init(chords: [Self.defaultChord(for: flavor, heardBy: hearing)], tapThreshold: tapThreshold, tap: tap)

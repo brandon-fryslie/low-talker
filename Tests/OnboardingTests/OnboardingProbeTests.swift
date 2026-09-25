@@ -1,6 +1,7 @@
 import Choices
 import DriverExtension
 import Foundation
+import Grants
 import KeyboardService
 import Flavors
 import Testing
@@ -239,7 +240,7 @@ import Testing
     @Test func theAppReadsItsOwnGrantsWhereTheCLICannot() {
         let asTheAppSeesIt = OnboardingProbe.readiness(
             flavor: .development, delivery: nil, source: nil,
-            reader: .theApp(helperAwaitingApproval: false), cli: "lowtalker")
+            reader: .theApp(helperAwaitingApproval: false, privacy: .success(Self.nothingGranted)), cli: "lowtalker")
         #expect(asTheAppSeesIt.requirements.map(\.row) == Requirement.Row.allCases)
         #expect(asTheAppSeesIt.notReadHere.isEmpty)
     }
@@ -250,7 +251,7 @@ import Testing
         func rows(_ source: HotkeySource) -> [Requirement.Row] {
             OnboardingProbe.readiness(
                 flavor: .development, delivery: .inputMethod, source: source,
-                reader: .theApp(helperAwaitingApproval: false), cli: "lowtalker").requirements.map(\.row)
+                reader: .theApp(helperAwaitingApproval: false, privacy: .success(Self.nothingGranted)), cli: "lowtalker").requirements.map(\.row)
         }
         #expect(rows(.eventTap) == [.microphone, .accessibility, .inputMonitoring, .inputMethod])
         #expect(rows(.registeredHotKey) == [.microphone, .inputMethod])
@@ -262,11 +263,37 @@ import Testing
     @Test func onlyTheHelperCanDifferBetweenTheTwoSurfaces() {
         let asAnUnapprovedAppSeesIt = OnboardingProbe.readiness(
             flavor: .development, delivery: nil, source: nil,
-            reader: .theApp(helperAwaitingApproval: true), cli: "lowtalker").requirements
+            reader: .theApp(helperAwaitingApproval: true, privacy: .success(Self.nothingGranted)), cli: "lowtalker").requirements
             .filter { !$0.row.readOnlyByTheApp }
         #expect(Self.asTheCLISeesIt.requirements.filter { $0.name != "Keyboard helper" }
             == asAnUnapprovedAppSeesIt.filter { $0.name != "Keyboard helper" })
     }
+
+    /// The grants rows read what the app's reading says, whatever this test process's own
+    /// grants are: every grant allowed clears all three, and none allowed leaves all three.
+    @Test func theAppsGrantRowsReadTheReadingItWasGiven() {
+        func grantRows(_ privacy: PrivacyReading) -> [Requirement] {
+            OnboardingProbe.readiness(
+                flavor: .development, delivery: .inputMethod, source: .eventTap,
+                reader: .theApp(helperAwaitingApproval: false, privacy: .success(privacy)), cli: "lowtalker")
+                .requirements.filter(\.row.readOnlyByTheApp)
+        }
+        let everything = PrivacyReading(microphone: .authorized, inputMonitoring: .granted, accessibility: true)
+        #expect(grantRows(everything).allSatisfy { $0.met })
+        #expect(grantRows(Self.nothingGranted).allSatisfy { !$0.met })
+    }
+
+    /// A reading that failed leaves each grant unmet and says why, rather than guessing.
+    @Test func aFailedReadingLeavesEachGrantUnmetAndSaysWhy() {
+        let rows = OnboardingProbe.readiness(
+            flavor: .development, delivery: .inputMethod, source: .eventTap,
+            reader: .theApp(helperAwaitingApproval: false, privacy: .failure(PrivacyReadingFailure("no reader"))), cli: "lowtalker")
+            .requirements.filter(\.row.readOnlyByTheApp)
+        #expect(rows.map(\.row) == [.microphone, .accessibility, .inputMonitoring])
+        #expect(rows.allSatisfy { !$0.met && $0.reads == "could not be read: no reader" })
+    }
+
+    static let nothingGranted = PrivacyReading(microphone: .notDetermined, inputMonitoring: .undecided, accessibility: false)
 
     static var asTheCLISeesIt: Readiness {
         OnboardingProbe.readiness(

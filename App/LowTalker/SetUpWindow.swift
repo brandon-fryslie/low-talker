@@ -96,8 +96,13 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
     /// anything on the Mac, so neither is worth a fresh reading.
     private var shown = Readiness([])
 
-    /// Reads again and draws it: the Check Again button.
-    private func redrawFromAFreshReading() { draw(read()) }
+    /// Reads again, draws it, and hands it on: the Check Again button, which is a moment a
+    /// grant may have arrived like any other.
+    private func redrawFromAFreshReading() {
+        let readiness = read()
+        draw(readiness)
+        settle(readiness)
+    }
 
     private func draw(_ readiness: Readiness) {
         shown = readiness
@@ -113,44 +118,39 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
 
     private func drawStep(_ requirement: Requirement, left: Int) {
         let explanation = requirement.row.explanation(for: flavor)
+        let row = requirement.row
+        // Asked once in this walk and still unmet: macOS will not show most of these
+        // dialogs a second time, so the page offers System Settings where the button was.
+        let askedAlready = asked.contains(row)
+        let ask = askedAlready ? nil : row.askTitle.map { title in button(title) { [unowned self] in request(row) } }
         add(label(left == 1 ? "1 step left" : "\(left) steps left", size: 11, color: .secondaryLabelColor))
         add(label(requirement.name, size: 20, weight: .semibold))
-        add(label("Right now: \(requirement.reads)", size: 12, color: .secondaryLabelColor))
-        section("Why \(flavor.displayName) asks", explanation.why)
-        section("What it lets you do", explanation.enables)
-        section("If you skip it", explanation.ifSkipped)
-        // The step's own words, for the states the explanation cannot know about: a grant
-        // switched off after it was given, a driver waiting for a restart.
-        if !requirement.stepLines.isEmpty {
+        add(label("Now: \(requirement.reads)", size: 12, color: .secondaryLabelColor))
+        add(label(explanation.why, size: 13))
+        add(label("If you skip it: \(explanation.ifSkipped)", size: 12, color: .secondaryLabelColor))
+        // The step's own words only where the page has no button that does it: a driver
+        // waiting on an administrator, a grant macOS will not ask about again.
+        if ask == nil, !requirement.stepLines.isEmpty {
             add(label(requirement.stepLines.joined(separator: " "), size: 12, color: .secondaryLabelColor))
+        }
+        if askedAlready {
+            add(label("macOS asks only once. If you said no, turn it on in System Settings.", size: 12, color: .secondaryLabelColor))
         }
         if let failure, failure.row == requirement.row {
             add(label(failure.reason, size: 12, color: .systemRed))
         }
-        let row = requirement.row
-        // Asked once in this walk and still unmet: macOS will not show most of these
-        // dialogs a second time, so pressing the same button again would do nothing at all.
-        // The page says so and puts System Settings where the button was.
-        let askedAlready = asked.contains(row)
-        if askedAlready {
-            add(label("""
-                macOS shows its dialog for this only once. If you said no, or no dialog \
-                appeared, turn it on in System Settings; this page updates when you come back.
-                """, size: 12, color: .secondaryLabelColor))
-        }
-        var buttons = [button("Skip for Now") { [unowned self] in walk.skip(row); failure = nil; draw(shown) }]
+        let skip = button("Skip for Now") { [unowned self] in walk.skip(row); failure = nil; draw(shown) }
+        // Every step can be read again by hand: a grant made where this window cannot see
+        // it arriving - System Settings left open beside it - clears its step here.
+        let checkAgain = button("Check Again") { [unowned self] in redrawFromAFreshReading() }
         let openSettings = row.settingsPane.map { pane in button("Open System Settings") { NSWorkspace.shared.open(pane) } }
-        let ask = askedAlready ? nil : row.askTitle.map { title in button(title) { [unowned self] in request(row) } }
         // The default is the one button that makes macOS ask, so Return is the person
-        // choosing to be asked; once asked, System Settings; and for a row nobody can ask
-        // for, a fresh reading.
-        let primary = ask ?? openSettings ?? button("Check Again") { [unowned self] in redrawFromAFreshReading() }
-        let others: [NSButton] = [openSettings, ask].compactMap { $0 }.filter { $0 !== primary }
-        buttons.append(contentsOf: others)
-        buttons.append(primary)
+        // choosing to be asked; once asked, System Settings; otherwise a fresh reading.
+        let primary = ask ?? openSettings ?? checkAgain
+        let others = [checkAgain, openSettings, ask].compactMap { $0 }.filter { $0 !== primary }
         primary.keyEquivalent = "\r"
         primary.isEnabled = !asking
-        add(buttonRow(buttons))
+        add(buttonRow([skip] + others + [primary]))
     }
 
     private func drawSummary(_ readiness: Readiness) {
@@ -192,11 +192,6 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
     // MARK: - pieces
 
     private func add(_ view: NSView) { page.addArrangedSubview(view) }
-
-    private func section(_ heading: String, _ body: String) {
-        add(label(heading, size: 13, weight: .semibold))
-        add(label(body, size: 13))
-    }
 
     private func label(_ text: String, size: CGFloat, weight: NSFont.Weight = .regular, color: NSColor = .labelColor) -> NSTextField {
         let label = NSTextField(wrappingLabelWithString: text)

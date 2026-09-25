@@ -301,7 +301,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // it does, or be overwritten by a later write about an earlier state.
         showHotkeyStatus("starting — setting up the \(setup.delivery.title.lowercased())")
         let delivering = await install(setup.delivery)
-        let hotkey = Hotkey(for: Self.flavor, heardBy: setup.source)
+        // The tap's grants from a fresh reading: this process's own answer can be the one it
+        // had before the person allowed them. See `PrivacyReading`.
+        let hotkey = Hotkey(for: Self.flavor, heardBy: setup.source) { [unowned self] in
+            // A reading that failed is logged by `readPrivacy` and shown on the grant's row.
+            switch readPrivacy() {
+            case .success(let privacy): privacy.eventTapHeld
+            case .failure: false
+            }
+        }
         let dictation = Dictation(
             capture: capture,
             transcriber: { [unowned self] in try await engine.value },
@@ -509,19 +517,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .microphone:
             // macOS asks about the microphone once. Past that, requesting answers at once and
             // shows nothing, so a decided "no" is said here and the pane opened instead.
-            switch MicrophonePermission().current {
-            case .withheld(.notDetermined):
+            switch readPrivacy().map({ $0.microphonePermission.current }) {
+            case .success(.withheld(.notDetermined)):
                 _ = await MicrophonePermission().request()
-            case .withheld(.denied):
-                Requirement.Row.microphone.settingsPane.map { NSWorkspace.shared.open($0) }
-                failure = "macOS asks about the microphone only once, and it was answered no; turn on \(Self.flavor.displayName) in the Microphone list System Settings just opened"
-            case .withheld(.restricted):
-                failure = "a policy on this Mac forbids the microphone, and only whoever manages this Mac can change that"
-            case .granted:
+            case .success(.withheld(.denied)):
+                failure = openPaneAfterANo(.microphone)
+            case .success(.withheld(.restricted)):
+                failure = "A policy on this Mac blocks the microphone."
+            case .success(.granted):
                 break
+            case .failure(let reading):
+                failure = "\(reading)"
             }
         case .inputMonitoring:
-            EventTapAccess.askForInputMonitoring()
+            // The same: macOS asks once, and a decided "no" is answered with the pane.
+            switch readPrivacy().map(\.inputMonitoring) {
+            case .success(.undecided):
+                EventTapAccess.askForInputMonitoring()
+            case .success(.denied):
+                failure = openPaneAfterANo(.inputMonitoring)
+            case .success(.granted):
+                break
+            case .failure(let reading):
+                failure = "\(reading)"
+            }
         case .accessibility:
             EventTapAccess.askForAccessibility()
         case .inputMethod:
@@ -544,6 +563,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             deliveryGrantAsked = true
         }
         return failure
+    }
+
+    /// Opens a grant's System Settings pane after macOS was already answered no, and says why.
+    private func openPaneAfterANo(_ row: Requirement.Row) -> String {
+        row.settingsPane.map { NSWorkspace.shared.open($0) }
+        return "macOS asks only once. Turn on \(Self.flavor.displayName) in the \(row.rawValue) list in System Settings."
     }
 
     @objc private func openSetUp() {
@@ -660,7 +685,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Restarting it would close and reopen an engine the resting mode holds open.
             if capture.atRest == nil {
                 let config = try Config.load(for: Self.flavor).config
-                try capture.start(try MicrophonePermission().current.grant(), atRest: config.microphone)
+                try capture.start(try readPrivacy().get().microphonePermission.current.grant(), atRest: config.microphone)
                 // Readied before the hotkey goes up, so the first press opens a microphone
                 // already reached rather than paying for reaching one.
                 capture.waitUntilReadied()
@@ -911,13 +936,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             flavor: Self.flavor,
             delivery: delivery,
             source: source,
-            reader: .theApp(helperAwaitingApproval: registration == .requiresApproval),
+            reader: .theApp(helperAwaitingApproval: registration == .requiresApproval, privacy: readPrivacy()),
             cli: Self.carriedCLI)
         log.notice("onboarding: \(readiness.ready ? "ready" : "not ready", privacy: .public)")
         for requirement in readiness.requirements {
             log.notice("onboarding: \(requirement.name, privacy: .public): \(requirement.reads, privacy: .public)")
         }
         return readiness
+    }
+
+    /// The app's privacy grants as they stand now, read by the carried CLI in a process of
+    /// its own, because this process keeps the answers it read first. See `PrivacyReading`.
+    private func readPrivacy() -> Result<PrivacyReading, PrivacyReadingFailure> {
+        let reading = Result { () throws(PrivacyReadingFailure) in try PrivacyReading.taken(by: Self.carriedCLI) }
+        switch reading {
+        case .success(let privacy): log.notice("privacy: \(privacy.line, privacy: .public)")
+        case .failure(let failure): log.error("privacy: \(failure.description, privacy: .public)")
+        }
+        return reading
     }
 
     /// Everything the menu says, made here, every time, from what this Mac reads now.
