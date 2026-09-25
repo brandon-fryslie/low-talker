@@ -37,6 +37,17 @@ import Testing
         #expect(underneath.installs == 0)
     }
 
+    /// Grants that could not be read are not grants withheld: the reading's own error
+    /// comes out, and no tap is asked for.
+    @Test func anUnreadableGrantIsItsOwnError() {
+        struct Unreadable: Error {}
+        let underneath = Underneath()
+        #expect(throws: Unreadable.self) {
+            try Self.install(GrantedKeyboardTap(underneath, granted: { throw Unreadable() }))
+        }
+        #expect(underneath.installs == 0)
+    }
+
     /// With both grants the tap is made as it always was.
     @Test func withItsGrantsTheTapIsMade() throws {
         let underneath = Underneath()

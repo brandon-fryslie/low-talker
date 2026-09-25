@@ -125,7 +125,8 @@ public enum OnboardingReader: Sendable, Hashable {
     ///
     /// - Parameter helperAwaitingApproval: what `SMAppService` told the app about the
     ///   helper's registration. See `HelperStanding.sharpenedByTheAppsOwnRegistration`.
-    case theApp(helperAwaitingApproval: Bool)
+    /// - Parameter privacy: the app's grants, read fresh; see `PrivacyReading`.
+    case theApp(helperAwaitingApproval: Bool, privacy: Result<PrivacyReading, PrivacyReadingFailure>)
     /// Any other process - the CLI. It reads what belongs to the Mac and names the rows
     /// that belong to the app, unread. See `Requirement.Row.readOnlyByTheApp`.
     case elsewhere
@@ -134,8 +135,18 @@ public enum OnboardingReader: Sendable, Hashable {
     /// has none to ask about, which is not the same as "not waiting".
     var helperAwaitingApproval: Bool? {
         switch self {
-        case .theApp(let waiting): waiting
+        case .theApp(let waiting, _): waiting
         case .elsewhere: nil
+        }
+    }
+
+    /// The grants, as far as this reader has them. `canRead` keeps the rows that need them
+    /// from any other reader, so the failure here is never shown; it is a failure rather
+    /// than a guess so that a row reaching it anyway says so. [LAW:no-silent-failure]
+    var privacy: Result<PrivacyReading, PrivacyReadingFailure> {
+        switch self {
+        case .theApp(_, let privacy): privacy
+        case .elsewhere: .failure(PrivacyReadingFailure("only the app reads its own grants"))
         }
     }
 
@@ -148,6 +159,15 @@ public enum OnboardingReader: Sendable, Hashable {
 }
 
 public extension OnboardingProbe {
+    /// The rows a setup needs: a choice not made yet could go either way, so it counts
+    /// every answer to it. [LAW:one-source-of-truth] The app asks this too, before deciding
+    /// whether to check Accessibility at all.
+    static func needed(delivery: Delivery?, source: HotkeySource?) -> [Requirement.Row] {
+        let deliveries: [Delivery] = delivery.map { [$0] } ?? Delivery.allCases
+        let sources: [HotkeySource] = source.map { [$0] } ?? HotkeySource.allCases
+        return Requirement.Row.allCases.filter { $0.isNeeded(deliveries: deliveries, sources: sources) }
+    }
+
     /// Everything that must hold before low-talker can hear and type, read off this Mac now.
     ///
     /// The list is assembled here and nowhere else. `lowtalker onboard`, the menu-bar app
@@ -173,9 +193,7 @@ public extension OnboardingProbe {
     static func readiness(
         flavor: Flavor, delivery: Delivery?, source: HotkeySource?, reader: OnboardingReader, cli: String
     ) -> Readiness {
-        let deliveries: [Delivery] = delivery.map { [$0] } ?? Delivery.allCases
-        let sources: [HotkeySource] = source.map { [$0] } ?? HotkeySource.allCases
-        let needed = Requirement.Row.allCases.filter { $0.isNeeded(deliveries: deliveries, sources: sources) }
+        let needed = needed(delivery: delivery, source: source)
         // The helper's standing is read at most once and only if asked for, because two
         // rows want it: its own, and the assistant's, whose step depends on whether a
         // helper has run. The dependency is in the data rather than in the order the rows
@@ -185,15 +203,22 @@ public extension OnboardingProbe {
         for row in needed where reader.canRead(row) {
             switch row {
             case .microphone:
-                let withheld: MicrophoneAuthorization.Withheld? = switch MicrophonePermission().current {
-                case .granted: nil
-                case .withheld(let reason): reason
-                }
-                requirements.append(.microphone(withheld, flavor: flavor))
+                requirements.append(.privacy(.microphone, reader.privacy, flavor: flavor) { reading in
+                    let withheld: MicrophoneAuthorization.Withheld? = switch reading.microphoneAuthorization {
+                    case .granted: nil
+                    case .withheld(let reason): reason
+                    }
+                    return .microphone(withheld, flavor: flavor)
+                })
             case .inputMonitoring:
-                requirements.append(.inputMonitoring(held: EventTapAccess.inputMonitoring, flavor: flavor))
+                requirements.append(.privacy(.inputMonitoring, reader.privacy, flavor: flavor) {
+                    // Accessibility is read whenever this row is: both serve the event tap.
+                    .inputMonitoring(held: $0.inputMonitoring == .granted, accessibilityHeld: $0.accessibility == true, flavor: flavor)
+                })
             case .accessibility:
-                requirements.append(.accessibility(held: EventTapAccess.accessibility, flavor: flavor))
+                requirements.append(.privacy(.accessibility, reader.privacy, flavor: flavor) {
+                    .accessibility(held: $0.accessibility == true, flavor: flavor)
+                })
             case .inputMethod:
                 requirements.append(.inputMethod(switchedOn: InputSourceInstaller.isSwitchedOn(flavor), flavor: flavor))
             case .driverExtension:

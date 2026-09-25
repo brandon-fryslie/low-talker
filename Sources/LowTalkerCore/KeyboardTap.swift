@@ -153,12 +153,13 @@ extension KeyEvent {
 /// runs under a terminal's grants, and is refused by macOS itself when it lacks them.
 public struct GrantedKeyboardTap: KeyboardTap {
     private let tap: any KeyboardTap
-    /// Whether both grants are held now. [LAW:effects-at-boundaries] The system's reading
+    /// Whether both grants are held now, or why that could not be read - which is not
+    /// the same as not holding them. [LAW:effects-at-boundaries] The system's reading
     /// unless a test says otherwise, so both of this type's answers run against a grant
     /// state a test controls.
-    private let granted: @MainActor () -> Bool
+    private let granted: @MainActor () throws -> Bool
 
-    public init(_ tap: any KeyboardTap = SystemKeyboardTap(), granted: @escaping @MainActor () -> Bool = { EventTapAccess.held }) {
+    public init(_ tap: any KeyboardTap = SystemKeyboardTap(), granted: @escaping @MainActor () throws -> Bool = { EventTapAccess.held }) {
         self.tap = tap
         self.granted = granted
     }
@@ -168,7 +169,7 @@ public struct GrantedKeyboardTap: KeyboardTap {
         handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Passage,
         onLapse: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse
     ) throws -> Disposal {
-        guard granted() else { throw KeyboardTapError.notAllowed }
+        guard try granted() else { throw KeyboardTapError.notAllowed }
         do {
             return try tap.install(listeningFor: chords, handling: handle, onLapse: onLapse)
         } catch KeyboardTapError.refused {

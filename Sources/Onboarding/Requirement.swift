@@ -23,16 +23,19 @@ public struct Requirement: Sendable, Hashable {
     /// facts, and a reader that cannot tell them apart will print the second as the
     /// first.
     public let step: String?
+    /// The row this one waits on, when it cannot be asked for until that one is met.
+    public let waitsOn: Row?
 
     /// What must hold, in the words the menu, the CLI and the guided setup all use.
     public var name: String { row.rawValue }
 
     public var met: Bool { step == nil }
 
-    public init(row: Row, reads: String, step: String?) {
+    public init(row: Row, reads: String, step: String?, waitsOn: Row? = nil) {
         self.row = row
         self.reads = reads
         self.step = step
+        self.waitsOn = waitsOn
     }
 }
 
@@ -207,6 +210,19 @@ private func privacyPane(_ row: Requirement.Row) -> String {
 }
 
 public extension Requirement {
+    /// A grant's row from the app's reading, or a row saying the reading failed: a grant
+    /// that could not be read is unmet, and says why. [LAW:no-silent-failure]
+    static func privacy(
+        _ row: Row, _ reading: Result<PrivacyReading, PrivacyReadingFailure>, flavor: Flavor,
+        _ build: (PrivacyReading) -> Requirement
+    ) -> Requirement {
+        switch reading {
+        case .success(let reading): build(reading)
+        case .failure(let failure):
+            Requirement(row: row, reads: "could not be read: \(failure)", step: "Try again in a moment. If it stays, reinstall \(flavor.displayName).")
+        }
+    }
+
     /// The microphone, which every setup needs: nothing is heard without it.
     ///
     /// - Parameter withheld: why macOS withholds it, or nil when it is allowed.
@@ -228,26 +244,23 @@ public extension Requirement {
         case nil:
             nil
         case .notDetermined:
-            """
-            \(flavor.displayName) asks for it only when you press Allow in
-            \(GuidedSetup.title(for: flavor)), in its menu.
-            """
+            "Allow it in \(GuidedSetup.title(for: flavor))"
         case .denied:
-            """
-            Turn on \(flavor.displayName) in
-            \(privacyPane(.microphone)).
-            """
+            "Turn on \(flavor.displayName) in \(privacyPane(.microphone))."
         case .restricted:
-            """
-            A policy on this Mac forbids it, and only whoever manages
-            this Mac can change that.
-            """
+            "A policy on this Mac blocks it."
         }
     }
 
-    /// Input Monitoring, which the event tap needs to read the keys.
-    static func inputMonitoring(held: Bool, flavor: Flavor) -> Requirement {
-        privacyGrant(.inputMonitoring, held: held, flavor: flavor)
+    /// Input Monitoring, which the event tap needs to read the keys. While Accessibility is
+    /// off, tccd answers this from it and no dialog can show; allowing Accessibility brings
+    /// it along. See `EventTapAccess`.
+    static func inputMonitoring(held: Bool, accessibilityHeld: Bool, flavor: Flavor) -> Requirement {
+        accessibilityHeld || held
+            ? privacyGrant(.inputMonitoring, held: held, flavor: flavor)
+            : Requirement(
+                row: .inputMonitoring, reads: reads(forGrantHeld: held),
+                step: "Allow Accessibility first. This comes with it.", waitsOn: .accessibility)
     }
 
     /// Accessibility, which the event tap needs to hold the chord back from the app in front.
@@ -258,10 +271,7 @@ public extension Requirement {
     /// [LAW:one-type-per-behavior] The two grants read, word and step, the same way; only
     /// the row differs.
     private static func privacyGrant(_ row: Row, held: Bool, flavor: Flavor) -> Requirement {
-        Requirement(row: row, reads: reads(forGrantHeld: held), step: held ? nil : """
-            Allow it in \(GuidedSetup.title(for: flavor)), in its menu, or turn on
-            \(flavor.displayName) in \(privacyPane(row)).
-            """)
+        Requirement(row: row, reads: reads(forGrantHeld: held), step: held ? nil : "Allow it in \(GuidedSetup.title(for: flavor)) or \(privacyPane(row)).")
     }
 
     private static func reads(forGrantHeld held: Bool) -> String {
@@ -276,10 +286,7 @@ public extension Requirement {
     /// an app may switch one on, so this is a grant, and the one the input method delivery
     /// waits on. Copying and registering it ask nobody, and the app does both on its own.
     static func inputMethod(switchedOn: Bool, flavor: Flavor) -> Requirement {
-        Requirement(row: .inputMethod, reads: reads(forSwitchedOn: switchedOn), step: switchedOn ? nil : """
-            Switch it on in \(GuidedSetup.title(for: flavor)), in the
-            \(flavor.displayName) menu. macOS asks you once to allow it.
-            """)
+        Requirement(row: .inputMethod, reads: reads(forSwitchedOn: switchedOn), step: switchedOn ? nil : "Switch it on in \(GuidedSetup.title(for: flavor))")
     }
 
     private static func reads(forSwitchedOn switchedOn: Bool) -> String {
