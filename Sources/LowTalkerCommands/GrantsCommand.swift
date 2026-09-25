@@ -15,7 +15,7 @@ struct GrantsCommand: AsyncParsableCommand {
 
     func run() async {
         await ask?.ask()
-        print(PrivacyReading.here().line)
+        print(PrivacyReading.lineReadHere())
     }
 }
 

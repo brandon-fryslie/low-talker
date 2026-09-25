@@ -1,5 +1,4 @@
 import AVFoundation
-import ApplicationServices
 import Foundation
 import IOKit.hid
 
@@ -11,6 +10,11 @@ import IOKit.hid
 /// Measured on studious (macOS 15.0.1, 2026-09-25): the app read the microphone "turned
 /// off" for 24 s after it was allowed, and sent tccd no query in that time; a fresh process
 /// queries tccd on every call, and tccd names the launching app as the subject.
+///
+/// Accessibility is the exception, read by the app itself: its own reading is live (it read
+/// "allowed" 3 s after a grant on studious), and the same read from a spawned process made
+/// tccd file a denied Accessibility row for the app at launch - a "no" nobody gave, which
+/// then answers Input Monitoring too, so no dialog could follow.
 ///
 /// [LAW:one-source-of-truth] One reader answers the setup, the menu, and the gates on the
 /// microphone and the tap; each takes a reading at the moment it decides.
@@ -25,19 +29,18 @@ public struct PrivacyReading: Sendable, Hashable {
         self.accessibility = accessibility
     }
 
-    /// This process's own answers. Fresh in a process that has just started; a long-running
-    /// one may be answered from what it read before.
-    public static func here() -> PrivacyReading {
-        PrivacyReading(
+    /// What `lowtalker grants` prints: this process's microphone and Input Monitoring, and
+    /// never its Accessibility, which read here would file a denial for the app.
+    public static func lineReadHere() -> String {
+        line(
             microphone: AVCaptureDevice.authorizationStatus(for: .audio),
-            inputMonitoring: InputMonitoringAccess(held: EventTapAccess.inputMonitoring, IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)),
-            accessibility: EventTapAccess.accessibility)
+            inputMonitoring: InputMonitoringAccess(held: EventTapAccess.inputMonitoring, IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)))
     }
 
     /// A fresh reading, taken by `reader grants` - the carried CLI - as a process this one
     /// starts, so it is credited to this app.
     public static func taken(by reader: String) throws(PrivacyReadingFailure) -> PrivacyReading {
-        try run(reader, ["grants"])
+        try PrivacyReading(line: run(reader, ["grants"], within: .seconds(10)), accessibility: EventTapAccess.accessibility)
     }
 
     /// Asks macOS for `grant` from a fresh process, then reads again. The asking is done
@@ -46,15 +49,18 @@ public struct PrivacyReading: Sendable, Hashable {
     /// app's `CGRequestListenEventAccess` after a reset sent tccd nothing and showed no
     /// dialog. Off the main actor, since a request waits for the person's answer.
     public static func asking(for grant: PrivacyGrant, by reader: String) async throws(PrivacyReadingFailure) -> PrivacyReading {
-        let result = await Task.detached { Result { () throws(PrivacyReadingFailure) in try run(reader, ["grants", "--ask", grant.rawValue]) } }.value
-        return try result.get()
+        let result = await Task.detached {
+            Result { () throws(PrivacyReadingFailure) in try run(reader, ["grants", "--ask", grant.rawValue], within: .seconds(300)) }
+        }.value
+        return try PrivacyReading(line: result.get(), accessibility: EventTapAccess.accessibility)
     }
 
-    /// How long a reading may take. A launch measured 10-20 ms on studious; a reader that
-    /// has not answered by this is stuck, and the app's menu waits on it.
-    private static let deadline: DispatchTimeInterval = .seconds(2)
-
-    private static func run(_ reader: String, _ arguments: [String]) throws(PrivacyReadingFailure) -> PrivacyReading {
+    /// Runs the reader and answers with the line it printed.
+    ///
+    /// - Parameter deadline: past this the reader is stuck, and is ended. A read launched
+    ///   in 10-20 ms on studious; the first run of a new binary is checked by macOS first,
+    ///   and a request may wait on the person.
+    private static func run(_ reader: String, _ arguments: [String], within deadline: DispatchTimeInterval) throws(PrivacyReadingFailure) -> String {
         let command = "\(reader) \(arguments.joined(separator: " "))"
         let process = Process()
         process.executableURL = URL(fileURLWithPath: reader)
@@ -76,16 +82,20 @@ public struct PrivacyReading: Sendable, Hashable {
             let how = process.terminationReason == .uncaughtSignal ? "crashed with signal" : "exited"
             throw PrivacyReadingFailure("\(command) \(how) \(process.terminationStatus)")
         }
-        return try PrivacyReading(line: line)
+        return line
     }
 
-    /// The reading as `lowtalker grants` prints it, and as `init(line:)` reads it back.
-    public var line: String {
-        "microphone=\(microphone.rawValue) inputMonitoring=\(inputMonitoring.rawValue) accessibility=\(accessibility)"
+    /// What `lowtalker grants` prints, and `init(line:accessibility:)` reads back: the two
+    /// grants read in a fresh process.
+    public var line: String { Self.line(microphone: microphone, inputMonitoring: inputMonitoring) }
+
+    private static func line(microphone: AVAuthorizationStatus, inputMonitoring: InputMonitoringAccess) -> String {
+        "microphone=\(microphone.rawValue) inputMonitoring=\(inputMonitoring.rawValue)"
     }
 
-    /// [LAW:parse-dont-validate] The one place the printed line becomes a reading.
-    public init(line: String) throws(PrivacyReadingFailure) {
+    /// [LAW:parse-dont-validate] The one place the printed line becomes a reading, with
+    /// Accessibility read by the process taking it.
+    public init(line: String, accessibility: Bool) throws(PrivacyReadingFailure) {
         let fields = Dictionary(
             line.split(separator: " ").map { field in
                 let pair = field.split(separator: "=", maxSplits: 1).map(String.init)
@@ -93,8 +103,7 @@ public struct PrivacyReading: Sendable, Hashable {
             },
             uniquingKeysWith: { first, _ in first })
         guard let microphone = fields["microphone"].flatMap(Int.init).flatMap(AVAuthorizationStatus.init(rawValue:)),
-              let inputMonitoring = fields["inputMonitoring"].flatMap(InputMonitoringAccess.init(rawValue:)),
-              let accessibility = fields["accessibility"].flatMap(Bool.init)
+              let inputMonitoring = fields["inputMonitoring"].flatMap(InputMonitoringAccess.init(rawValue:))
         else { throw PrivacyReadingFailure("unreadable grants line \"\(line)\"") }
         self.init(microphone: microphone, inputMonitoring: inputMonitoring, accessibility: accessibility)
     }

@@ -216,7 +216,7 @@ public extension Requirement {
         switch reading {
         case .success(let reading): build(reading)
         case .failure(let failure):
-            Requirement(row: row, reads: "could not be read: \(failure)", step: "Reinstall \(flavor.displayName): the reader it carries did not answer.")
+            Requirement(row: row, reads: "could not be read: \(failure)", step: "Press Check Again. If it stays, reinstall \(flavor.displayName).")
         }
     }
 

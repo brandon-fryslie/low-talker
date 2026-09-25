@@ -12,12 +12,12 @@ import Testing
         PrivacyReading(microphone: .restricted, inputMonitoring: .granted, accessibility: true),
     ])
     func whatIsPrintedReadsBackAsTheSameReading(reading: PrivacyReading) throws {
-        #expect(try PrivacyReading(line: reading.line) == reading)
+        #expect(try PrivacyReading(line: reading.line, accessibility: reading.accessibility) == reading)
     }
 
-    @Test(arguments: ["", "microphone=3", "microphone=3 inputMonitoring=maybe accessibility=true", "garbage"])
+    @Test(arguments: ["", "microphone=3", "microphone=3 inputMonitoring=maybe", "garbage"])
     func aLineMissingAGrantIsRefused(line: String) {
-        #expect(throws: PrivacyReadingFailure.self) { try PrivacyReading(line: line) }
+        #expect(throws: PrivacyReadingFailure.self) { try PrivacyReading(line: line, accessibility: true) }
     }
 
     /// The tap needs both of its grants; either one alone is not enough.
