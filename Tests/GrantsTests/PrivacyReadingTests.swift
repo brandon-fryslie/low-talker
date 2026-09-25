@@ -1,4 +1,5 @@
 import AVFoundation
+import IOKit.hid
 import Testing
 @testable import Grants
 
@@ -35,5 +36,24 @@ import Testing
         #expect((try? granted.microphoneAuthorization.grant()) != nil)
         let denied = PrivacyReading(microphone: .denied, inputMonitoring: .undecided, accessibility: false)
         #expect((try? denied.microphoneAuthorization.grant()) == nil)
+    }
+
+    /// Held - the measured preflight, true from Accessibility alone - is granted whatever
+    /// IOHID says; otherwise IOHID tells a "no" from never asked.
+    @Test func inputMonitoringTakesHeldFirstAndIOHIDForTheRest() {
+        #expect(InputMonitoringAccess(held: true, kIOHIDAccessTypeUnknown) == .granted)
+        #expect(InputMonitoringAccess(held: true, kIOHIDAccessTypeDenied) == .granted)
+        #expect(InputMonitoringAccess(held: false, kIOHIDAccessTypeDenied) == .denied)
+        #expect(InputMonitoringAccess(held: false, kIOHIDAccessTypeUnknown) == .undecided)
+        #expect(InputMonitoringAccess(held: false, kIOHIDAccessTypeGranted) == .granted)
+    }
+
+    /// A reader that cannot start, exits non-zero, or prints something else is a failure
+    /// that names the reader, never a reading.
+    @Test(arguments: ["/nonexistent/lowtalker", "/usr/bin/false", "/bin/echo"])
+    func aReaderThatDoesNotAnswerIsAFailure(reader: String) {
+        #expect(throws: PrivacyReadingFailure.self) {
+            try PrivacyReading.taken(by: reader, checkingAccessibility: false)
+        }
     }
 }

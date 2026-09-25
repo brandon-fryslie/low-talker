@@ -64,14 +64,18 @@ public struct PrivacyReading: Sendable, Hashable {
         process.terminationHandler = { _ in exited.signal() }
         do { try process.run() } catch { throw PrivacyReadingFailure("\(command) did not start: \(error)") }
         let said = Drained(output), complained = Drained(complaint)
-        guard exited.wait(timeout: .now() + .seconds(deadline)) == .success else {
-            process.terminate()
+        let by = DispatchTime.now() + .seconds(deadline)
+        guard exited.wait(timeout: by) == .success else {
+            // SIGKILL rather than terminate(): a stuck reader is not asked to leave.
+            kill(process.processIdentifier, SIGKILL)
             throw PrivacyReadingFailure("\(command) did not answer within \(deadline) s")
         }
-        let line = said.text
+        guard let line = said.text(by: by) else {
+            throw PrivacyReadingFailure("\(command) exited but its output stayed open past \(deadline) s")
+        }
         guard process.terminationReason == .exit, process.terminationStatus == 0 else {
             let how = process.terminationReason == .uncaughtSignal ? "crashed with signal" : "exited"
-            let why = complained.text
+            let why = complained.text(by: by) ?? ""
             throw PrivacyReadingFailure("\(command) \(how) \(process.terminationStatus)\(why.isEmpty ? "" : ": \(why)")")
         }
         return line
@@ -165,9 +169,10 @@ private final class Drained: @unchecked Sendable {
         }
     }
 
-    /// Everything written, once the writer has closed its end; trimmed.
-    var text: String {
-        done.wait()
+    /// Everything written, once every writer has closed its end, trimmed; nil if one still
+    /// holds it open at `deadline` - a process the reader left behind.
+    func text(by deadline: DispatchTime) -> String? {
+        guard done.wait(timeout: deadline) == .success else { return nil }
         return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
