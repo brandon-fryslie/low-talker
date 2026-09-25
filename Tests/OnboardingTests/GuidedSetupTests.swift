@@ -63,7 +63,7 @@ import Testing
     // MARK: - the walk
 
     static let unmetMicrophone = Requirement.microphone(.notDetermined, flavor: flavor)
-    static let unmetInputMonitoring = Requirement.inputMonitoring(held: false, flavor: flavor)
+    static let unmetInputMonitoring = Requirement.inputMonitoring(held: false, accessibilityHeld: true, flavor: flavor)
     static let metAccessibility = Requirement.accessibility(held: true, flavor: flavor)
     static let unmetInputMethod = Requirement.inputMethod(switchedOn: false, flavor: flavor)
     static let readiness = Readiness([unmetMicrophone, unmetInputMonitoring, metAccessibility, unmetInputMethod])
@@ -108,14 +108,22 @@ import Testing
         #expect(Requirement.microphone(.denied, flavor: Self.flavor).step?.contains("Privacy & Security > Microphone") == true)
     }
 
+    /// While Accessibility is off no Input Monitoring dialog can show, so the step points at
+    /// Accessibility rather than at a button that cannot work.
+    @Test func inputMonitoringWaitsOnAccessibility() {
+        let waiting = Requirement.inputMonitoring(held: false, accessibilityHeld: false, flavor: Self.flavor)
+        #expect(!waiting.met)
+        #expect(waiting.step?.contains("Accessibility") == true)
+    }
+
     /// Each event-tap grant's step names its own pane and the installation to switch on.
     @Test func anEventTapGrantNamesItsPaneAndTheInstallation() {
-        for requirement in [Requirement.inputMonitoring(held: false, flavor: Self.flavor), .accessibility(held: false, flavor: Self.flavor)] {
+        for requirement in [Requirement.inputMonitoring(held: false, accessibilityHeld: true, flavor: Self.flavor), .accessibility(held: false, flavor: Self.flavor)] {
             let step = requirement.step ?? ""
             #expect(step.contains("Privacy & Security > \(requirement.name)"))
             #expect(step.contains(Self.flavor.displayName))
         }
-        #expect(Requirement.inputMonitoring(held: true, flavor: Self.flavor).met)
+        #expect(Requirement.inputMonitoring(held: true, accessibilityHeld: true, flavor: Self.flavor).met)
     }
 
     /// The hotkey menu names the grants a source needs from the list itself.

@@ -12,9 +12,8 @@ import IOKit.hid
 /// queries tccd on every call, and tccd names the launching app as the subject.
 ///
 /// Accessibility is the exception, read by the app itself: its own reading is live (it read
-/// "allowed" 3 s after a grant on studious), and the same read from a spawned process made
-/// tccd file a denied Accessibility row for the app at launch - a "no" nobody gave, which
-/// then answers Input Monitoring too, so no dialog could follow.
+/// "allowed" 3 s after a grant on studious). Checking it, from any process, files the app in
+/// the Accessibility list switched off; see `Requirement.inputMonitoring`.
 ///
 /// [LAW:one-source-of-truth] One reader answers the setup, the menu, and the gates on the
 /// microphone and the tap; each takes a reading at the moment it decides.
@@ -29,8 +28,7 @@ public struct PrivacyReading: Sendable, Hashable {
         self.accessibility = accessibility
     }
 
-    /// What `lowtalker grants` prints: this process's microphone and Input Monitoring, and
-    /// never its Accessibility, which read here would file a denial for the app.
+    /// What `lowtalker grants` prints: this process's microphone and Input Monitoring.
     public static func lineReadHere() -> String {
         line(
             microphone: AVCaptureDevice.authorizationStatus(for: .audio),

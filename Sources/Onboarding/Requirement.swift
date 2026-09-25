@@ -249,9 +249,13 @@ public extension Requirement {
         }
     }
 
-    /// Input Monitoring, which the event tap needs to read the keys.
-    static func inputMonitoring(held: Bool, flavor: Flavor) -> Requirement {
-        privacyGrant(.inputMonitoring, held: held, flavor: flavor)
+    /// Input Monitoring, which the event tap needs to read the keys. While Accessibility is
+    /// off, tccd answers this from it and no dialog can show; allowing Accessibility brings
+    /// it along. See `EventTapAccess`.
+    static func inputMonitoring(held: Bool, accessibilityHeld: Bool, flavor: Flavor) -> Requirement {
+        accessibilityHeld || held
+            ? privacyGrant(.inputMonitoring, held: held, flavor: flavor)
+            : Requirement(row: .inputMonitoring, reads: reads(forGrantHeld: held), step: "Allow Accessibility first. This comes with it.")
     }
 
     /// Accessibility, which the event tap needs to hold the chord back from the app in front.

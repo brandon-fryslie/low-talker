@@ -205,7 +205,7 @@ public extension OnboardingProbe {
                 })
             case .inputMonitoring:
                 requirements.append(.privacy(.inputMonitoring, reader.privacy, flavor: flavor) {
-                    .inputMonitoring(held: $0.inputMonitoring == .granted, flavor: flavor)
+                    .inputMonitoring(held: $0.inputMonitoring == .granted, accessibilityHeld: $0.accessibility, flavor: flavor)
                 })
             case .accessibility:
                 requirements.append(.privacy(.accessibility, reader.privacy, flavor: flavor) {

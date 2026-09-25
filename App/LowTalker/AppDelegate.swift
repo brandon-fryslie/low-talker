@@ -531,8 +531,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 failure = "\(reading)"
             }
         case .inputMonitoring:
-            // The same: macOS asks once, and a decided "no" is answered with the pane.
-            switch readPrivacy().map(\.inputMonitoring) {
+            // Checking Accessibility files the app in its list, switched off (studious,
+            // 2026-09-25), and tccd answers Input Monitoring from that row: while
+            // Accessibility is off, no Input Monitoring dialog can show. Allowing
+            // Accessibility brings Input Monitoring with it. See `EventTapAccess`.
+            switch readPrivacy().map({ $0.accessibility ? $0.inputMonitoring : nil }) {
+            case .success(nil):
+                failure = "Allow Accessibility first. Input Monitoring comes with it."
             case .success(.undecided):
                 failure = await askInAFreshProcess(.inputMonitoring)
             case .success(.denied):
