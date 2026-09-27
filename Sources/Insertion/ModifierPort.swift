@@ -70,7 +70,7 @@ public final class ModifierPort {
     /// `heard` and `told` run on `queue`, one message at a time, in the order they were sent.
     public convenience init(
         flavor: Flavor, queue: DispatchQueue,
-        told: @escaping (Event) -> Void, heard: @escaping (HeldModifiers) -> Void
+        told: @escaping @Sendable (Event) -> Void, heard: @escaping @Sendable (HeldModifiers) -> Void
     ) throws(PortNotHosted) {
         let senders: PeerIdentity
         do throws(PeerIdentity.Unreadable) {
@@ -83,7 +83,7 @@ public final class ModifierPort {
     /// without being the app. [LAW:decomposition]
     init(
         portName: String, senders: PeerIdentity, queue: DispatchQueue,
-        told: @escaping (Event) -> Void, heard: @escaping (HeldModifiers) -> Void
+        told: @escaping @Sendable (Event) -> Void, heard: @escaping @Sendable (HeldModifiers) -> Void
     ) throws(PortNotHosted) {
         port = try NamedPort(name: portName, queue: queue, received: { message in
             message.discardReply()

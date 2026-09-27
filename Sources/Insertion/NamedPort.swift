@@ -46,7 +46,7 @@ final class NamedPort {
 
     init(
         name: String, queue: DispatchQueue,
-        received: @escaping (Mach.Received) -> Void, failed: @escaping (kern_return_t) -> Void
+        received: @escaping @Sendable (Mach.Received) -> Void, failed: @escaping @Sendable (kern_return_t) -> Void
     ) throws(PortNotHosted) {
         let right: ReceiveRight
         do throws(ReceiveRight.NotAllocated) { right = try ReceiveRight(sendable: true) } catch { throw .noPort(error.status) }

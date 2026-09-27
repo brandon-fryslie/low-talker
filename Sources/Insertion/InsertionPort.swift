@@ -54,7 +54,7 @@ public final class InsertionPort {
     /// Hosts this flavor's insert port, admitting this flavor's app and nobody else.
     public convenience init(
         flavor: Flavor, queue: DispatchQueue,
-        told: @escaping (Event) -> Void, answer: @escaping (String) -> InsertionAnswer
+        told: @escaping @Sendable (Event) -> Void, answer: @escaping @Sendable (String) -> InsertionAnswer
     ) throws(PortNotHosted) {
         let senders: PeerIdentity
         do throws(PeerIdentity.Unreadable) { senders = try .signedLikeThisProcess(identifier: flavor.bundleIdentifier) } catch { throw .noRequirement(error) }
@@ -65,7 +65,7 @@ public final class InsertionPort {
     /// without being an input method. [LAW:decomposition]
     convenience init(
         portName: String, senders: PeerIdentity, queue: DispatchQueue,
-        told: @escaping (Event) -> Void, answer: @escaping (String) -> InsertionAnswer
+        told: @escaping @Sendable (Event) -> Void, answer: @escaping @Sendable (String) -> InsertionAnswer
     ) throws(PortNotHosted) {
         try self.init(portName: portName, queue: queue, told: told) { request in
             do throws(PeerIdentity.NotAdmitted) {
@@ -88,7 +88,7 @@ public final class InsertionPort {
     /// A port that answers each message with whatever `respond` makes of it - the channel
     /// with nobody checked, which only the initializer above and the suite's hand-made far
     /// ends build on.
-    init(portName: String, queue: DispatchQueue, told: @escaping (Event) -> Void, respond: @escaping (Mach.Received) -> Data) throws(PortNotHosted) {
+    init(portName: String, queue: DispatchQueue, told: @escaping @Sendable (Event) -> Void, respond: @escaping @Sendable (Mach.Received) -> Data) throws(PortNotHosted) {
         port = try NamedPort(name: portName, queue: queue, received: { request in
             let sent = request.answer(respond(request))
             if sent != MACH_MSG_SUCCESS { told(.answerNotDelivered(sent)) }
