@@ -61,10 +61,10 @@ public struct Inserted: Equatable, Sendable {
 public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, CustomStringConvertible {
     /// Nothing has focus, so there is no client to commit into. Two shapes reach here and
     /// this process cannot tell them apart: the desktop, with no text field anywhere, and
-    /// this installation's source not being the selected one, where macOS routes it no
-    /// client at all. The app names the second, because it can read reliably which source is
-    /// selected and this process cannot - see `AppDelegate` and the ticket's finding. This
-    /// answer stays the honest account of what the input method saw: it has no client.
+    /// this installation's source no longer being the selected one, where macOS routes it no
+    /// client at all. It answers the honest account of what it saw - no client - either way;
+    /// the input method's own reading of which source is selected is not reliable, measured
+    /// on low-input-method-s71.39o.
     case noClientHasFocus
     /// There is a cursor, and it belongs to an app the person has since switched away
     /// from. Its own reason and not `noClientHasFocus`, because the two are fixed

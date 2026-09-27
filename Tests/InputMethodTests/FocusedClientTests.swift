@@ -61,8 +61,8 @@ import Testing
     }
 
     /// Nothing in front is an answer, not a failure, and it is said by name. This process
-    /// cannot tell an empty focus from its source having been deselected; the app names the
-    /// second, off a selection reading it can trust. See the ticket's finding.
+    /// cannot tell an empty focus from its source having been deselected, so it names neither
+    /// apart - both are no client. See low-input-method-s71.39o.
     @Test func nothingInFrontIsRefusedByName() {
         #expect(throws: Refusal.noClientHasFocus) { try FocusedClient().cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false).get() }
     }
