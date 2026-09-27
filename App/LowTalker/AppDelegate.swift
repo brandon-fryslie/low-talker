@@ -475,17 +475,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func askForHotkeySource() -> HotkeySource {
-        ask("Which hotkey should \(Self.flavor.displayName) listen for?",
-            explaining: "Hold it while you speak, or tap it to start and again to stop.",
-            among: HotkeySource.allCases, titled: title(of:))
+        // Where a source cannot hear is a sentence, too long for a button, so it is said
+        // above the buttons, named by the button it belongs to.
+        let unheard = HotkeySource.allCases.compactMap { source in source.unheard.map { "\(button(of: source)): \($0)." } }
+        return ask("Which hotkey should \(Self.flavor.displayName) listen for?",
+            explaining: (["Hold it while you speak, or tap it to start and again to stop."] + unheard).joined(separator: "\n\n"),
+            among: HotkeySource.allCases, titled: button(of:))
     }
 
-    /// A source as the menu and the first-launch question name it: its chord on the layout
-    /// the user types on, what macOS asks for it, and where it cannot hear.
+    /// A source as a first-launch button names it: its chord on the layout the user types
+    /// on, and what macOS asks for it.
     /// [LAW:one-source-of-truth] Every part is read off the source, so no second spelling of
     /// any is kept here.
+    private func button(of source: HotkeySource) -> String {
+        [chordName(heardBy: source), source.asks].joined(separator: " — ")
+    }
+
+    /// A source as the menu names it: its button, and where it cannot hear.
     private func title(of source: HotkeySource) -> String {
-        ([chordName(heardBy: source), source.asks] + [source.unheard].compactMap { $0 }).joined(separator: " — ")
+        ([button(of: source)] + [source.unheard].compactMap { $0 }).joined(separator: " — ")
     }
 
     /// This installation's chord for `source`, named on the layout the user types on now.
@@ -591,8 +599,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // A grant the chosen setup cannot work without was just asked for: once it reads as
         // met, the loop is rebuilt so the install of whichever half needs it finishes the
         // job - for the input method, selecting it - whether or not the loop is up.
+        // Only rows an install finishes: the event tap installs nothing, and reads its
+        // grants as it starts.
         if failure == nil, row.stopsDictation, let setup = chosenSetup,
-           !row.serves.isDisjoint(with: [.delivery(setup.delivery), .hearing(setup.source)]) {
+           row.serves.contains(.delivery(setup.delivery)) || (setup.source == .inputMethod && row.serves.contains(.hearing(.inputMethod))) {
             setupGrantAsked = true
         }
         return failure

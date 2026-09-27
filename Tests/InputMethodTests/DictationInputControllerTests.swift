@@ -57,7 +57,7 @@ import Testing
 
     /// A change of the modifier keys is handed back like every key, and told, stamped with
     /// the moment the event carries.
-    @Test func aChangeOfTheModifierKeysIsHandedBackAndTold() async throws {
+    @Test(.timeLimit(.minutes(1))) func aChangeOfTheModifierKeysIsHandedBackAndTold() async throws {
         let controller = try #require(DictationInputController(server: nil, delegate: nil, client: nil))
         let moved = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 61, keyDown: true))
         moved.type = .flagsChanged
