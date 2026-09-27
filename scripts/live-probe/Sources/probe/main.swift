@@ -70,14 +70,17 @@ func children(of element: AXUIElement) -> [AXUIElement] {
 
 // One line per item: each type it carries with a digest of the bytes behind it. Reads the
 // pasteboard directly rather than through a shipping type, so this instrument owns what it
-// measures and depends on nothing the app ships. [LAW:one-way-deps]
+// measures and depends on nothing the app ships. [LAW:one-way-deps] A promised type that
+// cannot deliver its bytes is dropped, and an item left with no deliverable type with it, so
+// the digest is of what is actually on the pasteboard.
 @MainActor func pasteboardSnapshot() -> String {
     (NSPasteboard.general.pasteboardItems ?? []).map { item in
-        item.types.map { type in
-            let digest = SHA256.hash(data: item.data(forType: type) ?? Data()).map { String(format: "%02x", $0) }.joined()
-            return "\(type.rawValue)=\(digest)"
+        item.types.compactMap { type -> String? in
+            item.data(forType: type).map { data in
+                "\(type.rawValue)=\(SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined())"
+            }
         }.joined(separator: " ")
-    }.joined(separator: "\n")
+    }.filter { !$0.isEmpty }.joined(separator: "\n")
 }
 
 /// A wait that ran out: said on stderr, so a caller capturing stdout keeps its value.
