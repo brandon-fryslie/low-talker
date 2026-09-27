@@ -53,9 +53,10 @@ for name in StatusMark StatusMarkDev; do
         if [ "$name" = StatusMarkDev ]; then
             # Widened to 23 so the badge clears the caret's serif by a whole pixel at 1x.
             width=23
-            sed -e 's/viewBox="0 0 18 18"/viewBox="0 0 23 18"/' -e 's#</svg>#  <circle cx="21" cy="3" r="2"/>\n</svg>#' \
+            sed -e 's/viewBox="0 0 18 18"/viewBox="0 0 23 18"/' -e 's#</svg>#<circle cx="21" cy="3" r="2"/></svg>#' \
                 "$source" >"$scratch/$name@$scale.svg"
-            grep -q 'viewBox="0 0 23 18"' "$scratch/$name@$scale.svg" || { echo "$source: no 18x18 viewBox to widen" >&2; exit 1; }
+            grep -q 'viewBox="0 0 23 18"' "$scratch/$name@$scale.svg" && grep -q '<circle' "$scratch/$name@$scale.svg" ||
+                { echo "$source: no 18x18 viewBox to widen or </svg> to badge" >&2; exit 1; }
         else
             width=18
             cp "$source" "$scratch/$name@$scale.svg"
