@@ -1,0 +1,31 @@
+#!/bin/bash
+# Renders the icons the bundles carry from their sources in App/Icons. The PNGs and the
+# TIFF are this script's output, checked in so a build needs no rsvg-convert; change the
+# SVG and run this, never the rendered files. Needs rsvg-convert (brew install librsvg).
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+catalog=App/LowTalker/Assets.xcassets
+
+for name in AppIcon AppIconDev; do
+    set="$catalog/$name.appiconset"
+    mkdir -p "$set"
+    images=()
+    for size in 16 32 128 256 512; do
+        rsvg-convert -w "$size" "App/Icons/$name.svg" -o "$set/icon_$size.png"
+        rsvg-convert -w $((size * 2)) "App/Icons/$name.svg" -o "$set/icon_$size@2x.png"
+        for scale in 1x 2x; do
+            file="icon_$size.png"; [ "$scale" = 2x ] && file="icon_$size@2x.png"
+            images+=("{\"idiom\":\"mac\",\"size\":\"${size}x$size\",\"scale\":\"$scale\",\"filename\":\"$file\"}")
+        done
+    done
+    joined=$(IFS=,; echo "${images[*]}")
+    echo "{\"images\":[$joined],\"info\":{\"author\":\"xcode\",\"version\":1}}" | python3 -m json.tool --indent 2 >"$set/Contents.json"
+done
+
+# The Input menu's glyph: a template image, one 16 pt TIFF carrying its 1x and 2x.
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+rsvg-convert -w 16 App/Icons/InputMethod.svg -o "$scratch/glyph.png"
+rsvg-convert -w 32 App/Icons/InputMethod.svg -o "$scratch/glyph@2x.png"
+tiffutil -cathidpicheck "$scratch/glyph.png" "$scratch/glyph@2x.png" -out App/InputMethods/InputMethod.tiff >/dev/null
