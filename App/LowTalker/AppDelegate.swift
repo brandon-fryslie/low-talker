@@ -167,8 +167,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch engineReadiness.statusGlyph() {
         case .mark:
             // The asset catalog marks it a template, so the bar tints it like its neighbours.
-            let image = NSImage(named: Self.flavor.statusMarkName)
-            image?.accessibilityDescription = description
+            // A copy, because the named image is shared and the description is this state's.
+            // [LAW:no-silent-failure] A bundle without the mark is built wrong; the item keeps
+            // a symbol rather than shrinking to nothing and taking the menu with it.
+            guard let image = NSImage(named: Self.flavor.statusMarkName)?.copy() as? NSImage else {
+                log.fault("no \(Self.flavor.statusMarkName, privacy: .public) in the asset catalog")
+                statusItem.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: description)
+                return
+            }
+            image.accessibilityDescription = description
             statusItem.button?.image = image
         case .symbol(let name):
             statusItem.button?.image = NSImage(systemSymbolName: name, accessibilityDescription: description)
