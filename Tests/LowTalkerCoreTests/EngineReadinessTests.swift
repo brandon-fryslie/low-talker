@@ -29,19 +29,17 @@ import Testing
         #expect(EngineReadiness.preparing(nil, since: launch).reporting(.loading) == .preparing(.loading, since: launch))
     }
 
-    /// The icon of a ready engine is the only one that can say words are waiting: nothing
-    /// is heard before the engine is ready, so a clipboard icon over a wait would be a lie.
-    @Test(arguments: [false, true])
-    func onlyAReadyEngineIsDrawnAsListening(wordsOnClipboard: Bool) {
-        #expect(EngineReadiness.preparing(.loading, since: launch).symbolName(wordsOnClipboard: wordsOnClipboard) == "hourglass")
-        #expect(EngineReadiness.failed("x").symbolName(wordsOnClipboard: wordsOnClipboard) == "exclamationmark.triangle.fill")
-        #expect(EngineReadiness.ready(.default, after: .seconds(5)).symbolName(wordsOnClipboard: wordsOnClipboard) == (wordsOnClipboard ? "doc.on.clipboard.fill" : "mic.fill"))
+    /// Each state draws its own icon: the ready engine listening, the wait and the failure
+    /// their own.
+    @Test func eachStateDrawsItsOwnIcon() {
+        #expect(EngineReadiness.preparing(.loading, since: launch).symbolName() == "hourglass")
+        #expect(EngineReadiness.failed("x").symbolName() == "exclamationmark.triangle.fill")
+        #expect(EngineReadiness.ready(.default, after: .seconds(5)).symbolName() == "mic.fill")
     }
 
     @Test func theIconNamesItsStateToAccessibility() {
-        #expect(EngineReadiness.preparing(nil, since: launch).iconDescription(for: "LowTalker", wordsOnClipboard: false) == "LowTalker: preparing the model")
-        #expect(EngineReadiness.failed("x").iconDescription(for: "LowTalker", wordsOnClipboard: false) == "LowTalker: the model failed to load")
-        #expect(EngineReadiness.ready(.default, after: .seconds(5)).iconDescription(for: "LowTalker", wordsOnClipboard: false) == "LowTalker")
-        #expect(EngineReadiness.ready(.default, after: .seconds(5)).iconDescription(for: "LowTalker", wordsOnClipboard: true) == "LowTalker: last dictation copied to the clipboard")
+        #expect(EngineReadiness.preparing(nil, since: launch).iconDescription(for: "LowTalker") == "LowTalker: preparing the model")
+        #expect(EngineReadiness.failed("x").iconDescription(for: "LowTalker") == "LowTalker: the model failed to load")
+        #expect(EngineReadiness.ready(.default, after: .seconds(5)).iconDescription(for: "LowTalker") == "LowTalker")
     }
 }

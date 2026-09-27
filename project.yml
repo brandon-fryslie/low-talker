@@ -206,15 +206,8 @@ targetTemplates:
             echo "error: ${plist} carries version ${short} (${build}); project.yml sets '${wanted}', and both must be set and equal" >&2
             exit 1
           fi
-    # The Insert Dictation service: the app that asks gets the latest dictation's words and
-    # puts them at its cursor, so no key is posted and no grant is needed. It returns text
-    # and takes none, so it is offered at a bare cursor. NSRequiredContext, even empty,
-    # enables it without a trip to Keyboard Shortcuts. The shortcut is per installation, so
-    # the two copies do not answer one key: serviceKey "@" is Command+Shift+2 on a US layout
-    # for the release copy, "!" Command+Shift+1 for the development one. NSTimeout is how long the
-    # requesting app waits for a reply, in milliseconds; the handler reads the last dictation and returns
-    # at once, so it is only a ceiling and is never reached. xcodegen writes this plist, and Xcode merges it with
-    # the keys GENERATE_INFOPLIST_FILE synthesises.
+    # xcodegen writes this plist, and Xcode merges it with the keys GENERATE_INFOPLIST_FILE
+    # synthesises.
     info:
       path: App/Generated/${displayName}-Info.plist
       properties:
@@ -222,16 +215,6 @@ targetTemplates:
         # second version the shipped bundle never carries.
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        NSServices:
-          - NSMenuItem:
-              default: Insert ${displayName} Dictation
-            NSMessage: insertDictation
-            NSPortName: ${displayName}
-            NSReturnTypes: [public.utf8-plain-text]
-            NSKeyEquivalent:
-              default: "${serviceKey}"
-            NSRequiredContext: {}
-            NSTimeout: "30000"
     settings:
       base:
         PRODUCT_NAME: ${displayName}
@@ -375,7 +358,6 @@ targets:
     templateAttributes:
       displayName: LowTalker
       bundleIdentifier: ai.promptctl.low-talker
-      serviceKey: "@"
       launchdLabel: ai.promptctl.low-talker.keyboardd
       inputMethodTarget: LowTalkerInputMethod
 
@@ -385,7 +367,6 @@ targets:
     templateAttributes:
       displayName: LowTalker Dev
       bundleIdentifier: ai.promptctl.low-talker.dev
-      serviceKey: "!"
       launchdLabel: ai.promptctl.low-talker.keyboardd.dev
       inputMethodTarget: LowTalkerDevInputMethod
 

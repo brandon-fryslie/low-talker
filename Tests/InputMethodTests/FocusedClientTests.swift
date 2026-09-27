@@ -112,8 +112,8 @@ import Testing
 
     /// The one that matters: focus can move by activating the new client before
     /// deactivating the old, and a `left` that cleared on anyone's word would drop the
-    /// client that just arrived. The words would then go to the clipboard with a live
-    /// cursor sitting right there, and nothing would say why. [LAW:no-silent-failure]
+    /// client that just arrived. The insert would then be refused with a live cursor
+    /// sitting right there, and nothing would say why. [LAW:no-silent-failure]
     @Test func aCursorLeavingAfterAnotherArrivedDoesNotTakeTheNewOnesFocus() throws {
         let client = FocusedClient()
         let old = Cursor()

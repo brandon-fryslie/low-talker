@@ -5,7 +5,6 @@
 import AppKit
 import ApplicationServices
 import CryptoKit
-import LowTalkerCore
 
 // Asked of the frontmost app, not the system-wide element: a shell outside the GUI
 // session (a launchd Background domain) can reach an app's Accessibility server but
@@ -69,11 +68,19 @@ func children(of element: AXUIElement) -> [AXUIElement] {
     return condition()
 }
 
-// One line per item: each type it carries with a digest of the bytes behind it.
+// One line per item: each type it carries with a digest of the bytes behind it. Reads the
+// pasteboard directly rather than through a shipping type, so this instrument owns what it
+// measures and depends on nothing the app ships. [LAW:one-way-deps] A promised type that
+// cannot deliver its bytes is dropped, and an item left with no deliverable type with it, so
+// the digest is of what is actually on the pasteboard.
 @MainActor func pasteboardSnapshot() -> String {
-    PasteboardContents(reading: .general).items.map { item in
-        item.map { "\($0.type.rawValue)=\(SHA256.hash(data: $0.data).map { String(format: "%02x", $0) }.joined())" }.joined(separator: " ")
-    }.joined(separator: "\n")
+    (NSPasteboard.general.pasteboardItems ?? []).map { item in
+        item.types.compactMap { type -> String? in
+            item.data(forType: type).map { data in
+                "\(type.rawValue)=\(SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined())"
+            }
+        }.joined(separator: " ")
+    }.filter { !$0.isEmpty }.joined(separator: "\n")
 }
 
 /// A wait that ran out: said on stderr, so a caller capturing stdout keeps its value.

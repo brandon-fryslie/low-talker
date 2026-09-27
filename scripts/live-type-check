@@ -2,8 +2,8 @@
 # Types into TextEdit and Terminal with `lowtalker type` and `lowtalker keys` - the executor
 # dictation inserts through, driven from a shell - and checks what landed, that text the
 # layout cannot type exits 3 with nothing typed, and that the pasteboard was never touched.
-# Reads back through scripts/live-probe, as scripts/live-paste-check does, and for the same
-# reason uses no AppleScript. Needs an unlocked screen, the development helper answering
+# Reads back through scripts/live-probe, and uses no AppleScript because an Automation
+# prompt nobody answers becomes a denial. Needs an unlocked screen, the development helper answering
 # (`lowtalker onboard`), and a terminal with Accessibility. Leaves the pasteboard and the
 # frontmost app as found.
 set -euo pipefail

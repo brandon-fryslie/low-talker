@@ -115,8 +115,8 @@ public struct TargetApp {
     ///
     /// [LAW:no-silent-failure] An element that will not answer is not read as an element
     /// holding nothing. Only the two `AXError`s that mean the attribute is absent count as
-    /// absence - the same two `SystemAlerts` and `PasteMenuItem` count that way - because
-    /// every other one means the read failed, and folding those into "no text" would hand
+    /// absence - the same two `SystemAlerts` counts that way - because every other one means
+    /// the read failed, and folding those into "no text" would hand
     /// `shows` a baseline of zero for an element that may have been holding the very text
     /// about to be typed.
     nonisolated static func text(from result: AXError, value: CFTypeRef?) throws -> ScreenText {
@@ -300,9 +300,7 @@ public struct TargetApp {
     /// admits no cast check, so its type id is the check. [LAW:parse-dont-validate] This
     /// is pointed at whatever bundle id the caller names, and an app whose Accessibility
     /// implementation answers this query with something else would otherwise trap the
-    /// process where it should have been refused by name. LowTalkerCore's PasteMenuItem
-    /// guards the same cast the same way; 3ti.12 takes reading the screen over from both
-    /// and is where the two become one.
+    /// process where it should have been refused by name.
     private static func element(_ value: CFTypeRef?) -> AXUIElement? {
         guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
         return (value as! AXUIElement)

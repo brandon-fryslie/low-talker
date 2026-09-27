@@ -7,7 +7,7 @@
 /// anywhere" is the dictation emit with a different target, not a new kind of route.
 ///
 /// [LAW:effects-at-boundaries] Routes are data, and routing is a pure function of the
-/// Context and Transcript. Nothing here reads the clipboard, posts events, or
+/// Context and Transcript. Nothing here posts events, types text, or
 /// launches programs; the app's executor does that with the Actions returned.
 public struct Route: Hashable, Sendable, CustomStringConvertible {
     public let when: Match
