@@ -107,8 +107,9 @@ public final class ModifierPort {
 /// The input method's end of the hotkey port: one message, sent and not waited on.
 ///
 /// Called from the thread every key this source passes through is handled on, so it waits
-/// for nothing: the app's queue is either taking messages or it is not, and a change the app
-/// was too busy to take is one the next change corrects, since each carries the whole state.
+/// for nothing: the app's queue is either taking messages or it is not. A change the app was
+/// too busy to take is corrected by the next, since each carries the whole state, or - for a
+/// release, which may have no next - by the app reading the session itself while a key is held.
 ///
 /// Nothing asks who holds the name before telling it. What crosses is which modifier keys
 /// are down, and the app is the one side that has something to protect - its microphone -
@@ -125,6 +126,15 @@ public struct ModifierSender: Sendable {
         /// The app is listening and did not take the message at once.
         case notTaken(port: String)
         case failed(port: String, status: kern_return_t)
+
+        /// Whether this is something gone wrong rather than an ordinary state: nobody
+        /// listening is how every app hearing its hotkey another way looks from here.
+        public var isFault: Bool {
+            switch self {
+            case .told, .nobodyIsListening: false
+            case .notTaken, .failed: true
+            }
+        }
 
         public var description: String {
             switch self {

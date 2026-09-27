@@ -156,7 +156,7 @@ let tellingTheApp = Task.detached {
     var fared: ModifierSender.Told?
     for await held in ModifierChanges.shared.changes {
         let told = sender.tell(held)
-        if told != fared { logger.log(level: told == .told ? .default : .error, "\(told.description, privacy: .public)") }
+        if told != fared { logger.log(level: told.isFault ? .error : .default, "\(told.description, privacy: .public)") }
         fared = told
     }
 }

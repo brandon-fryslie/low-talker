@@ -301,7 +301,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // it does, or be overwritten by a later write about an earlier state.
         showHotkeyStatus("starting — setting up the \(setup.delivery.title.lowercased())")
         let delivering = await install(setup.delivery)
-        let hearable = await install(setup.source)
+        // Only behind a delivery that installed, since a refusal there already decides the
+        // loop, and an input method it could not select would only be waited on twice.
+        let hearable: Result<Void, LoopRefusal> = switch delivering {
+        case .success: await install(setup.source)
+        case .failure(let refusal): .failure(refusal)
+        }
         // The tap's grants from a fresh reading: this process's own answer can be the one it
         // had before the person allowed them. See `PrivacyReading`.
         let hotkey = Hotkey(for: Self.flavor, heardBy: setup.source) { [unowned self] in
@@ -321,7 +326,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // while the status line said the loop was off. Left down, it is also what lets
         // choosing the same delivery again retry the install - `take` rebuilds a loop whose
         // hotkey is not watching. [LAW:no-silent-failure]
-        let hearing = delivering.flatMap { hearable }.flatMap {
+        let hearing = hearable.flatMap {
             Result {
                 try hotkey.start({ [unowned self] transition in
                     if case .began = transition { (lastDictation, lastFailure) = (nil, nil) }
@@ -583,11 +588,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .driverExtension, .keyboardSetupAssistant:
             break
         }
-        // A grant the chosen delivery cannot deliver without was just asked for: once it
-        // reads as met, the loop is rebuilt so the delivery's install finishes the job -
-        // for the input method, selecting it - whether or not the loop is up.
-        if failure == nil, row.stopsDictation, let delivery = chosenDelivery, row.serves.contains(.delivery(delivery)) {
-            deliveryGrantAsked = true
+        // A grant the chosen setup cannot work without was just asked for: once it reads as
+        // met, the loop is rebuilt so the install of whichever half needs it finishes the
+        // job - for the input method, selecting it - whether or not the loop is up.
+        if failure == nil, row.stopsDictation, let setup = chosenSetup,
+           !row.serves.isDisjoint(with: [.delivery(setup.delivery), .hearing(setup.source)]) {
+            setupGrantAsked = true
         }
         return failure
     }
@@ -746,8 +752,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var comingUp = false
 
     /// Once every row that stops dictation is met: brings the loop up when it is down for a
-    /// grant, and rebuilds a loop that is up when the chosen delivery's own grant was just
-    /// asked for, so its install finishes - the input method switched back on is selected.
+    /// grant, and rebuilds a loop that is up when a grant the chosen setup installs through was
+    /// just asked for, so its install finishes - the input method switched back on is selected.
     ///
     /// [LAW:dataflow-not-control-flow] Decided from where things stand, not from a
     /// difference between two readings, so it holds however the grant arrived and whichever
@@ -766,12 +772,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         guard readiness.unmet.allSatisfy({ !$0.row.stopsDictation }), let setup = chosenSetup else { return }
         if downForAGrant {
-            deliveryGrantAsked = false
+            setupGrantAsked = false
             log.notice("setup: what dictation waited on is granted; bringing it up")
             Task { await comeUp() }
-        } else if deliveryGrantAsked, listening?.hotkey.isWatching == true {
-            deliveryGrantAsked = false
-            log.notice("setup: the delivery's grant arrived; rebuilding the loop to finish installing it")
+        } else if setupGrantAsked, listening?.hotkey.isWatching == true {
+            setupGrantAsked = false
+            log.notice("setup: the grant the setup installs through arrived; rebuilding the loop to finish installing it")
             Task { await choose(setup) }
         }
     }
@@ -780,9 +786,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// and settled - with a fresh reading - by whichever of them ends last.
     private var readingOwed = false
 
-    /// Set when a request for the chosen delivery's own grant went through; cleared once the
-    /// loop has been rebuilt behind it.
-    private var deliveryGrantAsked = false
+    /// Set when a request for a grant the chosen setup installs through went through; cleared
+    /// once the loop has been rebuilt behind it.
+    private var setupGrantAsked = false
 
     /// The one place an owed reading is paid: once nothing is rebuilding the loop.
     private func settleOwedReading() {

@@ -13,8 +13,13 @@ import os
 /// latched press behave the same whichever hears them. What it cannot do is why it is not
 /// the only tap: the input method is handed keys only by an app in front that takes typing,
 /// and by none under Secure Event Input, so a press anywhere else never arrives. It never
-/// swallows anything, since the input method hands every key back, and it never lapses: a
-/// change it missed is made up by the next one, which carries the whole state.
+/// swallows anything, since the input method hands every key back, and it never lapses.
+///
+/// A release is the one change it cannot wait to be told. One made where the input method
+/// is handed nothing, or told while the app's port was full, would leave the microphone open
+/// until the next change happened to arrive; so while anything is held, the app reads the
+/// session's modifier keys itself - a reading that needs no grant - and lets go of what is no
+/// longer down. [LAW:no-silent-failure]
 public struct InputMethodModifiers: KeyboardTap {
     private let flavor: Flavor
 
@@ -22,9 +27,12 @@ public struct InputMethodModifiers: KeyboardTap {
         self.flavor = flavor
     }
 
+    /// How often a held key is looked for in the session: how late, at most, a release the
+    /// input method never told is heard.
+    static let confirming: DispatchTimeInterval = .milliseconds(200)
+
     /// What the port's messages reach on the main actor: while the tap is open, the port and
-    /// the handler; and the modifiers the detector has been told are held, which each new
-    /// state is the difference from.
+    /// the handler; and the modifiers the detector has been told are held.
     ///
     /// The port and the handler go together, because a message can still be on its way to
     /// the main queue when the tap is disposed of, and a hotkey that has stopped must hear
@@ -33,20 +41,50 @@ public struct InputMethodModifiers: KeyboardTap {
     /// finds. [LAW:no-ambient-temporal-coupling]
     @MainActor
     private final class Installed {
-        var open: (port: ModifierPort, handle: @MainActor (KeyEvent) -> HotkeyDetector.Passage)?
-        var held: Set<Modifier>
+        var open: (port: ModifierPort, handle: @MainActor (KeyEvent) -> HotkeyDetector.Passage)? {
+            didSet { settleConfirming() }
+        }
+        private var told: ToldModifiers
+        private var confirming: DispatchSourceTimer?
 
-        init(held: Set<Modifier>) {
-            self.held = held
+        init(told: ToldModifiers) {
+            self.told = told
         }
 
-        func heard(_ state: HeldModifiers) {
-            let now = Modifier.held(in: CGEventFlags(rawValue: state.flags))
-            let moves = KeyEvent.moves(from: held, to: now, at: HostTime(uptime: .nanoseconds(state.uptimeNanoseconds)))
+        func heard(_ moves: [KeyEvent]) {
             // The passage is the event tap's question. The input method hands every key
             // back whatever the answer, so there is nothing here to keep back.
             open.map { open in moves.forEach { _ = open.handle($0) } }
-            held = now
+            settleConfirming()
+        }
+
+        func heard(_ state: HeldModifiers) {
+            heard(told.take(Modifier.held(in: CGEventFlags(rawValue: state.flags)),
+                            at: HostTime(uptime: .nanoseconds(state.uptimeNanoseconds))))
+        }
+
+        /// [LAW:dataflow-not-control-flow] The session is read for as long as the tap is
+        /// open and something is held, derived from those two facts wherever either changes,
+        /// so there is no starting or stopping of it to get out of step with them.
+        private func settleConfirming() {
+            switch (open != nil && !told.held.isEmpty, confirming) {
+            case (true, nil):
+                let timer = DispatchSource.makeTimerSource(queue: .main)
+                timer.schedule(deadline: .now() + InputMethodModifiers.confirming, repeating: InputMethodModifiers.confirming,
+                               leeway: .milliseconds(50))
+                timer.setEventHandler { [unowned self] in
+                    MainActor.assumeIsolated {
+                        heard(told.confirm(session: Modifier.held(in: CGEventSource.flagsState(.combinedSessionState)), at: .now))
+                    }
+                }
+                timer.resume()
+                confirming = timer
+            case (false, let timer?):
+                timer.cancel()
+                confirming = nil
+            case (true, _?), (false, nil):
+                break
+            }
         }
     }
 
@@ -62,7 +100,8 @@ public struct InputMethodModifiers: KeyboardTap {
     ) throws -> Disposal {
         // What is held as listening begins is read, not assumed to be nothing, so a key
         // already down when this comes up is not heard going down when it next moves.
-        let installed = Installed(held: Modifier.held(in: CGEventSource.flagsState(.combinedSessionState)))
+        let installed = Installed(told: ToldModifiers(
+            held: Modifier.held(in: CGEventSource.flagsState(.combinedSessionState)), at: .now))
         let log = Logger(subsystem: flavor.bundleIdentifier, category: "hotkey")
         // Checked and read off the main thread, where the keys and the menu are, and handed
         // to it in the order the input method sent them: the main queue is first in, first
@@ -74,6 +113,39 @@ public struct InputMethodModifiers: KeyboardTap {
         installed.open = (port, handle)
         // Closed here and now, so a hotkey rebuilt straight after hosts the name again.
         return { installed.open = nil }
+    }
+}
+
+/// The modifier keys the detector has been told are held, and when that last changed: what
+/// each state heard next is the difference from.
+///
+/// Two readings reach it. The input method's, which can press and let go, stamped when its
+/// event happened; and the app's own of the session, which only confirms what is still down
+/// and so can only let go. A state older than the last change is one a newer reading has
+/// already overtaken - the input method's message about a release the session was read
+/// letting go of first - and changes nothing, or a key already let go would go down again.
+/// [LAW:no-ambient-temporal-coupling]
+public struct ToldModifiers: Sendable {
+    public private(set) var held: Set<Modifier>
+    private var changedAt: HostTime
+
+    public init(held: Set<Modifier>, at time: HostTime) {
+        self.held = held
+        changedAt = time
+    }
+
+    /// The key events that take the detector to holding `now`, as the input method read it
+    /// at `time`.
+    public mutating func take(_ now: Set<Modifier>, at time: HostTime) -> [KeyEvent] {
+        let moves = time < changedAt ? [] : KeyEvent.moves(from: held, to: now, at: time)
+        held = moves.last?.modifiers ?? held
+        changedAt = moves.isEmpty ? changedAt : time
+        return moves
+    }
+
+    /// The key events that let go of what `session`, read at `time`, no longer holds.
+    public mutating func confirm(session: Set<Modifier>, at time: HostTime) -> [KeyEvent] {
+        take(held.intersection(session), at: time)
     }
 }
 

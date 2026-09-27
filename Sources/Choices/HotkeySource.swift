@@ -41,14 +41,16 @@ public enum HotkeySource: String, CaseIterable, Sendable, CustomStringConvertibl
     /// Where a press of this hearing's chord is not heard, as a menu says it, or nil for a
     /// hearing that hears it wherever it is pressed.
     ///
-    /// The input method is handed keys only by an app in front that takes typing and has
-    /// activated it, and by none while an app holds Secure Event Input - a password field,
-    /// say. A press there never reaches it, so the menu says so rather than let a
-    /// press that did nothing look like a broken hotkey. [LAW:no-silent-failure]
+    /// The input method is handed keys only while it is the selected input source, by an app
+    /// in front that takes typing and has activated it, and by none while an app holds Secure
+    /// Event Input - a password field, say. A press there never reaches it, so the menu says
+    /// so rather than let a press that did nothing look like a broken hotkey. One input source
+    /// is selected at a time, so of two installations only one hears this way at once.
+    /// [LAW:no-silent-failure]
     public var unheard: String? {
         switch self {
         case .eventTap, .registeredHotKey: nil
-        case .inputMethod: "a press where the app in front takes no typing, or under Secure Event Input, is not heard"
+        case .inputMethod: "a press while another input source is selected, where the app in front takes no typing, or under Secure Event Input, is not heard"
         }
     }
 }

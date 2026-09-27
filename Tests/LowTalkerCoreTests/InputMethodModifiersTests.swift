@@ -11,7 +11,7 @@ import Testing
 /// method, told as often as the app it was in hands them over. [LAW:behavior-not-structure]
 private struct Told {
     var detector: HotkeyDetector
-    private var held: Set<Modifier> = []
+    private var told = ToldModifiers(held: [], at: at(0))
 
     init(listeningFor flavor: Flavor) {
         detector = HotkeyDetector(chords: [Hotkey.defaultChord(for: flavor, heardBy: .inputMethod)], tapThreshold: .milliseconds(250))
@@ -19,14 +19,21 @@ private struct Told {
 
     /// The input method telling the app that `modifiers` are held, `ms` into the run.
     mutating func holding(_ modifiers: Set<Modifier>, at ms: Int64) -> [HotkeyDetector.Transition] {
-        let moves = KeyEvent.moves(from: held, to: modifiers, at: at(ms))
-        held = modifiers
-        return moves.compactMap { detector.handle($0).transition }
+        heard(told.take(modifiers, at: at(ms)))
+    }
+
+    /// The app reading the session's modifier keys itself, `ms` into the run.
+    mutating func session(_ modifiers: Set<Modifier>, at ms: Int64) -> [HotkeyDetector.Transition] {
+        heard(told.confirm(session: modifiers, at: at(ms)))
     }
 
     /// Each state in turn, and every press they made.
     mutating func told(_ states: [(Set<Modifier>, Int64)]) -> [HotkeyDetector.Transition] {
         states.flatMap { holding($0.0, at: $0.1) }
+    }
+
+    private mutating func heard(_ moves: [KeyEvent]) -> [HotkeyDetector.Transition] {
+        moves.compactMap { detector.handle($0).transition }
     }
 }
 
@@ -105,6 +112,34 @@ private let development = KeyChord(modifiers: .rightOption, .rightCommand)
         var told = Told(listeningFor: .release)
         #expect(told.told([([.rightOption], 0), ([.leftShift], 900)])
             == [.began(release, at: at(0)), .ended(release, .released(.hold))])
+    }
+
+    /// A release the input method is never told at all - let go over the Desktop, or its
+    /// message dropped on a full port - is heard when the app reads the session, not left to
+    /// hold the microphone open.
+    @Test func aReleaseTheSessionNoLongerHoldsIsHeard() {
+        var told = Told(listeningFor: .release)
+        #expect(told.holding([.rightOption], at: 0) == [.began(release, at: at(0))])
+        #expect(told.session([], at: 800) == [.ended(release, .released(.hold))])
+    }
+
+    /// The session only confirms: a key down there that the input method never told is not
+    /// a press, since the input method is what hears presses.
+    @Test func theSessionCannotPress() {
+        var told = Told(listeningFor: .release)
+        #expect(told.holding([.leftShift], at: 0).isEmpty)
+        #expect(told.session([.leftShift, .rightOption], at: 200).isEmpty)
+        #expect(told.holding([], at: 300).isEmpty)
+    }
+
+    /// The input method's message about a hold, arriving after the session was read letting
+    /// go of it, is older than that release and does not press the key again.
+    @Test func aStateOlderThanTheSessionsReleaseChangesNothing() {
+        var told = Told(listeningFor: .release)
+        #expect(told.holding([.rightOption], at: 0) == [.began(release, at: at(0))])
+        #expect(told.session([], at: 800) == [.ended(release, .released(.hold))])
+        #expect(told.holding([.rightOption], at: 700).isEmpty)
+        #expect(told.holding([.rightOption], at: 2000) == [.began(release, at: at(2000))])
     }
 
     @Test func aStateThatChangedNothingIsNoKeys() {
