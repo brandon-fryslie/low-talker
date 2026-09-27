@@ -386,7 +386,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // which is a step in setup rather than something that went wrong.
                 return state.ready ? .success(()) : .failure(LoopRefusal(awaitingGrant: """
                     the input method is \(state); switch it on in \(GuidedSetup.title(for: Self.flavor)) \
-                    in this menu, where macOS asks you once to allow it
+                    in this menu, where macOS asks you to allow it
                     """))
             } catch {
                 log.error("input method: \(String(describing: error), privacy: .public)")

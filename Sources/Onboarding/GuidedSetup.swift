@@ -112,4 +112,30 @@ public extension Requirement.Row {
         case .keyboardSetupAssistant: nil
         }
     }
+
+    /// What pressing this row's ask button does, and what to do when it does not take: for
+    /// what the explanation cannot say and the once-asked note gets wrong. Only the input
+    /// method has one, and it is two measured facts the person cannot see coming. macOS
+    /// shows an Allow dialog naming the app each time it is asked, so declining is not the
+    /// end - the button stays and asks again. And a source installed during this login
+    /// session is switched on only after the next login, with no dialog until then, so
+    /// nothing happening is not the button failing. Both measured on studious 2026-09-27
+    /// (low-input-method-s71.ssn); [LAW:no-silent-failure] neither is left for the person to
+    /// discover. Keyed on what they can see - a dialog, or nothing - because the app cannot
+    /// tell the two apart from the source alone.
+    func switchOnNote(for flavor: Flavor) -> String? {
+        switch self {
+        case .inputMethod:
+            """
+            macOS asks whether to allow \(flavor.displayName) to switch it on: click Allow. \
+            You can press this again if you decline. If pressing it changes nothing, \
+            \(flavor.displayName) was installed during this login session, and macOS switches \
+            on a new input method only after the next one: log out and back in, then open \
+            \(flavor.displayName) and press this again.
+            """
+        case .microphone, .inputMonitoring, .accessibility, .keyboardHelper,
+             .driverExtension, .keyboardSetupAssistant:
+            nil
+        }
+    }
 }
