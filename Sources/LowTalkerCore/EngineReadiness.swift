@@ -45,12 +45,19 @@ public enum EngineReadiness: Sendable, Equatable {
         }
     }
 
-    /// The SF Symbol the status item draws.
-    public func symbolName() -> String {
+    /// What the status item draws. Ready is the app's own mark, so the icon a person looks
+    /// for is not the microphone macOS and every other dictation app already put in the
+    /// menu bar; the waits and the failure stay SF Symbols, which read the same everywhere.
+    public enum StatusGlyph: Equatable, Sendable {
+        case mark
+        case symbol(String)
+    }
+
+    public func statusGlyph() -> StatusGlyph {
         switch self {
-        case .preparing: "hourglass"
-        case .ready: "mic.fill"
-        case .failed: "exclamationmark.triangle.fill"
+        case .preparing: .symbol("hourglass")
+        case .ready: .mark
+        case .failed: .symbol("exclamationmark.triangle.fill")
         }
     }
 

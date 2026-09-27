@@ -40,3 +40,37 @@ done
 rsvg-convert -w 16 App/Icons/InputMethod.svg -o "$scratch/glyph.png"
 rsvg-convert -w 32 App/Icons/InputMethod.svg -o "$scratch/glyph@2x.png"
 tiffutil -cathidpicheck "$scratch/glyph.png" "$scratch/glyph@2x.png" -out App/InputMethods/InputMethod.tiff >/dev/null
+
+# The menu bar's mark, drawn twice by hand: the 1x on whole pixels, since a half-pixel
+# edge at 1x is a grey smear. Dev carries a badge to its right, the release mark's shapes
+# unchanged, so the two copies in one menu bar are told apart.
+for name in StatusMark StatusMarkDev; do
+    set="$catalog/$name.imageset"
+    rm -rf "$set"
+    mkdir -p "$set"
+    for scale in 1 2; do
+        source=App/Icons/Status.svg; [ "$scale" = 1 ] && source=App/Icons/Status@1x.svg
+        if [ "$name" = StatusMarkDev ]; then
+            # Widened to 23 so the badge clears the caret's serif by a whole pixel at 1x.
+            width=23
+            sed -e 's/viewBox="0 0 18 18"/viewBox="0 0 23 18"/' -e 's#</svg>#<circle cx="21" cy="3" r="2"/></svg>#' \
+                "$source" >"$scratch/$name@$scale.svg"
+            grep -q 'viewBox="0 0 23 18"' "$scratch/$name@$scale.svg" && grep -q '<circle' "$scratch/$name@$scale.svg" ||
+                { echo "$source: no 18x18 viewBox to widen or </svg> to badge" >&2; exit 1; }
+        else
+            width=18
+            cp "$source" "$scratch/$name@$scale.svg"
+        fi
+        rsvg-convert -w $((width * scale)) "$scratch/$name@$scale.svg" -o "$set/mark@${scale}x.png"
+    done
+    cat >"$set/Contents.json" <<'JSON'
+{
+  "images" : [
+    { "idiom" : "universal", "scale" : "1x", "filename" : "mark@1x.png" },
+    { "idiom" : "universal", "scale" : "2x", "filename" : "mark@2x.png" }
+  ],
+  "info" : { "author" : "xcode", "version" : 1 },
+  "properties" : { "template-rendering-intent" : "template" }
+}
+JSON
+done

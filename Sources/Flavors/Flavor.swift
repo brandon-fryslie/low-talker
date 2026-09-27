@@ -151,6 +151,15 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
         }
     }
 
+    /// The menu bar mark in the same catalog. Dev's carries a badge, because both copies'
+    /// status items sit in one menu bar.
+    public var statusMarkName: String {
+        switch self {
+        case .release: "StatusMark"
+        case .development: "StatusMarkDev"
+        }
+    }
+
     /// The config file's name inside `~/.config/low-talker`. One directory, two files:
     /// the directory is the project's, and a reader editing one build's settings should
     /// find the other's beside it rather than somewhere else entirely.

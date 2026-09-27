@@ -163,9 +163,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Named from the flavor, because with both copies installed there are two of
         // these icons in the menu bar and this label is what tells them apart - to a
         // reader with VoiceOver, and to an agent reading the bar over Accessibility.
-        statusItem.button?.image = NSImage(
-            systemSymbolName: engineReadiness.symbolName(),
-            accessibilityDescription: engineReadiness.iconDescription(for: Self.flavor.displayName))
+        let description = engineReadiness.iconDescription(for: Self.flavor.displayName)
+        switch engineReadiness.statusGlyph() {
+        case .mark:
+            // The asset catalog marks it a template, so the bar tints it like its neighbours.
+            // A copy, because the named image is shared and the description is this state's.
+            // [LAW:no-silent-failure] A bundle without the mark is built wrong; the item keeps
+            // a symbol rather than shrinking to nothing and taking the menu with it.
+            guard let image = NSImage(named: Self.flavor.statusMarkName)?.copy() as? NSImage else {
+                log.fault("no \(Self.flavor.statusMarkName, privacy: .public) in the asset catalog")
+                statusItem.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: description)
+                return
+            }
+            image.accessibilityDescription = description
+            statusItem.button?.image = image
+        case .symbol(let name):
+            statusItem.button?.image = NSImage(systemSymbolName: name, accessibilityDescription: description)
+        }
     }
 
     /// Takes the loop down and builds it again: the old loop's hotkey comes down first,
