@@ -301,6 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // it does, or be overwritten by a later write about an earlier state.
         showHotkeyStatus("starting — setting up the \(setup.delivery.title.lowercased())")
         let delivering = await install(setup.delivery)
+        let hearable = await install(setup.source)
         // The tap's grants from a fresh reading: this process's own answer can be the one it
         // had before the person allowed them. See `PrivacyReading`.
         let hotkey = Hotkey(for: Self.flavor, heardBy: setup.source) { [unowned self] in
@@ -320,7 +321,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // while the status line said the loop was off. Left down, it is also what lets
         // choosing the same delivery again retry the install - `take` rebuilds a loop whose
         // hotkey is not watching. [LAW:no-silent-failure]
-        let hearing = delivering.flatMap {
+        let hearing = delivering.flatMap { hearable }.flatMap {
             Result {
                 try hotkey.start({ [unowned self] transition in
                     if case .began = transition { (lastDictation, lastFailure) = (nil, nil) }
@@ -379,19 +380,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             return .success(())
         case .inputMethod:
-            do {
-                let state = try await InputSourceInstaller(flavor: Self.flavor).install()
-                log.notice("input method: \(state, privacy: .public)")
-                // Stopped short of selected only where a person has yet to switch it on,
-                // which is a step in setup rather than something that went wrong.
-                return state.ready ? .success(()) : .failure(LoopRefusal(awaitingGrant: """
-                    the input method is \(state); switch it on in \(GuidedSetup.title(for: Self.flavor)) \
-                    in this menu, where macOS asks you to allow it
-                    """))
-            } catch {
-                log.error("input method: \(String(describing: error), privacy: .public)")
-                return .failure("the input method could not be installed: \(error)")
-            }
+            return await installInputMethod()
+        }
+    }
+
+    /// Makes `source` ready to hear as far as it can without asking anyone, the way
+    /// `install(_ delivery:)` does for a delivery: the input method selected, for the
+    /// hearing it tells the modifier keys to. The event tap reads its grants when it goes
+    /// up, and a registered hot key needs nothing.
+    private func install(_ source: HotkeySource) async -> Result<Void, LoopRefusal> {
+        switch source {
+        case .eventTap, .registeredHotKey: .success(())
+        case .inputMethod: await installInputMethod()
+        }
+    }
+
+    /// This installation's input method put where macOS looks for one, registered, and -
+    /// once a person has switched it on in setup - selected: what the input method delivery
+    /// commits through and the input method hearing is told the keys by, so either one
+    /// choosing it is enough. Idempotent, so a setup where both choose it runs it twice and
+    /// comes to the same place.
+    private func installInputMethod() async -> Result<Void, LoopRefusal> {
+        do {
+            let state = try await InputSourceInstaller(flavor: Self.flavor).install()
+            log.notice("input method: \(state, privacy: .public)")
+            // Stopped short of selected only where a person has yet to switch it on,
+            // which is a step in setup rather than something that went wrong.
+            return state.ready ? .success(()) : .failure(LoopRefusal(awaitingGrant: """
+                the input method is \(state); switch it on in \(GuidedSetup.title(for: Self.flavor)) \
+                in this menu, where macOS asks you to allow it
+                """))
+        } catch {
+            log.error("input method: \(String(describing: error), privacy: .public)")
+            return .failure("the input method could not be installed: \(error)")
         }
     }
 
@@ -455,10 +476,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     /// A source as the menu and the first-launch question name it: its chord on the layout
-    /// the user types on, and what macOS asks for it. [LAW:one-source-of-truth] Both halves
-    /// are read off the source, so no second spelling of either is kept here.
+    /// the user types on, what macOS asks for it, and where it cannot hear.
+    /// [LAW:one-source-of-truth] Every part is read off the source, so no second spelling of
+    /// any is kept here.
     private func title(of source: HotkeySource) -> String {
-        "\(chordName(heardBy: source)) — \(source.asks)"
+        ([chordName(heardBy: source), source.asks] + [source.unheard].compactMap { $0 }).joined(separator: " — ")
     }
 
     /// This installation's chord for `source`, named on the layout the user types on now.
@@ -564,7 +586,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // A grant the chosen delivery cannot deliver without was just asked for: once it
         // reads as met, the loop is rebuilt so the delivery's install finishes the job -
         // for the input method, selecting it - whether or not the loop is up.
-        if failure == nil, row.stopsDictation, let delivery = chosenDelivery, row.serves == .delivery(delivery) {
+        if failure == nil, row.stopsDictation, let delivery = chosenDelivery, row.serves.contains(.delivery(delivery)) {
             deliveryGrantAsked = true
         }
         return failure

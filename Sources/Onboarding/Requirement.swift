@@ -72,22 +72,27 @@ public extension Requirement {
         /// [LAW:dataflow-not-control-flow] Which setups need a row is a value on the row, so
         /// choosing a hotkey or a delivery changes the list by what it holds, and no surface
         /// decides for itself which rows to show.
-        public var serves: Serves {
+        ///
+        /// A set, because one row can serve both halves: the input method switched on is what
+        /// its delivery commits through and what its hearing is told the modifier keys by.
+        public var serves: Set<Serves> {
             switch self {
-            case .microphone: .everySetup
-            case .inputMonitoring, .accessibility: .hearing(.eventTap)
-            case .inputMethod: .delivery(.inputMethod)
-            case .driverExtension, .keyboardHelper, .keyboardSetupAssistant: .delivery(.virtualKeyboard)
+            case .microphone: [.everySetup]
+            case .inputMonitoring, .accessibility: [.hearing(.eventTap)]
+            case .inputMethod: [.delivery(.inputMethod), .hearing(.inputMethod)]
+            case .driverExtension, .keyboardHelper, .keyboardSetupAssistant: [.delivery(.virtualKeyboard)]
             }
         }
 
         /// Whether any of these setups needs this row. The app passes the one setup it has;
         /// the CLI, which has none, passes every choice there is and gets every row.
         public func isNeeded(deliveries: [Delivery], sources: [HotkeySource]) -> Bool {
-            switch serves {
-            case .everySetup: true
-            case .hearing(let source): sources.contains(source)
-            case .delivery(let delivery): deliveries.contains(delivery)
+            serves.contains { served in
+                switch served {
+                case .everySetup: true
+                case .hearing(let source): sources.contains(source)
+                case .delivery(let delivery): deliveries.contains(delivery)
+                }
             }
         }
 
@@ -135,7 +140,7 @@ public extension Requirement {
         /// The rows a person must allow before this hotkey hears anything: the grants it
         /// asks for, read off the list rather than kept beside it.
         public static func grants(for source: HotkeySource) -> [Row] {
-            allCases.filter { $0.serves == .hearing(source) }
+            allCases.filter { $0.serves.contains(.hearing(source)) }
         }
     }
 

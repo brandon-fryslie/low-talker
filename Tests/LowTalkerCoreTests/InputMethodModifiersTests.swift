@@ -1,0 +1,113 @@
+import Choices
+import Flavors
+import LowTalkerCore
+import Testing
+
+/// The input method's hearing, held through the press detection it feeds: a stream of the
+/// modifier keys held, as the input method tells them, becomes the same presses the event
+/// tap's key events make.
+///
+/// Driven by states rather than by keys, because states are what cross from the input
+/// method, told as often as the app it was in hands them over. [LAW:behavior-not-structure]
+private struct Told {
+    var detector: HotkeyDetector
+    private var held: Set<Modifier> = []
+
+    init(listeningFor flavor: Flavor) {
+        detector = HotkeyDetector(chords: [Hotkey.defaultChord(for: flavor, heardBy: .inputMethod)], tapThreshold: .milliseconds(250))
+    }
+
+    /// The input method telling the app that `modifiers` are held, `ms` into the run.
+    mutating func holding(_ modifiers: Set<Modifier>, at ms: Int64) -> [HotkeyDetector.Transition] {
+        let moves = KeyEvent.moves(from: held, to: modifiers, at: at(ms))
+        held = modifiers
+        return moves.compactMap { detector.handle($0).transition }
+    }
+
+    /// Each state in turn, and every press they made.
+    mutating func told(_ states: [(Set<Modifier>, Int64)]) -> [HotkeyDetector.Transition] {
+        states.flatMap { holding($0.0, at: $0.1) }
+    }
+}
+
+private func at(_ ms: Int64) -> HostTime { HostTime(uptime: .milliseconds(ms)) }
+
+private let release = KeyChord(modifiers: .rightOption)
+private let development = KeyChord(modifiers: .rightOption, .rightCommand)
+
+@Suite struct InputMethodModifiersTests {
+    /// The input method listens for the event tap's chord, not a second spelling of it.
+    @Test(arguments: Flavor.allCases)
+    func theChordIsTheEventTaps(flavor: Flavor) {
+        #expect(Hotkey.defaultChord(for: flavor, heardBy: .inputMethod) == Hotkey.defaultChord(for: flavor, heardBy: .eventTap))
+    }
+
+    @Test func aHoldBeginsAtThePressAndEndsAtTheRelease() {
+        var told = Told(listeningFor: .release)
+        #expect(told.told([([.rightOption], 0), ([], 600)]) == [.began(release, at: at(0)), .ended(release, .released(.hold))])
+    }
+
+    @Test func aTapLatchesUntilTheNextPress() {
+        var told = Told(listeningFor: .release)
+        #expect(told.told([([.rightOption], 0), ([], 100)]) == [.began(release, at: at(0))])
+        #expect(told.told([([.rightOption], 2000), ([], 2100)]) == [.ended(release, .released(.tap))])
+    }
+
+    /// VS Code hands the input method every change twice, measured on studious,
+    /// 2026-09-27, and a tap told twice is still one tap: the second telling of a state
+    /// already held changes nothing, where a second key-down would have ended the latch and
+    /// begun a new press on the spot.
+    @Test func aStateToldTwiceIsToldOnce() {
+        var once = Told(listeningFor: .release)
+        var twice = Told(listeningFor: .release)
+        let states: [(Set<Modifier>, Int64)] = [([.rightOption], 0), ([], 100), ([.rightOption], 2000), ([], 2100)]
+        #expect(twice.told(states.flatMap { [$0, ($0.0, $0.1 + 3)] }) == once.told(states))
+    }
+
+    /// Right Option pressed with Shift already down is another chord, and passes by.
+    @Test func anotherModifierHeldFirstMakesItAnotherChord() {
+        var told = Told(listeningFor: .release)
+        #expect(told.told([([.leftShift], 0), ([.leftShift, .rightOption], 50), ([.rightOption], 100), ([], 700)]).isEmpty)
+    }
+
+    /// Shift added and let go during a hold changes nothing: the press is the chord's.
+    @Test func anotherModifierDuringAHoldChangesNothing() {
+        var told = Told(listeningFor: .release)
+        #expect(told.told([([.rightOption], 0), ([.rightOption, .leftShift], 200), ([.rightOption], 300), ([], 600)])
+            == [.began(release, at: at(0)), .ended(release, .released(.hold))])
+    }
+
+    /// The development chord is Right Command then Right Option, and the release copy
+    /// hears nothing of it.
+    @Test func theOtherInstallationsChordIsIgnored() {
+        var releaseCopy = Told(listeningFor: .release)
+        var developmentCopy = Told(listeningFor: .development)
+        let states: [(Set<Modifier>, Int64)] = [([.rightCommand], 0), ([.rightCommand, .rightOption], 50), ([], 700)]
+        #expect(releaseCopy.told(states).isEmpty)
+        #expect(developmentCopy.told(states) == [.began(development, at: at(50)), .ended(development, .released(.hold))])
+    }
+
+    /// Both keys of the development chord arriving in one state - pressed inside the moment
+    /// the input method took to read it - still make the development press and not the
+    /// release one, since the key the release chord shares goes down last.
+    @Test func twoKeysDownInOneStateAreNotTheOtherInstallationsChord() {
+        var releaseCopy = Told(listeningFor: .release)
+        var developmentCopy = Told(listeningFor: .development)
+        let states: [(Set<Modifier>, Int64)] = [([.rightCommand, .rightOption], 0), ([], 700)]
+        #expect(releaseCopy.told(states).isEmpty)
+        #expect(developmentCopy.told(states) == [.began(development, at: at(0)), .ended(development, .released(.hold))])
+    }
+
+    /// A release the input method was never handed - focus moved to where it hears nothing
+    /// - is heard in the next state it is told, which no longer holds the key, rather than
+    /// leaving the microphone open until the chord is pressed again.
+    @Test func aReleaseThatWasNotToldIsHeardInTheNextState() {
+        var told = Told(listeningFor: .release)
+        #expect(told.told([([.rightOption], 0), ([.leftShift], 900)])
+            == [.began(release, at: at(0)), .ended(release, .released(.hold))])
+    }
+
+    @Test func aStateThatChangedNothingIsNoKeys() {
+        #expect(KeyEvent.moves(from: [.rightOption], to: [.rightOption], at: at(0)).isEmpty)
+    }
+}

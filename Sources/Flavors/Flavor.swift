@@ -154,6 +154,15 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
     /// input method that looked installed and answered nothing. [LAW:no-silent-failure]
     public var inputMethodPortName: String { inputMethodBundleIdentifier + ".insert" }
 
+    /// The name the input method reaches this flavor's app on to say the modifier keys
+    /// moved: the other direction from `inputMethodPortName`, so the app registers it and
+    /// the input method looks it up.
+    ///
+    /// Under the app's identifier rather than the input method's, because the app is what
+    /// answers on it. The input method is sandboxed, so this name is also the one Mach
+    /// lookup its entitlements admit beyond the text input system's.
+    public var hotkeyPortName: String { bundleIdentifier + ".hotkey" }
+
     /// The name shown in the menu bar and in Login Items, where the whole point is that a
     /// person can tell the two apart at a glance.
     ///

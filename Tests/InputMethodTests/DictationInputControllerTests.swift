@@ -48,6 +48,27 @@ import Testing
         .init(description: "Return", characters: "\r", keyCode: 36, modifiers: 0),
     ]
 
+    /// Asked for changes of the modifier keys and nothing typed: the dictation chord is
+    /// modifiers alone, and a key typed is none of this process's business.
+    @Test func onlyChangesOfTheModifierKeysAreAskedFor() throws {
+        let controller = try #require(DictationInputController(server: nil, delegate: nil, client: nil))
+        #expect(controller.recognizedEvents(nil) == Int(NSEvent.EventTypeMask.flagsChanged.rawValue))
+    }
+
+    /// A change of the modifier keys is handed back like every key, and told, stamped with
+    /// the moment the event carries.
+    @Test func aChangeOfTheModifierKeysIsHandedBackAndTold() async throws {
+        let controller = try #require(DictationInputController(server: nil, delegate: nil, client: nil))
+        let moved = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 61, keyDown: true))
+        moved.type = .flagsChanged
+        moved.flags = .maskAlternate
+        moved.timestamp = 4_242_000_000
+        let event = try #require(NSEvent(cgEvent: moved))
+        #expect(controller.handle(event, client: nil) == false, "Right Option was claimed by the input method")
+        let told = await ModifierChanges.shared.changes.first { @Sendable held in held.uptimeNanoseconds == 4_242_000_000 }
+        #expect(told != nil)
+    }
+
     @Test(arguments: presses)
     func everyKeyIsHandedBack(press: Press) throws {
         let controller = try #require(

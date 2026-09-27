@@ -27,26 +27,7 @@ import DarwinCalls
 /// app's next request finds nothing listening; a request already being answered finishes
 /// first, because the port is only taken down once the queue is out of it.
 public final class InsertionPort {
-    private let source: DispatchSourceMachReceive
-
-    /// The port was not published under its name.
-    public enum NotHosted: Error, CustomStringConvertible {
-        /// Someone is already answering on this name: another copy of this input method in
-        /// another process, or another `InsertionPort` in this one.
-        case nameIsTaken(String)
-        case notRegistered(String, kern_return_t)
-        case noPort(kern_return_t)
-        case noRequirement(PeerIdentity.Unreadable)
-
-        public var description: String {
-            switch self {
-            case .nameIsTaken(let name): "no port could be hosted on \(name); something is already answering there"
-            case .notRegistered(let name, let status): "no port could be hosted on \(name): bootstrap status \(status)"
-            case .noPort(let status): "no Mach port could be allocated: \(Mach.describe(status))"
-            case .noRequirement(let failure): "nobody could be admitted to the insert port, because this process cannot say who signed it: \(failure)"
-            }
-        }
-    }
+    private let port: NamedPort
 
     /// Something the port did that nobody asked it for, said so the log can say it.
     public enum Event: CustomStringConvertible {
@@ -74,7 +55,7 @@ public final class InsertionPort {
     public convenience init(
         flavor: Flavor, queue: DispatchQueue,
         told: @escaping (Event) -> Void, answer: @escaping (String) -> InsertionAnswer
-    ) throws(NotHosted) {
+    ) throws(PortNotHosted) {
         let senders: PeerIdentity
         do throws(PeerIdentity.Unreadable) { senders = try .signedLikeThisProcess(identifier: flavor.bundleIdentifier) } catch { throw .noRequirement(error) }
         try self.init(portName: flavor.inputMethodPortName, senders: senders, queue: queue, told: told, answer: answer)
@@ -85,7 +66,7 @@ public final class InsertionPort {
     convenience init(
         portName: String, senders: PeerIdentity, queue: DispatchQueue,
         told: @escaping (Event) -> Void, answer: @escaping (String) -> InsertionAnswer
-    ) throws(NotHosted) {
+    ) throws(PortNotHosted) {
         try self.init(portName: portName, queue: queue, told: told) { request in
             do throws(PeerIdentity.NotAdmitted) {
                 try senders.admits(request.sender)
@@ -107,35 +88,10 @@ public final class InsertionPort {
     /// A port that answers each message with whatever `respond` makes of it - the channel
     /// with nobody checked, which only the initializer above and the suite's hand-made far
     /// ends build on.
-    init(portName: String, queue: DispatchQueue, told: @escaping (Event) -> Void, respond: @escaping (Mach.Received) -> Data) throws(NotHosted) {
-        let right: ReceiveRight
-        do throws(ReceiveRight.NotAllocated) { right = try ReceiveRight(sendable: true) } catch { throw .noPort(error.status) }
-        let registered = lt_bootstrap_register(portName, right.port)
-        guard registered == KERN_SUCCESS else {
-            throw registered == BOOTSTRAP_NAME_IN_USE ? .nameIsTaken(portName) : .notRegistered(portName, registered)
-        }
-        source = DispatchSource.makeMachReceiveSource(port: right.port, queue: queue)
-        // Every message waiting is taken each time the source fires, so a burst is not left
-        // queued behind an event that has already been handled.
-        source.setEventHandler {
-            while true {
-                switch Mach.receive(on: right.port, timeout: Duration.zero) {
-                case .received(let request):
-                    let sent = request.answer(respond(request))
-                    if sent != MACH_MSG_SUCCESS { told(.answerNotDelivered(sent)) }
-                case .failed(MACH_RCV_TIMED_OUT):
-                    return
-                case .failed(let status):
-                    told(.receiveFailed(status))
-                    return
-                }
-            }
-        }
-        // The right goes with the source, after the last handler has returned: the name is
-        // withdrawn by the same step that stops anything answering on it.
-        source.setCancelHandler { withExtendedLifetime(right) {} }
-        source.activate()
+    init(portName: String, queue: DispatchQueue, told: @escaping (Event) -> Void, respond: @escaping (Mach.Received) -> Data) throws(PortNotHosted) {
+        port = try NamedPort(name: portName, queue: queue, received: { request in
+            let sent = request.answer(respond(request))
+            if sent != MACH_MSG_SUCCESS { told(.answerNotDelivered(sent)) }
+        }, failed: { told(.receiveFailed($0)) })
     }
-
-    deinit { source.cancel() }
 }

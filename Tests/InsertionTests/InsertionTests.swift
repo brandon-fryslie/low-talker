@@ -150,7 +150,7 @@ private let anEditor = "com.example.editor"
         #expect {
             _ = try hostInsertion(name: name) { _ in .refused(.noClientHasFocus) }
         } throws: { error in
-            guard case InsertionPort.NotHosted.nameIsTaken(name)? = error as? InsertionPort.NotHosted else { return false }
+            guard case PortNotHosted.nameIsTaken(name)? = error as? PortNotHosted else { return false }
             return true
         }
         #expect(try await inserter(name).insert("hello") == Inserted(characters: 5, into: anEditor))

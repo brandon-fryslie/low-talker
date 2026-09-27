@@ -65,6 +65,9 @@ let package = Package(
                 "Flavors",
                 "Choices",
                 "Grants",
+                // The app's end of the hotkey port, which the input method tells the modifier
+                // keys to.
+                "Insertion",
                 .product(name: "WhisperKit", package: "argmax-oss-swift"),
                 .product(name: "TOMLKit", package: "TOMLKit"),
             ]
@@ -139,10 +142,11 @@ let package = Package(
         // `make test` the way App/LowTalker's sources are.
         .target(name: "InputMethod", dependencies: ["Insertion"]),
         .testTarget(name: "InputMethodTests", dependencies: ["InputMethod", "Insertion", "Flavors"]),
-        // The one call that crosses between the app and the input method, and both ends of
-        // the port carrying it. It links Flavors for the port's name and the Darwin calls
-        // beneath it, and nothing else - in particular no InputMethodKit, because the app is
-        // one of its two callers and the app has no business linking the text input system.
+        // The two calls that cross between the app and the input method - words one way, the
+        // modifier keys the other - and both ends of each port. It links Flavors for the
+        // ports' names and the Darwin calls beneath them, and nothing else - in particular no
+        // InputMethodKit, because the app is one of its two callers and the app has no
+        // business linking the text input system.
         // [LAW:one-way-deps]
         .target(name: "Insertion", dependencies: ["Flavors", "DarwinCalls"]),
         // The bootstrap calls the SDK keeps from Swift, the Mach macros Swift cannot import
