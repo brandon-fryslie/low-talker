@@ -43,6 +43,6 @@ public enum Carrier {
     /// app, or the one built beside it.
     public static func keyboardHelper(shippedWith executable: URL) -> URL {
         app(enclosing: executable).map { $0.appending(path: helperInBundle) }
-            ?? executable.resolvingSymlinksInPath().deletingLastPathComponent().appending(path: "lowtalker-keyboardd")
+            ?? executable.resolvingSymlinksInPath().deletingLastPathComponent().appending(path: URL(fileURLWithPath: helperInBundle).lastPathComponent)
     }
 }

@@ -414,8 +414,8 @@ public extension Requirement {
 public enum HelperStanding: Sendable, Hashable, CaseIterable {
     /// The app's job holds the Mach service: registered, approved, and answering.
     case holdingTheService
-    /// A job loaded from /Library/LaunchDaemons runs the helper this installation shipped
-    /// and holds the service: what `lowtalker helper install` loads, which needs sudo and
+    /// A job loaded from /Library/LaunchDaemons runs root's copy of this installation's
+    /// helper and holds the service: what `lowtalker helper install` loads, which needs sudo and
     /// no approval anyone has to click, so an agent can bring a helper up on a Mac with no
     /// checkout. The app's own registration never spawns while it holds the label, and BTM
     /// binds that registration to this job's plist - measured, README "The keyboard
@@ -555,8 +555,7 @@ public extension Requirement {
             A job bootstrapped from /Library/LaunchDaemons holds
             \(flavor.launchdLabel) and runs some other copy of the helper,
             so \(flavor.displayName)'s own never spawned. Remove that job,
-            then launch the app again, or install this copy's helper in its
-            place with helper install:
+            then launch the app again:
                 \(HelperJob.command(cli, "remove", flavor: flavor))
             """
         }

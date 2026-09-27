@@ -29,7 +29,7 @@ public enum OnboardingProbe {
     public static func helperStanding(flavor: Flavor) throws -> HelperStanding {
         try standing(
             from: Command("/bin/launchctl", "print", "system/\(flavor.launchdLabel)").run(),
-            flavor: flavor, installation: Carrier.installation(of:))
+            flavor: flavor)
     }
 
     /// What launchd said, read.
@@ -38,23 +38,18 @@ public enum OnboardingProbe {
     /// `noJob` for. Any other failure is refused: an unread launchd reported as "no job"
     /// would send a reader to approve a login item that is already approved.
     /// [LAW:no-silent-failure]
-    ///
-    /// - Parameter installation: which installation an executable belongs to, handed in so
-    ///   the bundle it reads off the disk is the caller's. [LAW:effects-at-boundaries]
-    static func standing(from printed: Command.Output, flavor: Flavor, installation: (URL) -> Flavor?) throws -> HelperStanding {
+    static func standing(from printed: Command.Output, flavor: Flavor) throws -> HelperStanding {
         guard let job = try HelperJob.Record(printed, label: flavor.launchdLabel, service: flavor.machServiceName) else { return .noJob }
         // A job loaded from a plist in /Library/LaunchDaemons is not the app's
         // registration, and `SMAppService.register()` gets no refusal while it holds the
         // label: the app's own copy simply never spawns. That is harmless when the plist
-        // runs a helper this installation shipped and holds the service - the job
+        // runs root's copy of this installation's helper and holds the service - the job
         // `lowtalker helper install` loads - and it is the stray the step removes when it
-        // runs anything else, such as a checkout's build under the release label.
-        // [LAW:single-enforcer] The same rule install keeps, so the reading does not
-        // depend on which copy of the CLI is asking.
+        // runs anything else, such as a checkout's build that an older script loaded.
         guard job.loadedFromLaunchDaemons else {
             return job.holdsTheService ? .holdingTheService : .anotherJobHoldsTheService
         }
-        return job.program.flatMap(installation) == flavor && job.holdsTheService
+        return job.program == URL(fileURLWithPath: HelperJob.helperPath(for: flavor)) && job.holdsTheService
             ? .answeringAsALaunchDaemon : .aBootstrappedJobHoldsTheLabel
     }
 

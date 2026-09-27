@@ -24,9 +24,8 @@ struct HelperCommand: ParsableCommand {
     /// [CLI] Exit 0 once the job holds the helper's Mach service, 1 with the reason otherwise.
     ///
     /// [LAW:types-are-the-program] No `--flavor`: the helper is the one this binary shipped
-    /// with, so its installation is this binary's too. A stated flavor could only load one
-    /// installation's helper under the other's label - the stray onboarding tells a reader
-    /// to remove.
+    /// with, and the label is that helper's installation's. A stated flavor could only load
+    /// one installation's helper under the other's label.
     struct Install: ParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "install",
@@ -34,7 +33,7 @@ struct HelperCommand: ParsableCommand {
 
         func run() throws {
             let helper = Carrier.keyboardHelper(shippedWith: URL(fileURLWithPath: LowTalker.path))
-            try HelperCommand.say { try HelperJob.install(flavor: FlavorOption.defaultFlavor, helper: helper) }
+            try HelperCommand.say { try HelperJob.install(helper: helper) }
         }
     }
 

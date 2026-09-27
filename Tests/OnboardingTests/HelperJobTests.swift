@@ -6,35 +6,26 @@ import Testing
 
 /// The LaunchDaemon `lowtalker helper install` writes, and where it finds the helper to run.
 @Suite struct HelperJobTests {
-    static let helper = URL(fileURLWithPath: "/Applications/LowTalker.app/Contents/MacOS/lowtalker-keyboardd")
+    static let helper = OnboardingProbeTests.helper
 
     /// The job names the service its flavor's client dials, under the label that makes a
     /// second claimant loud. A job that bootstrapped one name while the client dialled
     /// another would leave a root daemon nobody can reach, which is what 3ti.13 was.
     @Test(arguments: Flavor.allCases)
     func theJobRegistersTheServiceTheClientConnectsTo(flavor: Flavor) throws {
-        let plist = HelperJob.plist(for: flavor, helper: Self.helper)
+        let plist = HelperJob.plist(for: flavor)
         #expect(plist["Label"] as? String == flavor.launchdLabel)
         #expect(plist["MachServices"] as? [String: Bool] == [flavor.machServiceName: true])
         #expect(HelperJob.plistPath(for: flavor) == "/Library/LaunchDaemons/\(flavor.launchdLabel).plist")
     }
 
     /// The helper learns which installation it serves from its arguments alone, and runs
-    /// the program it was handed rather than one a bundle names relative to itself.
+    /// root's copy, never the file its user can write.
     @Test(arguments: Flavor.allCases)
-    func theJobRunsTheHelperItWasHandedAsItsFlavor(flavor: Flavor) throws {
-        let plist = HelperJob.plist(for: flavor, helper: Self.helper)
-        #expect(plist["ProgramArguments"] as? [String] == [Self.helper.path, "--flavor", flavor.description])
+    func theJobRunsRootsCopyAsItsFlavor(flavor: Flavor) throws {
+        let plist = HelperJob.plist(for: flavor)
+        #expect(plist["ProgramArguments"] as? [String] == ["/Library/PrivilegedHelperTools/\(flavor.launchdLabel)", "--flavor", flavor.description])
         #expect(plist["KeepAlive"] as? [String: Bool] == ["SuccessfulExit": false])
-    }
-
-    /// The plist the job is loaded from is one `PropertyListSerialization` can write, so a
-    /// path holding XML's reserved characters needs no escaping by hand.
-    @Test func theJobSerializesWhateverThePathHolds() throws {
-        let odd = URL(fileURLWithPath: "/Applications/Low <&> \"Talker\".app/Contents/MacOS/lowtalker-keyboardd")
-        let data = try PropertyListSerialization.data(fromPropertyList: HelperJob.plist(for: .release, helper: odd), format: .xml, options: 0)
-        let back = try #require(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
-        #expect((back["ProgramArguments"] as? [String])?.first == odd.path)
     }
 
     /// The step's command pastes into a shell whatever the path holds.
@@ -71,7 +62,7 @@ import Testing
         let printed = Command.Output(status: 0, stdout: OnboardingProbeTests.installedByTheCLI, stderr: "")
         let record = try #require(try HelperJob.Record(printed, label: OnboardingProbeTests.label, service: OnboardingProbeTests.service))
         #expect(record.path == "/Library/LaunchDaemons/ai.promptctl.low-talker.keyboardd.plist")
-        #expect(record.program == Self.helper)
+        #expect(record.program == URL(fileURLWithPath: HelperJob.helperPath(for: .release)))
         #expect(record.holdsTheService)
         #expect(record.loadedFromLaunchDaemons)
     }
