@@ -20,8 +20,8 @@ public enum HelperJob {
         ///   SMAppService:              path = (submitted by smd.919)
         ///   launchctl bootstrap:       path = /Library/LaunchDaemons/<label>.plist
         let path: String
-        /// The executable the job runs, empty when launchd names none.
-        let program: String
+        /// The executable the job runs, nil when launchd names none.
+        let program: URL?
         /// Whether the job holds the flavor's Mach service. The endpoint is handed out at
         /// load, so a job that holds the service names it; a job that asked and lost simply
         /// has no such entry - launchd does not make the loser loud.
@@ -62,7 +62,8 @@ public enum HelperJob {
             // A record naming no path says nothing about who holds the label, and nothing
             // is not an answer to act on. [LAW:no-silent-failure]
             guard !path.isEmpty else { throw OnboardingUnreadable.noPath(label: label, record: printed.stdout) }
-            program = field("program")
+            let program = field("program")
+            self.program = program.isEmpty ? nil : URL(fileURLWithPath: program)
             holdsTheService = printed.stdout.contains("\"\(service)\" = {")
         }
     }
@@ -134,7 +135,8 @@ public enum HelperJob {
     }
 
     /// Loads `helper` as this flavor's LaunchDaemon, replacing a job an earlier install
-    /// loaded and never the app's own registration.
+    /// loaded and never the app's own registration. A failure leaves no job under the
+    /// label, the earlier one included: install again once it is fixed.
     public static func install(flavor: Flavor, helper: URL) throws -> String {
         guard geteuid() == 0 else { throw Refusal.notRoot }
         guard FileManager.default.isExecutableFile(atPath: helper.path) else { throw Refusal.noHelper(helper.path) }
@@ -151,20 +153,20 @@ public enum HelperJob {
         // never cleared blind.
         let holder = try record(for: flavor)
         if let holder, !holder.loadedFromLaunchDaemons { throw Refusal.heldByTheApp(label: flavor.launchdLabel, path: holder.path) }
+        // The job an earlier install loaded goes first, with its plist whatever that is
+        // called, or it would load at the next boot and hold the label against this one.
+        // So every failure below ends in one state: nothing under the label, loaded or on
+        // disk, and the plist written here goes back out rather than loading at the next
+        // boot ahead of the app. [LAW:no-ambient-temporal-coupling] [LAW:no-silent-failure]
+        if let holder {
+            try succeed(Command("/bin/launchctl", "bootout", "system/\(flavor.launchdLabel)"))
+            try discard(holder.path)
+        }
         let path = plistPath(for: flavor)
-        let written = try PropertyListSerialization.data(fromPropertyList: plist(for: flavor, helper: helper), format: .xml, options: 0)
-        try written.write(to: URL(fileURLWithPath: path), options: .atomic)
-        // From here every failure takes the plist back out: left behind it loads at the next
-        // boot ahead of the app and holds the label against it. [LAW:no-silent-failure]
         do {
+            let written = try PropertyListSerialization.data(fromPropertyList: plist(for: flavor, helper: helper), format: .xml, options: 0)
+            try written.write(to: URL(fileURLWithPath: path), options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o644, .ownerAccountID: 0, .groupOwnerAccountID: 0], ofItemAtPath: path)
-            // The job an earlier install loaded goes now that nothing is left to refuse, and a
-            // plist under another file name goes with it, or it would load first at the next
-            // boot and hold the label against this one. [LAW:no-ambient-temporal-coupling]
-            if let holder {
-                try succeed(Command("/bin/launchctl", "bootout", "system/\(flavor.launchdLabel)"))
-                if holder.path != path { try discard(holder.path) }
-            }
             try succeed(Command("/bin/launchctl", "bootstrap", "system", path))
             // A job that did not get the endpoint is taken back down: left loaded it would be
             // a root process nobody can reach, restarted by KeepAlive forever.

@@ -71,7 +71,7 @@ import Testing
         let printed = Command.Output(status: 0, stdout: OnboardingProbeTests.installedByTheCLI, stderr: "")
         let record = try #require(try HelperJob.Record(printed, label: OnboardingProbeTests.label, service: OnboardingProbeTests.service))
         #expect(record.path == "/Library/LaunchDaemons/ai.promptctl.low-talker.keyboardd.plist")
-        #expect(record.program == Self.helper.path)
+        #expect(record.program == Self.helper)
         #expect(record.holdsTheService)
         #expect(record.loadedFromLaunchDaemons)
     }

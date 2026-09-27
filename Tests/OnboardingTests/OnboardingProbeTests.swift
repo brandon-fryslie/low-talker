@@ -14,6 +14,9 @@ import Testing
     static let label = "ai.promptctl.low-talker.keyboardd"
     /// The helper the release app ships, which a job this reader counts as its own runs.
     static let helper = URL(fileURLWithPath: "/Applications/LowTalker.app/Contents/MacOS/lowtalker-keyboardd")
+    /// Which installation an executable belongs to, without a bundle on disk: the release
+    /// app's own helper, and a checkout's build for everything else.
+    static func installation(_ executable: URL) -> Flavor? { executable == helper ? .release : .development }
 
     /// What `launchctl print` prints for a job that holds the Mach service. The endpoint
     /// is handed out at load, so a job that has it names it here.
@@ -71,21 +74,21 @@ import Testing
 
     @Test func aJobNamingTheEndpointIsHoldingTheService() throws {
         let printed = Command.Output(status: 0, stdout: Self.holdingTheService, stderr: "")
-        #expect(try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service, helper: Self.helper) == .holdingTheService)
+        #expect(try OnboardingProbe.standing(from: printed, flavor: .release, installation: Self.installation) == .holdingTheService)
     }
 
     /// The failure this requirement exists for: a job that is loaded, running, and holds
     /// nothing. An app in this state reports its helper enabled and types nothing.
     @Test func aRunningJobWithNoEndpointHasLostTheService() throws {
         let printed = Command.Output(status: 0, stdout: Self.holdingNothing, stderr: "")
-        #expect(try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service, helper: Self.helper) == .anotherJobHoldsTheService)
+        #expect(try OnboardingProbe.standing(from: printed, flavor: .release, installation: Self.installation) == .anotherJobHoldsTheService)
     }
 
     /// A plist job running some other copy of the helper - a checkout's build under the
     /// release label - is the stray, however healthy its endpoint looks.
     @Test func aJobBootstrappedFromAPlistRunningAnotherCopyIsAStray() throws {
         let printed = Command.Output(status: 0, stdout: Self.bootstrappedFromAPlist, stderr: "")
-        #expect(try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service, helper: Self.helper) == .aBootstrappedJobHoldsTheLabel)
+        #expect(try OnboardingProbe.standing(from: printed, flavor: .release, installation: Self.installation) == .aBootstrappedJobHoldsTheLabel)
     }
 
     /// What `lowtalker helper install` loads, measured on studious.local 2026-09-27: a
@@ -115,27 +118,9 @@ import Testing
 
     @Test func aPlistJobRunningThisInstallationsHelperIsAnswering() throws {
         let printed = Command.Output(status: 0, stdout: Self.installedByTheCLI, stderr: "")
-        let standing = try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service, helper: Self.helper)
+        let standing = try OnboardingProbe.standing(from: printed, flavor: .release, installation: Self.installation)
         #expect(standing == .answeringAsALaunchDaemon)
         #expect(standing.aHelperHasRun)
-    }
-
-    /// launchd reports the program as it was written, and a checkout's `.build/debug` is a
-    /// link, so a job loaded through one is still this installation's helper.
-    @Test func aPlistJobRunningThisInstallationsHelperThroughALinkIsAnswering() throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let built = root.appending(path: "arm64-apple-macosx/debug")
-        try FileManager.default.createDirectory(at: built, withIntermediateDirectories: true)
-        try FileManager.default.createSymbolicLink(at: root.appending(path: "debug"), withDestinationURL: built)
-        // Foundation resolves a link only on a path that exists, as a shipped helper does.
-        FileManager.default.createFile(atPath: built.appending(path: "lowtalker-keyboardd").path, contents: nil)
-        let throughTheLink = root.appending(path: "debug/lowtalker-keyboardd").path
-        let printed = Command.Output(
-            status: 0,
-            stdout: Self.installedByTheCLI.replacingOccurrences(of: "program = \(Self.helper.path)", with: "program = \(throughTheLink)"),
-            stderr: "")
-        #expect(try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service, helper: built.appending(path: "lowtalker-keyboardd")) == .answeringAsALaunchDaemon)
     }
 
     /// A job naming no path says nothing about who holds the label, so it is not read as
@@ -143,7 +128,7 @@ import Testing
     @Test func aJobNamingNoPathIsUnreadable() {
         let printed = Command.Output(status: 0, stdout: Self.installedByTheCLI.replacingOccurrences(of: "\tpath = /Library/LaunchDaemons/ai.promptctl.low-talker.keyboardd.plist\n", with: ""), stderr: "")
         #expect(throws: OnboardingUnreadable.self) {
-            try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service, helper: Self.helper)
+            try OnboardingProbe.standing(from: printed, flavor: .release, installation: Self.installation)
         }
     }
 
@@ -151,7 +136,7 @@ import Testing
     @Test func aPlistJobRunningThisInstallationsHelperWithoutTheServiceIsNotAnswering() throws {
         let lost = Self.installedByTheCLI.replacingOccurrences(of: "\"ai.promptctl.low-talker.keyboardd\" = {", with: "\"another.service\" = {")
         let printed = Command.Output(status: 0, stdout: lost, stderr: "")
-        #expect(try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service, helper: Self.helper) == .aBootstrappedJobHoldsTheLabel)
+        #expect(try OnboardingProbe.standing(from: printed, flavor: .release, installation: Self.installation) == .aBootstrappedJobHoldsTheLabel)
     }
 
     /// The app's own job, reported by its bundle path, whose plist also sits under a
@@ -171,7 +156,7 @@ import Testing
         \t}
         }
         """, stderr: "")
-        #expect(try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service, helper: Self.helper) == .holdingTheService)
+        #expect(try OnboardingProbe.standing(from: printed, flavor: .release, installation: Self.installation) == .holdingTheService)
     }
 
     /// The whole way from what launchd printed to what the reader is told, on the Mac
@@ -186,7 +171,7 @@ import Testing
     @Test func aHelperHoldingTheNameSendsTheReaderToTheLog() throws {
         let standing = try OnboardingProbe.standing(
             from: Command.Output(status: 0, stdout: Self.holdingTheService, stderr: ""),
-            label: Self.label, service: Self.service, helper: Self.helper)
+            flavor: .release, installation: Self.installation)
             .sharpenedByTheAppsOwnRegistration(approvalPending: nil)
         #expect(standing == .holdingTheService)
 
@@ -217,14 +202,14 @@ import Testing
     @Test func theServiceNameInTheEnvironmentIsNotAnEndpoint() throws {
         let printed = Command.Output(status: 0, stdout: Self.holdingNothing, stderr: "")
         #expect(Self.holdingNothing.contains(Self.service))
-        #expect(try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service, helper: Self.helper) != .holdingTheService)
+        #expect(try OnboardingProbe.standing(from: printed, flavor: .release, installation: Self.installation) != .holdingTheService)
     }
 
     /// A job launchd has never heard of is a normal answer, and the only non-zero exit
     /// that may become one.
     @Test func aJobLaunchdNeverHeardOfIsNoJob() throws {
         let printed = Command.Output(status: 113, stdout: "", stderr: "Could not find service \"ai.promptctl.low-talker.keyboardd\" in domain for system")
-        #expect(try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service, helper: Self.helper) == .noJob)
+        #expect(try OnboardingProbe.standing(from: printed, flavor: .release, installation: Self.installation) == .noJob)
     }
 
     /// Any other refusal is refused. A launchd nobody could read, reported as "no job",
@@ -233,7 +218,7 @@ import Testing
     @Test func alaunchdThatRefusedForAnyOtherReasonIsNotNoJob() {
         let printed = Command.Output(status: 1, stdout: "", stderr: "Operation not permitted")
         #expect(throws: OnboardingUnreadable.self) {
-            try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service, helper: Self.helper)
+            try OnboardingProbe.standing(from: printed, flavor: .release, installation: Self.installation)
         }
     }
 

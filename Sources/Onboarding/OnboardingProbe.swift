@@ -26,14 +26,10 @@ public enum OnboardingProbe {
     /// becomes the running job. That is a reading of its own, and this tells it apart from
     /// a holder outside launchd by the field launchd answers with.
     /// [LAW:no-silent-failure]
-    ///
-    /// - Parameter cli: the lowtalker binary this reader has. The helper shipped with it is
-    ///   the one a job loaded from /Library/LaunchDaemons must run to count as this
-    ///   installation's.
-    public static func helperStanding(label: String, service: String, cli: String) throws -> HelperStanding {
+    public static func helperStanding(flavor: Flavor) throws -> HelperStanding {
         try standing(
-            from: Command("/bin/launchctl", "print", "system/\(label)").run(),
-            label: label, service: service, helper: Carrier.keyboardHelper(shippedWith: URL(fileURLWithPath: cli)))
+            from: Command("/bin/launchctl", "print", "system/\(flavor.launchdLabel)").run(),
+            flavor: flavor, installation: Carrier.installation(of:))
     }
 
     /// What launchd said, read.
@@ -42,20 +38,23 @@ public enum OnboardingProbe {
     /// `noJob` for. Any other failure is refused: an unread launchd reported as "no job"
     /// would send a reader to approve a login item that is already approved.
     /// [LAW:no-silent-failure]
-    static func standing(from printed: Command.Output, label: String, service: String, helper: URL) throws -> HelperStanding {
-        guard let job = try HelperJob.Record(printed, label: label, service: service) else { return .noJob }
+    ///
+    /// - Parameter installation: which installation an executable belongs to, handed in so
+    ///   the bundle it reads off the disk is the caller's. [LAW:effects-at-boundaries]
+    static func standing(from printed: Command.Output, flavor: Flavor, installation: (URL) -> Flavor?) throws -> HelperStanding {
+        guard let job = try HelperJob.Record(printed, label: flavor.launchdLabel, service: flavor.machServiceName) else { return .noJob }
         // A job loaded from a plist in /Library/LaunchDaemons is not the app's
         // registration, and `SMAppService.register()` gets no refusal while it holds the
         // label: the app's own copy simply never spawns. That is harmless when the plist
-        // runs the very helper this installation shipped and holds the service - the job
+        // runs a helper this installation shipped and holds the service - the job
         // `lowtalker helper install` loads - and it is the stray the step removes when it
         // runs anything else, such as a checkout's build under the release label.
+        // [LAW:single-enforcer] The same rule install keeps, so the reading does not
+        // depend on which copy of the CLI is asking.
         guard job.loadedFromLaunchDaemons else {
             return job.holdsTheService ? .holdingTheService : .anotherJobHoldsTheService
         }
-        // Both sides resolved: launchd reports the program as it was written, and a
-        // checkout's `.build/debug` is itself a link.
-        return URL(fileURLWithPath: job.program).resolvingSymlinksInPath() == helper.resolvingSymlinksInPath() && job.holdsTheService
+        return job.program.flatMap(installation) == flavor && job.holdsTheService
             ? .answeringAsALaunchDaemon : .aBootstrappedJobHoldsTheLabel
     }
 
@@ -232,10 +231,7 @@ public extension OnboardingProbe {
     /// assistant's step. [LAW:no-silent-failure]
     private static func helperRow(flavor: Flavor, approvalPending: Bool?, cli: String) -> (row: Requirement, aHelperHasRun: Bool) {
         do {
-            let standing = try helperStanding(
-                label: flavor.launchdLabel,
-                service: flavor.machServiceName,
-                cli: cli)
+            let standing = try helperStanding(flavor: flavor)
                 .sharpenedByTheAppsOwnRegistration(approvalPending: approvalPending)
             return (.keyboardHelper(standing, flavor: flavor, cli: cli), standing.aHelperHasRun)
         } catch { return (.unreadable(.keyboardHelper, error), false) }

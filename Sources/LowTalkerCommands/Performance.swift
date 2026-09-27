@@ -91,7 +91,7 @@ enum PerformExit: Int32, CaseIterable {
     /// then the code its kind is owed. A failure this names nothing about exits 1, as
     /// ArgumentParser's own would.
     static func fail(_ error: any Error, flavor: Flavor) -> ExitCode {
-        let failure = classify(error, flavor: flavor, machine: .of(flavor, cli: LowTalker.path), cli: LowTalker.path)
+        let failure = classify(error, flavor: flavor, machine: .of(flavor), cli: LowTalker.path)
         FileHandle.standardError.write(Data("Error: \(failure.said)\n".utf8))
         return ExitCode(failure.exit?.rawValue ?? ExitCode.failure.rawValue)
     }
@@ -136,9 +136,9 @@ struct Machine {
     let driver: () throws -> DriverState
     let helper: () throws -> HelperStanding
 
-    static func of(_ flavor: Flavor, cli: String) -> Machine {
+    static func of(_ flavor: Flavor) -> Machine {
         Machine(
             driver: { DriverState(try DriverProbe.facts()) },
-            helper: { try OnboardingProbe.helperStanding(label: flavor.launchdLabel, service: flavor.machServiceName, cli: cli) })
+            helper: { try OnboardingProbe.helperStanding(flavor: flavor) })
     }
 }

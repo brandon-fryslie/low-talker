@@ -19,6 +19,14 @@ public enum Carrier {
         }.first { $0.pathExtension == "app" }
     }
 
+    /// The installation an executable belongs to: the flavor its enclosing app's identifier
+    /// names, development for one no bundle holds - a build from a checkout is the
+    /// development copy - and nil inside a bundle that is no installation's.
+    public static func installation(of executable: URL) -> Flavor? {
+        guard let app = app(enclosing: executable) else { return .development }
+        return Bundle(url: app)?.bundleIdentifier.flatMap(Flavor.init(bundleIdentifier:))
+    }
+
     /// Where an app bundle keeps its keyboard helper: the `BundleProgram` its own launchd
     /// plist names, which `HelperPlistTests` holds this to.
     public static let helperInBundle = "Contents/MacOS/lowtalker-keyboardd"
