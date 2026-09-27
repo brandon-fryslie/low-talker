@@ -2,7 +2,7 @@ import Foundation
 import Insertion
 import LowTalkerCore
 import Testing
-@testable import Typing
+@testable import Dictation
 
 /// The executor: the words are asked of the input method, and what it
 /// does not put at the cursor is a failure, thrown by name.

@@ -78,8 +78,6 @@ targetTemplates:
       - package: low-talker
         product: Signals
       - package: low-talker
-        product: Typing
-      - package: low-talker
         product: Dictation
       # The channel that asks the input method to insert, and the install that puts that
       # input method where macOS looks for one.

@@ -7,7 +7,6 @@ import LowTalkerCore
 import Synchronization
 import Testing
 import TestProbes
-import Typing
 
 private struct NoEngine: Error {}
 private struct NoApp: Error {}

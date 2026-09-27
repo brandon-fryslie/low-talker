@@ -8,7 +8,6 @@ import Insertion
 import LowTalkerCore
 import Onboarding
 import Signals
-import Typing
 import os
 
 /// The menu-bar agent. `LSUIElement` keeps it out of the Dock, so the status item
@@ -231,12 +230,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }.mapError { LoopRefusal(stringLiteral: "\($0)") }
         }
         switch hearing {
-        case .success:
-            downForAGrant = false
-            showHotkeyStatus("hold \(chordName), or tap it to start and again to stop")
-        case .failure(let refusal):
-            downForAGrant = refusal.awaitsGrant
-            showHotkeyStatus("off — \(refusal.reason)")
+        case .success: showHotkeyStatus("hold \(chordName), or tap it to start and again to stop")
+        case .failure(let refusal): showHotkeyStatus("off — \(refusal.reason)")
         }
     }
 
@@ -256,10 +251,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             log.notice("input method: \(state, privacy: .public)")
             // Stopped short of selected only where a person has yet to switch it on,
             // which is a step in setup rather than something that went wrong.
-            return state.ready ? .success(()) : .failure(LoopRefusal(awaitingGrant: """
+            return state.ready ? .success(()) : .failure("""
                 the input method is \(state); switch it on in \(GuidedSetup.title(for: Self.flavor)) \
                 in this menu, where macOS asks you to allow it
-                """))
+                """)
         } catch {
             log.error("input method: \(String(describing: error), privacy: .public)")
             return .failure("the input method could not be installed: \(error)")
@@ -270,11 +265,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Named apart from `Insertion.Refusal`, which is the input method's answer to an insert.
     private struct LoopRefusal: Error, ExpressibleByStringInterpolation {
         let reason: String
-        /// Whether the loop is down only for a grant a person has yet to give, which is what
-        /// a grant arriving later brings it back up from.
-        let awaitsGrant: Bool
-        init(stringLiteral reason: String) { (self.reason, awaitsGrant) = (reason, false) }
-        init(awaitingGrant reason: String) { (self.reason, awaitsGrant) = (reason, true) }
+        init(stringLiteral reason: String) { self.reason = reason }
     }
 
     /// The chords the config listens for, in the words a person presses them by.
@@ -401,31 +392,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             capture.stop()
             // A microphone macOS was never asked about, or was told no, is a step in setup,
             // and the status says where it is the way the input method's refusal does.
-            let (whereToAllow, awaitsGrant) = switch error {
+            let whereToAllow = switch error {
             case MicrophoneAuthorization.Withheld.notDetermined, MicrophoneAuthorization.Withheld.denied:
-                ("; allow it in \(GuidedSetup.title(for: Self.flavor)) in this menu", true)
-            // A reading that failed is retried by the next one that succeeds.
-            case is PrivacyReadingFailure: ("", true)
-            default: ("", false)
+                "; allow it in \(GuidedSetup.title(for: Self.flavor)) in this menu"
+            default: ""
             }
-            downForAGrant = awaitsGrant
             showHotkeyStatus("off — \(error)\(whereToAllow)")
             return
         }
         await rebuild()
     }
 
-    /// True while the loop is down for a grant a person has yet to give: the microphone, or
-    /// the input method switched on. Set by the loop's own last attempt to come up, so a loop
-    /// down for anything else - a config that cannot be read, an install that failed - is not
-    /// restarted by a grant.
-    private var downForAGrant = false
     /// True while `comeUp` runs, so readings taken meanwhile do not start a second one.
     private var comingUp = false
 
-    /// Once every requirement is met: brings the loop up when it is down for a grant, and
-    /// rebuilds a loop that is up when the input method was just switched on, so the install
-    /// selects it.
+    /// Once every requirement is met: brings the loop up when no hotkey is watching, whatever
+    /// took it down - a grant given since, or an install that refused while an app held Secure
+    /// Event Input - and rebuilds a loop that is up when the input method was just switched
+    /// on, so the install selects it. Every reading is a retry, so a loop that came down is
+    /// never down until a relaunch.
     ///
     /// [LAW:dataflow-not-control-flow] Decided from where things stand, not from a
     /// difference between two readings, so it holds however the grant arrived and whichever
@@ -443,11 +428,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         guard readiness.unmet.isEmpty else { return }
-        if downForAGrant {
+        if listening?.hotkey.isWatching != true {
             inputMethodSwitchedOn = false
-            log.notice("setup: what dictation waited on is granted; bringing it up")
+            log.notice("setup: every requirement is met and no hotkey is watching; bringing it up")
             Task { await comeUp() }
-        } else if inputMethodSwitchedOn, listening?.hotkey.isWatching == true {
+        } else if inputMethodSwitchedOn {
             inputMethodSwitchedOn = false
             log.notice("setup: the input method was switched on; rebuilding the loop to select it")
             Task { await rebuild() }
@@ -585,7 +570,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// password field in front of them.
     private func unheardBecause() -> [String] {
         let reasons: [String?] = [
-            InputSourceInstaller.isSelected(Self.flavor) ? nil : "another input source is selected",
+            InputSourceInstaller.isSelected(Self.flavor) ? nil : "\(Self.flavor.displayName) is not the selected input source",
             IsSecureEventInputEnabled() ? "an app holds Secure Event Input, as a password field does" : nil,
         ]
         let found = reasons.compactMap { $0 }

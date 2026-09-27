@@ -10,7 +10,6 @@ let package = Package(
         .library(name: "Flavors", targets: ["Flavors"]),
         .library(name: "Onboarding", targets: ["Onboarding"]),
         .library(name: "Signals", targets: ["Signals"]),
-        .library(name: "Typing", targets: ["Typing"]),
         .library(name: "Dictation", targets: ["Dictation"]),
         .library(name: "InputMethod", targets: ["InputMethod"]),
         .library(name: "Insertion", targets: ["Insertion"]),
@@ -29,8 +28,8 @@ let package = Package(
     targets: [
         // [LAW:one-way-deps] Core knows nothing of the CLI or the app; both link it.
         // Which installation this is: the one name every other name in a flavor is
-        // built from. It depends on nothing, so the root helper and the app's upper
-        // layers can both read it without either depending on the other.
+        // built from. It depends on nothing, so the input method process and the app's
+        // upper layers can both read it without either depending on the other.
         // [LAW:one-way-deps]
         .target(name: "Flavors"),
         .testTarget(name: "FlavorsTests", dependencies: ["Flavors"]),
@@ -74,17 +73,13 @@ let package = Package(
         // The steps are what a person acts on, so they are asserted as values rather
         // than scraped off a terminal.
         .testTarget(name: "OnboardingTests", dependencies: ["Onboarding", "Flavors", "Grants"]),
-        // The app's one inserter: a route's actions asked of the input method, which puts the
-        // words at the cursor. It takes the inserter as a value, which is what lets it run
-        // against the input method in the app and against a fake in a test. [LAW:composability]
-        .target(name: "Typing", dependencies: ["LowTalkerCore", "Insertion"]),
-        .testTarget(name: "TypingTests", dependencies: ["Typing", "LowTalkerCore", "Signals", "Insertion", "TestProbes"]),
+        .testTarget(name: "SignalsTests", dependencies: ["Signals", "LowTalkerCore", "TestProbes"]),
         // The loop from a press to inserted text, with every collaborator taken as a value.
         // Its own target rather than app code so the loop runs under `swift test`; the
-        // app links it and hands over the real microphone, engine and inserter.
-        // [LAW:decomposition]
-        .target(name: "Dictation", dependencies: ["LowTalkerCore", "Typing"]),
-        .testTarget(name: "DictationTests", dependencies: ["Dictation", "LowTalkerCore", "Grants", "Typing", "Insertion", "TestProbes"]),
+        // app links it and hands over the real microphone, engine and inserter - the input
+        // method in the app, a fake in a test. [LAW:decomposition] [LAW:composability]
+        .target(name: "Dictation", dependencies: ["LowTalkerCore", "Insertion"]),
+        .testTarget(name: "DictationTests", dependencies: ["Dictation", "LowTalkerCore", "Grants", "Insertion", "TestProbes"]),
         // What the input method process answers with, kept out of the process itself so the
         // suite compiles and exercises it: an Xcode-only target would be invisible to
         // `make test` the way App/LowTalker's sources are.
@@ -101,8 +96,8 @@ let package = Package(
         // and the kernel's code signing call, each passed through by a line of C and nothing
         // more.
         .target(name: "DarwinCalls"),
-        // The one lock every call into Text Input Sources takes, beneath the two modules
-        // that call it, since the API aborts the process when two threads meet inside it.
+        // The one lock every call into Text Input Sources takes, since the API aborts the
+        // process when two threads meet inside it.
         .target(name: "TextInputSources"),
         // A sender that is not the test process, so the insert port's refusal is held by a
         // request that really crossed from another process. In no product: nothing ships it.
@@ -123,6 +118,7 @@ let package = Package(
                 "Grants",
                 "Flavors",
                 "Onboarding",
+                "InputSource",
                 "Signals",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]

@@ -63,12 +63,6 @@ public final class Hotkey {
             .map(\.element)
     }
 
-    /// The chord in the grammar a config file writes: modifiers by their case names, in the
-    /// order `pressOrder` gives. [LAW:one-source-of-truth]
-    nonisolated public static func held(_ chord: KeyChord) -> String {
-        pressOrder(of: chord).map(\.rawValue).joined(separator: "+")
-    }
-
     /// The chord in the words a person presses it by, in the order `pressOrder` says to hold
     /// them: `rightOption` as "Right Option", the case's own name split at its capitals, so no
     /// table of names stands beside the cases to fall out of step with them.

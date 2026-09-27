@@ -12,8 +12,8 @@ import os
 /// opening the port, running the loop - so the controller beside it stays a pure answer to
 /// a key.
 ///
-/// Said where `log show` will find it, because LaunchServices launches this process with nowhere for standard error to go, so its only
-/// voice is the unified log. Public on purpose - a redacted reason is no reason, and
+/// Said where `log show` will find it, because LaunchServices launches this process with
+/// nowhere for standard error to go, so its only voice is the unified log. Public on purpose - a redacted reason is no reason, and
 /// measured, NSLog arrives there as `<private>` and says nothing at all.
 ///
 ///     log show --last 10m --predicate 'subsystem BEGINSWITH "ai.promptctl.low-talker"'

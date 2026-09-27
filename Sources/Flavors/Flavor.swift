@@ -4,9 +4,9 @@
 ///
 /// [LAW:one-type-per-behavior] They are not two programs. They are one program installed
 /// twice, and what separates them is configuration - a bundle identifier, a port name, a
-/// file to read. So this is one type with two instances rather than a
-/// `#if DEBUG` seam through the code, and no caller ever branches on which it holds: it
-/// asks the value for the name it needs. [LAW:dataflow-not-control-flow]
+/// file to read. So this is one type with two instances rather than a `#if DEBUG` seam
+/// through the code, and no caller ever branches on which it holds: it asks the value for
+/// the name it needs. [LAW:dataflow-not-control-flow]
 ///
 /// **Why these particular names and no others.** Each entry below is a namespace macOS
 /// itself enforces uniqueness in, and sharing any one of them is what makes the second
@@ -96,8 +96,8 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
     /// The name the text input system reaches this flavor's input method server on, which
     /// its `Info.plist` publishes as `InputMethodConnectionName` and `IMKServer` answers.
     ///
-    /// A port name: exactly one process may answer on it, and two copies sharing it would leave the second's
-    /// server unreachable rather than refused. [LAW:no-silent-failure]
+    /// A port name: exactly one process may answer on it, and two copies sharing it would
+    /// leave the second's server unreachable rather than refused. [LAW:no-silent-failure]
     public var inputMethodConnectionName: String { inputMethodBundleIdentifier + "_Connection" }
 
     /// The name the app reaches this flavor's input method on to ask it to insert text.
@@ -107,8 +107,8 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
     /// it and would not carry a message of ours. This one is ours end to end.
     ///
     /// Measured on 2026-09-22, and the reason this is a registered Mach port rather than XPC:
-    /// a process macOS launches from a bundle has no launchd job, so it
-    /// cannot check a Mach service name in. `NSXPCListener(machServiceName:)` resumes
+    /// a process macOS launches from a bundle has no launchd job, so it cannot check a Mach
+    /// service name in. `NSXPCListener(machServiceName:)` resumes
     /// without raising, logs nothing, and simply never receives, which would have made an
     /// input method that looked installed and answered nothing. [LAW:no-silent-failure]
     public var inputMethodPortName: String { inputMethodBundleIdentifier + ".insert" }
@@ -122,8 +122,8 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
     /// lookup its entitlements admit beyond the text input system's.
     public var hotkeyPortName: String { bundleIdentifier + ".hotkey" }
 
-    /// The name shown in the menu bar, where the whole point is that a
-    /// person can tell the two apart at a glance.
+    /// The name shown in the menu bar, where the whole point is that a person can tell the
+    /// two apart at a glance.
     ///
     /// It is the name the Input Sources list shows for this flavor's input method too -
     /// reused deliberately rather than coined a second time, because a person choosing the
@@ -193,8 +193,8 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
         self = flavor
     }
 
-    /// [LAW:parse-dont-validate] The one place a `--flavor` argument becomes a flavor, refusing anything that is not one of
-    /// the two words.
+    /// [LAW:parse-dont-validate] The one place a `--flavor` argument becomes a flavor,
+    /// refusing anything that is not one of the two words.
     public init?(word: String) {
         guard let flavor = Flavor(rawValue: word) else { return nil }
         self = flavor

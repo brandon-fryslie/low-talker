@@ -170,18 +170,12 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         }
     }
 
-    /// The development chord in `held`'s order, spelled out, because this is the order that
-    /// once shipped wrong: the menu bar printed `hold rightOption+rightCommand to dictate`,
-    /// and a reader following it literally completed the release chord first.
+    /// The chords in a person's words, spelled out in press order, because this is the order
+    /// that once shipped wrong: the menu bar printed `hold rightOption+rightCommand to
+    /// dictate`, and a reader following it literally completed the release chord first.
     /// `Modifier.allCases` puts rightOption at 5 and rightCommand at 7, so the order came
     /// straight from the enum's declaration order - a fact about how the cases were typed,
     /// being read as a fact about the keyboard.
-    @Test func theDevelopmentChordIsPrintedInTheOrderThatDoesNotStartTheOtherCopy() {
-        #expect(Hotkey.held(Hotkey.defaultChord(for: .development)) == "rightCommand+rightOption")
-        #expect(Hotkey.held(Hotkey.defaultChord(for: .release)) == "rightOption")
-    }
-
-    /// The same chords in a person's words, in the same order.
     @Test func aChordIsNamedInWordsInPressOrder() {
         #expect(Hotkey.named(Hotkey.defaultChord(for: .development)) == "Right Command+Right Option")
         #expect(Hotkey.named(Hotkey.defaultChord(for: .release)) == "Right Option")
