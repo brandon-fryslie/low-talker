@@ -92,13 +92,15 @@ import Testing
 
     // MARK: - the keyboard helper
 
-    /// Holding the Mach service is the only standing that means the helper will answer.
-    /// In particular, a job that is loaded and running but lost the name is not ready -
-    /// that is the whole failure this requirement exists to catch.
+    /// Holding the Mach service with this installation's own helper is the only thing that
+    /// means the helper will answer, whether the app's job holds it or the LaunchDaemon
+    /// `helper install` loaded. In particular, a job that is loaded and running but lost the
+    /// name is not ready - that is the whole failure this requirement exists to catch.
     @Test func onlyAHelperHoldingTheServiceIsReady() {
+        let answering: Set<HelperStanding> = [.holdingTheService, .answeringAsALaunchDaemon]
         for standing in HelperStanding.allCases {
-            let requirement = Requirement.keyboardHelper(standing, flavor: Self.flavor)
-            #expect(requirement.met == (standing == .holdingTheService), "\(standing)")
+            let requirement = Requirement.keyboardHelper(standing, flavor: Self.flavor, cli: Self.cli)
+            #expect(requirement.met == answering.contains(standing), "\(standing)")
         }
     }
 
@@ -113,7 +115,7 @@ import Testing
     /// leaving README and the enum in perfect agreement about it.
     @Test func everyStandingReadsBackAsItsOwnLineAndNoTwoShareOne() {
         #expect(Self.readings(for: .keyboardHelper) == HelperStanding.allCases.map {
-            Requirement.keyboardHelper($0, flavor: Self.flavor).reads
+            Requirement.keyboardHelper($0, flavor: Self.flavor, cli: Self.cli).reads
         })
         #expect(Set(Self.readings(for: .keyboardHelper)).count == HelperStanding.allCases.count)
     }
@@ -135,25 +137,25 @@ import Testing
     /// has. A step offering only `pgrep` sends that reader hunting a process that is
     /// behaving exactly as it should.
     @Test func aServiceLostToAnUnidentifiedHolderNamesBothHoldersNoLabelGoverns() {
-        let step = Requirement.keyboardHelper(.anotherJobHoldsTheService, flavor: Self.flavor).step ?? ""
+        let step = Requirement.keyboardHelper(.anotherJobHoldsTheService, flavor: Self.flavor, cli: Self.cli).step ?? ""
         #expect(step.contains(Self.service))
         #expect(step.contains("pgrep"))
         #expect(step.contains("/Library/LaunchDaemons"))
         // Still not this one: removing a plist is the *other* standing's step, and the
         // holder here is by definition not a job this script installed.
-        #expect(!step.contains("keyboard-helper uninstall"))
+        #expect(!step.contains("helper remove"))
     }
 
     /// The holder the app can name gets the step that names it. Its whole difference from
     /// the row above is that there is something to remove and a command that removes it.
     @Test func aBootstrappedJobHoldingTheLabelIsSentToRemoveItsPlist() {
-        let step = Requirement.keyboardHelper(.aBootstrappedJobHoldsTheLabel, flavor: Self.flavor).step ?? ""
+        let step = Requirement.keyboardHelper(.aBootstrappedJobHoldsTheLabel, flavor: Self.flavor, cli: Self.cli).step ?? ""
         #expect(step.contains("/Library/LaunchDaemons"))
-        #expect(step.contains("keyboard-helper uninstall \(Self.flavor)"))
+        #expect(step.contains(HelperJob.command(Self.cli, "remove", flavor: Self.flavor)))
     }
 
     @Test func aHelperWaitingForItsApprovalIsSentToLoginItems() {
-        let step = Requirement.keyboardHelper(.awaitingApproval, flavor: Self.flavor).step ?? ""
+        let step = Requirement.keyboardHelper(.awaitingApproval, flavor: Self.flavor, cli: Self.cli).step ?? ""
         #expect(step.contains("Login Items & Extensions"))
     }
 
@@ -169,7 +171,7 @@ import Testing
     @Test func aStepNamingAnAppNamesTheInstallationItWasAskedAbout() {
         for standing in [HelperStanding.awaitingApproval, .noJob] {
             let steps = Flavor.allCases.map { flavor -> String in
-                let step = Requirement.keyboardHelper(standing, flavor: flavor).step ?? ""
+                let step = Requirement.keyboardHelper(standing, flavor: flavor, cli: Self.cli).step ?? ""
                 #expect(step.contains(flavor.displayName), "\(standing) never names \(flavor.displayName)")
                 return step
             }
@@ -321,7 +323,7 @@ import Testing
     @Test func theListShowsEveryRequirementWhetherOrNotItNeedsAnything() {
         let readiness = Readiness([
             .driverExtension(.running, cli: Self.cli),
-            .keyboardHelper(.holdingTheService, flavor: Self.flavor),
+            .keyboardHelper(.holdingTheService, flavor: Self.flavor, cli: Self.cli),
         ])
         #expect(readiness.ready)
         #expect(readiness.description.contains("Driver extension: running"))
@@ -331,7 +333,7 @@ import Testing
     @Test func oneUnmetRequirementIsEnoughToStopTheList() {
         let readiness = Readiness([
             .driverExtension(.running, cli: Self.cli),
-            .keyboardHelper(.anotherJobHoldsTheService, flavor: Self.flavor),
+            .keyboardHelper(.anotherJobHoldsTheService, flavor: Self.flavor, cli: Self.cli),
         ])
         #expect(!readiness.ready)
     }

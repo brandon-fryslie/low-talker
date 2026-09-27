@@ -414,6 +414,12 @@ public extension Requirement {
 public enum HelperStanding: Sendable, Hashable, CaseIterable {
     /// The app's job holds the Mach service: registered, approved, and answering.
     case holdingTheService
+    /// A job loaded from /Library/LaunchDaemons runs the helper this installation shipped
+    /// and holds the service: what `lowtalker helper install` loads, which needs sudo and
+    /// no approval anyone has to click, so an agent can bring a helper up on a Mac with no
+    /// checkout. The app's own registration is shadowed by it and never spawns, which
+    /// costs nothing while this job answers.
+    case answeringAsALaunchDaemon
     /// A job under this flavor's label is loaded, and something else holds the service.
     ///
     /// launchd does not make the loser loud: a second claimant on a Mach service name
@@ -427,13 +433,14 @@ public enum HelperStanding: Sendable, Hashable, CaseIterable {
     /// either way, nameable by neither.
     case anotherJobHoldsTheService
     /// A job bootstrapped from a plist in /Library/LaunchDaemons holds this flavor's
-    /// label, so the app's own `SMAppService` registration never became the running job.
+    /// label and is not this installation's own helper answering, so the app's own
+    /// `SMAppService` registration never became the running job.
     ///
     /// [LAW:types-are-the-program] This is the state the label collapse made reachable and
     /// left unrepresentable. `launchctl bootstrap` refuses a second job under a held label,
     /// which is what the one-label design rests on - but `SMAppService.register()` is not
-    /// `bootstrap` and gets no such refusal. So `scripts/keyboard-helper install` followed
-    /// by launching the app is a real, ordinary sequence that ends here, and folding it in
+    /// `bootstrap` and gets no such refusal. So a checkout's `lowtalker helper install`
+    /// followed by launching an app is a real, ordinary sequence that ends here, and folding it in
     /// with "a holder that cannot be named" threw away the one fact that makes it fixable:
     /// this holder has a plist, at a path that can be printed and removed.
     case aBootstrappedJobHoldsTheLabel
@@ -482,7 +489,7 @@ public enum HelperStanding: Sendable, Hashable, CaseIterable {
     /// that may not exist.
     var aHelperHasRun: Bool {
         switch self {
-        case .holdingTheService: true
+        case .holdingTheService, .answeringAsALaunchDaemon: true
         case .anotherJobHoldsTheService, .aBootstrappedJobHoldsTheLabel, .noJob, .awaitingApproval: false
         }
     }
@@ -495,13 +502,17 @@ public extension Requirement {
     /// those are two readings of one installation - so they are derived here, together,
     /// from the value that holds both. Passing a name instead lets a step address one copy
     /// while naming the other's, which is the confusion the two flavors exist to prevent.
-    static func keyboardHelper(_ standing: HelperStanding, flavor: Flavor) -> Requirement {
-        Requirement(row: .keyboardHelper, reads: reads(for: standing), step: step(for: standing, flavor: flavor))
+    ///
+    /// - Parameter cli: the lowtalker binary this reader has, which the step that removes a
+    ///   stray job names; see `driverExtension(_:cli:)`.
+    static func keyboardHelper(_ standing: HelperStanding, flavor: Flavor, cli: String) -> Requirement {
+        Requirement(row: .keyboardHelper, reads: reads(for: standing), step: step(for: standing, flavor: flavor, cli: cli))
     }
 
     private static func reads(for standing: HelperStanding) -> String {
         switch standing {
         case .holdingTheService: "answering"
+        case .answeringAsALaunchDaemon: "answering, as the LaunchDaemon lowtalker helper install loaded"
         case .anotherJobHoldsTheService: "registered, but another job holds the service"
         case .aBootstrappedJobHoldsTheLabel: "a bootstrapped job holds the label, so this app's registration never ran"
         case .noJob: "not registered"
@@ -509,9 +520,9 @@ public extension Requirement {
         }
     }
 
-    private static func step(for standing: HelperStanding, flavor: Flavor) -> String? {
+    private static func step(for standing: HelperStanding, flavor: Flavor, cli: String) -> String? {
         switch standing {
-        case .holdingTheService:
+        case .holdingTheService, .answeringAsALaunchDaemon:
             nil
         case .awaitingApproval:
             """
@@ -540,11 +551,11 @@ public extension Requirement {
         case .aBootstrappedJobHoldsTheLabel:
             """
             A job bootstrapped from /Library/LaunchDaemons holds
-            \(flavor.launchdLabel), so \(flavor.displayName) registered its
-            helper and launchd kept the job already under that label -
-            this app's copy never spawned. scripts/keyboard-helper
-            installs that job; remove it and launch the app again:
-                scripts/keyboard-helper uninstall \(flavor)
+            \(flavor.launchdLabel) and runs some other copy of the helper,
+            so \(flavor.displayName)'s own never spawned. Remove that job,
+            then launch the app again, or install this copy's helper in its
+            place with helper install:
+                \(HelperJob.command(cli, "remove", flavor: flavor))
             """
         }
     }

@@ -26,10 +26,13 @@ public enum OnboardingProbe {
     /// becomes the running job. That is a reading of its own, and this tells it apart from
     /// a holder outside launchd by the field launchd answers with.
     /// [LAW:no-silent-failure]
-    public static func helperStanding(label: String, service: String) throws -> HelperStanding {
+    ///
+    /// - Parameter helper: the keyboard helper that shipped with this reader, the one a job
+    ///   loaded from /Library/LaunchDaemons must run to count as this installation's.
+    public static func helperStanding(label: String, service: String, helper: URL) throws -> HelperStanding {
         try standing(
             from: Command("/bin/launchctl", "print", "system/\(label)").run(),
-            label: label, service: service)
+            label: label, service: service, helper: helper)
     }
 
     /// What launchd said, read.
@@ -38,49 +41,19 @@ public enum OnboardingProbe {
     /// `noJob` for. Any other failure is refused: an unread launchd reported as "no job"
     /// would send a reader to approve a login item that is already approved.
     /// [LAW:no-silent-failure]
-    static func standing(from printed: Command.Output, label: String, service: String) throws -> HelperStanding {
-        guard printed.status == 0 else {
-            guard printed.merged.contains("Could not find service") else {
-                throw OnboardingUnreadable.launchdRefused(label: label, status: printed.status, complaint: printed.merged)
-            }
-            return .noJob
+    static func standing(from printed: Command.Output, label: String, service: String, helper: URL) throws -> HelperStanding {
+        guard let job = try HelperJob.Record(printed, label: label, service: service) else { return .noJob }
+        // A job loaded from a plist in /Library/LaunchDaemons is not the app's
+        // registration, and `SMAppService.register()` gets no refusal while it holds the
+        // label: the app's own copy simply never spawns. That is harmless when the plist
+        // runs the very helper this installation shipped and holds the service - the job
+        // `lowtalker helper install` loads - and it is the stray the step removes when it
+        // runs anything else, such as a checkout's build under the release label.
+        guard job.loadedFromLaunchDaemons else {
+            return job.holdsTheService ? .holdingTheService : .anotherJobHoldsTheService
         }
-        // [LAW:parse-dont-validate] Whose job this is, read off the one field that separates
-        // the two ways a job reaches this label. Measured on this Mac, 2026-09-12, against
-        // the running release app and its plist-installed counterpart:
-        //
-        //   SMAppService:              path = (submitted by smd.919)
-        //   launchctl bootstrap:       path = /Library/LaunchDaemons/<label>.plist
-        //
-        // Read before the endpoint, not after: a plist job under this label carries the
-        // service in its own MachServices, so it names the endpoint exactly as the app's
-        // job would - and a reading that asked about the endpoint first would call it
-        // "answering" and never reach here. Whatever it holds, it is not the app's
-        // registration, and its plist is the thing that has to go.
-        //
-        // The value must *start* there, as the script's `/Library/LaunchDaemons/*` does: the
-        // app's own plist sits under `Contents/Library/LaunchDaemons/` in its bundle, and a
-        // match anywhere in the line would call the app's job a stray one. The line must be
-        // the job's own `path`, not a `stderr path` nested beneath it. [LAW:single-enforcer]
-        let path = printed.stdout
-            .split(separator: "\n")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .first { $0.hasPrefix("path = ") }?
-            .dropFirst("path = ".count) ?? ""
-        guard !path.hasPrefix("/Library/LaunchDaemons/") else { return .aBootstrappedJobHoldsTheLabel }
-        // The endpoint is handed out at load, so a job that holds the service names it
-        // here. A job that asked and lost simply has no such line: launchd does not make
-        // the loser loud, which is exactly why this is read rather than assumed.
-        //
-        // At load, and not at check-in - which is the whole reason this reads the
-        // endpoints block rather than a state field, and is worth recording because it is
-        // the reading that looks wrong. Measured with a job whose program is `sleep`, so
-        // it never checks a Mach service in at all: `state = running`, and the endpoint
-        // already named, with `active = 0`. Check-in is what `active` tracks. So a helper
-        // between its own start and `listener.resume()` - it files this keyboard's answer
-        // in that window, then waits on the daemon - already reads as holding the service,
-        // which is what the assistant's row needs it to say.
-        return printed.stdout.contains("\"\(service)\" = {") ? .holdingTheService : .anotherJobHoldsTheService
+        return job.program == helper.resolvingSymlinksInPath().path && job.holdsTheService
+            ? .answeringAsALaunchDaemon : .aBootstrappedJobHoldsTheLabel
     }
 
     /// Whether Keyboard Setup Assistant already holds a verdict for this keyboard.
@@ -198,7 +171,7 @@ public extension OnboardingProbe {
         // rows want it: its own, and the assistant's, whose step depends on whether a
         // helper has run. The dependency is in the data rather than in the order the rows
         // happen to be read in. [LAW:no-ambient-temporal-coupling]
-        lazy var helper = helperRow(flavor: flavor, approvalPending: reader.helperAwaitingApproval)
+        lazy var helper = helperRow(flavor: flavor, approvalPending: reader.helperAwaitingApproval, cli: cli)
         var requirements: [Requirement] = []
         for row in needed where reader.canRead(row) {
             switch row {
@@ -254,13 +227,14 @@ public extension OnboardingProbe {
     /// beside it - the helper's own, which reads `could not be read` and names the
     /// reason - so the failure is reported where it belongs rather than inferred from the
     /// assistant's step. [LAW:no-silent-failure]
-    private static func helperRow(flavor: Flavor, approvalPending: Bool?) -> (row: Requirement, aHelperHasRun: Bool) {
+    private static func helperRow(flavor: Flavor, approvalPending: Bool?, cli: String) -> (row: Requirement, aHelperHasRun: Bool) {
         do {
             let standing = try helperStanding(
                 label: flavor.launchdLabel,
-                service: flavor.machServiceName)
+                service: flavor.machServiceName,
+                helper: Carrier.keyboardHelper(shippedWith: URL(fileURLWithPath: cli)))
                 .sharpenedByTheAppsOwnRegistration(approvalPending: approvalPending)
-            return (.keyboardHelper(standing, flavor: flavor), standing.aHelperHasRun)
+            return (.keyboardHelper(standing, flavor: flavor, cli: cli), standing.aHelperHasRun)
         } catch { return (.unreadable(.keyboardHelper, error), false) }
     }
 

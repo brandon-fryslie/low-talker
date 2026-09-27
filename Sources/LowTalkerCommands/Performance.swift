@@ -117,7 +117,7 @@ enum PerformExit: Int32, CaseIterable {
         guard causes.contains(where: { $0 is HelperConnection.Unreachable }) else { return (nil, "\(error)") }
         let rows: [(PerformExit, () throws -> Requirement)] = [
             (.driverNotActivated, { .driverExtension(try machine.driver(), cli: cli) }),
-            (.helperNotApproved, { .keyboardHelper(try machine.helper(), flavor: flavor) }),
+            (.helperNotApproved, { .keyboardHelper(try machine.helper(), flavor: flavor, cli: cli) }),
         ]
         for (exit, row) in rows {
             let requirement: Requirement
@@ -139,6 +139,10 @@ struct Machine {
     static func of(_ flavor: Flavor) -> Machine {
         Machine(
             driver: { DriverState(try DriverProbe.facts()) },
-            helper: { try OnboardingProbe.helperStanding(label: flavor.launchdLabel, service: flavor.machServiceName) })
+            helper: {
+                try OnboardingProbe.helperStanding(
+                    label: flavor.launchdLabel, service: flavor.machServiceName,
+                    helper: Carrier.keyboardHelper(shippedWith: URL(fileURLWithPath: LowTalker.path)))
+            })
     }
 }
