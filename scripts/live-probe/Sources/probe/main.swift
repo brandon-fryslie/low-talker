@@ -5,7 +5,6 @@
 import AppKit
 import ApplicationServices
 import CryptoKit
-import LowTalkerCore
 
 // Asked of the frontmost app, not the system-wide element: a shell outside the GUI
 // session (a launchd Background domain) can reach an app's Accessibility server but
@@ -69,10 +68,15 @@ func children(of element: AXUIElement) -> [AXUIElement] {
     return condition()
 }
 
-// One line per item: each type it carries with a digest of the bytes behind it.
+// One line per item: each type it carries with a digest of the bytes behind it. Reads the
+// pasteboard directly rather than through a shipping type, so this instrument owns what it
+// measures and depends on nothing the app ships. [LAW:one-way-deps]
 @MainActor func pasteboardSnapshot() -> String {
-    PasteboardContents(reading: .general).items.map { item in
-        item.map { "\($0.type.rawValue)=\(SHA256.hash(data: $0.data).map { String(format: "%02x", $0) }.joined())" }.joined(separator: " ")
+    (NSPasteboard.general.pasteboardItems ?? []).map { item in
+        item.types.map { type in
+            let digest = SHA256.hash(data: item.data(forType: type) ?? Data()).map { String(format: "%02x", $0) }.joined()
+            return "\(type.rawValue)=\(digest)"
+        }.joined(separator: " ")
     }.joined(separator: "\n")
 }
 

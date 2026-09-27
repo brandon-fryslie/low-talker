@@ -7,6 +7,5 @@ import PackageDescription
 let package = Package(
     name: "probe",
     platforms: [.macOS(.v15)],
-    dependencies: [.package(name: "low-talker", path: "../..")],
-    targets: [.executableTarget(name: "probe", dependencies: [.product(name: "LowTalkerCore", package: "low-talker")])]
+    targets: [.executableTarget(name: "probe")]
 )
