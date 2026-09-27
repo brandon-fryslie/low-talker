@@ -106,9 +106,14 @@ public final class FocusedClient {
     /// Secure Event Input macOS hands no input method a client, and a cursor still held from
     /// before it came on is one the text input system has stopped routing to - so no commit
     /// is attempted and the refusal names the thing to fix. [LAW:no-silent-failure]
-    public func cursor(whileInFrontIs frontmost: String?, secureInputIsOn: Bool) -> Result<any TextCursor, Refusal> {
+    /// `ourSourceIsSelected` tells the two clientless cases apart, read at the same boundary
+    /// as `frontmost` and passed as a value: with no client and our source not the selected
+    /// one, macOS routes us nothing and the refusal names the source another copy or the
+    /// person took, not a text field to click into. [LAW:no-silent-failure] Asked only when
+    /// there is no client, since a client we hold is proof our source is selected.
+    public func cursor(whileInFrontIs frontmost: String?, secureInputIsOn: Bool, ourSourceIsSelected: Bool) -> Result<any TextCursor, Refusal> {
         guard !secureInputIsOn else { return .failure(.secureInputIsOn) }
-        guard let focus else { return .failure(.noClientHasFocus) }
+        guard let focus else { return .failure(ourSourceIsSelected ? .noClientHasFocus : .anotherInputSourceIsSelected) }
         guard focus.application == frontmost else { return .failure(.cursorIsInAnotherApp) }
         return .success(focus)
     }

@@ -60,8 +60,18 @@ public struct Inserted: Equatable, Sendable {
 /// there is one spelling of each fact. [LAW:one-source-of-truth]
 public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, CustomStringConvertible {
     /// Nothing has focus, so there is no client to commit into. The desktop is the plain
-    /// case: no text field, nowhere for words to go.
+    /// case: no text field, nowhere for words to go. This installation's own source IS the
+    /// selected one - so the absence is a place with nowhere for words, not a source that
+    /// was taken; `anotherInputSourceIsSelected` is that other case.
     case noClientHasFocus
+    /// This installation's input source is not the one selected, so macOS routes no app's
+    /// client to this input method and every insert reaches it clientless. Its own reason
+    /// and not `noClientHasFocus`, because the fix is elsewhere: not a text field to click
+    /// into, but a source another copy or the person selected away, which the app reselects
+    /// on the next dictation. [LAW:no-silent-failure] Measured on 2026-09-22: two copies
+    /// share one selection, and a layout switch (Ctrl+Space) takes it as surely as the other
+    /// copy adopting does.
+    case anotherInputSourceIsSelected
     /// There is a cursor, and it belongs to an app the person has since switched away
     /// from. Its own reason and not `noClientHasFocus`, because the two are fixed
     /// differently: this one is words arriving while the person is somewhere else.
@@ -91,6 +101,8 @@ public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, 
     public var description: String {
         switch self {
         case .noClientHasFocus: "no client has focus"
+        case .anotherInputSourceIsSelected:
+            "another input source is selected, so macOS hands this input method no client; it is reselected on the next dictation"
         case .cursorIsInAnotherApp: "the cursor is in an app that is not in front"
         case .requestWasNotText: "the request was not text"
         case .secureInputIsOn: "an app has secure keyboard entry on, and macOS switches input methods off while it does"

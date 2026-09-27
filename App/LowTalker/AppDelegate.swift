@@ -245,6 +245,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Why the last press's words reached no cursor, while no press has begun since.
     private var lastFailure: String?
 
+    /// The last selection reassertion a press kicked off, which the next one chains behind so
+    /// two quick presses do not run `install`'s copy-and-register over each other. Held only
+    /// to serialize them; nothing awaits its value. [LAW:no-ambient-temporal-coupling]
+    private var reasserting: Task<Void, Never>?
+
     private func drawStatusIcon() {
         // Named from the flavor, because with both copies installed there are two of
         // these icons in the menu bar and this label is what tells them apart - to a
@@ -318,7 +323,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let hearing = hearable.flatMap {
             Result {
                 try hotkey.start({ [unowned self] transition in
-                    if case .began = transition { lastFailure = nil }
+                    if case .began = transition {
+                        lastFailure = nil
+                        // [LAW:one-source-of-truth] One selection serves the whole Mac, so the
+                        // other copy adopting or the person switching layouts takes ours. A
+                        // press reasserts it through the one enforcer that selects and leaves
+                        // it selected - not a toggle put back after, so it stays true for the
+                        // next press too (Brandon, 2026-09-22). Off the press's own turn, so the
+                        // microphone still opens on the mark. `install`'s own settling poll is
+                        // the owned wait for the source to read selected; a source already
+                        // selected is left where it is. Serialized behind the last reassertion,
+                        // so two quick presses do not race on the copy on disk.
+                        if setup.delivery == .inputMethod {
+                            let previous = reasserting
+                            reasserting = Task { await previous?.value; _ = await installInputMethod() }
+                        }
+                    }
                     dictation.press(transition)
                 }, onLapse: { [unowned self] in report($0) })
             }.mapError { error in
