@@ -11,7 +11,7 @@ import Testing
 /// method, told as often as the app it was in hands them over. [LAW:behavior-not-structure]
 private struct Told {
     var detector: HotkeyDetector
-    private var told = ToldModifiers(held: [], at: at(0))
+    private var told = ToldModifiers(held: [])
 
     init(listeningFor flavor: Flavor) {
         detector = HotkeyDetector(chords: [Hotkey.defaultChord(for: flavor, heardBy: .inputMethod)], tapThreshold: .milliseconds(250))
@@ -134,12 +134,33 @@ private let development = KeyChord(modifiers: .rightOption, .rightCommand)
 
     /// The input method's message about a hold, arriving after the session was read letting
     /// go of it, is older than that release and does not press the key again.
-    @Test func aStateOlderThanTheSessionsReleaseChangesNothing() {
+    @Test func aStateOlderThanTheSessionsReleaseDoesNotPressItAgain() {
         var told = Told(listeningFor: .release)
         #expect(told.holding([.rightOption], at: 0) == [.began(release, at: at(0))])
         #expect(told.session([], at: 800) == [.ended(release, .released(.hold))])
         #expect(told.holding([.rightOption], at: 700).isEmpty)
         #expect(told.holding([.rightOption], at: 2000) == [.began(release, at: at(2000))])
+    }
+
+    /// Shift let go and Right Option pressed inside one of the app's session reads: the read
+    /// lets go of Shift before the input method's messages arrive, and the press they carry,
+    /// stamped before the read, is still heard.
+    @Test func aPressStampedBeforeTheSessionsReadIsStillHeard() {
+        var told = Told(listeningFor: .release)
+        #expect(told.holding([.leftShift], at: 0).isEmpty)
+        #expect(told.session([.rightOption], at: 1002).isEmpty)
+        #expect(told.holding([], at: 990).isEmpty)
+        #expect(told.holding([.rightOption], at: 1000) == [.began(release, at: at(1000))])
+        #expect(told.holding([], at: 1700) == [.ended(release, .released(.hold))])
+    }
+
+    /// The development chord completed while a session read let go of nothing in between
+    /// still presses: a read that changes nothing marks nothing.
+    @Test func aSessionReadThatLetGoOfNothingOvertakesNothing() {
+        var told = Told(listeningFor: .development)
+        #expect(told.holding([.rightCommand], at: 0).isEmpty)
+        #expect(told.session([.rightCommand, .rightOption], at: 1002).isEmpty)
+        #expect(told.holding([.rightCommand, .rightOption], at: 1000) == [.began(development, at: at(1000))])
     }
 
     @Test func aStateThatChangedNothingIsNoKeys() {

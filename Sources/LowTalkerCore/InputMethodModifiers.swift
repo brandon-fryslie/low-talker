@@ -100,8 +100,7 @@ public struct InputMethodModifiers: KeyboardTap {
     ) throws -> Disposal {
         // What is held as listening begins is read, not assumed to be nothing, so a key
         // already down when this comes up is not heard going down when it next moves.
-        let installed = Installed(told: ToldModifiers(
-            held: Modifier.held(in: CGEventSource.flagsState(.combinedSessionState)), at: .now))
+        let installed = Installed(told: ToldModifiers(held: Modifier.held(in: CGEventSource.flagsState(.combinedSessionState))))
         let log = Logger(subsystem: flavor.bundleIdentifier, category: "hotkey")
         // Checked and read off the main thread, where the keys and the menu are, and handed
         // to it in the order the input method sent them: the main queue is first in, first
@@ -116,36 +115,41 @@ public struct InputMethodModifiers: KeyboardTap {
     }
 }
 
-/// The modifier keys the detector has been told are held, and when that last changed: what
-/// each state heard next is the difference from.
+/// The modifier keys the detector has been told are held: what each state heard next is the
+/// difference from.
 ///
 /// Two readings reach it. The input method's, which can press and let go, stamped when its
-/// event happened; and the app's own of the session, which only confirms what is still down
-/// and so can only let go. A state older than the last change is one a newer reading has
-/// already overtaken - the input method's message about a release the session was read
-/// letting go of first - and changes nothing, or a key already let go would go down again.
-/// [LAW:no-ambient-temporal-coupling]
+/// event happened and arriving in that order; and the app's own of the session, which only
+/// confirms what is still down and so can only let go. What the session let go of is kept
+/// per key with when it was read, because a message from the input method stamped before
+/// then can still be on its way holding that key, and must not press it again - while
+/// every other key in that message is news the session read could not have given, and is
+/// taken. [LAW:no-ambient-temporal-coupling]
 public struct ToldModifiers: Sendable {
     public private(set) var held: Set<Modifier>
-    private var changedAt: HostTime
+    private var letGo: [Modifier: HostTime] = [:]
 
-    public init(held: Set<Modifier>, at time: HostTime) {
+    public init(held: Set<Modifier>) {
         self.held = held
-        changedAt = time
     }
 
     /// The key events that take the detector to holding `now`, as the input method read it
     /// at `time`.
     public mutating func take(_ now: Set<Modifier>, at time: HostTime) -> [KeyEvent] {
-        let moves = time < changedAt ? [] : KeyEvent.moves(from: held, to: now, at: time)
-        held = moves.last?.modifiers ?? held
-        changedAt = moves.isEmpty ? changedAt : time
-        return moves
+        // A later message has nothing older left to be overtaken by. [LAW:dataflow-not-control-flow]
+        letGo = letGo.filter { $0.value > time }
+        return move(to: now.subtracting(letGo.keys), at: time)
     }
 
     /// The key events that let go of what `session`, read at `time`, no longer holds.
     public mutating func confirm(session: Set<Modifier>, at time: HostTime) -> [KeyEvent] {
-        take(held.intersection(session), at: time)
+        held.subtracting(session).forEach { letGo[$0] = time }
+        return move(to: held.intersection(session), at: time)
+    }
+
+    private mutating func move(to now: Set<Modifier>, at time: HostTime) -> [KeyEvent] {
+        defer { held = now }
+        return KeyEvent.moves(from: held, to: now, at: time)
     }
 }
 
