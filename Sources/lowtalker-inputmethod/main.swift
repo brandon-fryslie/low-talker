@@ -1,5 +1,4 @@
 import AppKit
-import Carbon
 import Flavors
 import InputMethod
 import InputMethodKit
@@ -80,20 +79,6 @@ func secureInputHolder() -> String? {
     return NSRunningApplication(processIdentifier: pid)?.localizedName ?? "process \(pid)"
 }
 
-/// Whether this installation's source is the one selected for the Mac right now, read from
-/// the text input system at the boundary and handed to the focus decision as a value.
-///
-/// One selection serves the whole Mac, so the other copy adopting or the person switching
-/// layouts takes it; while it is gone macOS routes this input method no client, and telling
-/// that apart from a plain empty focus is what lets the refusal name the source rather than
-/// a text field. Read only when there is no client to insert into. [LAW:effects-at-boundaries]
-func ourSourceIsSelected() -> Bool {
-    guard let current = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
-          let idPointer = TISGetInputSourceProperty(current, kTISPropertyInputSourceID) else { return false }
-    let id = Unmanaged<CFString>.fromOpaque(idPointer).takeUnretainedValue() as String
-    return id == flavor.inputSourceIdentifier
-}
-
 /// Where the insert port's commits run, one serial queue per app, off the main thread. Held
 /// for the life of the process like everything else opened here.
 let committer = Committer(label: "\(flavor.inputMethodPortName).commits")
@@ -130,8 +115,7 @@ let insertions: InsertionPort? = {
                 MainActor.assumeIsolated {
                     let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
                     let securing = secureInputHolder()
-                    return (frontmost: frontmost, securing: securing, cursor: FocusedClient.shared.cursor(
-                        whileInFrontIs: frontmost, secureInputIsOn: securing != nil, ourSourceIsSelected: ourSourceIsSelected()))
+                    return (frontmost: frontmost, securing: securing, cursor: FocusedClient.shared.cursor(whileInFrontIs: frontmost, secureInputIsOn: securing != nil))
                 }
             }
             let answer = committer.answer(text, at: seen?.cursor)

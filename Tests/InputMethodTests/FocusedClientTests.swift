@@ -35,7 +35,7 @@ import Testing
         let cursor = Cursor()
         client.took(cursor)
 
-        #expect(try client.cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false, ourSourceIsSelected: true).get() === cursor)
+        #expect(try client.cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false).get() === cursor)
     }
 
     /// A cursor held from before secure input came on is not committed into: macOS has
@@ -46,46 +46,25 @@ import Testing
         let cursor = Cursor()
         client.took(cursor)
 
-        #expect(throws: Refusal.secureInputIsOn) { try client.cursor(whileInFrontIs: Self.inFront, secureInputIsOn: true, ourSourceIsSelected: true).get() }
+        #expect(throws: Refusal.secureInputIsOn) { try client.cursor(whileInFrontIs: Self.inFront, secureInputIsOn: true).get() }
     }
 
     /// Secure input is asked first, so it is the reason given even where another refusal
     /// also holds: the fix is in the app holding it, and naming the other would send the
     /// person to click into a text field that cannot help.
     @Test func secureInputIsTheReasonOverEveryOtherRefusal() {
-        #expect(throws: Refusal.secureInputIsOn) { try FocusedClient().cursor(whileInFrontIs: Self.inFront, secureInputIsOn: true, ourSourceIsSelected: true).get() }
+        #expect(throws: Refusal.secureInputIsOn) { try FocusedClient().cursor(whileInFrontIs: Self.inFront, secureInputIsOn: true).get() }
         let client = FocusedClient()
         let cursor = Cursor()
         client.took(cursor)
-        #expect(throws: Refusal.secureInputIsOn) { try client.cursor(whileInFrontIs: "com.example.elsewhere", secureInputIsOn: true, ourSourceIsSelected: true).get() }
+        #expect(throws: Refusal.secureInputIsOn) { try client.cursor(whileInFrontIs: "com.example.elsewhere", secureInputIsOn: true).get() }
     }
 
-    /// Nothing in front is an answer, not a failure, and it is said by name. Our source is
-    /// the selected one, so an empty focus is a place with nowhere for words - not a source
-    /// that was taken.
+    /// Nothing in front is an answer, not a failure, and it is said by name. This process
+    /// cannot tell an empty focus from its source having been deselected; the app names the
+    /// second, off a selection reading it can trust. See the ticket's finding.
     @Test func nothingInFrontIsRefusedByName() {
-        #expect(throws: Refusal.noClientHasFocus) { try FocusedClient().cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false, ourSourceIsSelected: true).get() }
-    }
-
-    /// With no client and our source not the selected one, macOS is routing us nothing: the
-    /// other copy adopted or the person switched layouts. Named as the source taken rather
-    /// than as an empty focus, because the fix is a reselection and not a text field to click
-    /// into. [LAW:no-silent-failure]
-    @Test func aStolenSelectionIsRefusedAsTheSourceNotAnEmptyFocus() {
-        #expect(throws: Refusal.anotherInputSourceIsSelected) {
-            try FocusedClient().cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false, ourSourceIsSelected: false).get()
-        }
-    }
-
-    /// A client we hold is proof our source is selected, so it is committed into whatever the
-    /// `ourSourceIsSelected` reading says: the client is the fact, and a stale reading beside
-    /// it could only disagree. [LAW:one-source-of-truth]
-    @Test func aHeldClientIsChosenEvenIfTheSelectionReadingLags() throws {
-        let client = FocusedClient()
-        let cursor = Cursor()
-        client.took(cursor)
-
-        #expect(try client.cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false, ourSourceIsSelected: false).get() === cursor)
+        #expect(throws: Refusal.noClientHasFocus) { try FocusedClient().cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false).get() }
     }
 
     /// A cursor does not outlive the app it belongs to. Without this the person could
@@ -98,7 +77,7 @@ import Testing
         client.took(cursor)
         client.applicationQuit("com.apple.TextEdit")
 
-        #expect(throws: Refusal.noClientHasFocus) { try client.cursor(whileInFrontIs: "com.apple.TextEdit", secureInputIsOn: false, ourSourceIsSelected: true).get() }
+        #expect(throws: Refusal.noClientHasFocus) { try client.cursor(whileInFrontIs: "com.apple.TextEdit", secureInputIsOn: false).get() }
     }
 
     /// Some other app quitting is not this cursor's business.
@@ -108,7 +87,7 @@ import Testing
         client.took(cursor)
         client.applicationQuit("com.apple.Safari")
 
-        #expect(try client.cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false, ourSourceIsSelected: true).get() === cursor)
+        #expect(try client.cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false).get() === cursor)
     }
 
     @Test func aCursorThatLeavesTakesTheFocusWithIt() {
@@ -117,7 +96,7 @@ import Testing
         client.took(cursor)
         client.left(cursor)
 
-        #expect(throws: Refusal.noClientHasFocus) { try client.cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false, ourSourceIsSelected: true).get() }
+        #expect(throws: Refusal.noClientHasFocus) { try client.cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false).get() }
     }
 
     /// Committing into a window the person has left is the one outcome worse than
@@ -130,7 +109,7 @@ import Testing
         let cursor = Cursor(in: "com.apple.TextEdit")
         client.took(cursor)
 
-        #expect(throws: Refusal.cursorIsInAnotherApp) { try client.cursor(whileInFrontIs: "com.apple.finder", secureInputIsOn: false, ourSourceIsSelected: true).get() }
+        #expect(throws: Refusal.cursorIsInAnotherApp) { try client.cursor(whileInFrontIs: "com.apple.finder", secureInputIsOn: false).get() }
     }
 
     /// The one that matters: focus can move by activating the new client before
@@ -145,6 +124,6 @@ import Testing
         client.took(new)
         client.left(old)
 
-        #expect(try client.cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false, ourSourceIsSelected: true).get() === new)
+        #expect(try client.cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false).get() === new)
     }
 }
