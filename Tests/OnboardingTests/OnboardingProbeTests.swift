@@ -1,365 +1,54 @@
-import Choices
-import DriverExtension
-import Foundation
 import Grants
-import KeyboardService
 import Flavors
 import Testing
 @testable import Onboarding
-
-/// The two readings onboarding takes for itself, against the text and the files the
-/// machine actually produces.
-@Suite struct OnboardingProbeTests {
-    static let service = "ai.promptctl.low-talker.keyboardd"
-    static let label = "ai.promptctl.low-talker.keyboardd"
-    /// The helper the release app ships, which a job this reader counts as its own runs.
-    static let helper = URL(fileURLWithPath: "/Applications/LowTalker.app/Contents/MacOS/lowtalker-keyboardd")
-
-    /// What `launchctl print` prints for a job that holds the Mach service. The endpoint
-    /// is handed out at load, so a job that has it names it here.
-    static let holdingTheService = """
-    system/ai.promptctl.low-talker.keyboardd = {
-    \tactive count = 1
-    \tpath = (submitted by smd.338)
-    \tstate = running
-    \tendpoints = {
-    \t\t"ai.promptctl.low-talker.keyboardd" = {
-    \t\t\tport = 0x1847f7
-    \t\t\tactive = 1
-    \t\t}
-    \t}
-    }
-    """
-
-    /// The same job when launchd gave the name to somebody else. Measured on this Mac:
-    /// the record is complete, the job says `state = running`, and there is simply no
-    /// endpoints block. Nothing in it announces the loss.
-    ///
-    /// Which is the lost-name shape and not a job that has yet to check in - a distinction
-    /// worth naming, because a running job that has never checked a service in still names
-    /// its endpoint, at `active = 0`. There is no endpoints block here at all.
-    static let holdingNothing = """
-    system/ai.promptctl.low-talker.keyboardd = {
-    \tactive count = 1
-    \tpath = (submitted by smd.338)
-    \tstate = running
-    \tparent bundle identifier = ai.promptctl.low-talker
-    \tenvironment = {
-    \t\tXPC_SERVICE_NAME => ai.promptctl.low-talker.keyboardd
-    \t}
-    }
-    """
-
-    /// A job this script bootstrapped from a plist, holding the label with the service
-    /// named in its endpoints exactly as the app's own would. The endpoint is what makes
-    /// this fixture worth having: read endpoint-first it is "answering", and the app's
-    /// registration having never become the running job is never said.
-    static let bootstrappedFromAPlist = """
-    system/ai.promptctl.low-talker.keyboardd = {
-    \tactive count = 1
-    \tpath = /Library/LaunchDaemons/ai.promptctl.low-talker.keyboardd.plist
-    \tstate = running
-    \tprogram = /Users/bmf/code/low-talker/.build/debug/lowtalker-keyboardd
-    \tendpoints = {
-    \t\t"ai.promptctl.low-talker.keyboardd" = {
-    \t\t\tport = 0x1847f7
-    \t\t\tactive = 1
-    \t\t}
-    \t}
-    }
-    """
-
-    @Test func aJobNamingTheEndpointIsHoldingTheService() throws {
-        let printed = Command.Output(status: 0, stdout: Self.holdingTheService, stderr: "")
-        #expect(try OnboardingProbe.standing(from: printed, flavor: .release) == .holdingTheService)
-    }
-
-    /// The failure this requirement exists for: a job that is loaded, running, and holds
-    /// nothing. An app in this state reports its helper enabled and types nothing.
-    @Test func aRunningJobWithNoEndpointHasLostTheService() throws {
-        let printed = Command.Output(status: 0, stdout: Self.holdingNothing, stderr: "")
-        #expect(try OnboardingProbe.standing(from: printed, flavor: .release) == .anotherJobHoldsTheService)
-    }
-
-    /// A plist job running some other copy of the helper - a checkout's build under the
-    /// release label - is the stray, however healthy its endpoint looks.
-    @Test func aJobBootstrappedFromAPlistRunningAnotherCopyIsAStray() throws {
-        let printed = Command.Output(status: 0, stdout: Self.bootstrappedFromAPlist, stderr: "")
-        #expect(try OnboardingProbe.standing(from: printed, flavor: .release) == .aBootstrappedJobHoldsTheLabel)
-    }
-
-    /// What `lowtalker helper install` loads, measured on studious.local 2026-09-27: a
-    /// plist job running root's copy of this installation's helper, holding the service.
-    /// It is answering, and it has run.
-    static let installedByTheCLI = """
-    system/ai.promptctl.low-talker.keyboardd = {
-    \tactive count = 1
-    \tpath = /Library/LaunchDaemons/ai.promptctl.low-talker.keyboardd.plist
-    \ttype = LaunchDaemon
-    \tstate = running
-    \tprogram = /Library/PrivilegedHelperTools/ai.promptctl.low-talker.keyboardd
-    \targuments = {
-    \t\t/Library/PrivilegedHelperTools/ai.promptctl.low-talker.keyboardd
-    \t\t--flavor
-    \t\trelease
-    \t}
-    \tstderr path = /Library/Logs/ai.promptctl.low-talker.keyboardd.crash.log
-    \tendpoints = {
-    \t\t"ai.promptctl.low-talker.keyboardd" = {
-    \t\t\tport = 0x2f03
-    \t\t\tactive = 1
-    \t\t}
-    \t}
-    }
-    """
-
-    @Test func aPlistJobRunningThisInstallationsHelperIsAnswering() throws {
-        let printed = Command.Output(status: 0, stdout: Self.installedByTheCLI, stderr: "")
-        let standing = try OnboardingProbe.standing(from: printed, flavor: .release)
-        #expect(standing == .answeringAsALaunchDaemon)
-        #expect(standing.aHelperHasRun)
-    }
-
-    /// A plist job running the helper in place, inside a bundle its user can write, is not
-    /// one `helper install` loads, even holding the service.
-    @Test func aPlistJobRunningTheHelperInPlaceIsAStray() throws {
-        let inPlace = Self.installedByTheCLI.replacingOccurrences(
-            of: "program = /Library/PrivilegedHelperTools/ai.promptctl.low-talker.keyboardd",
-            with: "program = \(Self.helper.path)")
-        let printed = Command.Output(status: 0, stdout: inPlace, stderr: "")
-        #expect(try OnboardingProbe.standing(from: printed, flavor: .release) == .aBootstrappedJobHoldsTheLabel)
-    }
-
-    /// A job naming no path says nothing about who holds the label, so it is not read as
-    /// the app's. [LAW:no-silent-failure]
-    @Test func aJobNamingNoPathIsUnreadable() {
-        let printed = Command.Output(status: 0, stdout: Self.installedByTheCLI.replacingOccurrences(of: "\tpath = /Library/LaunchDaemons/ai.promptctl.low-talker.keyboardd.plist\n", with: ""), stderr: "")
-        #expect(throws: OnboardingUnreadable.self) {
-            try OnboardingProbe.standing(from: printed, flavor: .release)
-        }
-    }
-
-    /// The same job without the endpoint has not got the name, whoever's helper it runs.
-    @Test func aPlistJobRunningThisInstallationsHelperWithoutTheServiceIsNotAnswering() throws {
-        let lost = Self.installedByTheCLI.replacingOccurrences(of: "\"ai.promptctl.low-talker.keyboardd\" = {", with: "\"another.service\" = {")
-        let printed = Command.Output(status: 0, stdout: lost, stderr: "")
-        #expect(try OnboardingProbe.standing(from: printed, flavor: .release) == .aBootstrappedJobHoldsTheLabel)
-    }
-
-    /// The app's own job, reported by its bundle path, whose plist also sits under a
-    /// `Library/LaunchDaemons` - inside the bundle - and whose crash log is written beside
-    /// the system's. Neither makes it a stray plist job: only a `path` that starts at
-    /// /Library/LaunchDaemons does.
-    @Test func theAppsJobReportedByItsBundlePathIsNotAStrayPlistJob() throws {
-        let printed = Command.Output(status: 0, stdout: """
-        system/ai.promptctl.low-talker.keyboardd = {
-        \tpath = /Applications/LowTalker.app/Contents/Library/LaunchDaemons/ai.promptctl.low-talker.keyboardd.plist
-        \tstate = running
-        \tstderr path = /Library/LaunchDaemons/not-a-job.log
-        \tendpoints = {
-        \t\t"ai.promptctl.low-talker.keyboardd" = {
-        \t\t\tport = 0x1847f7
-        \t\t}
-        \t}
-        }
-        """, stderr: "")
-        #expect(try OnboardingProbe.standing(from: printed, flavor: .release) == .holdingTheService)
-    }
-
-    /// The whole way from what launchd printed to what the reader is told, on the Mac
-    /// where reading it as "is the app's own helper answering" got it wrong: a helper is
-    /// up and holding the name, so it has already been through its filing - and a reader
-    /// whose answer is still missing needs the log, not a wait for something that already
-    /// happened and already failed.
-    ///
-    /// Taken through the readings rather than by handing the step a bool, because the
-    /// bool is what was wrong: every piece here was right on its own while what they
-    /// composed to was a reader told to wait forever. [LAW:behavior-not-structure]
-    @Test func aHelperHoldingTheNameSendsTheReaderToTheLog() throws {
-        let standing = try OnboardingProbe.standing(
-            from: Command.Output(status: 0, stdout: Self.holdingTheService, stderr: ""),
-            flavor: .release)
-            .sharpenedByTheAppsOwnRegistration(approvalPending: nil)
-        #expect(standing == .holdingTheService)
-
-        let step = Requirement.keyboardSetupAssistant(
-            answered: false, aHelperHasRun: standing.aHelperHasRun, helperSubsystem: Self.service).step ?? ""
-        #expect(step.contains("log show"), "the reader is not told where the failure is reported")
-        #expect(!step.contains("clears itself"), "the reader is told to wait for a filing that already happened")
-    }
-
-    /// Which standings mean a helper has already had its chance to file the answer. Only
-    /// a helper that holds the name was read as running. A holder nobody could identify
-    /// has not earned the claim, and neither has a plist job under the label: that a
-    /// plist is loaded was read, that the helper it names ever started was not - it may
-    /// have refused to, or never spawned. Its own step removes the plist, after which the
-    /// app's helper files afresh.
-    /// [LAW:no-silent-failure] Exhaustive, so a standing added later has to answer this.
-    @Test func onlyAStandingThatNamesARunningHelperSaysOneHasRun() {
-        let ran: Set<HelperStanding> = [.holdingTheService, .answeringAsALaunchDaemon]
-        for standing in HelperStanding.allCases {
-            #expect(standing.aHelperHasRun == ran.contains(standing), "\(standing)")
-        }
-    }
-
-    /// The service name appears in that record as an environment variable, spelled
-    /// without the `= {` that an endpoint carries. Reading it as the endpoint would
-    /// report every registered job as holding the service, which is the one answer this
-    /// probe must never give.
-    @Test func theServiceNameInTheEnvironmentIsNotAnEndpoint() throws {
-        let printed = Command.Output(status: 0, stdout: Self.holdingNothing, stderr: "")
-        #expect(Self.holdingNothing.contains(Self.service))
-        #expect(try OnboardingProbe.standing(from: printed, flavor: .release) != .holdingTheService)
-    }
-
-    /// A job launchd has never heard of is a normal answer, and the only non-zero exit
-    /// that may become one.
-    @Test func aJobLaunchdNeverHeardOfIsNoJob() throws {
-        let printed = Command.Output(status: 113, stdout: "", stderr: "Could not find service \"ai.promptctl.low-talker.keyboardd\" in domain for system")
-        #expect(try OnboardingProbe.standing(from: printed, flavor: .release) == .noJob)
-    }
-
-    /// Any other refusal is refused. A launchd nobody could read, reported as "no job",
-    /// would send a reader to approve a login item that is already approved.
-    /// [LAW:no-silent-failure]
-    @Test func alaunchdThatRefusedForAnyOtherReasonIsNotNoJob() {
-        let printed = Command.Output(status: 1, stdout: "", stderr: "Operation not permitted")
-        #expect(throws: OnboardingUnreadable.self) {
-            try OnboardingProbe.standing(from: printed, flavor: .release)
-        }
-    }
-
-    // MARK: - the assistant's cache
-
-    /// A Mac that has never met any keyboard has no file, and that is an answer: the
-    /// assistant has nothing cached and will ask.
-    @Test func noCacheFileMeansTheAssistantWillAsk() throws {
-        let missing = FileManager.default.temporaryDirectory.appendingPathComponent("no-such-\(UUID().uuidString).plist")
-        #expect(try OnboardingProbe.keyboardSetupAssistantAnswered(key: "10203-5824-0", at: missing.path) == false)
-    }
-
-    @Test func anEntryForThisKeyboardMeansTheAssistantIsAnswered() throws {
-        let path = try Self.writePlist(["keyboardtype": ["10203-5824-0": 40, "1031-4176-0": 40]])
-        #expect(try OnboardingProbe.keyboardSetupAssistantAnswered(key: "10203-5824-0", at: path) == true)
-    }
-
-    /// A cache full of other devices' answers is not this device's answer. The 3ti.2
-    /// spike found an entry from an unrelated country-33 device already sitting here,
-    /// and reading it as ours is exactly the mistake that leaves the assistant returning.
-    @Test func anotherKeyboardsAnswerIsNotThisKeyboardsAnswer() throws {
-        let path = try Self.writePlist(["keyboardtype": ["10203-5824-33": 40, "49291-1133-0": 40]])
-        #expect(try OnboardingProbe.keyboardSetupAssistantAnswered(key: "10203-5824-0", at: path) == false)
-    }
-
-    /// A file the assistant has not written to yet answers the same as no file.
-    @Test func aCacheWithNoKeyboardtypeEntryMeansTheAssistantWillAsk() throws {
-        let path = try Self.writePlist(["something else": 1])
-        #expect(try OnboardingProbe.keyboardSetupAssistantAnswered(key: "10203-5824-0", at: path) == false)
-    }
-
-    /// A file that is there and cannot be read is not an unanswered assistant, and
-    /// reporting it as one would have onboarding recommend a root write nobody needed.
-    /// [LAW:no-silent-failure]
-    @Test func aCacheFileThatCannotBeReadIsRefused() throws {
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("junk-\(UUID().uuidString).plist")
-        try Data("this is not a property list".utf8).write(to: path)
-        defer { try? FileManager.default.removeItem(at: path) }
-        #expect(throws: OnboardingUnreadable.self) {
-            try OnboardingProbe.keyboardSetupAssistantAnswered(key: "10203-5824-0", at: path.path)
-        }
-    }
-
-    static func writePlist(_ contents: [String: Any]) throws -> String {
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("keyboardtype-\(UUID().uuidString).plist")
-        let data = try PropertyListSerialization.data(fromPropertyList: contents, format: .xml, options: 0)
-        try data.write(to: path)
-        return path.path
-    }
-}
 
 /// The list itself, as both surfaces get it. `lowtalker onboard` and the menu-bar app
 /// are two views of one assembly, and what is checked here is the part neither of them
 /// may quietly disagree about: which requirements are in the list, and in what order.
 /// [LAW:behavior-not-structure]
 @Suite struct ReadinessTests {
-    /// Every requirement the CLI can read, named, on any Mac in any state. A reading that
-    /// failed keeps its row and its name, so this holds on a machine with no driver package
-    /// as surely as on one that is fully set up - which is what makes it a check on the
-    /// assembly and not on the Mac it runs on.
-    @Test func theCLIReadsEveryRowThatBelongsToTheMacInOrder() {
-        #expect(Self.asTheCLISeesIt.requirements.map(\.name)
-            == ["Input method", "Driver extension", "Keyboard helper", "Keyboard Setup Assistant"])
+    /// Every requirement the CLI can read, named, on any Mac in any state.
+    @Test func theCLIReadsEveryRowThatBelongsToTheMac() {
+        #expect(Self.asTheCLISeesIt.requirements.map(\.name) == ["Input method"])
     }
 
-    /// The grants macOS keys to the app are named from the CLI, never read: a CLI reading
-    /// them would report its terminal's grants as the app's.
-    @Test func theCLINamesTheAppsOwnGrantsWithoutReadingThem() {
-        #expect(Self.asTheCLISeesIt.notReadHere == [.microphone, .accessibility, .inputMonitoring])
+    /// The grant macOS keys to the app is named from the CLI, never read: a CLI reading it
+    /// would report its terminal's grant as the app's.
+    @Test func theCLINamesTheAppsOwnGrantWithoutReadingIt() {
+        #expect(Self.asTheCLISeesIt.notReadHere == [.microphone])
         #expect(Self.asTheCLISeesIt.description.contains("Microphone: only the app can read this"))
     }
 
-    /// The app reads every row the CLI reads, plus its own grants, in the one order.
-    @Test func theAppReadsItsOwnGrantsWhereTheCLICannot() {
-        let asTheAppSeesIt = OnboardingProbe.readiness(
-            flavor: .development, delivery: nil, source: nil,
-            reader: .theApp(helperAwaitingApproval: false, privacy: .success(Self.nothingGranted)), cli: "lowtalker")
+    /// The app reads every row the CLI reads, plus its own grant, in the one order.
+    @Test func theAppReadsItsOwnGrantWhereTheCLICannot() {
+        let asTheAppSeesIt = OnboardingProbe.readiness(flavor: .development, reader: .theApp(privacy: .success(Self.nothingGranted)))
         #expect(asTheAppSeesIt.requirements.map(\.row) == Requirement.Row.allCases)
         #expect(asTheAppSeesIt.notReadHere.isEmpty)
     }
 
-    /// With the registered hot key chosen, neither event-tap grant is in the list; with the
-    /// event tap chosen, both are. This is low-hotkey-a6m.2's contract.
-    @Test func theEventTapsGrantsAppearOnlyWhenTheEventTapIsChosen() {
-        func rows(_ source: HotkeySource) -> [Requirement.Row] {
-            OnboardingProbe.readiness(
-                flavor: .development, delivery: .inputMethod, source: source,
-                reader: .theApp(helperAwaitingApproval: false, privacy: .success(Self.nothingGranted)), cli: "lowtalker").requirements.map(\.row)
-        }
-        #expect(rows(.eventTap) == [.microphone, .accessibility, .inputMonitoring, .inputMethod])
-        #expect(rows(.registeredHotKey) == [.microphone, .inputMethod])
-    }
-
-    /// The app's extra reading changes the helper's row and nothing else among the rows the
-    /// CLI can read too. A caller that cannot ask `SMAppService` gets launchd's answer
-    /// unsharpened, which is the whole of the difference on those rows.
-    @Test func onlyTheHelperCanDifferBetweenTheTwoSurfaces() {
-        let asAnUnapprovedAppSeesIt = OnboardingProbe.readiness(
-            flavor: .development, delivery: nil, source: nil,
-            reader: .theApp(helperAwaitingApproval: true, privacy: .success(Self.nothingGranted)), cli: "lowtalker").requirements
-            .filter { !$0.row.readOnlyByTheApp }
-        #expect(Self.asTheCLISeesIt.requirements.filter { $0.name != "Keyboard helper" }
-            == asAnUnapprovedAppSeesIt.filter { $0.name != "Keyboard helper" })
-    }
-
-    /// The grants rows read what the app's reading says, whatever this test process's own
-    /// grants are: every grant allowed clears all three, and none allowed leaves all three.
-    @Test func theAppsGrantRowsReadTheReadingItWasGiven() {
+    /// The microphone row reads what the app's reading says, whatever this test process's
+    /// own grant is.
+    @Test func theAppsGrantRowReadsTheReadingItWasGiven() {
         func grantRows(_ privacy: PrivacyReading) -> [Requirement] {
-            OnboardingProbe.readiness(
-                flavor: .development, delivery: .inputMethod, source: .eventTap,
-                reader: .theApp(helperAwaitingApproval: false, privacy: .success(privacy)), cli: "lowtalker")
+            OnboardingProbe.readiness(flavor: .development, reader: .theApp(privacy: .success(privacy)))
                 .requirements.filter(\.row.readOnlyByTheApp)
         }
-        let everything = PrivacyReading(microphone: .authorized, inputMonitoring: .granted, accessibility: true)
-        #expect(grantRows(everything).allSatisfy { $0.met })
-        #expect(grantRows(Self.nothingGranted).allSatisfy { !$0.met })
+        #expect(grantRows(PrivacyReading(microphone: .authorized)).map(\.met) == [true])
+        #expect(grantRows(Self.nothingGranted).map(\.met) == [false])
     }
 
-    /// A reading that failed leaves each grant unmet and says why, rather than guessing.
-    @Test func aFailedReadingLeavesEachGrantUnmetAndSaysWhy() {
-        let rows = OnboardingProbe.readiness(
-            flavor: .development, delivery: .inputMethod, source: .eventTap,
-            reader: .theApp(helperAwaitingApproval: false, privacy: .failure(PrivacyReadingFailure("no reader"))), cli: "lowtalker")
+    /// A reading that failed leaves the grant unmet and says why, rather than guessing.
+    @Test func aFailedReadingLeavesTheGrantUnmetAndSaysWhy() {
+        let rows = OnboardingProbe.readiness(flavor: .development, reader: .theApp(privacy: .failure(PrivacyReadingFailure("no reader"))))
             .requirements.filter(\.row.readOnlyByTheApp)
-        #expect(rows.map(\.row) == [.microphone, .accessibility, .inputMonitoring])
+        #expect(rows.map(\.row) == [.microphone])
         #expect(rows.allSatisfy { !$0.met && $0.reads == "could not be read: no reader" })
     }
 
-    static let nothingGranted = PrivacyReading(microphone: .notDetermined, inputMonitoring: .undecided, accessibility: false)
+    static let nothingGranted = PrivacyReading(microphone: .notDetermined)
 
     static var asTheCLISeesIt: Readiness {
-        OnboardingProbe.readiness(
-            flavor: .development, delivery: nil, source: nil,
-            reader: .elsewhere, cli: "lowtalker")
+        OnboardingProbe.readiness(flavor: .development, reader: .elsewhere)
     }
 }

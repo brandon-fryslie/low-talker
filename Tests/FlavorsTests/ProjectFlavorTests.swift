@@ -8,11 +8,10 @@ private let repository = URL(fileURLWithPath: #filePath)
 /// project.yml builds one app bundle per flavor, under that flavor's own names.
 ///
 /// xcodegen cannot read a Swift constant, so every name `Flavor` decides that a target
-/// needs - the bundle identifier, the product name, the launchd plist, and the input
-/// method's three - is written again in project.yml, and this is what keeps those copies
+/// needs - the bundle identifier, the product name, and the input method's three - is written again in project.yml, and this is what keeps those copies
 /// from drifting. [LAW:one-source-of-truth] The failure they would otherwise cause is
 /// silent in the worst way: two bundles that agree on an identifier are one installation
-/// as far as LaunchServices, TCC and Login Items are concerned, so the second copy would
+/// as far as LaunchServices and TCC are concerned, so the second copy would
 /// install over the first's grants rather than beside them - and nothing would say so
 /// until a hotkey went to the wrong app.
 ///
@@ -61,7 +60,7 @@ private let repository = URL(fileURLWithPath: #filePath)
     /// release name, so matching loosely would file both blocks under `release`.
     private static func names(of flavor: Flavor) -> Set<String> {
         [
-            flavor.bundleIdentifier, flavor.displayName, flavor.launchdLabel,
+            flavor.bundleIdentifier, flavor.displayName,
             flavor.inputMethodBundleIdentifier, flavor.inputSourceIdentifier,
             flavor.inputMethodConnectionName,
         ]
@@ -87,7 +86,6 @@ private let repository = URL(fileURLWithPath: #filePath)
             "project.yml builds nothing under \(flavor.bundleIdentifier); it builds \(installations)"
         )
         #expect(mine.sets["displayName"] == flavor.displayName)
-        #expect(mine.sets["launchdLabel"] == flavor.launchdLabel)
         #expect(mine.sets["appIconName"] == flavor.appIconName)
     }
 
@@ -171,15 +169,5 @@ private let repository = URL(fileURLWithPath: #filePath)
             #expect(Set(flavors) == Set(Flavor.allCases) && flavors.count == Flavor.allCases.count,
                     "the targets setting \(kind.sorted()) are built for \(flavors) rather than once for each flavor")
         }
-    }
-
-    /// The helper signs under the name the release copy's helper serves: one namespace for
-    /// the whole program. project.yml's helper target is where both builds of it read the
-    /// identifier from, so it is the copy held to `Flavor` here.
-    @Test func theHelperSignsUnderTheNameItServes() throws {
-        let yaml = try String(contentsOf: repository.appending(path: "project.yml"), encoding: .utf8)
-        let helper = try #require(yaml.components(separatedBy: "\n  lowtalker-keyboardd:\n").dropFirst().first, "project.yml has no lowtalker-keyboardd target")
-        let identifiers = helper.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { $0.hasPrefix("PRODUCT_BUNDLE_IDENTIFIER:") }
-        #expect(identifiers == ["PRODUCT_BUNDLE_IDENTIFIER: \(Flavor.release.machServiceName)"])
     }
 }

@@ -58,11 +58,11 @@ jobs:
         run: make signing-identity
 
       # Proves the identity this job just created can actually sign, before the longer
-      # steps spend time on a keychain that cannot. `make test` runs the same two recipes
-      # again at its end, because `swift test` ad-hoc signs whatever it links; `make app`
-      # signs through Xcode.
-      - name: Sign the CLI and the helper
-        run: make cli helper
+      # steps spend time on a keychain that cannot. `make test` runs the same recipe again
+      # at its end, because `swift test` ad-hoc signs whatever it links; `make app` signs
+      # through Xcode.
+      - name: Sign the CLI
+        run: make cli
 
       - name: Build and test the package
         run: make test

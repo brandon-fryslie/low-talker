@@ -1,10 +1,9 @@
 import AVFoundation
+import Dispatch
 import Grants
-import Keystrokes
+import Insertion
 import LowTalkerCore
-import Pointing
 import Synchronization
-import Typing
 
 /// Hardware a test feeds: one engine per opening, its samples the test's to append.
 @MainActor
@@ -122,49 +121,55 @@ final class FakeTranscriber: Transcriber {
     }
 }
 
-/// A keyboard that records every call, and refuses all of them once told to.
-@MainActor
-final class LoggingKeyboard: Keyboard {
-    private(set) var log: [String] = []
-    var refusing = false
-    /// What a key-down waits for once it is recorded, as a real one waits for the device to
-    /// answer. Nothing, unless a test wants a session held mid-keystroke.
-    var acknowledgement: @MainActor () async -> Void = {}
-
-    private func record(_ what: String) throws {
-        guard !refusing else { throw Refused() }
-        log.append(what)
-    }
-
-    func check() throws { try record("check") }
-
-    func down(_ usage: Usage) async throws {
-        try record("down \(String(usage.rawValue, radix: 16))")
-        await acknowledgement()
-    }
-
-    func releaseAll() throws { try record("up") }
-}
-
-struct Refused: Error {}
-
-/// The pointer a dictation session must never reach for. The default route inserts text
-/// and nothing else, so a report arriving here means the loop grew a mouse behind the
-/// test's back.
+/// An input method that records every text it put at the cursor, answers that it reached
+/// the app it is told, and refuses or holds an insert when a test says so. One fake for every
+/// behavior, since each is a value. [LAW:composability]
 ///
-/// [LAW:no-silent-failure] It throws rather than records: a recorded report that no test
-/// asserts on is a pointer the loop could use unnoticed, which is the whole thing this
-/// fake exists to catch.
-@MainActor
-final class UnusedMouse: Mouse {
-    struct Pointed: Error, CustomStringConvertible {
-        let report: String
-        var description: String { "a dictation session posted \(report) to the mouse" }
+/// Asked on a thread of the executor's choosing: `Inserter`'s awaited overload puts the
+/// blocking call on a thread of its own, which is also what lets a held insert block here
+/// without holding the main actor.
+final class FakeInputMethod: Inserter, Sendable {
+    private struct State {
+        var inserted: [String] = []
+        var into = "com.apple.TextEdit"
+        var refusal: (any Error)?
+        var gate: DispatchSemaphore?
+        var holding = 0
     }
 
-    func check() throws {}
-    func down(_ button: Button) throws { throw Pointed(report: "down \(button.rawValue)") }
-    func releaseAll() throws { throw Pointed(report: "release") }
-    func move(by delta: Move) throws { throw Pointed(report: "move") }
-    func scroll(by delta: Scroll) throws { throw Pointed(report: "scroll") }
+    private let state = Mutex(State())
+
+    /// Every text put at the cursor, in order. A held insert is not in it until it is let go.
+    var inserted: [String] { state.withLock { $0.inserted } }
+    /// How many inserts are held at the gate now.
+    var holding: Int { state.withLock { $0.holding } }
+
+    /// The app the next inserts say they reached.
+    func reaching(_ app: BundleID) { state.withLock { $0.into = app.rawValue } }
+    /// Every insert from now on is refused with `refusal`, or none is when it is nil.
+    func refusing(_ refusal: (any Error)?) { state.withLock { $0.refusal = refusal } }
+    /// Every insert from now on waits until `letGo`, the way a real one waits for the app to
+    /// answer - held at a gate rather than for a duration. [LAW:no-ambient-temporal-coupling]
+    func hold() { state.withLock { $0.gate = DispatchSemaphore(value: 0) } }
+    /// Lets the held insert through, and holds none after it.
+    func letGo() {
+        let gate = state.withLock { state in
+            defer { state.gate = nil }
+            return state.gate
+        }
+        gate?.signal()
+    }
+
+    func insert(_ text: String) throws -> Inserted {
+        if let gate = state.withLock({ $0.gate }) {
+            state.withLock { $0.holding += 1 }
+            gate.wait()
+            state.withLock { $0.holding -= 1 }
+        }
+        return try state.withLock { state in
+            if let refusal = state.refusal { throw refusal }
+            state.inserted.append(text)
+            return Inserted(characters: text.count, into: state.into)
+        }
+    }
 }

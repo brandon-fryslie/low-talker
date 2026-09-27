@@ -1,4 +1,3 @@
-import Choices
 import Flavors
 import Foundation
 import Grants
@@ -39,31 +38,23 @@ import Testing
         }
     }
 
-    /// A step the app can ask macOS about has a button saying what it asks; the two it
-    /// cannot ask about - the driver, which an administrator installs, and the assistant,
-    /// which the helper answers - have none, so no button promises a dialog that never comes.
-    @Test func onlyTheRowsTheAppCanAskForHaveAnAskButton() {
-        let asking = Requirement.Row.allCases.filter { $0.askTitle != nil }
-        #expect(asking == [.microphone, .accessibility, .inputMonitoring, .inputMethod, .keyboardHelper])
-        for row in asking { #expect(row.askTitle?.hasSuffix("…") == true, "\(row.rawValue)'s button does not say a dialog follows") }
+    /// Every step's button says a dialog follows.
+    @Test(arguments: Requirement.Row.allCases)
+    func everyAskButtonSaysADialogFollows(row: Requirement.Row) {
+        #expect(row.askTitle.hasSuffix("…"), "\(row.rawValue)'s button does not say a dialog follows")
     }
 
     /// Every grant a person can switch by hand has the pane it is switched in, which is
     /// where a person goes after declining a dialog macOS will not show twice.
     @Test func everyGrantOpensTheExactPaneItIsSwitchedIn() {
-        #expect(Requirement.Row.microphone.settingsPane?.absoluteString.hasSuffix("Privacy_Microphone") == true)
-        #expect(Requirement.Row.inputMonitoring.settingsPane?.absoluteString.hasSuffix("Privacy_ListenEvent") == true)
-        #expect(Requirement.Row.accessibility.settingsPane?.absoluteString.hasSuffix("Privacy_Accessibility") == true)
-        #expect(Requirement.Row.inputMethod.settingsPane?.absoluteString.hasSuffix("com.apple.Keyboard-Settings.extension") == true)
-        #expect(Requirement.Row.driverExtension.settingsPane?.absoluteString.hasSuffix("com.apple.LoginItems-Settings.extension") == true)
-        #expect(Requirement.Row.keyboardHelper.settingsPane?.absoluteString.hasSuffix("com.apple.LoginItems-Settings.extension") == true)
-        #expect(Requirement.Row.keyboardSetupAssistant.settingsPane == nil)
+        #expect(Requirement.Row.microphone.settingsPane.absoluteString.hasSuffix("Privacy_Microphone"))
+        #expect(Requirement.Row.inputMethod.settingsPane.absoluteString.hasSuffix("com.apple.Keyboard-Settings.extension"))
     }
 
     // MARK: - the input method's dialog, which returns
 
-    /// Only the input method is re-askable. macOS shows the others' dialogs once per app, so
-    /// their button is spent after one press and the page sends the person to System
+    /// Only the input method is re-askable. macOS shows the microphone's dialog once per app,
+    /// so its button is spent after one press and the page sends the person to System
     /// Settings; the input method's dialog comes back on the next press (measured on
     /// studious 2026-09-27), so its button must stay and it must never get the "asks only
     /// once" line. A row landing on the wrong side of this is the exact defect ssn fixes.
@@ -73,8 +64,8 @@ import Testing
         }
     }
 
-    /// Only the input method carries a switch-on note. The others' asking is fully covered
-    /// by the generic once-asked line, so a note on them would be a second, competing voice.
+    /// Only the input method carries a switch-on note. The microphone's asking is fully
+    /// covered by the generic once-asked line, so a note on them would be a second, competing voice.
     @Test func onlyTheInputMethodCarriesASwitchOnNote() {
         for row in Requirement.Row.allCases {
             #expect((row.switchOnNote(for: Self.flavor) != nil) == (row == .inputMethod), "\(row.rawValue)")
@@ -115,10 +106,8 @@ import Testing
     // MARK: - the walk
 
     static let unmetMicrophone = Requirement.microphone(.notDetermined, flavor: flavor)
-    static let unmetInputMonitoring = Requirement.inputMonitoring(held: false, accessibilityHeld: true, flavor: flavor)
-    static let metAccessibility = Requirement.accessibility(held: true, flavor: flavor)
     static let unmetInputMethod = Requirement.inputMethod(switchedOn: false, flavor: flavor)
-    static let readiness = Readiness([unmetMicrophone, unmetInputMonitoring, metAccessibility, unmetInputMethod])
+    static let readiness = Readiness([unmetMicrophone, unmetInputMethod])
 
     /// One step at a time, in the list's order, and never a step that is already met.
     @Test func theWalkShowsTheFirstUnmetRequirement() {
@@ -130,25 +119,21 @@ import Testing
     @Test func skippingMovesOnAndRevisitingComesBack() {
         var walk = GuidedSetup()
         walk.skip(.microphone)
-        #expect(walk.current(in: Self.readiness)?.row == .inputMonitoring)
-        walk.skip(.inputMonitoring)
         #expect(walk.current(in: Self.readiness)?.row == .inputMethod)
         walk.skip(.inputMethod)
         #expect(walk.current(in: Self.readiness) == nil)
-        walk.revisit(.inputMonitoring)
-        #expect(walk.current(in: Self.readiness)?.row == .inputMonitoring)
+        walk.revisit(.microphone)
+        #expect(walk.current(in: Self.readiness)?.row == .microphone)
     }
 
     /// A grant given in System Settings clears its step at the next reading: the walk keeps
     /// no answer of its own, so a fresh list with the grant met moves it on.
     @Test func aGrantMadeElsewhereClearsItsStepAtTheNextReading() {
-        let granted = Readiness([
-            .microphone(nil, flavor: Self.flavor), Self.unmetInputMonitoring, Self.metAccessibility, Self.unmetInputMethod,
-        ])
-        #expect(GuidedSetup().current(in: granted)?.row == .inputMonitoring)
+        let granted = Readiness([.microphone(nil, flavor: Self.flavor), Self.unmetInputMethod])
+        #expect(GuidedSetup().current(in: granted)?.row == .inputMethod)
     }
 
-    // MARK: - the rows only the app reads
+    // MARK: - the row only the app reads
 
     /// Each way macOS can withhold the microphone reads as its own word and asks for its
     /// own step; allowed asks for nothing.
@@ -158,41 +143,5 @@ import Testing
         #expect(Set(rows.map(\.reads)).count == answers.count)
         #expect(rows.map(\.met) == [true, false, false, false])
         #expect(Requirement.microphone(.denied, flavor: Self.flavor).step?.contains("Privacy & Security > Microphone") == true)
-    }
-
-    /// While Accessibility is off no Input Monitoring dialog can show, so the step points at
-    /// Accessibility rather than at a button that cannot work.
-    @Test func inputMonitoringWaitsOnAccessibility() {
-        let waiting = Requirement.inputMonitoring(held: false, accessibilityHeld: false, flavor: Self.flavor)
-        #expect(!waiting.met)
-        #expect(waiting.step?.contains("Accessibility") == true)
-        #expect(waiting.waitsOn == .accessibility)
-        #expect(Requirement.inputMonitoring(held: false, accessibilityHeld: true, flavor: Self.flavor).waitsOn == nil)
-    }
-
-    /// Each event-tap grant's step names its own pane and the installation to switch on.
-    @Test func anEventTapGrantNamesItsPaneAndTheInstallation() {
-        for requirement in [Requirement.inputMonitoring(held: false, accessibilityHeld: true, flavor: Self.flavor), .accessibility(held: false, flavor: Self.flavor)] {
-            let step = requirement.step ?? ""
-            #expect(step.contains("Privacy & Security > \(requirement.name)"))
-            #expect(step.contains(Self.flavor.displayName))
-        }
-        #expect(Requirement.inputMonitoring(held: true, accessibilityHeld: true, flavor: Self.flavor).met)
-    }
-
-    /// The hotkey menu names the grants a source needs from the list itself.
-    @Test func aHotkeySourceNamesTheGrantsTheListGivesIt() {
-        #expect(HotkeySource.eventTap.asks == "needs Accessibility and Input Monitoring")
-        #expect(HotkeySource.registeredHotKey.asks == "needs nothing")
-        #expect(HotkeySource.inputMethod.asks == "needs Input method")
-    }
-
-    /// The input method is one row serving both halves: a setup that hears through it needs
-    /// it switched on whatever the delivery, and one that neither hears nor delivers
-    /// through it does not.
-    @Test func theInputMethodRowServesItsHearingAsWellAsItsDelivery() {
-        #expect(OnboardingProbe.needed(delivery: .virtualKeyboard, source: .inputMethod).contains(.inputMethod))
-        #expect(!OnboardingProbe.needed(delivery: .virtualKeyboard, source: .inputMethod).contains(.inputMonitoring))
-        #expect(!OnboardingProbe.needed(delivery: .virtualKeyboard, source: .registeredHotKey).contains(.inputMethod))
     }
 }

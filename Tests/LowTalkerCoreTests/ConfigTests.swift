@@ -1,4 +1,3 @@
-import Choices
 import Flavors
 import Foundation
 import LowTalkerCore
@@ -27,11 +26,11 @@ import Testing
 
         [[modes]]
         name = "dictation"
-        chord = { eventTap = { modifiers = ["rightOption"] } }
+        chord = { modifiers = ["rightOption"] }
 
         [[modes]]
         name = "slack"
-        chord = { eventTap = { modifiers = ["leftCommand", "leftShift"], key = 1 }, registeredHotKey = { modifiers = ["leftCommand", "leftShift"], key = 1 }, inputMethod = { modifiers = ["leftCommand", "leftShift"] } }
+        chord = { modifiers = ["leftCommand", "leftShift"] }
         vocabulary = ["Kubernetes", "  Anthropic\\n"]
         routes = [
           { when = "always", then = { insert = { app = "com.tinyspeck.slackmacgap" } } },
@@ -39,7 +38,7 @@ import Testing
 
         [[modes]]
         name = "notes"
-        chord = { eventTap = { modifiers = ["rightCommand"] }, registeredHotKey = { modifiers = ["leftCommand"], key = 2 }, inputMethod = { modifiers = ["rightCommand"] } }
+        chord = { modifiers = ["rightCommand"] }
         routes = [{ when = "always", then = { insert = "focus" } }]
         """
 
@@ -50,9 +49,7 @@ import Testing
         #expect(config.modes.map(\.name) == ["dictation", "slack", "notes"])
 
         let slack = try #require(config.modes.first { $0.name == "slack" })
-        #expect(slack.chords[.eventTap] == KeyChord(key: Key(rawValue: 1), modifiers: [.leftCommand, .leftShift]))
-        #expect(slack.chords[.registeredHotKey] == KeyChord(key: Key(rawValue: 1), modifiers: [.leftCommand, .leftShift]))
-        #expect(slack.chords[.inputMethod] == KeyChord(modifiers: [.leftCommand, .leftShift], key: nil))
+        #expect(slack.chord == KeyChord(modifiers: .leftCommand, .leftShift))
         #expect(slack.vocabulary.terms.map(\.text) == ["Kubernetes", "Anthropic"])
         #expect(slack.router.routes == [
             Route(when: .always, then: .insertTranscript(target: .app(bundleID: BundleID(rawValue: "com.tinyspeck.slackmacgap")))),
@@ -123,84 +120,53 @@ import Testing
     @Test(arguments: Flavor.allCases) func theDefaultsAreTheValuesTheirOwnersName(_ flavor: Flavor) {
         #expect(Config.default(for: flavor).model == ModelName.default)
         #expect(Config.default(for: flavor).modes == [Mode.dictation(for: flavor)])
-        for source in HotkeySource.allCases {
-            #expect(Mode.dictation(for: flavor).chords[source] == Hotkey.defaultChord(for: flavor, heardBy: source))
-        }
+        #expect(Mode.dictation(for: flavor).chord == Hotkey.defaultChord(for: flavor))
         #expect(Mode.dictation(for: flavor).vocabulary == .empty)
         #expect(Mode.dictation(for: flavor).router.routes == [Route.dictation])
     }
 
     /// The chord that started listening picks the mode, and the hotkey is told exactly the
-    /// chords the modes claim through the source it hears by.
+    /// chords the modes claim.
     @Test func theChordSelectsTheMode() throws {
         let config = try Self.config(Self.full)
         let dictation = KeyChord(modifiers: .rightOption)
-        #expect(config.mode(for: dictation, heardBy: .eventTap)?.name == "dictation")
-        #expect(config.mode(for: KeyChord(modifiers: .rightCommand), heardBy: .eventTap)?.name == "notes")
-        #expect(config.mode(for: KeyChord(modifiers: .function), heardBy: .eventTap) == nil)
-        for source in HotkeySource.allCases {
-            #expect(config.chords(heardBy: source) == Set(config.modes.map { $0.chords[source] }))
-        }
-        #expect(config.chords(heardBy: .eventTap).contains(dictation))
+        #expect(config.mode(for: dictation)?.name == "dictation")
+        #expect(config.mode(for: KeyChord(modifiers: .rightCommand))?.name == "notes")
+        #expect(config.mode(for: KeyChord(modifiers: .function)) == nil)
+        #expect(config.chords == Set(config.modes.map(\.chord)))
+        #expect(config.chords.contains(dictation))
     }
 
-    /// [LAW:one-source-of-truth] A source a mode's chord table leaves out listens for this
-    /// installation's own chord, so a file that changes only the event tap's chord keeps the
-    /// other sources on the chords `Hotkey.defaultChord` names.
-    @Test(arguments: Flavor.allCases) func aSourceTheFileLeavesOutHearsTheInstallationsChord(_ flavor: Flavor) throws {
+    /// [LAW:one-source-of-truth] A mode with no chord listens for the installation's own,
+    /// the chord `Hotkey.defaultChord` names.
+    @Test(arguments: Flavor.allCases) func aModeWithNoChordHearsTheInstallationsChord(_ flavor: Flavor) throws {
         let config = try Config(toml: """
             [[modes]]
             name = "dictation"
-            chord = { eventTap = { modifiers = ["leftControl"] } }
             """, flavor: flavor)
-        let chords = try #require(config.modes.first).chords
-        #expect(chords[.eventTap] == KeyChord(modifiers: .leftControl))
-        #expect(chords[.registeredHotKey] == Hotkey.defaultChord(for: flavor, heardBy: .registeredHotKey))
-        #expect(chords[.inputMethod] == Hotkey.defaultChord(for: flavor, heardBy: .inputMethod))
-    }
-
-    /// A mode with no chord table at all listens for the installation's chords through
-    /// every source.
-    @Test func aModeWithNoChordHearsTheInstallationsChords() throws {
-        let config = try Self.config("""
-            [[modes]]
-            name = "dictation"
-            """)
-        #expect(try #require(config.modes.first).chords == .default(for: Self.flavor))
-    }
-
-    /// No field claims a chord its source cannot hear. A registered hot key needs a key, and
-    /// the sentence is the one registering it would have said.
-    @Test func aRegisteredHotKeyOfModifiersAloneIsRefused() {
-        #expect(throws: ConfigError.wrongShape("modes[0].chord.registeredHotKey: rightOption is modifiers alone, and a registered hot key needs a key besides them")) {
-            try Self.config("""
-                [[modes]]
-                name = "dictation"
-                chord = { registeredHotKey = { modifiers = ["rightOption"] } }
-                """)
-        }
+        #expect(try #require(config.modes.first).chord == Hotkey.defaultChord(for: flavor))
     }
 
     /// The input method is told only of the modifier keys, so a chord with another key in
-    /// it would never be heard.
-    @Test func anInputMethodChordWithAKeyIsRefused() {
-        #expect(throws: ConfigError.wrongShape("modes[0].chord.inputMethod: leftCommand+key 2 has a key besides its modifiers, and the input method hears the modifier keys alone")) {
+    /// it would never be heard, and a key is nothing a chord can say.
+    @Test func aChordWithAKeyIsRefused() {
+        #expect(throws: ConfigError.unknownKeys(["modes[0].chord.key"])) {
             try Self.config("""
                 [[modes]]
                 name = "dictation"
-                chord = { inputMethod = { modifiers = ["leftCommand"], key = 2 } }
+                chord = { modifiers = ["leftCommand"], key = 2 }
                 """)
         }
     }
 
-    /// A source name that is not one would otherwise be a chord that quietly changes
-    /// nothing.
-    @Test func aChordUnderASourceNothingIsCalledIsNamed() {
-        #expect(throws: ConfigError.unknownKeys(["modes[0].chord.eventTop"])) {
+    /// A chord written under a hotkey source's name, as a config once named one per source,
+    /// is refused rather than read as a chord that quietly changes nothing.
+    @Test func aChordUnderASourcesNameIsRefused() {
+        #expect(throws: ConfigError.unknownKeys(["modes[0].chord.inputMethod"])) {
             try Self.config("""
                 [[modes]]
                 name = "dictation"
-                chord = { eventTop = { modifiers = ["rightOption"] } }
+                chord = { modifiers = ["rightOption"], inputMethod = { modifiers = ["rightOption"] } }
                 """)
         }
     }
@@ -253,7 +219,7 @@ import Testing
             try Self.config("""
                 [[modes]]
                 name = "  "
-                chord = { eventTap = { modifiers = ["rightOption"] } }
+                chord = { modifiers = ["rightOption"] }
                 """)
         }
     }
@@ -263,31 +229,31 @@ import Testing
             try Self.config("""
                 [[modes]]
                 name = "dictation"
-                chord = { eventTap = { modifiers = ["rightOption"] } }
+                chord = { modifiers = ["rightOption"] }
 
                 [[modes]]
                 name = "dictation"
-                chord = { eventTap = { modifiers = ["rightCommand"] }, registeredHotKey = { modifiers = ["leftCommand"], key = 2 }, inputMethod = { modifiers = ["rightCommand"] } }
+                chord = { modifiers = ["rightCommand"] }
                 """)
         }
     }
 
     /// Two modes on one chord is a config with no answer to "which mode is this".
     @Test func twoModesOnOneChordAreRefused() {
-        #expect(throws: ConfigError.twoModesOnOneChord("second", heardBy: .eventTap)) {
+        #expect(throws: ConfigError.twoModesOnOneChord("second")) {
             try Self.config("""
                 [[modes]]
                 name = "first"
-                chord = { eventTap = { modifiers = ["rightOption"] } }
+                chord = { modifiers = ["rightOption"] }
 
                 [[modes]]
                 name = "second"
-                chord = { eventTap = { modifiers = ["rightOption"] } }
+                chord = { modifiers = ["rightOption"] }
                 """)
         }
     }
 
-    /// [LAW:single-enforcer] The rule that a chord has at least one key belongs to
+    /// [LAW:single-enforcer] The rule that a chord has at least one modifier belongs to
     /// KeyChord, and the config file gets it without restating it - including the
     /// sentence KeyChord wrote.
     @Test func aChordWithNothingInItIsRefusedInKeyChordsOwnWords() throws {
@@ -295,10 +261,10 @@ import Testing
             try Self.config("""
                 [[modes]]
                 name = "dictation"
-                chord = { eventTap = { modifiers = [] } }
+                chord = { modifiers = [] }
                 """)
         }
-        #expect("\(error)".contains("a chord needs at least one key"))
+        #expect("\(error)".contains("a chord needs at least one modifier"))
     }
 
     /// [LAW:single-enforcer] Likewise the rule about what a vocabulary term may be.
@@ -307,7 +273,7 @@ import Testing
             try Self.config("""
                 [[modes]]
                 name = "dictation"
-                chord = { eventTap = { modifiers = ["rightOption"] } }
+                chord = { modifiers = ["rightOption"] }
                 vocabulary = ["..."]
                 """)
         }
@@ -356,11 +322,11 @@ import Testing
             try Self.config("""
                 [[modes]]
                 name = "dictation"
-                chord = { eventTap = { modifiers = ["rightOption"] } }
+                chord = { modifiers = ["rightOption"] }
 
                 [[modes]]
                 name = "slack"
-                chord = { eventTap = { modifiers = ["rightCommand"] }, registeredHotKey = { modifiers = ["leftCommand"], key = 2 }, inputMethod = { modifiers = ["rightCommand"] } }
+                chord = { modifiers = ["rightCommand"] }
                 routes = [
                   { when = "always", then = { insert = "focus" } },
                   { when = "sometyme", then = { insert = "focus" } },
@@ -405,17 +371,16 @@ import Testing
         }
     }
 
-    /// Two modes that each leave a source out both listen for the installation's chord
-    /// through it, which is one chord for two modes, and the refusal says which source.
-    @Test func twoModesLeavingOneSourceOutAreRefusedNamingIt() {
-        #expect(throws: ConfigError.twoModesOnOneChord("second", heardBy: .registeredHotKey)) {
+    /// Two modes that each leave the chord out both listen for the installation's chord,
+    /// which is one chord for two modes.
+    @Test func twoModesLeavingTheChordOutAreRefused() {
+        #expect(throws: ConfigError.twoModesOnOneChord("second")) {
             try Self.config("""
                 [[modes]]
                 name = "first"
 
                 [[modes]]
                 name = "second"
-                chord = { eventTap = { modifiers = ["rightCommand"] } }
                 """)
         }
     }
@@ -431,11 +396,11 @@ import Testing
     /// A modifier that is not one is answered with the ones that are.
     @Test func aModifierThatIsNotOneIsNamedWithTheOnesThatAre() {
         let modifiers = Modifier.allCases.map(\.rawValue).joined(separator: ", ")
-        #expect(throws: ConfigError.wrongShape(#"modes[0].chord.eventTap.modifiers[0]: "banana" is not a modifier: "# + modifiers)) {
+        #expect(throws: ConfigError.wrongShape(#"modes[0].chord.modifiers[0]: "banana" is not a modifier: "# + modifiers)) {
             try Self.config("""
                 [[modes]]
                 name = "dictation"
-                chord = { eventTap = { modifiers = ["banana"] } }
+                chord = { modifiers = ["banana"] }
                 """)
         }
     }
@@ -447,12 +412,12 @@ import Testing
             try Self.config("""
                 [[modes]]
                 name = "a"
-                chord = { eventTap = { modifiers = ["rightOption"] } }
+                chord = { modifiers = ["rightOption"] }
                 chrod = 1
 
                 [[modes]]
                 name = "b"
-                chord = { eventTap = { modifiers = ["rightCommand"] }, registeredHotKey = { modifiers = ["leftCommand"], key = 2 }, inputMethod = { modifiers = ["rightCommand"] } }
+                chord = { modifiers = ["rightCommand"] }
                 vocabualry = ["x"]
                 """)
         }
@@ -468,12 +433,12 @@ import Testing
             try Self.config("""
                 [[modes]]
                 name = "a"
-                chord = { eventTap = { modifiers = ["rightOption"] } }
+                chord = { modifiers = ["rightOption"] }
                 chrod = 1
 
                 [[modes]]
                 name = "b"
-                chord = { eventTap = { modifiers = ["rightCommand"] }, registeredHotKey = { modifiers = ["leftCommand"], key = 2 }, inputMethod = { modifiers = ["rightCommand"] } }
+                chord = { modifiers = ["rightCommand"] }
                 chrod = 2
                 """)
         }
@@ -489,7 +454,7 @@ import Testing
         """
         [[modes]]
         name = "dictation"
-        chord = { eventTap = { modifiers = ["rightOption"] } }
+        chord = { modifiers = ["rightOption"] }
         routes = \(routes)
         """
     }

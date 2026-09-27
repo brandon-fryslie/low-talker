@@ -67,8 +67,8 @@ private let anEditor = "com.example.editor"
 ///
 /// Every case here awaits rather than calling the blocking `insert` on its own thread, and
 /// that is not a style choice: a test body runs on the cooperative pool, and this repo has
-/// already measured what blocking there costs - `HelperKeyboardTests` records four blocking
-/// calls holding every thread of a three-core runner until no other test ran at all. The
+/// already measured what blocking there costs - four blocking calls held every thread of a
+/// three-core runner until no other test ran at all. The
 /// awaited overload puts the wait on a thread of its own, which is what it is for.
 /// [LAW:no-ambient-temporal-coupling]
 @Suite struct InserterTests {

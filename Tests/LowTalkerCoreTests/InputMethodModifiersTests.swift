@@ -1,11 +1,9 @@
-import Choices
 import Flavors
 import LowTalkerCore
 import Testing
 
 /// The input method's hearing, held through the press detection it feeds: a stream of the
-/// modifier keys held, as the input method tells them, becomes the same presses the event
-/// tap's key events make.
+/// modifier keys held, as the input method tells them, becomes presses.
 ///
 /// Driven by states rather than by keys, because states are what cross from the input
 /// method, told as often as the app it was in hands them over. [LAW:behavior-not-structure]
@@ -14,7 +12,7 @@ private struct Told {
     private var told = ToldModifiers(held: [])
 
     init(listeningFor flavor: Flavor) {
-        detector = HotkeyDetector(chords: [Hotkey.defaultChord(for: flavor, heardBy: .inputMethod)], tapThreshold: .milliseconds(250))
+        detector = HotkeyDetector(chords: [Hotkey.defaultChord(for: flavor)], tapThreshold: .milliseconds(250))
     }
 
     /// The input method telling the app that `modifiers` are held, `ms` into the run.
@@ -33,7 +31,7 @@ private struct Told {
     }
 
     private mutating func heard(_ moves: [KeyEvent]) -> [HotkeyDetector.Transition] {
-        moves.compactMap { detector.handle($0).transition }
+        moves.compactMap { detector.handle($0) }
     }
 }
 
@@ -43,12 +41,6 @@ private let release = KeyChord(modifiers: .rightOption)
 private let development = KeyChord(modifiers: .rightOption, .rightCommand)
 
 @Suite struct InputMethodModifiersTests {
-    /// The input method listens for the event tap's chord, not a second spelling of it.
-    @Test(arguments: Flavor.allCases)
-    func theChordIsTheEventTaps(flavor: Flavor) {
-        #expect(Hotkey.defaultChord(for: flavor, heardBy: .inputMethod) == Hotkey.defaultChord(for: flavor, heardBy: .eventTap))
-    }
-
     @Test func aHoldBeginsAtThePressAndEndsAtTheRelease() {
         var told = Told(listeningFor: .release)
         #expect(told.told([([.rightOption], 0), ([], 600)]) == [.began(release, at: at(0)), .ended(release, .released(.hold))])

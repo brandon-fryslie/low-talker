@@ -124,18 +124,14 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
         // A re-askable row is the exception - its dialog returns on the next press
         // (`Requirement.Row.reAskable`) - so its button stays and it gets neither line.
         let askedAlready = asked.contains(row) && !row.reAskable
-        // A step waiting on another has nothing to ask yet; its way forward is that step.
-        let back = requirement.waitsOn.map { earlier in
-            button("Set Up \(earlier.rawValue)…") { [unowned self] in walk.revisit(earlier); failure = nil; draw(shown) }
-        }
-        let ask = askedAlready || back != nil ? nil : row.askTitle.map { title in button(title) { [unowned self] in request(row) } }
+        let ask = askedAlready ? nil : button(row.askTitle) { [unowned self] in request(row) }
         add(label(left == 1 ? "1 step left" : "\(left) steps left", size: 11, color: .secondaryLabelColor))
         add(label(requirement.name, size: 20, weight: .semibold))
         add(label("Now: \(requirement.reads)", size: 12, color: .secondaryLabelColor))
         add(label(explanation.why, size: 13))
         add(label("If you skip it: \(explanation.ifSkipped)", size: 12, color: .secondaryLabelColor))
-        // The step's own words, for what the explanation cannot know - a helper held by a
-        // stale job, a grant switched off - except words sending the reader to this page.
+        // The step's own words, for what the explanation cannot know - a grant switched off
+        // in System Settings - except words sending the reader to this page.
         if let step = requirement.step, !step.contains(GuidedSetup.title(for: flavor)) {
             add(label(requirement.stepLines.joined(separator: " "), size: 12, color: .secondaryLabelColor))
         }
@@ -155,10 +151,10 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
         // Every step can be read again by hand: a grant made where this window cannot see
         // it arriving - System Settings left open beside it - clears its step here.
         let checkAgain = button("Check Again") { [unowned self] in redrawFromAFreshReading() }
-        let openSettings = back != nil ? nil : row.settingsPane.map { pane in button("Open System Settings") { NSWorkspace.shared.open(pane) } }
+        let openSettings = button("Open System Settings") { NSWorkspace.shared.open(row.settingsPane) }
         // The default is the one button that makes macOS ask, so Return is the person
-        // choosing to be asked; once asked, System Settings; otherwise a fresh reading.
-        let primary = back ?? ask ?? openSettings ?? checkAgain
+        // choosing to be asked; once asked, System Settings.
+        let primary = ask ?? openSettings
         let others = [checkAgain, openSettings, ask].compactMap { $0 }.filter { $0 !== primary }
         primary.keyEquivalent = "\r"
         primary.isEnabled = !asking

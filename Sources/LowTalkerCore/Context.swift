@@ -18,7 +18,7 @@ public struct Context: Hashable, Codable, Sendable {
 }
 
 /// A short press toggles listening; a long one is push-to-talk. The threshold belongs
-/// to the event tap, which resolves it before a Context exists.
+/// to the hotkey, which resolves it before a Context exists.
 public enum PressKind: String, Hashable, Codable, Sendable {
     case tap, hold
 }
