@@ -6,21 +6,19 @@ import os
 
 /// The hotkey heard through this installation's input method: the input method tells the
 /// app every change of the modifier keys it is handed, and this turns each change into the
-/// key events that make it, for the detector above to find presses in exactly as it does for
-/// the event tap. Nothing is granted to the app for it.
+/// key events that make it, for the detector above to find presses in. Nothing is granted to
+/// the app for it.
 ///
-/// [LAW:composability] It sits behind the same seam as the other taps, so hold, tap and a
-/// latched press behave the same whichever hears them. What it cannot do is why it is not
-/// the only tap: the input method is handed keys only by an app in front that takes typing,
-/// and by none under Secure Event Input, so a press anywhere else never arrives. It never
-/// swallows anything, since the input method hands every key back, and it never lapses.
+/// The input method is handed keys only by an app in front that takes typing, and by none
+/// under Secure Event Input, so a press anywhere else never arrives. It never keeps a key
+/// back, since the input method hands every key back.
 ///
 /// A release is the one change it cannot wait to be told. One made where the input method
 /// is handed nothing, or told while the app's port was full, would leave the microphone open
 /// until the next change happened to arrive; so while anything is held, the app reads the
 /// session's modifier keys itself - a reading that needs no grant - and lets go of what is no
 /// longer down. [LAW:no-silent-failure]
-public struct InputMethodModifiers: KeyboardTap {
+public struct InputMethodModifiers: ModifierFeed {
     private let flavor: Flavor
 
     public init(flavor: Flavor) {
@@ -31,17 +29,16 @@ public struct InputMethodModifiers: KeyboardTap {
     /// input method never told is heard.
     static let confirming: DispatchTimeInterval = .milliseconds(200)
 
-    /// What the port's messages reach on the main actor: while the tap is open, the port and
-    /// the handler; and the modifiers the detector has been told are held.
+    /// What the port's messages reach on the main actor: while the feed is open, the port
+    /// and the handler; and the modifiers the detector has been told are held.
     ///
     /// The port and the handler go together, because a message can still be on its way to
-    /// the main queue when the tap is disposed of, and a hotkey that has stopped must hear
-    /// nothing after it: the event tap's callbacks cannot arrive late, and these can.
-    /// Disposing of the tap is what closes the port, then and there, and what a late message
-    /// finds. [LAW:no-ambient-temporal-coupling]
+    /// the main queue when the feed is disposed of, and a hotkey that has stopped must hear
+    /// nothing after it. Disposing of the feed is what closes the port, then and there, and
+    /// what a late message finds. [LAW:no-ambient-temporal-coupling]
     @MainActor
     private final class Installed {
-        var open: (port: ModifierPort, handle: @MainActor (KeyEvent) -> HotkeyDetector.Passage)? {
+        var open: (port: ModifierPort, handle: @MainActor (KeyEvent) -> Void)? {
             didSet { settleConfirming() }
         }
         private var told: ToldModifiers
@@ -52,9 +49,7 @@ public struct InputMethodModifiers: KeyboardTap {
         }
 
         func heard(_ moves: [KeyEvent]) {
-            // The passage is the event tap's question. The input method hands every key
-            // back whatever the answer, so there is nothing here to keep back.
-            open.map { open in moves.forEach { _ = open.handle($0) } }
+            open.map { open in moves.forEach(open.handle) }
             settleConfirming()
         }
 
@@ -88,16 +83,9 @@ public struct InputMethodModifiers: KeyboardTap {
         }
     }
 
-    /// `onLapse` is never called: there is no tap for the system to switch off, and no
-    /// stream of other keys to fall behind on.
-    ///
     /// Throws when the hotkey port cannot be hosted - most often because another process of
     /// this installation already hears on it, such as `lowtalker hotkey` run beside the app.
-    public func install(
-        listeningFor _: Set<KeyChord>,
-        handling handle: @escaping @MainActor (KeyEvent) -> HotkeyDetector.Passage,
-        onLapse _: @escaping @MainActor (HostTime, LapseCause) -> LapseResponse
-    ) throws -> Disposal {
+    public func install(handling handle: @escaping @MainActor (KeyEvent) -> Void) throws -> Disposal {
         // What is held as listening begins is read, not assumed to be nothing, so a key
         // already down when this comes up is not heard going down when it next moves.
         let installed = Installed(told: ToldModifiers(held: Modifier.held(in: CGEventSource.flagsState(.combinedSessionState))))
@@ -170,15 +158,15 @@ extension KeyEvent {
     /// [LAW:one-source-of-truth]
     public static func moves(from before: Set<Modifier>, to after: Set<Modifier>, at time: HostTime) -> [KeyEvent] {
         let released = Modifier.allCases.filter { before.contains($0) && !after.contains($0) }
-        let pressed = KeyChord(modifiers: after.subtracting(before), key: nil).map(Hotkey.pressOrder(of:)) ?? []
+        let pressed = KeyChord(modifiers: after.subtracting(before)).map(Hotkey.pressOrder(of:)) ?? []
         var held = before
         let ups = released.map { modifier in
             held.remove(modifier)
-            return KeyEvent(key: .modifier(modifier), direction: .up, modifiers: held, time: time)
+            return KeyEvent(key: modifier, direction: .up, modifiers: held, time: time)
         }
         let downs = pressed.map { modifier in
             held.insert(modifier)
-            return KeyEvent(key: .modifier(modifier), direction: .down, modifiers: held, time: time)
+            return KeyEvent(key: modifier, direction: .down, modifiers: held, time: time)
         }
         return ups + downs
     }

@@ -13,8 +13,6 @@ struct FlavorTests {
     /// to run rather than running beside the first.
     @Test(arguments: [
         ("bundle identifier", { @Sendable (f: Flavor) in f.bundleIdentifier }),
-        ("Mach service", { @Sendable (f: Flavor) in f.machServiceName }),
-        ("launchd label", { @Sendable (f: Flavor) in f.launchdLabel }),
         ("display name", { @Sendable (f: Flavor) in f.displayName }),
         ("config file", { @Sendable (f: Flavor) in f.configFileName }),
         ("app icon", { @Sendable (f: Flavor) in f.appIconName }),
@@ -29,29 +27,17 @@ struct FlavorTests {
         #expect(empty.isEmpty, "a flavor has an empty \(named)")
     }
 
-    /// The rule the measured launchd behaviour rests on: one label per flavor, and it is
-    /// the service's own name. Two labels naming one service is the collision that
-    /// bootstraps with exit 0 and never receives the endpoint.
-    @Test(arguments: Flavor.allCases)
-    func theLabelIsTheService(flavor: Flavor) {
-        #expect(flavor.launchdLabel == flavor.machServiceName)
-    }
-
     /// Every name macOS files this program under, across both flavors at once.
     ///
     /// `everyFlavorIsNamedApart` asks whether two flavors share one *kind* of name. This
     /// asks the other half: whether two *kinds* collide - the input method bundle taking
-    /// the helper's identifier, say, or a development suffix landing one flavor's name on
+    /// the app's identifier, say, or a development suffix landing one flavor's name on
     /// another flavor's. Both are the same failure to macOS, a second registrant losing to
     /// a first, and neither is caught by comparing a name only to its own kind.
-    ///
-    /// `launchdLabel` is left out because it is `machServiceName` on purpose; that is
-    /// what `theLabelIsTheService` states.
     @Test func noTwoNamesMacOSKeysOnCollide() {
         let names = Flavor.allCases.flatMap { flavor in
             [
                 ("bundle identifier", flavor.bundleIdentifier),
-                ("Mach service", flavor.machServiceName),
                 ("input method bundle identifier", flavor.inputMethodBundleIdentifier),
                 ("input source identifier", flavor.inputSourceIdentifier),
                 ("input method connection name", flavor.inputMethodConnectionName),
@@ -138,7 +124,7 @@ struct FlavorTests {
     }
 
     /// An identifier belonging to neither is refused rather than guessed at: answering
-    /// `.release` for it would point a misbuilt app at the installed copy's helper,
+    /// `.release` for it would point a misbuilt app at the installed copy's input method,
     /// config and hotkey.
     @Test(arguments: ["", "ai.promptctl.low-talker.staging", "com.apple.Finder", "LowTalker"])
     func anUnknownBundleIdentifierIsRefused(identifier: String) {

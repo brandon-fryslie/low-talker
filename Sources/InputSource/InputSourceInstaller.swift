@@ -245,6 +245,12 @@ public struct InputSourceInstaller: Sendable {
             .allSatisfy { source(named: $0).map(isEnabled) ?? false }
     }
 
+    /// Whether this flavor's source is the one in use now: the only state in which the input
+    /// method is handed keys, and so the only one in which the hotkey is heard.
+    public static func isSelected(_ flavor: Flavor) -> Bool {
+        source(named: flavor.inputSourceIdentifier).map(isSelected) ?? false
+    }
+
     /// A copy `place` swapped in: the moment it began to stand, and the staging directory,
     /// which holds whatever stood there before - still whole, because a process may be
     /// running from it - or nothing on a first install. The caller deletes it once no

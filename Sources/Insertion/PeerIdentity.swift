@@ -23,10 +23,6 @@ import Security
 ///
 /// The audit token and never the pid: a pid can be reused between being read and being
 /// checked, and the check would then be of whichever process inherited the number.
-///
-/// `lowtalker-keyboardd`'s `CallerIdentity` asks the same question of an XPC caller, from
-/// outside any sandbox. It is not shared from here because that helper leaves this
-/// repository with the rest of the virtual keyboard. [LAW:one-way-deps]
 public enum PeerIdentity: Equatable, Codable, Sendable, CustomStringConvertible {
     /// Signed by a certificate: the identifier the code is signed as, and the SHA-1 of the
     /// certificate in lowercase hex - what a code signing requirement's

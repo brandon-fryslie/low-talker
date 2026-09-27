@@ -1,29 +1,21 @@
-/// One key of a chord as the keyboard reports it moving: a modifier, told apart by
-/// side, or any other key by its code.
-public enum ChordKey: Hashable, Sendable {
-    case modifier(Modifier)
-    case key(Key)
-}
-
-/// A key going down or up, with what the keyboard held once it had.
+/// A modifier key going down or up, with what the keyboard held once it had.
 ///
 /// [LAW:one-source-of-truth] `modifiers` is the whole modifier state as the event
 /// reports it, not a running tally kept here: a tally would drift the first time an
-/// event was missed (the tap disabled, the app not yet running), and nothing could
-/// tell it had.
+/// event was missed, and nothing could tell it had.
 public struct KeyEvent: Hashable, Sendable {
     public enum Direction: Hashable, Sendable {
         case down, up
     }
 
-    public let key: ChordKey
+    public let key: Modifier
     public let direction: Direction
     /// Every modifier held after this event.
     public let modifiers: Set<Modifier>
     /// When the key moved.
     public let time: HostTime
 
-    public init(key: ChordKey, direction: Direction, modifiers: Set<Modifier>, time: HostTime) {
+    public init(key: Modifier, direction: Direction, modifiers: Set<Modifier>, time: HostTime) {
         self.key = key
         self.direction = direction
         self.modifiers = modifiers
@@ -33,26 +25,14 @@ public struct KeyEvent: Hashable, Sendable {
 
 extension KeyChord {
     /// Whether `key` going down, leaving `held` as the modifiers, is this chord being
-    /// pressed. A chord with a key completes on that key, its modifiers already held;
-    /// one without completes on whichever of its modifiers comes down last.
-    func isCompleted(by key: ChordKey, holding held: Set<Modifier>) -> Bool {
-        switch (self.key, key) {
-        case (nil, .modifier(let modifier)): held == modifiers && modifiers.contains(modifier)
-        case (let expected?, .key(let pressed)): held == modifiers && expected == pressed
-        case (nil, .key), (.some, .modifier): false
-        }
-    }
-
-    func contains(_ key: ChordKey) -> Bool {
-        switch key {
-        case .modifier(let modifier): modifiers.contains(modifier)
-        case .key(let pressed): self.key == pressed
-        }
+    /// pressed: a chord completes on whichever of its modifiers comes down last.
+    func isCompleted(by key: Modifier, holding held: Set<Modifier>) -> Bool {
+        held == modifiers && modifiers.contains(key)
     }
 }
 
-/// Finds presses of the configured chords in the keyboard's events, tells a hold
-/// from a tap, and says which events the frontmost app must not see.
+/// Finds presses of the configured chords in the keyboard's events, and tells a hold
+/// from a tap.
 ///
 /// A press begins the moment a chord is completed, so listening starts on key-down.
 /// Releasing within `tapThreshold` makes it a tap: listening stays on, latched,
@@ -72,8 +52,8 @@ public struct HotkeyDetector: Sendable {
         case ended(KeyChord, Ending)
     }
 
-    /// What stopped the listening: the speaker let go, or the tap went deaf and the
-    /// press was ended without them.
+    /// What stopped the listening: the speaker let go, or the hotkey stopped hearing and
+    /// the press was ended without them.
     ///
     /// [LAW:types-are-the-program] Two facts a caller could never pull back apart if
     /// they shared a value - "that was the whole utterance" and "that is as much of it
@@ -84,9 +64,8 @@ public struct HotkeyDetector: Sendable {
     public enum Ending: Hashable, Sendable, CustomStringConvertible {
         /// The key came up on a hold, or the chord went down again on a latched tap.
         case released(PressKind)
-        /// Events were missed while the press was open. Nothing was heard past the last
-        /// event the tap delivered, and whether the speaker had even finished is unknown
-        /// - their release may be among the events that were lost.
+        /// The hotkey stopped hearing while the press was open. Nothing was heard past the
+        /// last event it was told, and whether the speaker had even finished is unknown.
         case lapsed
 
         /// An ending in a person's words. A case added here has to say what it is before
@@ -96,21 +75,6 @@ public struct HotkeyDetector: Sendable {
             case .released(let kind): kind.rawValue
             case .lapsed: "lapsed"
             }
-        }
-    }
-
-    /// What the frontmost app gets: the event, or nothing.
-    public enum Passage: Hashable, Sendable {
-        case pass, swallow
-    }
-
-    public struct Verdict: Hashable, Sendable {
-        public let transition: Transition?
-        public let passage: Passage
-
-        public init(transition: Transition?, passage: Passage) {
-            self.transition = transition
-            self.passage = passage
         }
     }
 
@@ -126,12 +90,6 @@ public struct HotkeyDetector: Sendable {
     /// A press released before this long is a tap.
     public let tapThreshold: Duration
     public private(set) var phase: Phase = .idle
-    /// Keys whose down was swallowed and whose up has not come, so it is swallowed
-    /// too and the app sees each key move a balanced number of times. Beside the
-    /// phase rather than in it: a press can end, and the next begin, while a
-    /// swallowed key is still down. An up that went by during a lapse leaves the key
-    /// here until its next down, which is swallowed with its up: one press unseen.
-    private var swallowing: Set<ChordKey> = []
 
     public init(chords: Set<KeyChord>, tapThreshold: Duration) {
         precondition(tapThreshold > .zero, "a tap is a press shorter than something; zero makes every press a hold")
@@ -139,7 +97,8 @@ public struct HotkeyDetector: Sendable {
         self.tapThreshold = tapThreshold
     }
 
-    public mutating func handle(_ event: KeyEvent) -> Verdict {
+    /// The transition `event` makes, if it makes one.
+    public mutating func handle(_ event: KeyEvent) -> Transition? {
         switch event.direction {
         case .down: down(of: event)
         case .up: up(of: event)
@@ -148,45 +107,41 @@ public struct HotkeyDetector: Sendable {
 
     /// A press is only ever begun from rest: while a chord is held, another chord
     /// completed on top of it (Right Option held, Shift added) changes nothing.
-    private mutating func down(of event: KeyEvent) -> Verdict {
-        // At most one chord completes on one event: two with the same modifiers are
-        // told apart by having a key or not, and the event's key settles which.
+    private mutating func down(of event: KeyEvent) -> Transition? {
+        // At most one chord completes on one event, since two chords with the same
+        // modifiers are one chord.
         let completed = chords.first { $0.isCompleted(by: event.key, holding: event.modifiers) }
         switch (phase, completed) {
         case (.idle, let chord?):
             phase = .held(chord, since: event.time)
-            swallowing.insert(event.key)
-            return Verdict(transition: .began(chord, at: event.time), passage: .swallow)
+            return .began(chord, at: event.time)
         case (.latched(let chord), .some):
             phase = .idle
-            swallowing.insert(event.key)
-            return Verdict(transition: .ended(chord, .released(.tap)), passage: .swallow)
+            return .ended(chord, .released(.tap))
         case (.held, _), (_, nil):
-            // A key still swallowed repeats while held; the app sees none of the repeats.
-            return Verdict(transition: nil, passage: swallowing.contains(event.key) ? .swallow : .pass)
+            return nil
         }
     }
 
-    private mutating func up(of event: KeyEvent) -> Verdict {
-        let passage: Passage = swallowing.remove(event.key) == nil ? .pass : .swallow
+    private mutating func up(of event: KeyEvent) -> Transition? {
         switch phase {
-        case .held(let chord, let since) where chord.contains(event.key):
+        case .held(let chord, let since) where chord.modifiers.contains(event.key):
             let press: PressKind = event.time - since < tapThreshold ? .tap : .hold
             switch press {
             case .tap:
                 phase = .latched(chord)
-                return Verdict(transition: nil, passage: passage)
+                return nil
             case .hold:
                 phase = .idle
-                return Verdict(transition: .ended(chord, .released(.hold)), passage: passage)
+                return .ended(chord, .released(.hold))
             }
         case .held, .latched, .idle:
-            return Verdict(transition: nil, passage: passage)
+            return nil
         }
     }
 
-    /// Events were missed: the open press ends, since its release may have gone by
-    /// unseen. What was swallowed stays so; the app never saw those keys go down.
+    /// The hotkey stopped hearing: the open press ends, since its release can no longer
+    /// arrive.
     ///
     /// A hold and a latched tap end the same way here, because what ends them is the
     /// same thing and it is not the speaker. Naming one `.hold` and the other `.tap`

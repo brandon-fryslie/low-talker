@@ -1,15 +1,12 @@
 import AppKit
-import Choices
+import Carbon
 import Dictation
 import Flavors
 import Grants
 import InputSource
 import Insertion
-import KeyboardLayout
-import KeyboardService
 import LowTalkerCore
 import Onboarding
-import ServiceManagement
 import Signals
 import Typing
 import os
@@ -17,7 +14,7 @@ import os
 /// The menu-bar agent. `LSUIElement` keeps it out of the Dock, so the status item
 /// is the app's only surface; the delegate exists to install it, to start the model
 /// loading the moment the app is up, and to hand the loop its microphone, engine and
-/// the output the user chose.
+/// input method.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // [LAW:no-ambient-temporal-coupling] NSStatusBar is only usable once the
@@ -42,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// What the engine is doing, and whether the hotkey is being watched. The two
     /// things in the menu that cannot be read on demand: they arrive from the load's
-    /// and the tap's own callbacks, so they are held here while everything else is read
+    /// and the loop's own callbacks, so they are held here while everything else is read
     /// at the moment the menu opens. Launch sets the hotkey's before it returns, so no
     /// menu can open on an empty string.
     ///
@@ -59,17 +56,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// nobody has open is no way to measure a launch, and no way for an agent to check
     /// what the app is showing without a screen. [LAW:verifiable-goals]
     private let log = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "engine")
-    /// One line per press: what was heard, how long after key-up, and what was typed.
+    /// One line per press: what was heard, how long after key-up, and what was inserted.
     private let sessions = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "dictation")
 
     /// [LAW:parse-dont-validate] The one place this process learns which of the two
     /// installations it is. macOS launched it under one bundle identifier or the other,
-    /// and everything keyed to the installation - the helper's job, the config file, the
+    /// and everything keyed to the installation - the input method, the config file, the
     /// chord, the name in the menu - is read from this and never decided again.
     ///
     /// [LAW:no-silent-failure] A bundle identifier that is neither flavor's is a
     /// misconfigured build, and guessing is the one wrong answer: reading a development
-    /// bundle as `.release` would point this copy's helper, config and hotkey at the
+    /// bundle as `.release` would point this copy's input method, config and hotkey at the
     /// installed copy's, which is the whole failure the two flavors exist to prevent.
     /// There is nothing to fall back to, so it stops here, at launch, where the reason is
     /// legible - rather than at the first keypress, in the other app.
@@ -82,16 +79,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return flavor
     }()
 
-    /// The CLI this bundle carries, which the driver's onboarding steps name: a person who
-    /// installed only this app has it, and it is the one the helper this app registers
-    /// admits.
+    /// The CLI this bundle carries, which reads the app's grants in a process of its own.
     static let carriedCLI = Carrier.cli(in: Bundle.main.bundleURL)
-
-    /// The helper's registration, from the bundle's own launchd plist. One instance,
-    /// because registering and asking where the registration stands are two questions
-    /// about one record. [LAW:one-source-of-truth] The plist is named from the flavor, so
-    /// each installation registers its own job and neither can adopt the other's record.
-    private let helperService = SMAppService.daemon(plistName: "\(AppDelegate.flavor.launchdLabel).plist")
 
     /// [LAW:one-source-of-truth] Every engine status passes through here, so the
     /// menu and the log never tell different stories.
@@ -106,51 +95,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         log.notice("hotkey: \(status, privacy: .public)")
     }
 
-    /// The root keyboard helper, registered from the bundle's own launchd plist.
-    ///
-    /// Two callers. The keyboard helper's step in setup, which a person starts: a first
-    /// registration is what lands the job in Login Items as "requires approval" and puts
-    /// macOS's background item notice on screen. And adoption, launch included, but only
-    /// once the job is already enabled, where registering again shows nothing and keeps the
-    /// job pointing at this copy of the app; see `install(_:)`.
-    ///
-    /// Answers with why the registration failed, or nil when it landed. `SMAppService`
-    /// answers only whether this app's own registration is approved, and that is one of two
-    /// readings the helper's row needs - the other, which job actually holds the Mach
-    /// service, only launchd can give. Both are taken together at the next reading.
-    private func registerKeyboardHelper() -> String? {
-        do {
-            try helperService.register()
-            return nil
-        } catch {
-            log.notice("keyboard helper: register — \(error.localizedDescription, privacy: .public)")
-            // On the first registration of every install this throws "Operation not
-            // permitted": smd will not bootstrap a daemon nobody has approved yet, and the
-            // registration it made reads back as waiting for approval. That is the step on
-            // the way in, and the helper's row says what is left. Anything else is a
-            // registration that did not land, and the caller says why. [LAW:no-silent-failure]
-            return helperService.status == .requiresApproval
-                ? nil : "the keyboard helper could not be registered: \(error.localizedDescription)"
-        }
-    }
-
-    @objc private func openLoginItems() {
-        SMAppService.openSystemSettingsLoginItems()
-    }
-
     private let capture = AudioCapture()
-    /// Kept for the app's life so the XPC connection to the helper stays open: launchd
-    /// starts the job on the first call, and that is a cost to pay once, not per press.
-    /// Lazy, so an installation on the input method never dials a helper it never registered.
-    private lazy var helper = HelperConnection(flavor: AppDelegate.flavor)
-    /// Raised on the way out, so a session still typing stops short of its remaining
-    /// keys rather than being waited out in full.
-    private let interrupt = Interrupt()
 
     /// A signal is a third way to ask the app to go, after the menu item and Cmd-Q, and
     /// it goes the same way they do rather than by the default disposition, which ends
-    /// the process where it stands - with a session's keys still down, if one is in
-    /// flight. [LAW:single-enforcer] `terminate` is the door; this only knocks on it.
+    /// the process where it stands - with a session's words still on their way, if one is
+    /// in flight. [LAW:single-enforcer] `terminate` is the door; this only knocks on it.
     ///
     /// The knock is posted to the main run loop rather than made from the handler, and
     /// that is load-bearing: `terminate` answers `.terminateLater` by spinning a nested
@@ -176,77 +126,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// reports to this delegate's menu; touching it is what starts the load.
     private lazy var engine: Task<WhisperKitTranscriber, any Error> = Task { try await loadEngine() }
 
-    // MARK: - the delivery and the hotkey source
-
-    /// Where this installation's two choices are kept: its own defaults domain, so the two
-    /// installations choose apart. [LAW:one-source-of-truth] The menu and the first-launch
-    /// questions write them, launch reads them, `lowtalker onboard` reads them from outside,
-    /// and `KeptChoices` holds the one spelling of each key.
-    private let kept = KeptChoices(.standard)
+    // MARK: - the loop
 
     /// The config this app runs on, read the first time it is asked for and never again:
-    /// what the microphone does at rest and the chords every hotkey listens for, from one
+    /// what the microphone does at rest and the chords the hotkey listens for, from one
     /// reading, so the two cannot come from different versions of the file. The menu's
     /// names for the chords read it too, so what the menu says to hold is what is heard.
     /// [LAW:one-source-of-truth]
     private lazy var config = Result { () throws(ConfigError) in try Config.load(for: Self.flavor).config }
 
-    /// The delivery the user chose, or nil for an installation that has never been asked.
-    private var chosenDelivery: Delivery? {
-        get { kept.delivery }
-        set { kept.delivery = newValue }
-    }
-
-    /// The hotkey source the user chose, or nil for an installation that has never been asked.
-    private var chosenSource: HotkeySource? {
-        get { kept.source }
-        set { kept.source = newValue }
-    }
-
-    /// What a loop is built from: how the words arrive and how the chord is heard.
-    ///
-    /// [LAW:locality-or-seam] Two independent choices. Every pairing is a loop, the source
-    /// decides only the hotkey and the delivery only the executor, so nothing here reads
-    /// one to decide anything about the other.
-    private struct Setup: Equatable {
-        let delivery: Delivery
-        let source: HotkeySource
-    }
-
-    /// The choices the app is working to: the listening loop's, or the kept ones while
-    /// nothing listens yet, so a choice made then is shown as made.
-    private var shownChoices: (delivery: Delivery?, source: HotkeySource?) {
-        (listening?.setup.delivery ?? chosenDelivery, listening?.setup.source ?? chosenSource)
-    }
-
-    /// Both kept choices, or nil while either has never been made.
-    private var chosenSetup: Setup? {
-        guard let delivery = chosenDelivery, let source = chosenSource else { return nil }
-        return Setup(delivery: delivery, source: source)
-    }
-
-    /// The loop that is listening now, and the setup it was built from.
+    /// The loop that is listening now.
     private struct Listening {
-        let setup: Setup
         let hotkey: Hotkey
         let dictation: Dictation
     }
 
     private var listening: Listening?
 
-    /// The switch in progress, which the next one waits behind.
+    /// The rebuild in progress, which the next one waits behind.
     ///
-    /// [LAW:no-ambient-temporal-coupling] A switch awaits the old loop's sessions, and a
-    /// second choice made during that wait would otherwise build a loop beside the first
-    /// one's and leave a hotkey up that nothing can take down. Each switch awaits the one
+    /// [LAW:no-ambient-temporal-coupling] A rebuild awaits the old loop's sessions, and a
+    /// second one asked for during that wait would otherwise build a loop beside the first
+    /// one's and leave a hotkey up that nothing can take down. Each rebuild awaits the one
     /// before it, so there is only ever one loop being built.
-    private var switching: Task<Void, Never>?
+    private var rebuilding: Task<Void, Never>?
     /// Set the moment a quit is asked for, and never cleared.
     ///
-    /// A choice taken after that point would chain a switch behind the one the quit is
-    /// waiting on, and that switch installs a fresh tap - after the quit has taken the
-    /// old one down, and with nothing left to wait for its sessions. The app would exit
-    /// with a live tap in front of the session's keyboard. [LAW:no-ambient-temporal-coupling]
+    /// A rebuild taken after that point would chain behind the one the quit is waiting on,
+    /// and put a fresh hotkey up after the quit has taken the old one down, with nothing
+    /// left to wait for its sessions. [LAW:no-ambient-temporal-coupling]
     private var quitting = false
 
     /// Why the last press's words reached no cursor, while no press has begun since.
@@ -261,149 +169,87 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             accessibilityDescription: engineReadiness.iconDescription(for: Self.flavor.displayName))
     }
 
-    /// Takes `setup` down to the loop: the old loop's hotkey comes down first, ending any
-    /// press it had open, its sessions are waited out, and then the source's hotkey goes up
-    /// in front of a loop whose output is the delivery's.
+    /// Takes the loop down and builds it again: the old loop's hotkey comes down first,
+    /// ending any press it had open, its sessions are waited out, and then the input method
+    /// is installed and the hotkey goes up in front of a new loop.
     ///
-    /// Queued behind any switch still in progress; see `switching`.
-    private func choose(_ setup: Setup) async {
-        let before = switching
+    /// Queued behind any rebuild still in progress; see `rebuilding`.
+    private func rebuild() async {
+        let before = rebuilding
         let this = Task {
             await before?.value
-            await adopt(setup)
+            await adopt()
         }
-        switching = this
-        switchesInFlight += 1
+        rebuilding = this
+        rebuildsInFlight += 1
         await this.value
-        switchesInFlight -= 1
+        rebuildsInFlight -= 1
         settleOwedReading()
     }
 
-    /// How many switches are queued or running. While any is, the loop is being rebuilt by
-    /// someone already, and a grant noticed in the meantime is that switch's to take up.
-    private var switchesInFlight = 0
+    /// How many rebuilds are queued or running. While any is, the loop is being rebuilt by
+    /// someone already, and a grant noticed in the meantime is that rebuild's to take up.
+    private var rebuildsInFlight = 0
 
-    private func adopt(_ setup: Setup) async {
+    private func adopt() async {
         if let previous = listening {
             listening = nil
             await previous.hotkey.stopAndDeliver()
-            // A refused wait is reported and the switch still made: a loop that cannot be
+            // A refused wait is reported and the rebuild still made: a loop that cannot be
             // replaced would be the worse failure of the two. [LAW:no-silent-failure]
             do { try await previous.dictation.finish() } catch { report(.failure(error)) }
         }
-        // [LAW:no-ambient-temporal-coupling] The delivery is made ready before the hotkey
+        // [LAW:no-ambient-temporal-coupling] The input method is made ready before the hotkey
         // goes up, so no press is heard that has nowhere to go yet, and the one status write
-        // below comes after every half has answered - nothing can say the loop works before
-        // it does, or be overwritten by a later write about an earlier state.
-        showHotkeyStatus("starting — setting up the \(setup.delivery.title.lowercased())")
-        let delivering = await install(setup.delivery)
-        // Only behind a delivery that installed, since a refusal there already decides the
-        // loop, and an input method it could not select would only be waited on twice.
-        let hearable: Result<Void, LoopRefusal> = switch delivering {
-        case .success: await install(setup.source)
-        case .failure(let refusal): .failure(refusal)
-        }
-        // `comeUp` reads the config before it adopts any setup and adopts none on a config it
-        // cannot read, so a loop is only ever built over one that was read.
+        // below comes after it has answered - nothing can say the loop works before it does,
+        // or be overwritten by a later write about an earlier state.
+        showHotkeyStatus("starting — setting up the input method")
+        let installed = await installInputMethod()
+        // `comeUp` reads the config before it adopts and adopts nothing on a config it cannot
+        // read, so a loop is only ever built over one that was read.
         guard case .success(let config) = config else { preconditionFailure("a loop is adopted only once the config has been read") }
-        // The tap's grants from a fresh reading: this process's own answer can be the one it
-        // had before the person allowed them. See `PrivacyReading`.
-        let hotkey = Hotkey(for: Self.flavor, heardBy: setup.source, listeningFor: config) { [unowned self] in
-            // A reading that failed is its own error, not a missing grant. [LAW:no-silent-failure]
-            try readPrivacy().get().eventTapHeld
-        }
+        let hotkey = Hotkey(for: Self.flavor, listeningFor: config)
         let dictation = Dictation(
             capture: capture,
             transcriber: { [unowned self] in try await engine.value },
             router: Router(routes: [.dictation]),
-            executor: executor(for: setup.delivery),
+            // The words cross to this flavor's own input method, which commits them at the
+            // cursor through the text input system.
+            executor: Executor(insertingThrough: InputMethodInserter(flavor: Self.flavor)),
             report: { [unowned self] in report($0) }
         )
-        listening = Listening(setup: setup, hotkey: hotkey, dictation: dictation)
-        // The hotkey goes up only on a delivery that installed: a hotkey over a delivery
-        // that refused would open the microphone on every press for words that go nowhere,
-        // while the status line said the loop was off. Left down, it is also what lets
-        // choosing the same delivery again retry the install - `take` rebuilds a loop whose
-        // hotkey is not watching. [LAW:no-silent-failure]
-        let hearing = hearable.flatMap {
+        listening = Listening(hotkey: hotkey, dictation: dictation)
+        // The hotkey goes up only over an input method that installed: a hotkey over one that
+        // refused would open the microphone on every press for words that go nowhere, while
+        // the status line said the loop was off. [LAW:no-silent-failure]
+        let hearing = installed.flatMap {
             Result {
-                try hotkey.start({ [unowned self] transition in
+                try hotkey.start { [unowned self] transition in
                     if case .began = transition { lastFailure = nil }
                     dictation.press(transition)
-                }, onLapse: { [unowned self] in report($0) })
-            }.mapError { error in
-                // A tap refused for want of its grants waits on them; any other refusal is
-                // not something a grant can fix.
-                if case KeyboardTapError.notAllowed = error {
-                    LoopRefusal(awaitingGrant: "\(error); allow them in \(GuidedSetup.title(for: Self.flavor)) in this menu")
                 }
-                // A reading that failed is said as itself, and the next good one retries.
-                else if error is PrivacyReadingFailure { LoopRefusal(awaitingGrant: "\(error)") }
-                else { LoopRefusal(stringLiteral: "\(error)") }
-            }
+            }.mapError { LoopRefusal(stringLiteral: "\($0)") }
         }
-        showHotkeyStatus(of: setup.source, hearing)
-    }
-
-    /// [LAW:no-silent-failure] Either half can refuse: every refusal is on the one surface
-    /// this app has, in the words the user can act on.
-    /// [LAW:dataflow-not-control-flow] One sentence for every pairing that works: every
-    /// source feeds the same detector, which hears a hold and a tap alike.
-    private func showHotkeyStatus(of source: HotkeySource, _ loop: Result<Void, LoopRefusal>) {
-        switch loop {
+        switch hearing {
         case .success:
             downForAGrant = false
-            showHotkeyStatus("hold \(chordName(heardBy: source)), or tap it to start and again to stop")
+            showHotkeyStatus("hold \(chordName), or tap it to start and again to stop")
         case .failure(let refusal):
             downForAGrant = refusal.awaitsGrant
             showHotkeyStatus("off — \(refusal.reason)")
         }
     }
 
-    /// Makes `delivery` ready to reach the cursor as far as it can without asking anyone:
-    /// this installation's input method put where macOS looks for one, registered, and -
-    /// once a person has switched it on in setup - selected. Run at every adoption, which
-    /// is also what keeps the input method selected across a change of hotkey source.
+    /// This installation's input method put where macOS looks for one, registered, and -
+    /// once a person has switched it on in setup - selected: what the words are committed
+    /// through and the hotkey is told the keys by. Run at every rebuild, which is what keeps
+    /// the input method selected.
     ///
-    /// Nothing here puts a system dialog on screen, because adoption runs at launch. The
-    /// virtual keyboard's helper is first registered from its step in setup, and only an
-    /// already enabled registration is refreshed here, which shows nothing; the input
-    /// method is switched on from its own step. See `ask(_:)`.
+    /// Nothing here puts a system dialog on screen, because a rebuild runs at launch. The
+    /// input method is switched on from its own step in setup; see `ask(_:)`.
     ///
     /// [LAW:no-silent-failure] An install that fails leaves a hotkey that would hear every
     /// press and insert nothing, so it comes back as a refusal for the status line.
-    private func install(_ delivery: Delivery) async -> Result<Void, LoopRefusal> {
-        switch delivery {
-        case .virtualKeyboard:
-            // An approved registration is refreshed at every adoption, which shows nothing
-            // and keeps the job pointing at this copy of the app after it moves or updates.
-            // One that is not approved yet is left to its step: registering is what puts
-            // macOS's notice on screen. [LAW:no-silent-failure] A refresh that fails is said.
-            if helperService.status == .enabled, let failure = registerKeyboardHelper() {
-                log.error("keyboard helper: \(failure, privacy: .public)")
-            }
-            return .success(())
-        case .inputMethod:
-            return await installInputMethod()
-        }
-    }
-
-    /// Makes `source` ready to hear as far as it can without asking anyone, the way
-    /// `install(_ delivery:)` does for a delivery: the input method selected, for the
-    /// hearing it tells the modifier keys to. The event tap reads its grants when it goes
-    /// up, and a registered hot key needs nothing.
-    private func install(_ source: HotkeySource) async -> Result<Void, LoopRefusal> {
-        switch source {
-        case .eventTap, .registeredHotKey: .success(())
-        case .inputMethod: await installInputMethod()
-        }
-    }
-
-    /// This installation's input method put where macOS looks for one, registered, and -
-    /// once a person has switched it on in setup - selected: what the input method delivery
-    /// commits through and the input method hearing is told the keys by, so either one
-    /// choosing it is enough. Idempotent, so a setup where both choose it runs it twice and
-    /// comes to the same place.
     private func installInputMethod() async -> Result<Void, LoopRefusal> {
         do {
             let state = try await InputSourceInstaller(flavor: Self.flavor).install()
@@ -420,22 +266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// [LAW:single-enforcer] The one place a delivery becomes the output its words reach.
-    private func executor(for delivery: Delivery) -> Executor {
-        switch delivery {
-        case .virtualKeyboard:
-            // The typist proves the target app in front before every key, so this app
-            // never activates itself around a session; `LSUIElement` is what keeps its own
-            // menu from taking focus.
-            .guarding(keyboard: helper.keyboard, mouse: helper.mouse, interrupt: interrupt)
-        case .inputMethod:
-            // The words cross to this flavor's own input method, which commits them at the
-            // cursor through the text input system.
-            Executor(insertingThrough: InputMethodInserter(flavor: Self.flavor))
-        }
-    }
-
-    /// Why half of a loop is not working, in the words the status line says it.
+    /// Why the loop is not working, in the words the status line says it.
     /// Named apart from `Insertion.Refusal`, which is the input method's answer to an insert.
     private struct LoopRefusal: Error, ExpressibleByStringInterpolation {
         let reason: String
@@ -446,74 +277,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         init(awaitingGrant reason: String) { (self.reason, awaitsGrant) = (reason, true) }
     }
 
-    /// Asked when an installation has never made `choices`' choice, which is its first
-    /// launch; the delivery and the hotkey source are each asked this way, apart.
-    ///
-    /// The buttons are `choices` in order, and the answer is read back by that same order,
-    /// so a button can never pick a choice it does not name. [LAW:one-source-of-truth]
-    private func ask<Choice: CustomStringConvertible>(
-        _ question: String, explaining details: String, among choices: [Choice], titled title: (Choice) -> String
-    ) -> Choice {
-        let alert = NSAlert()
-        alert.messageText = question
-        alert.informativeText = details + "\n\nYou can change this at any time from the menu bar."
-        choices.forEach { alert.addButton(withTitle: title($0)) }
-        NSApp.activate()
-        let response = alert.runModal()
-        let answer = choices[response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue]
-        // [LAW:verifiable-goals] The question has no other trace: an agent checking that a
-        // first launch asked, and what it was told, reads it here.
-        log.notice("\(String(describing: Choice.self), privacy: .public): asked, answered \(answer, privacy: .public) (modal response \(response.rawValue, privacy: .public))")
-        return answer
-    }
-
-    private func askForDelivery() -> Delivery {
-        ask("How should \(Self.flavor.displayName) give you what you say?",
-            explaining: Delivery.allCases.map { "\($0.title): \($0.explanation)" }.joined(separator: "\n\n"),
-            among: Delivery.allCases, titled: \.title)
-    }
-
-    private func askForHotkeySource() -> HotkeySource {
-        // Where a source cannot hear is a sentence, too long for a button, so it is said
-        // above the buttons, named by the button it belongs to.
-        let unheard = HotkeySource.allCases.compactMap { source in source.unheard.map { "\(button(of: source)): \($0)." } }
-        return ask("Which hotkey should \(Self.flavor.displayName) listen for?",
-            explaining: (["Hold it while you speak, or tap it to start and again to stop."] + unheard).joined(separator: "\n\n"),
-            among: HotkeySource.allCases, titled: button(of:))
-    }
-
-    /// A source as a first-launch button names it: its chord on the layout the user types
-    /// on, and what macOS asks for it.
-    /// [LAW:one-source-of-truth] Every part is read off the source, so no second spelling of
-    /// any is kept here.
-    private func button(of source: HotkeySource) -> String {
-        [chordName(heardBy: source), source.asks].joined(separator: " — ")
-    }
-
-    /// A source as the menu names it: its button, and where it cannot hear.
-    private func title(of source: HotkeySource) -> String {
-        ([button(of: source)] + [source.unheard].compactMap { $0 }).joined(separator: " — ")
-    }
-
-    /// The chords the config has `source` listen for, named on the layout the user types on
-    /// now. Read at each use rather than kept, since the user can switch layouts at any
-    /// moment.
-    private func chordName(heardBy source: HotkeySource) -> String {
+    /// The chords the config listens for, in the words a person presses them by.
+    private var chordName: String {
         switch config {
-        case .success(let config):
-            do {
-                return try Hotkey.named(heardBy: source, in: config, on: KeyboardLayout.current())
-            } catch {
-                // [LAW:no-silent-failure] A layout that cannot be read still leaves the reader
-                // a chord to press, in the spelling `held` gives every chord, and the log says
-                // why.
-                log.error("keyboard layout: \(String(describing: error), privacy: .public); naming the chords by their codes")
-                return config.modes.map { Hotkey.held($0.chords[source]) }.joined(separator: " or ")
-            }
-        // The status line already says why nothing is heard; a button still has to say
-        // which source it is.
-        case .failure:
-            return "no chord: the config cannot be read"
+        case .success(let config): Hotkey.named(in: config)
+        // The status line already says why nothing is heard.
+        case .failure: "no chord: the config cannot be read"
         }
     }
 
@@ -526,24 +295,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ask: { [unowned self] in await ask($0) },
         settle: { [unowned self] in comeUpIfGranted($0) })
 
-    /// After a choice has been made: the setup, in front of the person, when the choice
-    /// brought a step they can act on - one with a button that asks macOS, or a System
-    /// Settings pane. A row the old setup already needed was news then, not now, and a row
-    /// nobody can act on (the assistant clears itself; the driver waits on an administrator)
-    /// is not worth taking focus from the app the person is typing in; the menu's Set Up
-    /// item shows both. Not on a launch that only remembers its choices.
-    ///
-    /// - Parameter before: the setup the choice replaced, or nil when there was none.
-    private func showSetUpIfNeeded(replacing before: Setup?) {
-        let actionable = readReadiness().unmet.filter { requirement in
-            let row = requirement.row
-            let new = before.map { !row.isNeeded(deliveries: [$0.delivery], sources: [$0.source]) } ?? true
-            return new && (row.askTitle != nil || row.settingsPane != nil)
-        }
-        guard !actionable.isEmpty else { return }
-        setUp.show()
-    }
-
     /// Asks macOS for one requirement - the only place in the app that does, and reached
     /// only from the button a person pressed on that requirement's step. Each case raises
     /// at most one system dialog.
@@ -553,7 +304,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// skipping it costs. [LAW:no-silent-failure]
     private func ask(_ row: Requirement.Row) async -> String? {
         log.notice("setup: asking for \(row.rawValue, privacy: .public)")
-        var failure: String?
         switch row {
         case .microphone:
             // macOS asks about the microphone once. Past that, requesting answers at once and
@@ -562,113 +312,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case .success(.withheld(.notDetermined)):
                 // Asked here, as measured on studious 2026-09-24: one dialog, naming the app.
                 _ = await MicrophonePermission().request()
+                return nil
             case .success(.withheld(.denied)):
-                failure = openPaneAfterANo(.microphone)
+                NSWorkspace.shared.open(row.settingsPane)
+                return "macOS asks only once. Turn on \(Self.flavor.displayName) in the \(row.rawValue) list in System Settings."
             case .success(.withheld(.restricted)):
-                failure = "A policy on this Mac blocks the microphone."
+                return "A policy on this Mac blocks the microphone."
             case .success(.granted):
-                break
+                return nil
             case .failure(let reading):
-                failure = "\(reading)"
+                return "\(reading)"
             }
-        case .inputMonitoring:
-            // Checking Accessibility files the app in its list, switched off (studious,
-            // 2026-09-25), and tccd answers Input Monitoring from that row: while
-            // Accessibility is off, no Input Monitoring dialog can show. Allowing
-            // Accessibility brings Input Monitoring with it. See `EventTapAccess`.
-            switch readPrivacy().map({ $0.accessibility == true ? $0.inputMonitoring : nil }) {
-            case .success(nil):
-                failure = "Allow Accessibility first. Input Monitoring comes with it."
-            case .success(.undecided):
-                EventTapAccess.askForInputMonitoring()
-            case .success(.denied):
-                failure = openPaneAfterANo(.inputMonitoring)
-            case .success(.granted):
-                break
-            case .failure(let reading):
-                failure = "\(reading)"
-            }
-        case .accessibility:
-            EventTapAccess.askForAccessibility()
         case .inputMethod:
             do { try await InputSourceInstaller(flavor: Self.flavor).switchOn() } catch {
                 log.error("setup: input method: \(String(describing: error), privacy: .public)")
-                failure = "\(error)"
+                return "\(error)"
             }
-        case .keyboardHelper:
-            failure = registerKeyboardHelper()
-        // Nothing the app can ask for: an administrator installs the driver, and the helper
-        // answers the assistant. Their steps offer no ask button, so this is never reached
-        // from one; it is named rather than defaulted so a new row has to say. [LAW:no-silent-failure]
-        case .driverExtension, .keyboardSetupAssistant:
-            break
+            // Switched on is not selected: once it reads as met, the loop is rebuilt so the
+            // install selects it, whether or not the loop is up.
+            inputMethodSwitchedOn = true
+            return nil
         }
-        // A grant the chosen setup cannot work without was just asked for: once it reads as
-        // met, the loop is rebuilt so the install of whichever half needs it finishes the
-        // job - for the input method, selecting it - whether or not the loop is up.
-        // Only rows an install finishes: the event tap installs nothing, and reads its
-        // grants as it starts.
-        if failure == nil, row.stopsDictation, let setup = chosenSetup,
-           row.serves.contains(.delivery(setup.delivery)) || (setup.source == .inputMethod && row.serves.contains(.hearing(.inputMethod))) {
-            setupGrantAsked = true
-        }
-        return failure
-    }
-
-    /// Opens a grant's System Settings pane after macOS was already answered no, and says why.
-    private func openPaneAfterANo(_ row: Requirement.Row) -> String {
-        row.settingsPane.map { NSWorkspace.shared.open($0) }
-        return "macOS asks only once. Turn on \(Self.flavor.displayName) in the \(row.rawValue) list in System Settings."
     }
 
     @objc private func openSetUp() {
         setUp.show()
-    }
-
-    @objc private func chooseDelivery(_ item: NSMenuItem) {
-        guard let spelling = item.representedObject as? String, let chosen = Delivery(rawValue: spelling) else {
-            preconditionFailure("a delivery item carries its delivery's raw value")
-        }
-        take { $0.chosenDelivery = chosen }
-    }
-
-    @objc private func chooseHotkeySource(_ item: NSMenuItem) {
-        guard let spelling = item.representedObject as? String, let chosen = HotkeySource(rawValue: spelling) else {
-            preconditionFailure("a hotkey source item carries its source's raw value")
-        }
-        take { $0.chosenSource = chosen }
-    }
-
-    /// Keeps a choice made from the menu, and takes the setup it leaves down to the loop.
-    ///
-    /// Before `comeUp` has the microphone - not yet allowed, or refused - the choice is
-    /// only kept: `comeUp` takes it up once the microphone is held, and a hotkey put up now
-    /// would hear presses no capture could open for, over the status that says why.
-    /// `switching` is set only by a choice taken down to a loop, which `comeUp` makes
-    /// first. [LAW:no-ambient-temporal-coupling]
-    ///
-    /// The setup already chosen is not chosen again while its hotkey is up: rebuilding
-    /// the loop would end a latched press as lapsed and throw its recording away.
-    /// A hotkey that has come down has no press to lose and nothing listening, so
-    /// choosing its source again is how the user starts it - and is what the status
-    /// line tells them to do. Only that one case: a loop still being built has no
-    /// hotkey to read yet, and letting the absence pass for a come-down would chain a
-    /// second teardown and rebuild behind the first, alert and all.
-    private func take(_ keep: (AppDelegate) -> Void) {
-        let before = chosenSetup
-        // Down is no hotkey watching and no switch building one: a loop that never came
-        // up, or whose hotkey came down, but not one being rebuilt right now.
-        let cameDown = listening?.hotkey.isWatching != true && switchesInFlight == 0
-        keep(self)
-        guard let setup = chosenSetup, setup != before || cameDown, !quitting else { return }
-        Task {
-            // A loop that has come up is switched; one that never did is brought up from the
-            // microphone, which `comeUp` reads - so choosing again after a grant is given in
-            // System Settings starts dictation, and a microphone still withheld says so.
-            if switching != nil { await choose(setup) } else { await comeUp() }
-            // What a setup still needs is news when the setup is new.
-            if setup != before { showSetUpIfNeeded(replacing: before) }
-        }
     }
 
     // MARK: - launch and quit
@@ -681,22 +349,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { await listen() }
     }
 
-    /// The two choices, then the loop as far as what is already granted allows, then - on
-    /// the launch that made a choice - the guided setup for whatever that choice still needs.
+    /// The loop as far as what is already granted allows, then the guided setup when
+    /// something is left: every requirement stops dictation, so an app missing one can do
+    /// nothing until the person has seen why.
     ///
-    /// A launch asks macOS for nothing. The two questions are the app's own, and every grant
-    /// is asked for from its own step in setup, after that step has said why; see `ask(_:)`.
+    /// A launch asks macOS for nothing. Every grant is asked for from its own step in setup,
+    /// after that step has said why; see `ask(_:)`.
     private func listen() async {
-        // Each choice is remembered or asked on its own, so an installation that has made
-        // one is asked only the other.
-        let asked = chosenDelivery == nil || chosenSource == nil
-        let delivery = chosenDelivery ?? askForDelivery()
-        let source = chosenSource ?? askForHotkeySource()
-        chosenDelivery = delivery
-        chosenSource = source
-        log.notice("setup: delivery \(delivery, privacy: .public), hotkey source \(source, privacy: .public)")
         await comeUp()
-        if asked { showSetUpIfNeeded(replacing: nil) }
+        if !readReadiness().unmet.isEmpty { setUp.show() }
     }
 
     /// From the microphone up: the grant read, then capture holding it, then the hotkey in
@@ -718,7 +379,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// chose. The menu says what is wrong with it.
     /// [LAW:no-silent-failure]
     private func comeUp() async {
-        guard let setup = chosenSetup, !quitting, !comingUp else { return }
+        guard !quitting, !comingUp else { return }
         comingUp = true
         defer {
             comingUp = false
@@ -726,7 +387,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         do {
             // A capture already running is left running: the microphone was held before, and
-            // what came up short was the hotkey or the delivery, which `choose` rebuilds.
+            // what came up short was the hotkey or the input method, which `rebuild` redoes.
             // Restarting it would close and reopen an engine the resting mode holds open.
             if capture.atRest == nil {
                 try capture.start(try readPrivacy().get().microphoneAuthorization.grant(), atRest: try config.get().microphone)
@@ -739,7 +400,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // start leave by one path. [LAW:dataflow-not-control-flow]
             capture.stop()
             // A microphone macOS was never asked about, or was told no, is a step in setup,
-            // and the status says where it is the way the other grants' refusals do.
+            // and the status says where it is the way the input method's refusal does.
             let (whereToAllow, awaitsGrant) = switch error {
             case MicrophoneAuthorization.Withheld.notDetermined, MicrophoneAuthorization.Withheld.denied:
                 ("; allow it in \(GuidedSetup.title(for: Self.flavor)) in this menu", true)
@@ -751,79 +412,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             showHotkeyStatus("off — \(error)\(whereToAllow)")
             return
         }
-        await choose(setup)
+        await rebuild()
     }
 
-    /// True while the loop is down for a grant a person has yet to give: the microphone,
-    /// the event tap's two, or the input method switched on. Set by the loop's own last
-    /// attempt to come up, so a loop down for anything else - a config that cannot be read,
-    /// a hotkey that kept lapsing - is not restarted by a grant.
+    /// True while the loop is down for a grant a person has yet to give: the microphone, or
+    /// the input method switched on. Set by the loop's own last attempt to come up, so a loop
+    /// down for anything else - a config that cannot be read, an install that failed - is not
+    /// restarted by a grant.
     private var downForAGrant = false
     /// True while `comeUp` runs, so readings taken meanwhile do not start a second one.
     private var comingUp = false
 
-    /// Once every row that stops dictation is met: brings the loop up when it is down for a
-    /// grant, and rebuilds a loop that is up when a grant the chosen setup installs through was
-    /// just asked for, so its install finishes - the input method switched back on is selected.
+    /// Once every requirement is met: brings the loop up when it is down for a grant, and
+    /// rebuilds a loop that is up when the input method was just switched on, so the install
+    /// selects it.
     ///
     /// [LAW:dataflow-not-control-flow] Decided from where things stand, not from a
     /// difference between two readings, so it holds however the grant arrived and whichever
     /// reading first sees it. [LAW:effects-at-boundaries] Reading has no effects; this is the
     /// one place a reading is acted on, called after a request, when setup comes back to the
-    /// front, and when the menu opens. A reading that arrives while a switch or `comeUp` is
+    /// front, and when the menu opens. A reading that arrives while a rebuild or `comeUp` is
     /// running is owed to the moment it ends, never dropped, and never acted on while
     /// quitting. [LAW:no-ambient-temporal-coupling]
     private func comeUpIfGranted(_ readiness: Readiness) {
         guard !quitting else { return }
-        // A switch or a comeUp in flight may have read the grants before this reading did,
+        // A rebuild or a comeUp in flight may have read the grants before this reading did,
         // so the reading is owed to the moment it ends rather than dropped.
-        guard !comingUp, switchesInFlight == 0 else {
+        guard !comingUp, rebuildsInFlight == 0 else {
             readingOwed = true
             return
         }
-        guard readiness.unmet.allSatisfy({ !$0.row.stopsDictation }), let setup = chosenSetup else { return }
+        guard readiness.unmet.isEmpty else { return }
         if downForAGrant {
-            setupGrantAsked = false
+            inputMethodSwitchedOn = false
             log.notice("setup: what dictation waited on is granted; bringing it up")
             Task { await comeUp() }
-        } else if setupGrantAsked, listening?.hotkey.isWatching == true {
-            setupGrantAsked = false
-            log.notice("setup: the grant the setup installs through arrived; rebuilding the loop to finish installing it")
-            Task { await choose(setup) }
+        } else if inputMethodSwitchedOn, listening?.hotkey.isWatching == true {
+            inputMethodSwitchedOn = false
+            log.notice("setup: the input method was switched on; rebuilding the loop to select it")
+            Task { await rebuild() }
         }
     }
 
-    /// Set when a reading reached `comeUpIfGranted` while a switch or a comeUp was running,
+    /// Set when a reading reached `comeUpIfGranted` while a rebuild or a comeUp was running,
     /// and settled - with a fresh reading - by whichever of them ends last.
     private var readingOwed = false
 
-    /// Set when a request for a grant the chosen setup installs through went through; cleared
-    /// once the loop has been rebuilt behind it.
-    private var setupGrantAsked = false
+    /// Set when a request to switch the input method on went through; cleared once the loop
+    /// has been rebuilt behind it.
+    private var inputMethodSwitchedOn = false
 
     /// The one place an owed reading is paid: once nothing is rebuilding the loop.
     private func settleOwedReading() {
-        guard readingOwed, switchesInFlight == 0, !comingUp else { return }
+        guard readingOwed, rebuildsInFlight == 0, !comingUp else { return }
         readingOwed = false
         comeUpIfGranted(readReadiness())
     }
 
-    /// Quitting waits for the sessions, the way `lowtalker dictate` waits on its
-    /// interrupt. A session holds keys down while it types and releases them on its way
-    /// out, so a process that goes while one is in flight leaves a key down for macOS to
-    /// repeat into whatever comes forward next; the interrupt is what cuts a long session
-    /// short, and the wait is what lets it reach its release.
+    /// Quitting waits for the sessions: a press heard just before the quit still has its
+    /// words on the way to the cursor, and the wait is what lets them land.
     /// [LAW:no-ambient-temporal-coupling] The quit has an owner, rather than a race.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         quitting = true
-        interrupt.raise(SIGTERM)
         Task {
-            // A switch in progress is let finish first, so the loop waited on is the last one.
-            await switching?.value
-            // The tap comes down before the wait, as at every other teardown: a press open
+            // A rebuild in progress is let finish first, so the loop waited on is the last one.
+            await rebuilding?.value
+            // The hotkey comes down before the wait, as at every other teardown: a press open
             // when the quit arrives is ended as lapsed and reported, rather than the app
             // going mid-utterance leaving nothing behind to say it did, and no key-down
-            // landing during the wait can open a session there is no longer anyone to close.
+            // arriving during the wait can open a session there is no longer anyone to close.
             await listening?.hotkey.stopAndDeliver()
             // A refused wait is reported and the quit still granted: an app that cannot
             // be quit would be the worse failure of the two. [LAW:no-silent-failure]
@@ -871,8 +528,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// The session's own line; each action's key-up-to-acknowledged time is the
-    /// typist's line beside it, under its own category. The words are private: they
+    /// The session's own line; each insert's key-up-to-acknowledged time is the
+    /// executor's line beside it, under its own category. The words are private: they
     /// are what the user dictated.
     private func report(_ outcome: Result<Dictation.Session, any Error>) {
         switch outcome {
@@ -883,35 +540,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // only the person who dictated them reads it. A stopped route is named by what
             // stopped it; what it did first is the log's.
             lastFailure = "\((error as? RouteStopped)?.cause ?? error)"
-            // The kind of failure is public and its account is not: a TypingStopped
-            // names the character left half typed, which is a character the user
-            // dictated. [LAW:no-silent-failure] The type alone still says what broke.
+            // The kind of failure is public and its account is not: a refusal can carry
+            // words the user dictated. [LAW:no-silent-failure] The type alone still says
+            // what broke.
             sessions.error("session failed: \(String(describing: type(of: error)), privacy: .public) — \(String(describing: error), privacy: .private)")
-        }
-    }
-
-    /// Every lapse, in the dictation log beside the sessions it damaged, so the cause of
-    /// a missing sentence reads in the order it happened rather than being pieced back
-    /// together from two categories by timestamp.
-    ///
-    /// [LAW:no-silent-failure] This is the app's only voice for a lapse that ended no
-    /// press, which is the lapse that eats the beginning of the next utterance.
-    ///
-    /// Public in full, unlike the session line beneath it: a lapse is a count and a
-    /// fixed sentence, and no part of it is anything the user dictated.
-    private func report(_ lapse: KeyboardTapLapse) {
-        sessions.error("\(lapse.description, privacy: .public)")
-        switch lapse.response {
-        // The tap is still up and the hotkey still works, so the line the menu reads is
-        // still true and is left alone.
-        case .rearm:
-            break
-        // [LAW:no-silent-failure] The hotkey is gone, and the menu is where a user looks
-        // to find out what this app is doing. A log is somewhere they have no reason to
-        // open, which is no use to someone whose keyboard has just started misbehaving
-        // and who is trying to work out which app is doing it.
-        case .comeDown:
-            showHotkeyStatus("off — kept lapsing; choose a hotkey below to start it again")
         }
     }
 
@@ -920,28 +552,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// What this installation's setup needs, read off this Mac now, and logged as it is read.
     ///
     /// The one reading every surface in the app draws from: the menu, the guided setup, and
-    /// the question of whether setup has anything to show. Read for the setup the person
-    /// chose; before a choice is made, for every choice there is.
-    ///
-    /// With the virtual keyboard it waits about 220ms - measured from the log timestamps,
-    /// and spent almost entirely in the driver probe's subprocesses. It is paid on every read
-    /// rather than kept warm in the background because a cached reading is a reading that
-    /// can be stale exactly when it matters: right after the user gave the approval the
-    /// menu was telling them to give. [LAW:no-ambient-temporal-coupling]
+    /// the question of whether setup has anything to show. Paid on every read rather than
+    /// kept warm in the background because a cached reading is a reading that can be stale
+    /// exactly when it matters: right after the user gave the grant the menu was telling them
+    /// to give. [LAW:no-ambient-temporal-coupling]
     private func readReadiness() -> Readiness {
-        let (delivery, source) = shownChoices
-        // The one reading no other process can take, logged raw as `SMAppService` gave
-        // it. On a Mac whose helper is already approved it changes nothing a reader
-        // sees, so an agent checking that the app asked at all - and that it asked about
-        // the right plist - has nothing else to read back. [LAW:no-silent-failure]
-        let registration = helperService.status
-        log.notice("helper registration: SMAppService.Status \(registration.rawValue, privacy: .public)")
-        let readiness = OnboardingProbe.readiness(
-            flavor: Self.flavor,
-            delivery: delivery,
-            source: source,
-            reader: .theApp(helperAwaitingApproval: registration == .requiresApproval, privacy: readPrivacy()),
-            cli: Self.carriedCLI)
+        let readiness = OnboardingProbe.readiness(flavor: Self.flavor, reader: .theApp(privacy: readPrivacy()))
         log.notice("onboarding: \(readiness.ready ? "ready" : "not ready", privacy: .public)")
         for requirement in readiness.requirements {
             log.notice("onboarding: \(requirement.name, privacy: .public): \(requirement.reads, privacy: .public)")
@@ -952,16 +568,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// The app's privacy grants as they stand now, read by the carried CLI in a process of
     /// its own, because this process keeps the answers it read first. See `PrivacyReading`.
     private func readPrivacy() -> Result<PrivacyReading, PrivacyReadingFailure> {
-        let (delivery, source) = shownChoices
-        let checkingAccessibility = OnboardingProbe.needed(delivery: delivery, source: source).contains(.accessibility)
-        let reading = Result { () throws(PrivacyReadingFailure) in
-            try PrivacyReading.taken(by: Self.carriedCLI, checkingAccessibility: checkingAccessibility)
-        }
+        let reading = Result { () throws(PrivacyReadingFailure) in try PrivacyReading.taken(by: Self.carriedCLI) }
         switch reading {
         case .success(let privacy): log.notice("privacy: \(privacy.line, privacy: .public)")
         case .failure(let failure): log.error("privacy: \(failure.description, privacy: .public)")
         }
         return reading
+    }
+
+    /// Why a press of the chord would not be heard right now, read at the moment the menu
+    /// opens: the input method is handed keys only while its source is the one in use, and by
+    /// no app while one holds Secure Event Input. Empty when neither stands in the way.
+    ///
+    /// [LAW:no-silent-failure] A hotkey line that read as working while nothing could hear
+    /// it would send the person after a broken app rather than the Input menu or the
+    /// password field in front of them.
+    private func unheardBecause() -> [String] {
+        let reasons: [String?] = [
+            InputSourceInstaller.isSelected(Self.flavor) ? nil : "another input source is selected",
+            IsSecureEventInputEnabled() ? "an app holds Secure Event Input, as a password field does" : nil,
+        ]
+        let found = reasons.compactMap { $0 }
+        log.notice("hotkey: unheard because [\(found.joined(separator: "; "), privacy: .public)]")
+        return found
     }
 
     /// Everything the menu says, made here, every time, from what this Mac reads now.
@@ -970,9 +599,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// to re-read. `menuNeedsUpdate` rather than `menuWillOpen`: AppKit calls this one
     /// before the menu is laid out, so the items are in place when it is measured.
     func menuNeedsUpdate(_ menu: NSMenu) {
-        let (delivery, source) = shownChoices
-        // The rows of the setup the person chose and no other: a list of driver steps would
-        // be a list of things to install for an output nobody is using.
         let readiness = readReadiness()
         comeUpIfGranted(readiness)
 
@@ -982,6 +608,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // the config asked to hold open says so here too. [LAW:no-silent-failure]
         let microphone = capture.doing
         log.notice("microphone at rest: \(microphone, privacy: .public)")
+        let unheard = unheardBecause()
 
         menu.removeAllItems()
         menu.addItem(readout("Whisper model: \(engineReadiness.readout(at: .now))"))
@@ -989,6 +616,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if case .preparing = engineReadiness { menu.addItem(readout("A press now is heard once the model is ready")) }
         menu.addItem(readout("Microphone: \(microphone)"))
         menu.addItem(readout("Hotkey: \(hotkeyStatus)"))
+        for reason in unheard { menu.addItem(readout("    Not heard now: \(reason)")) }
         lastFailure.map { menu.addItem(readout("Your last dictation was not placed: \($0)")) }
         // Every requirement, met or not, and its step under it as the lines it was
         // written in - one item per line, so nothing here wraps text the requirement
@@ -1004,27 +632,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let stepsLeft = left == 0 ? "" : " (\(left) left)"
         menu.addItem(withTitle: "\(GuidedSetup.title(for: Self.flavor))\(stepsLeft)", action: #selector(openSetUp), keyEquivalent: "")
         menu.addItem(.separator())
-        menu.addItem(readout("Delivery"))
-        for choice in Delivery.allCases {
-            let item = NSMenuItem(title: "    \(choice.title)", action: #selector(chooseDelivery(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = choice.rawValue
-            item.state = choice == delivery ? .on : .off
-            menu.addItem(item)
-        }
-        menu.addItem(readout("Hotkey source"))
-        for choice in HotkeySource.allCases {
-            let item = NSMenuItem(title: "    \(title(of: choice))", action: #selector(chooseHotkeySource(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = choice.rawValue
-            item.state = choice == source ? .on : .off
-            menu.addItem(item)
-        }
-        menu.addItem(.separator())
-        // Where every step that asks for a click sends a reader, one click closer.
-        if delivery == .virtualKeyboard {
-            menu.addItem(withTitle: "Open Login Items & Extensions…", action: #selector(openLoginItems), keyEquivalent: "")
-        }
         menu.addItem(withTitle: "Quit \(Self.flavor.displayName)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     }
 
@@ -1032,27 +639,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// one AppKit disables on its own, which is the whole of what "readout" means here.
     private func readout(_ title: String) -> NSMenuItem {
         NSMenuItem(title: title, action: nil, keyEquivalent: "")
-    }
-}
-
-private extension Delivery {
-    /// The name a person picks it by, in the menu and in the first-launch question.
-    var title: String {
-        switch self {
-        case .inputMethod: "Input Method"
-        case .virtualKeyboard: "Virtual Keyboard"
-        }
-    }
-
-    /// What it does and what it costs to install. No chord: which one is heard is the
-    /// hotkey source's to say.
-    var explanation: String {
-        switch self {
-        case .inputMethod:
-            "the words are committed where your cursor is. Nothing for an administrator to approve."
-        case .virtualKeyboard:
-            "the words are typed where you are. Needs a driver extension and a helper, which an administrator approves once."
-        }
     }
 }
 

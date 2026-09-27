@@ -1,101 +1,12 @@
-import Carbon.HIToolbox
-import Choices
 import Dispatch
 import Flavors
-import Grants
 
-/// The system switching the keyboard tap off for being slow to answer. The events in
-/// between were lost.
-///
-/// Reported whether or not a press was open to end, because only one of the two leaves
-/// anything else behind. A lapse during a press also ends it as `.lapsed`, and the press
-/// is reported in its own right; a lapse with no press open is reported here and nowhere
-/// else, and that is the one that swallows the next key-down and takes the beginning of
-/// the next utterance with it.
-///
-/// [LAW:types-are-the-program] The count travels with the lapse rather than being left
-/// on the tap for a reader to ask for afterwards: a count read later is the count as of
-/// the asking, which by the second lapse is not the number that belongs to this one.
-/// `response` travels with it for a sharper reason: "the tap lost some keys and is
-/// listening again" and "the tap is down and this app has no hotkey" are two different
-/// facts about the session, and a reader handed only a count cannot tell which one it
-/// is holding.
-public struct KeyboardTapLapse: Hashable, Sendable, CustomStringConvertible {
-    /// Lapses since `Hotkey.start`, this one counted: the first reports 1.
-    ///
-    /// Every lapse, whatever its cause. This is not the number the cap is drawn against -
-    /// that one counts only the recent ones this app was too slow for - so nothing here
-    /// offers it as the reason a tap came down.
-    public let count: Int
-    /// Why the system switched the tap off.
-    public let cause: LapseCause
-    /// What the tap did about this one.
-    public let response: LapseResponse
-
-    public init(count: Int, cause: LapseCause, response: LapseResponse) {
-        self.count = count
-        self.cause = cause
-        self.response = response
-    }
-
-    private var why: String {
-        switch cause {
-        case .tooSlow: "this app did not answer the window server in time"
-        case .userInput: "the system switched it off around the user's own input"
-        }
-    }
-
-    public var description: String {
-        switch response {
-        case .rearm:
-            "the keyboard tap lapsed and was switched back on, losing the events in between - \(why); \(count) since listening began"
-        case .comeDown:
-            "the keyboard tap has been taken down for lapsing too often - \(why); \(count) lapses since listening began, and the hotkey is off until it is started again"
-        }
-    }
-}
-
-/// The hotkey for the life of the app: a tap in front of the session's keyboard,
-/// a detector reading its events, and the presses it finds handed on.
-///
-/// Inside the tap's callback this does one thing: ask the detector what to do with the
-/// event and answer the window server. Everything a press sets in motion leaves by the
-/// main queue once that answer is given. An active tap is a gate the whole session's
-/// keyboard queues behind, and a callback that opens a microphone or asks another
-/// process what is in front holds every key on the Mac for as long as that takes.
-/// [LAW:effects-at-boundaries]
+/// The hotkey for the life of the app: the modifier keys as the input method tells them, a
+/// detector reading them, and the presses it finds handed on by the main queue.
 @MainActor
 public final class Hotkey {
     nonisolated public static let defaultTapThreshold: Duration = .milliseconds(250)
-    /// How many lapses inside `lapseWindow` mean the tap is not recovering, and comes
-    /// down instead of going back on.
-    ///
-    /// A tap lapses because this app took too long to answer the window server, and
-    /// every lapse is keystrokes the user typed and nobody received. One is a bad
-    /// moment - a wake, a model loading - and worth riding out. Several inside a minute
-    /// is a process that cannot hold up its end, and each re-arm buys another round of
-    /// swallowed keys. At that point the tap is costing the session more than the hotkey
-    /// returns, and the only answer that respects the user is to get out of the way.
-    ///
-    /// [LAW:no-silent-failure] A tap that re-arms without limit is a smoke alarm with
-    /// the battery out: it can go on taking the keyboard for as long as the app runs and
-    /// report it nowhere the user will look.
-    nonisolated public static let lapsesBeforeComingDown = 5
-    /// The span `lapsesBeforeComingDown` is counted over. Long enough that lapses from
-    /// separate bad moments do not accumulate into a false verdict, short enough that a
-    /// tap failing repeatedly is caught while the user is still in front of it.
-    ///
-    /// A minute of the machine being awake, not a minute of wall clock: lapses are stamped
-    /// on `HostTime`, which counts up-time and stands still while the Mac sleeps. That is
-    /// the measure this cap wants. Every lapse is a moment this app was running and did not
-    /// answer in time, so the question is whether it has failed repeatedly across a short
-    /// span of *running* - and hours of sleep between two lapses is not evidence that the
-    /// second one is a fresh incident. Reading a wall clock here would also put a second
-    /// time base in a decision `HostTime` already answers, and hand it one that can jump
-    /// under it. [LAW:one-source-of-truth]
-    nonisolated public static let lapseWindow: Duration = .seconds(60)
-    /// The chord an installation listens for, as `hearing` hears it, where its config names
-    /// no other: what `HeardChords.default` is made of.
+    /// The chord an installation listens for where its config names no other.
     ///
     /// Right Option for the installed copy, and Right Option held together with Right
     /// Command for the development one. The development chord is a superset of the
@@ -110,35 +21,17 @@ public final class Hotkey {
     /// exactly, starting a press there before Right Command can make it the development
     /// one, and both installations then listen. Right Command alone completes nothing, so
     /// starting with it leaves only the development chord to complete.
-    ///
-    /// Named once per installation: the tap listens for it and the typist refuses to
-    /// press it, and two spellings of one chord would be a hotkey the typist could type.
-    /// [LAW:one-source-of-truth]
-    ///
-    /// The input method hears what the event tap hears - modifiers alone, told apart by
-    /// side - so it listens for the same chord, and there is one chord of modifiers per
-    /// installation rather than a second spelling of it.
-    ///
-    /// **A registered hot key cannot be a modifier alone**, so that hearing gets a key: Command+Option+X for the development copy, and
-    /// Shift added for the release. Carbon matches modifiers exactly, so neither completes
-    /// the other. No Control: the chord is held while the person speaks, and a Control chord
-    /// held over a terminal is a control character sent to the shell (an earlier chord's
-    /// Control+D was end-of-file, and closed the shell it was pressed in). Not Control+Option
-    /// either, which is VoiceOver's modifier.
-    nonisolated public static func defaultChord(for flavor: Flavor, heardBy hearing: HotkeySource) -> KeyChord {
-        let x = Key(rawValue: UInt16(kVK_ANSI_X))
-        return switch (hearing, flavor) {
-        case (.eventTap, .release), (.inputMethod, .release): KeyChord(modifiers: .rightOption)
-        case (.eventTap, .development), (.inputMethod, .development): KeyChord(modifiers: .rightOption, .rightCommand)
-        case (.registeredHotKey, .release): KeyChord(key: x, modifiers: [.leftShift, .leftCommand, .leftOption])
-        case (.registeredHotKey, .development): KeyChord(key: x, modifiers: [.leftCommand, .leftOption])
+    nonisolated public static func defaultChord(for flavor: Flavor) -> KeyChord {
+        switch flavor {
+        case .release: KeyChord(modifiers: .rightOption)
+        case .development: KeyChord(modifiers: .rightOption, .rightCommand)
         }
     }
 
-    /// Every installation's chord through every source, as their config files said the first
-    /// time this process asked: the set a typist must refuse to press, and the chords
-    /// `pressOrder` orders a press around. Read once, as the app reads its own config once;
-    /// see `Config.everyInstallationsChord(read:)` for why it is every installation's.
+    /// Every installation's chord, as their config files said the first time this process
+    /// asked: the chords `pressOrder` orders a press around. Read once, as the app reads its
+    /// own config once; see `Config.everyInstallationsChord(read:)` for why it is every
+    /// installation's.
     nonisolated public static let everyInstallationsChord: Set<KeyChord> = Config.everyInstallationsChord()
 
     /// This chord's modifiers in the order a person must press them.
@@ -156,9 +49,7 @@ public final class Hotkey {
     /// go down last. `theOrderPrintedIsAnOrderThatWorks` holds that to every flavor.
     /// [LAW:verifiable-goals]
     nonisolated public static func pressOrder(of chord: KeyChord) -> [Modifier] {
-        // Only a chord of modifiers alone completes while modifiers go down; one with a key
-        // waits for its key, so no order of holding modifiers can start it.
-        let rivals = everyInstallationsChord.subtracting([chord]).filter { $0.key == nil }.map(\.modifiers)
+        let rivals = everyInstallationsChord.subtracting([chord]).map(\.modifiers)
         // How many other installations' chords this modifier appears in. Zero means it
         // cannot complete one of theirs, so it is safe to hold early.
         func shared(_ modifier: Modifier) -> Int { rivals.filter { $0.contains(modifier) }.count }
@@ -172,100 +63,65 @@ public final class Hotkey {
             .map(\.element)
     }
 
-    /// The chord in the grammar `KeyChord.init(spelled:on:)` reads back: modifiers by their case names in
-    /// the order `pressOrder` gives, then the key by its code. It needs no keyboard layout,
-    /// so it can always be printed; `named(_:heardBy:on:)` is the spelling in a person's
-    /// words where a layout can be read. [LAW:one-source-of-truth]
+    /// The chord in the grammar a config file writes: modifiers by their case names, in the
+    /// order `pressOrder` gives. [LAW:one-source-of-truth]
     nonisolated public static func held(_ chord: KeyChord) -> String {
-        let struck = chord.key.map { ["key 0x" + String($0.rawValue, radix: 16)] } ?? []
-        return (pressOrder(of: chord).map(\.rawValue) + struck).joined(separator: "+")
+        pressOrder(of: chord).map(\.rawValue).joined(separator: "+")
     }
 
-    private let tap: any KeyboardTap
-    private var detector: HotkeyDetector
-    /// The tap that is up, and the handler its presses go to - kept together because a
-    /// press still open when the tap comes down is ended at that same handler.
-    private var installed: (dispose: Disposal, onTransition: @MainActor (HotkeyDetector.Transition) -> Void)?
-    /// Lapses since `start()`, which each one is reported with. Private because a
-    /// second way to ask is a second answer: this one moves between the lapse and any
-    /// later reading of it. [LAW:one-source-of-truth]
-    private var lapses = 0
-    /// The moments of the recent lapses this app was too slow for, which is the whole of
-    /// what deciding to come down needs to know. Trimmed on each one, so it holds at most
-    /// `lapsesBeforeComingDown` of them and never grows with the app's life.
-    ///
-    /// Only `.tooSlow` lands here. A lapse the system took around the user's own input is
-    /// not something this app can go faster to avoid, so counting it would take the hotkey
-    /// down for something it did not do.
-    private var recentLapses: [HostTime] = []
+    /// The chord in the words a person presses it by, in the order `pressOrder` says to hold
+    /// them: `rightOption` as "Right Option", the case's own name split at its capitals, so no
+    /// table of names stands beside the cases to fall out of step with them.
+    nonisolated public static func named(_ chord: KeyChord) -> String {
+        pressOrder(of: chord).map { modifier in
+            modifier.rawValue.reduce(into: "") { name, letter in
+                name += name.isEmpty ? letter.uppercased() : letter.isUppercase ? " \(letter)" : String(letter)
+            }
+        }.joined(separator: "+")
+    }
 
-    public init(chords: Set<KeyChord>, tapThreshold: Duration = defaultTapThreshold, tap: any KeyboardTap = SystemKeyboardTap()) {
-        self.tap = tap
+    /// Every chord `config` listens for, named as above, in the order the file declares its
+    /// modes.
+    nonisolated public static func named(in config: Config) -> String {
+        config.modes.map { named($0.chord) }.joined(separator: " or ")
+    }
+
+    private let feed: any ModifierFeed
+    private var detector: HotkeyDetector
+    /// The feed that is running, and the handler its presses go to - kept together because a
+    /// press still open when the feed stops is ended at that same handler.
+    private var installed: (dispose: Disposal, onTransition: @MainActor (HotkeyDetector.Transition) -> Void)?
+
+    public init(chords: Set<KeyChord>, tapThreshold: Duration = defaultTapThreshold, feed: any ModifierFeed) {
+        self.feed = feed
         detector = HotkeyDetector(chords: chords, tapThreshold: tapThreshold)
     }
 
-    /// An installation's hotkey as `hearing` hears it: the chords `config` gives that
-    /// hearing, through that hearing's tap. [LAW:one-source-of-truth] The one place a
-    /// hearing becomes the pair, and `HeardChords` holds only chords their hearing can hear,
-    /// so a chord can never be handed to a tap that cannot hear it.
-    ///
-    /// - Parameter granted: whether the event tap's grants are held, throwing when that
-    ///   could not be read; see `GrantedKeyboardTap`.
-    public convenience init(
-        for flavor: Flavor, heardBy hearing: HotkeySource, listeningFor config: Config, tapThreshold: Duration = defaultTapThreshold,
-        granted: @escaping @MainActor () throws -> Bool = { EventTapAccess.held }
-    ) {
-        let tap: any KeyboardTap = switch hearing {
-        case .eventTap: GrantedKeyboardTap(granted: granted)
-        case .registeredHotKey: RegisteredHotKeys()
-        case .inputMethod: InputMethodModifiers(flavor: flavor)
-        }
-        self.init(chords: config.chords(heardBy: hearing), tapThreshold: tapThreshold, tap: tap)
+    /// An installation's hotkey: the chords `config` names, heard through its input method.
+    public convenience init(for flavor: Flavor, listeningFor config: Config, tapThreshold: Duration = defaultTapThreshold) {
+        self.init(chords: config.chords, tapThreshold: tapThreshold, feed: InputMethodModifiers(flavor: flavor))
     }
 
     public var phase: HotkeyDetector.Phase { detector.phase }
 
-    /// Whether a tap is up and presses are being heard.
+    /// Whether the feed is running and presses are being heard.
     ///
-    /// False before the first `start`, after `stop`, and after a tap that kept lapsing
-    /// was taken down. [LAW:one-source-of-truth] derived from the installation itself, so
-    /// it cannot disagree with whether anything is actually listening - which is the
-    /// question a caller offering the user a way to start it again has to ask.
+    /// False before the first `start`, and after `stop`. [LAW:one-source-of-truth] derived
+    /// from the installation itself, so it cannot disagree with whether anything is actually
+    /// listening - which is the question a caller offering the user a way to start it again
+    /// has to ask.
     public var isWatching: Bool { installed != nil }
 
-    /// Starts watching. Each press begins and ends at `onTransition`, and every lapse
-    /// of the tap arrives at `onLapse`, both on the main actor and both on the main
-    /// queue once the tap's callback has answered - never inside it. Neither is bound by
-    /// the window server's deadline, so either may take as long as its work takes. The
-    /// count begins again here: it counts the tap that is up now, not the app's whole
-    /// life.
-    ///
-    /// [LAW:no-silent-failure] `onLapse` has no default. A caller that watches the
-    /// keyboard is a caller that can find out the keyboard went unwatched, and a
-    /// default would let that be nothing, silently, at a call site that reads as
-    /// complete.
-    public func start(
-        _ onTransition: @escaping @MainActor (HotkeyDetector.Transition) -> Void,
-        onLapse: @escaping @MainActor (KeyboardTapLapse) -> Void
-    ) throws {
+    /// Starts watching. Each press begins and ends at `onTransition`, on the main actor and
+    /// on the main queue.
+    public func start(_ onTransition: @escaping @MainActor (HotkeyDetector.Transition) -> Void) throws {
         stop()
-        lapses = 0
-        recentLapses = []
-        let dispose = try tap.install(
-            listeningFor: detector.chords,
-            handling: { [weak self] event in self?.handle(event, onTransition) ?? .pass },
-            // A hotkey that has been released cannot decide anything, and an armed tap
-            // with nothing behind it is a gate in front of the session's keyboard that
-            // nobody is minding.
-            onLapse: { [weak self] moment, cause in
-                self?.lapse(at: moment, because: cause, onTransition, onLapse) ?? .comeDown
-            }
-        )
+        let dispose = try feed.install { [weak self] event in self?.handle(event, onTransition) }
         installed = (dispose, onTransition)
     }
 
     /// Stops watching. A press still open is ended here as `.lapsed`, at the handler it
-    /// began at: once the tap is down its release can never arrive, and a press left open
+    /// began at: once the feed has stopped its release can never arrive, and a press left open
     /// is a microphone left open with nothing to close it.
     /// [LAW:no-ambient-temporal-coupling]
     public func stop() {
@@ -284,7 +140,7 @@ public final class Hotkey {
     ///
     /// [LAW:single-enforcer] What a caller waiting out a loop's sessions needs is both of
     /// these, in this order, and the pairing lives here rather than at each call site.
-    /// Presses leave by the main queue, so a key-up the tap read moments ago can still be
+    /// Presses leave by the main queue, so a key-up told moments ago can still be
     /// sitting on it, and a wait on the sessions a loop has been given cannot cover one
     /// that has not reached it yet. Spelled out at three teardowns and forgotten at a
     /// fourth, that is a final session lost in silence - which is the failure the wait was
@@ -301,10 +157,10 @@ public final class Hotkey {
 
     // A non-Sendable @MainActor class is only ever held by main-actor code, so its
     // last release is on the main actor; assumeIsolated traps if that stops holding.
-    // Only the tap comes down: nothing is left to hear an ending told from here.
+    // Only the feed stops: nothing is left to hear an ending told from here.
     deinit { MainActor.assumeIsolated { installed?.dispose() } }
 
-    /// Runs `work` on the main queue once the tap's callback has returned.
+    /// Runs `work` on the main queue, after the event that caused it has been read.
     ///
     /// [LAW:single-enforcer] The one way anything leaves this class. The main queue is
     /// first-in-first-out, which is what keeps a `began` ahead of the `ended` that
@@ -314,50 +170,7 @@ public final class Hotkey {
         DispatchQueue.main.async { MainActor.assumeIsolated(work) }
     }
 
-    private func handle(_ event: KeyEvent, _ onTransition: @escaping @MainActor (HotkeyDetector.Transition) -> Void) -> HotkeyDetector.Passage {
-        let verdict = detector.handle(event)
-        verdict.transition.map { transition in after { onTransition(transition) } }
-        return verdict.passage
-    }
-
-    /// Counts this lapse, says whether the tap goes back on, and reports it.
-    ///
-    /// The answer is worked out here and now because the tap is waiting on it; the
-    /// report goes out afterwards like everything else.
-    private func lapse(
-        at moment: HostTime,
-        because cause: LapseCause,
-        _ onTransition: @escaping @MainActor (HotkeyDetector.Transition) -> Void,
-        _ onLapse: @escaping @MainActor (KeyboardTapLapse) -> Void
-    ) -> LapseResponse {
-        lapses += 1
-        switch cause {
-        case .tooSlow:
-            recentLapses.removeAll { moment - $0 >= Self.lapseWindow }
-            recentLapses.append(moment)
-        case .userInput:
-            break
-        }
-        let response: LapseResponse = recentLapses.count >= Self.lapsesBeforeComingDown ? .comeDown : .rearm
-        let lapse = KeyboardTapLapse(count: lapses, cause: cause, response: response)
-        // Ended here rather than inside the teardown below, so the press is ended once
-        // however the two are ordered.
-        let unfinished = detector.lapse()
-        // **Down before it is reported.** A tap left switched off is still an installation
-        // holding a disposal, and `isWatching` would go on saying this hotkey is up. It is
-        // taken down once the callback has returned, which is the only point it is safe to
-        // dispose the port the callback is running inside - and it goes on the queue ahead
-        // of the report so that a handler told the tap has come down finds it already
-        // down. A hotkey started from that handler, which is exactly what the report
-        // invites, would otherwise be disposed by this teardown a turn later.
-        switch response {
-        case .rearm: break
-        case .comeDown: after { [weak self] in self?.stop() }
-        }
-        // The lapse before what it did to the press, so a reader of either meets the
-        // cause ahead of the consequence.
-        after { onLapse(lapse) }
-        unfinished.map { transition in after { onTransition(transition) } }
-        return response
+    private func handle(_ event: KeyEvent, _ onTransition: @escaping @MainActor (HotkeyDetector.Transition) -> Void) {
+        detector.handle(event).map { transition in after { onTransition(transition) } }
     }
 }

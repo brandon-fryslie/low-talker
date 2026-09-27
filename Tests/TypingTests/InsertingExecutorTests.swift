@@ -1,13 +1,10 @@
 import Foundation
 import Insertion
-import KeyboardLayout
-import Keystrokes
 import LowTalkerCore
-import Pointing
 import Testing
 @testable import Typing
 
-/// The executor's input method output: the words are asked of the input method, and what it
+/// The executor: the words are asked of the input method, and what it
 /// does not put at the cursor is a failure, thrown by name.
 ///
 /// [LAW:behavior-not-structure] Asked through `Inserter`, which is one method and mentions
@@ -15,7 +12,6 @@ import Testing
 /// selected, and nothing at a real cursor. What cannot be asked of a double is whether the
 /// words appear in a window, and that is the live checkpoint, not a thing to mock an answer to.
 @Suite @MainActor struct InsertingExecutorTests {
-    static let us = try! KeyboardLayout.named("com.apple.keylayout.US")
     /// `nonisolated` where the suite is not: a bundle id is a value, and the double that
     /// names one is asked on a thread of the executor's choosing rather than on this actor.
     nonisolated static let textEdit = BundleID(rawValue: "com.apple.TextEdit")
@@ -54,13 +50,12 @@ import Testing
     @Test func wordsAtTheFocusAreInsertedAtTheCursor() async throws {
         let inputMethod = Self.inserting(into: Self.textEdit)
         let performed = try await Executor(insertingThrough: inputMethod)
-            .perform([.insertText(text: "héllo there", target: .focus)], in: Self.textEdit, on: Self.us, since: .now)
+            .perform([.insertText(text: "héllo there", target: .focus)], since: .now)
 
         #expect(inputMethod.texts == ["héllo there"])
         #expect(performed.count == 1)
         #expect(performed[0].into == Self.textEdit)
-        guard case .inserted(let characters) = performed[0].what else { Issue.record("not inserted"); return }
-        #expect(characters == 11)
+        #expect(performed[0].characters == 11)
         #expect("\(performed[0])".hasPrefix("inserted 11 characters at the cursor in com.apple.TextEdit, key-up to acknowledged "))
     }
 
@@ -70,7 +65,7 @@ import Testing
     /// commits where the cursor is then. [FRAMING:representation]
     @Test func theAppNamedIsTheOneTheInputMethodReached() async throws {
         let performed = try await Executor(insertingThrough: Self.inserting(into: Self.slack))
-            .perform([.insertText(text: "hi", target: .focus)], in: Self.textEdit, on: Self.us, since: .now)
+            .perform([.insertText(text: "hi", target: .focus)], since: .now)
 
         #expect(performed[0].into == Self.slack)
         #expect("\(performed[0])".hasPrefix("inserted 2 characters at the cursor in com.tinyspeck.slackmacgap, key-up to acknowledged "))
@@ -84,7 +79,7 @@ import Testing
         let inputMethod = AnInputMethod { _ in throw refusal }
         let stopped = try await #require(throws: RouteStopped.self) {
             try await Executor(insertingThrough: inputMethod)
-                .perform([.insertText(text: "héllo there", target: .focus)], in: Self.textEdit, on: Self.us, since: .now)
+                .perform([.insertText(text: "héllo there", target: .focus)], since: .now)
         }
 
         #expect(stopped.cause as? Refusal == refusal)
@@ -98,7 +93,7 @@ import Testing
         let inputMethod = AnInputMethod { _ in throw late }
         let stopped = try await #require(throws: RouteStopped.self) {
             try await Executor(insertingThrough: inputMethod)
-                .perform([.insertText(text: "héllo there", target: .focus)], in: Self.textEdit, on: Self.us, since: .now)
+                .perform([.insertText(text: "héllo there", target: .focus)], since: .now)
         }
 
         #expect(stopped.cause as? NotYetTaken == late)
@@ -120,57 +115,33 @@ import Testing
         let inputMethod = AnInputMethod { _ in throw why }
         let stopped = try await #require(throws: RouteStopped.self) {
             try await Executor(insertingThrough: inputMethod)
-                .perform([.insertText(text: "héllo there", target: .focus)], in: Self.textEdit, on: Self.us, since: .now)
+                .perform([.insertText(text: "héllo there", target: .focus)], since: .now)
         }
 
         #expect(stopped.cause as? Unreachable == why)
         #expect(stopped.performed.isEmpty)
     }
 
-    /// Everything only the virtual devices can do is refused before anything is sent, so a
-    /// list with one of them in it inserts nothing - and the refusal names the delivery the
-    /// person actually has.
-    @Test func whatOnlyTheDevicesCanDoIsRefusedByNameAndNothingIsSent() async throws {
+    /// Everything that is not text at the focus is refused before anything is sent, so a
+    /// list with one of them in it inserts nothing. Text for a named app is among them: the
+    /// input method reaches only the cursor the text input system is holding.
+    @Test func whatIsNotTextAtTheFocusIsRefusedByNameAndNothingIsSent() async throws {
         let refused: [Action] = [
-            .sendKeys(chord: KeyChord(key: Key(rawValue: 0x24))),
-            .click(at: ScreenPoint(x: 1, y: 1), button: .left, times: .single),
-            .scroll(at: ScreenPoint(x: 1, y: 1), vertical: WheelCounts(rawValue: 3)!, horizontal: .none),
-            .clickElement(role: AccessibilityRole(rawValue: "AXButton"), title: "Cancel"),
             .insertText(text: "a", target: .app(bundleID: Self.slack)),
+            .activateApp(bundleID: Self.slack),
+            .openURL(url: URL(string: "https://example.com")!),
+            .runShortcut(name: "x", input: nil),
+            .pipe(executable: "/bin/cat", arguments: []),
         ]
         for action in refused {
             let inputMethod = Self.inserting(into: Self.textEdit)
-            let refusal = try await #require(throws: NeedsTheVirtualKeyboard.self) {
+            let refusal = try await #require(throws: NotAnInsert.self) {
                 try await Executor(insertingThrough: inputMethod)
-                    .perform([.insertText(text: "first", target: .focus), action], in: Self.textEdit, on: Self.us, since: .now)
+                    .perform([.insertText(text: "first", target: .focus), action], since: .now)
             }
 
-            #expect("\(refusal)".contains("asks the input method to put dictation at the cursor"))
+            #expect(refusal.action == action)
             #expect(inputMethod.texts.isEmpty, "\(action) let the text before it through to the input method")
         }
-    }
-
-    /// What no output here can do at all is said the other way, because activating an app or
-    /// opening a URL is not something a virtual keyboard would fix either.
-    @Test func whatIsNoInputAtAllIsSaidTheOtherWay() async throws {
-        let inputMethod = Self.inserting(into: Self.textEdit)
-        await #expect(throws: NotAnInput.self) {
-            try await Executor(insertingThrough: inputMethod)
-                .perform([.activateApp(bundleID: Self.slack)], in: Self.textEdit, on: Self.us, since: .now)
-        }
-        #expect(inputMethod.texts.isEmpty)
-    }
-
-    /// Inserting reads no layout: only typing needs to know which keys make which
-    /// characters, so a layout that cannot be read costs this output nothing.
-    @Test func insertingReadsNoLayout() async throws {
-        struct UnreadableLayout: Error {}
-        let inputMethod = Self.inserting(into: Self.textEdit)
-        let performed = try await Executor(insertingThrough: inputMethod)
-            .perform([.insertText(text: "hi", target: .focus)], in: Self.textEdit,
-                     on: { throw UnreadableLayout() }(), since: .now)
-
-        #expect(performed.count == 1)
-        #expect(inputMethod.texts == ["hi"])
     }
 }

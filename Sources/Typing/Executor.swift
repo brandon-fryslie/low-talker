@@ -1,232 +1,88 @@
 import Foundation
 import Insertion
-import KeyboardLayout
 import LowTalkerCore
 import os
 
-/// Performs a route's actions on the devices: text typed into the app it names, chords
-/// pressed in the app in front, clicks and scrolls made in the app in front.
+/// Performs a route's actions: text at the focus asked of the input method, which commits it
+/// at the cursor through the text input system - no key posted, no pasteboard touched, and no
+/// grant asked of an administrator.
 ///
-/// [LAW:effects-at-boundaries] The router hands back descriptions; this is the edge
-/// where they become reports. The keyboard and the pointer are values it is given per
-/// target - the helper behind a focus check in the app, a refusing fake in a test - so
-/// the executor itself decides only which app each action means and how much of it was
-/// done.
+/// [LAW:effects-at-boundaries] The router hands back descriptions; this is the edge where they
+/// become inserts. The inserter is a value it is given - the input method's port in the app, a
+/// fake in a test - so the executor itself decides only what each action is and how much of
+/// the list was done.
 ///
-/// Every action is lowered before any is performed. An action list is a whole the same
-/// way a string is: a list that typed its first action and refused its second would
-/// leave half a route in the document, and the half is not marked as half.
-/// [LAW:parse-dont-validate]
+/// Every action is proven before any is performed. An action list is a whole the same way a
+/// string is: a list that inserted its first action and refused its second would leave half
+/// a route in the document, and the half is not marked as half. [LAW:parse-dont-validate]
 @MainActor
 public struct Executor {
-    /// The keyboard for one target app: pressed through the helper, and refusing every
-    /// key once that app is no longer in front.
-    public typealias Keyboards = @MainActor (BundleID) -> any Keyboard
-    /// The pointer for one target app, refusing every report the same way.
-    public typealias Pointers = @MainActor (BundleID) -> Pointer
-
-    /// Where the actions go. [LAW:types-are-the-program] One value, so an executor that
-    /// types holds no inserter it could reach for, and one that inserts holds no keyboard.
-    private enum Output {
-        /// `hotkeys` are the chords the tap listens for, which no action may press.
-        case devices(keyboard: Keyboards, mouse: Pointers, hotkeys: Set<KeyChord>)
-        /// The input method puts the words at the cursor itself.
-        case insertion(any Inserter)
-    }
-
-    private let output: Output
+    private let inserter: any Inserter
     private let log: Logger
 
-    /// `hotkeys` are the chords the tap listens for, which no action may press.
-    public init(keyboard: @escaping Keyboards, mouse: @escaping Pointers, hotkeys: Set<KeyChord>, log: Logger = Executor.log) {
-        output = .devices(keyboard: keyboard, mouse: mouse, hotkeys: hotkeys)
-        self.log = log
-    }
-
-    /// Text at the focus asked of the input method, which commits it at the cursor through
-    /// the text input system - no key posted, no pasteboard touched, and no grant asked of
-    /// an administrator.
-    ///
     /// Words that do not reach the cursor are a failure and are thrown as one: the input
     /// method's refusal or the channel's, by name. Nothing puts them anywhere else.
     /// [LAW:no-silent-failure]
     public init(insertingThrough inserter: any Inserter, log: Logger = Executor.log) {
-        output = .insertion(inserter)
+        self.inserter = inserter
         self.log = log
     }
 
-    nonisolated public static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "lowtalker", category: "typist")
+    nonisolated public static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "lowtalker", category: "insert")
 
-    /// One action, done. The time is from the hotkey's key-up to the helper's
-    /// acknowledgement of the last report, which is the number the app has to keep
-    /// under its latency target and not a claim that the text is on screen: the daemon
-    /// acknowledges reports the driver then drops, and reading the screen back is the
-    /// CLI's measurement.
+    /// One insert, done. The time is from the hotkey's key-up to the input method's answer.
     public struct Performed: CustomStringConvertible, Sendable {
-        public enum What: Sendable {
-            case typed(characters: Int)
-            case pressed(KeyChord)
-            /// `reports` is how many motion reports the cursor took to get there, which
-            /// is the acceleration loop's cost and the number worth reading off a run.
-            case clicked(at: ScreenPoint, button: MouseButton, times: Clicks, reports: Int)
-            case scrolled(at: ScreenPoint, vertical: WheelCounts, horizontal: WheelCounts)
-            /// Committed at the cursor by the input method. The app is `into`, which for
-            /// this case is the app the words actually reached and not necessarily the one
-            /// this route was decided in front of: the person can move between the chord and
-            /// the words being ready, and the input method commits where the cursor is then.
-            /// [FRAMING:representation]
-            case inserted(characters: Int)
-        }
-
-        public let what: What
-        /// The app this outcome is about, which each case above says its own relation to:
-        /// the app typed into, the app a click landed in, the app whose cursor took an insert.
-        /// One field and not one per case, so a reader of a list of these - the session line -
-        /// has one place to look and cannot be handed two apps that disagree.
-        /// [LAW:one-source-of-truth]
+        public let characters: Int
+        /// The app whose cursor took the words, as the input method names it - not
+        /// necessarily the one in front at key-down: the person can move between the chord
+        /// and the words being ready, and the input method commits where the cursor is then.
+        /// [FRAMING:representation]
         public let into: BundleID
         public let acknowledged: Duration
 
         public var description: String {
-            let act = switch what {
-            case .typed(let characters): "typed \(characters) characters into \(into.rawValue)"
-            case .pressed(let chord): "pressed \(Hotkey.held(chord)) into \(into.rawValue)"
-            case .clicked(let at, let button, let times, let reports): "clicked \(button.rawValue) \(times.spelled) at \(at) after \(reports) move reports into \(into.rawValue)"
-            case .scrolled(let at, let vertical, let horizontal): "scrolled vertical \(vertical.rawValue) horizontal \(horizontal.rawValue) at \(at) into \(into.rawValue)"
-            case .inserted(let characters): "inserted \(characters) characters at the cursor in \(into.rawValue)"
-            }
-            return "\(act), key-up to acknowledged \(Int(acknowledged / .milliseconds(1))) ms"
+            "inserted \(characters) characters at the cursor in \(into.rawValue), key-up to acknowledged \(Int(acknowledged / .milliseconds(1))) ms"
         }
     }
 
-    /// Performs every action in order, each logged as it completes, and answers with
-    /// what was done. Throws before the first report when any action is one the devices
-    /// cannot perform, cannot be typed on the layout, or would press the hotkey; throws
-    /// `RouteStopped` from the action that stopped, carrying the earlier ones, which are
-    /// done.
-    ///
-    /// `frontmost` is the app that was in front when the actions were decided: where text at
-    /// the focus goes, and where chords and clicks land. It is the one fact about that moment
-    /// an executor reads, so it is the one it is handed - a whole `Context` asked a caller
-    /// with no hotkey behind it, `lowtalker type`, to invent the chord that started it.
-    /// [LAW:types-are-the-program]
-    ///
-    /// `layout` is read only by an executor that types: inserting needs no layout, so a
-    /// layout that cannot be read costs an insert nothing.
+    /// Performs every action in order, each logged as it completes, and answers with what was
+    /// done. Throws `NotAnInsert` before the first insert when any action is not text at the
+    /// focus; throws `RouteStopped` from the insert that stopped, carrying the earlier ones,
+    /// which are done.
     @discardableResult
-    public func perform(_ actions: [Action], in frontmost: BundleID, on layout: @autoclosure () throws -> KeyboardLayout, since keyUp: ContinuousClock.Instant) async throws -> [Performed] {
-        let lowered: [Step]
-        switch output {
-        case .devices(let keyboard, let mouse, let hotkeys):
-            let layout = try layout()
-            lowered = try actions.map { try lower($0, in: frontmost, on: layout, keyboard: keyboard, mouse: mouse, hotkeys: hotkeys) }
-        case .insertion(let inserter):
-            lowered = try actions.map { try insert($0, through: inserter) }
-        }
+    public func perform(_ actions: [Action], since keyUp: ContinuousClock.Instant) async throws -> [Performed] {
+        let texts = try actions.map(Self.text(of:))
         let clock = ContinuousClock()
         var performed: [Performed] = []
-        for step in lowered {
-            let landed: (what: Performed.What, into: BundleID)
-            do { landed = try await step.perform() } catch { throw RouteStopped(performed: performed, cause: error) }
-            let done = Performed(what: landed.what, into: landed.into, acknowledged: clock.now - keyUp)
+        for text in texts {
+            // Awaited, so the round trip runs on a thread of its own: this is the main actor,
+            // and `Inserter` says in its own contract that the blocking call must not pump it.
+            // [LAW:no-ambient-temporal-coupling] A refusal or a channel failure is thrown on
+            // as it is, and stops the route by name.
+            let inserted: Inserted
+            do { inserted = try await inserter.insert(text) } catch { throw RouteStopped(performed: performed, cause: error) }
+            let done = Performed(characters: inserted.characters, into: BundleID(rawValue: inserted.into), acknowledged: clock.now - keyUp)
             log.info("\(done.description, privacy: .public)")
             performed.append(done)
         }
         return performed
     }
 
-    /// An action as reports on the device for its target, proven before any is posted.
-    ///
-    /// The app comes back with the outcome rather than being fixed when the step is built.
-    /// An insert only learns which app took the words when the input method names it, and a
-    /// step that carried the app it was aimed at would leave `Performed` holding that beside
-    /// the one it reached - two apps, free to disagree, with the session line reading one
-    /// and the action line the other. [LAW:one-source-of-truth] Every other step answers
-    /// with the app it was built for, which is the same shape and needs no case of its own.
-    /// [LAW:dataflow-not-control-flow]
-    private struct Step {
-        let perform: @MainActor () async throws -> (what: Performed.What, into: BundleID)
-    }
-
-    private func insert(_ action: Action, through inserter: any Inserter) throws -> Step {
+    /// [LAW:parse-dont-validate] The one place an action becomes something the input method
+    /// can do. Text for a named app is refused with the rest: the input method reaches the
+    /// cursor the text input system is holding, which belongs to whatever is in front, so an
+    /// action naming its own app is one it could only pretend to perform.
+    private static func text(of action: Action) throws -> String {
         switch action {
-        case .insertText(let text, .focus):
-            return Step {
-                // Awaited, so the round trip runs on a thread of its own: this is the main
-                // actor, and `Inserter` says in its own contract that the blocking call must
-                // not pump it. [LAW:no-ambient-temporal-coupling] A refusal or a channel
-                // failure is thrown on as it is, and stops the route by name.
-                let inserted = try await inserter.insert(text)
-                return (.inserted(characters: inserted.characters), BundleID(rawValue: inserted.into))
-            }
-        // Text for a named app included: this output reaches the cursor the text input
-        // system is holding, which belongs to whatever is in front, so an action naming its
-        // own app is one it could only pretend to perform.
-        case .insertText(_, .app), .sendKeys, .click, .scroll, .clickElement:
-            throw NeedsTheVirtualKeyboard(action: action, instead: "asks the input method to put dictation at the cursor")
-        case .activateApp, .openURL, .runShortcut, .pipe:
-            throw NotAnInput(action: action)
-        }
-    }
-
-    private func lower(_ action: Action, in frontmost: BundleID, on layout: KeyboardLayout, keyboard: Keyboards, mouse: Pointers, hotkeys: Set<KeyChord>) throws -> Step {
-        switch action {
-        case .insertText(let text, let target):
-            // The focus is whatever app was in front when the actions were decided;
-            // typing into it re-proves it in front before every key. A named app is
-            // typed into the same way, without being raised: bringing it forward is
-            // low-commands-tpt.4's work on top of this.
-            let into = switch target {
-            case .focus: frontmost
-            case .app(let bundleID): bundleID
-            }
-            let typist = Typist(keyboard: keyboard(into), hotkeys: hotkeys)
-            let lowered = try typist.lower(text, on: layout)
-            return Step { (.typed(characters: try await typist.type(lowered)), into) }
-        case .sendKeys(let chord):
-            let typist = Typist(keyboard: keyboard(frontmost), hotkeys: hotkeys)
-            let lowered = try typist.lower(chord)
-            return Step {
-                try await typist.press(lowered)
-                return (.pressed(chord), frontmost)
-            }
-        case .click(let at, let button, let times):
-            let pointer = mouse(frontmost)
-            return Step {
-                let click = try await pointer.click(at: at, button: button, times: times)
-                return (.clicked(at: click.at, button: button, times: times, reports: click.reports), frontmost)
-            }
-        case .scroll(let at, let vertical, let horizontal):
-            let pointer = mouse(frontmost)
-            return Step {
-                try await pointer.scroll(at: at, vertical: vertical, horizontal: horizontal)
-                return (.scrolled(at: at, vertical: vertical, horizontal: horizontal), frontmost)
-            }
-        case .clickElement(let role, let title):
-            let pointer = mouse(frontmost)
-            return Step {
-                let click = try await pointer.click(element: role, title: title)
-                return (.clicked(at: click.at, button: .left, times: .single, reports: click.reports), frontmost)
-            }
-        case .activateApp, .openURL, .runShortcut, .pipe:
-            throw NotAnInput(action: action)
+        case .insertText(let text, .focus): text
+        case .insertText(_, .app), .activateApp, .openURL, .runShortcut, .pipe: throw NotAnInsert(action: action)
         }
     }
 }
 
-private extension Clicks {
-    var spelled: String {
-        switch rawValue {
-        case 1: "once"
-        case 2: "twice"
-        default: "\(rawValue) times"
-        }
-    }
-}
-
-/// A list that stopped part way: the action that stopped is the cause, and the actions
-/// before it are done and cannot be taken back, so they travel with it. Text is in the
-/// document either way; what this adds is which of it, so a retry does not type it twice.
+/// A list that stopped part way: the insert that stopped is the cause, and the ones before it
+/// are done and cannot be taken back, so they travel with it. Text is in the document either
+/// way; what this adds is which of it, so a retry does not insert it twice.
 public struct RouteStopped: StoppedPartWay, CustomStringConvertible {
     public let performed: [Executor.Performed]
     public let cause: any Error
@@ -242,26 +98,11 @@ public struct RouteStopped: StoppedPartWay, CustomStringConvertible {
     }
 }
 
-/// An action neither device can perform. Activating an app, opening a URL, running a
-/// shortcut and piping are the command layer's work, and a route that emits one reaches
-/// an executor that does not have it yet. [LAW:no-silent-failure] Said by name rather
-/// than skipped, so a route is never half-performed without a word.
-public struct NotAnInput: Error, CustomStringConvertible {
+/// An action that is not text at the cursor, which is the one thing the input method puts
+/// anywhere. [LAW:no-silent-failure] Refused by name, so a route is never half-performed
+/// without a word.
+public struct NotAnInsert: Error, CustomStringConvertible {
     public let action: Action
 
-    public var description: String { "neither the keyboard nor the mouse can perform \(action); nothing was done" }
-}
-
-/// An action only the virtual keyboard or mouse can perform, reaching an executor that has
-/// neither. [LAW:no-silent-failure] Refused by name, so a route that needs the devices says
-/// so instead of leaving part of itself somewhere the user did not ask for.
-public struct NeedsTheVirtualKeyboard: Error, CustomStringConvertible {
-    public let action: Action
-    /// What this installation does with dictated words instead, in the words that output's
-    /// own line would use. A value rather than a second error type, because what differs
-    /// between the outputs is this sentence and not the refusal.
-    /// [LAW:dataflow-not-control-flow]
-    public let instead: String
-
-    public var description: String { "\(action) needs the virtual keyboard, and this installation \(instead); nothing was done" }
+    public var description: String { "\(action) is not text at the cursor, which is all the input method puts anywhere; nothing was done" }
 }

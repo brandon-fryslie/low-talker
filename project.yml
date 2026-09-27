@@ -7,20 +7,17 @@ options:
   deploymentTarget:
     macOS: "15.0"
 
-# Shared by every target. macOS keys Microphone, Accessibility, and Input Monitoring
-# grants to the signing certificate, so dev builds carry a self-signed identity that
-# `make signing-identity` creates once per Mac. Ad hoc signing would key the grants to
-# each build's own hash and lose them on every rebuild. The keyboard helper admits
-# exactly the certificate that signed it, which is one more reason the app and the
-# helper are signed by the one identity named here; scripts/signing-identity reads it
-# for the CLI and helper builds outside Xcode.
+# Shared by every target. macOS keys the Microphone grant to the signing certificate, so
+# dev builds carry a self-signed identity that `make signing-identity` creates once per
+# Mac. Ad hoc signing would key the grant to each build's own hash and lose it on every
+# rebuild. scripts/signing-identity reads it for the CLI build outside Xcode.
 settings:
   base:
     SWIFT_VERSION: "6.0"
     CODE_SIGN_STYLE: Manual
     CODE_SIGN_IDENTITY: LowTalker Dev
     # Notarization refuses a binary without it, and every target in this file is one a
-    # release carries: the app, the helper, and the input method bundle embedded in it.
+    # release carries: the app, the CLI, and the input method bundle embedded in it.
     ENABLE_HARDENED_RUNTIME: YES
     # [LAW:one-source-of-truth] The one place a version is written. Every bundle takes both
     # from here: GENERATE_INFOPLIST_FILE fills CFBundleShortVersionString and CFBundleVersion
@@ -33,10 +30,9 @@ settings:
     MARKETING_VERSION: 0.1.0
     CURRENT_PROJECT_VERSION: "4"
   # A build to hand to someone else: the Developer ID certificate, which Gatekeeper trusts
-  # and notarization accepts, in place of the dev identity nobody trusts. The helper admits
-  # exactly the certificate that signed it, so the app and everything embedded in it change
-  # certificate together; a CLI signed with the dev identity is refused by this build's
-  # helper, as it should be. scripts/sign-release builds this configuration.
+  # and notarization accepts, in place of the dev identity nobody trusts. The app and
+  # everything embedded in it change certificate together. scripts/sign-release builds
+  # this configuration.
   #
   # Notarization refuses two things Xcode signs in by default, in Release as in Debug:
   # the get-task-allow entitlement, which CODE_SIGN_INJECT_BASE_ENTITLEMENTS adds, and a
@@ -55,10 +51,10 @@ packages:
     path: .
 
 # [LAW:one-type-per-behavior] The two installations are not two apps. They are one app
-# built twice, and what separates them is three strings: the identity macOS keys the TCC
-# grants and Login Items record to, the name a person reads in the menu bar, and which
-# launchd plist rides in the bundle. So there is one template and two sets of attributes
-# rather than two targets that must be kept in step by hand.
+# built twice, and what separates them is a few strings: the identity macOS keys the TCC
+# grant to, the name a person reads in the menu bar, and which input method it carries. So
+# there is one template and two sets of attributes rather than two targets that must be
+# kept in step by hand.
 #
 # The strings themselves belong to `Flavor` in Sources/Flavors; xcodegen cannot read
 # Swift, so they are written again here, and `ProjectFlavorTests` is what holds these
@@ -69,24 +65,12 @@ targetTemplates:
     platform: macOS
     sources:
       - App/LowTalker
-      # The keyboard helper's launchd plist, where SMAppService.daemon reads it from.
-      # One per installation, named for the job it registers.
-      - path: App/LaunchDaemons/${launchdLabel}.plist
-        buildPhase:
-          copyFiles:
-            destination: wrapper
-            subpath: Contents/Library/LaunchDaemons
     dependencies:
       - package: low-talker
         product: LowTalkerCore
-      # The choices the menu keeps and the grants it reads, beneath both the core and the
-      # setup list.
-      - package: low-talker
-        product: Choices
+      # The grants the menu reads, beneath both the core and the setup list.
       - package: low-talker
         product: Grants
-      - package: low-talker
-        product: KeyboardService
       # The list of what must hold before low-talker can type, which the menu shows and
       # `lowtalker onboard` prints. One list, two views. [LAW:one-source-of-truth]
       - package: low-talker
@@ -95,40 +79,28 @@ targetTemplates:
         product: Signals
       - package: low-talker
         product: Typing
-      # The layout names the clipboard hotkey's key as the user's keyboard prints it.
-      - package: low-talker
-        product: KeyboardLayout
       - package: low-talker
         product: Dictation
-      # The input method delivery: the channel that asks the input method to insert, and
-      # the install that puts that input method where macOS looks for one.
+      # The channel that asks the input method to insert, and the install that puts that
+      # input method where macOS looks for one.
       - package: low-talker
         product: Insertion
       - package: low-talker
         product: InputSource
-      # The helper rides inside the bundle, where the plist above names it, signed on
-      # copy with the app's own identity. One tool target embedded in both bundles: the
-      # binary is the same program either way, and which installation it serves is the
-      # `--flavor` its plist passes, never a second build of it.
-      - target: lowtalker-keyboardd
-        embed: true
-        copy:
-          destination: wrapper
-          subpath: Contents/MacOS
-      # The CLI, signed on copy with the app's identity, so the helper this app registers
-      # admits it on a Mac with no checkout. One tool in both bundles, like the helper:
-      # which installation it acts on is read from the bundle it sits in, never built into
-      # it. In Helpers and not beside the helper, because `lowtalker` and the release app's
-      # own `LowTalker` are one file name on a case-insensitive volume.
+      # The CLI, signed on copy with the app's identity, which the app runs to read its own
+      # grants afresh. One tool in both bundles: which installation it acts on is read from
+      # the bundle it sits in, never built into it. In Helpers and not beside the app's own
+      # binary, because `lowtalker` and the release app's `LowTalker` are one file name on a
+      # case-insensitive volume.
       - target: lowtalker-cli
         embed: true
         copy:
           destination: wrapper
           subpath: Contents/Helpers
-      # The input method bundle, carried the way the helper is so a copy of the app has
-      # everything it delivers with. Unlike the helper, it is a bundle of its own with its
-      # own identifier, so there is one target per flavor rather than one tool embedded
-      # twice: macOS keys a registered input source by that identifier.
+      # The input method bundle, carried so a copy of the app has everything it delivers
+      # with. It is a bundle of its own with its own identifier, so there is one target per
+      # flavor rather than one tool embedded twice: macOS keys a registered input source by
+      # that identifier.
       - target: ${inputMethodTarget}
         embed: true
         copy:
@@ -145,19 +117,14 @@ targetTemplates:
     # A Mac that already granted the microphone keeps hearing; a Mac that has not is
     # never asked, and the app is deaf.
     #
-    # Measured with nothing else in the file, on both installations: the session event
-    # tap, Accessibility, the paste, SMAppService and the XPC connection to the helper
-    # all work, and the helper, hardened too, needs no entitlements of its own.
     entitlements:
       path: App/Generated/LowTalker.entitlements
       properties:
         com.apple.security.device.audio-input: true
-    # A release carries what a first run would otherwise fetch: a store holding its model,
-    # so a first launch installs it with the network off, and the pinned virtual keyboard
-    # driver package, so installing the driver needs no GitHub. Copied in after every other
-    # phase, so the signature Xcode writes last seals them with the rest of the bundle.
-    # `make` passes BUNDLED_MODEL_STORE and BUNDLED_DRIVER_PACKAGE, which only
-    # scripts/sign-release sets; a build that names neither carries neither.
+    # A bundle carries what a first run would otherwise fetch: a store holding its model, so
+    # a first launch loads it with the network off. Copied in after every other phase, so
+    # the signature Xcode writes last seals it with the rest of the bundle. `make` passes
+    # BUNDLED_MODEL_STORE; a build that names none carries none.
     postBuildScripts:
       - name: Carry what a first run would fetch
         basedOnDependencyAnalysis: false
@@ -177,12 +144,6 @@ targetTemplates:
             rsync -a --delete "${BUNDLED_MODEL_STORE}/" "${resources}/${MODEL_STORE_RESOURCE}/"
           else
             rm -rf "${resources}/${MODEL_STORE_RESOURCE}"
-          fi
-          # Removed on every build, named or not, for the reason above; it is small, so it
-          # costs nothing to copy again.
-          rm -rf "${resources}/${DRIVER_PACKAGE_RESOURCE}"
-          if [ -n "${BUNDLED_DRIVER_PACKAGE:-}" ]; then
-            ditto "${BUNDLED_DRIVER_PACKAGE}" "${resources}/${DRIVER_PACKAGE_RESOURCE}"
           fi
       # [LAW:no-silent-failure] A bundle that ships without the version project.yml sets
       # fails the build rather than shipping quietly. Checked here, on the built plist,
@@ -234,9 +195,6 @@ targetTemplates:
         # Where the bundle's resources hold the carried store, as ModelStore.carriedResourceName
         # names it; CarriedModelStoreTests holds the two equal. [LAW:one-source-of-truth]
         MODEL_STORE_RESOURCE: model-store
-        # Named without its version, so whatever installs it from the bundle need not change
-        # when the pin does; `lowtalker driver install` checks the bytes against the pin.
-        DRIVER_PACKAGE_RESOURCE: Karabiner-DriverKit-VirtualHIDDevice.pkg
 
   # [LAW:one-type-per-behavior] One input method, built once per installation. What
   # separates the two copies is what separates the apps - the names macOS files them under
@@ -361,7 +319,6 @@ targets:
     templateAttributes:
       displayName: LowTalker
       bundleIdentifier: ai.promptctl.low-talker
-      launchdLabel: ai.promptctl.low-talker.keyboardd
       inputMethodTarget: LowTalkerInputMethod
       appIconName: AppIcon
 
@@ -371,7 +328,6 @@ targets:
     templateAttributes:
       displayName: LowTalker Dev
       bundleIdentifier: ai.promptctl.low-talker.dev
-      launchdLabel: ai.promptctl.low-talker.keyboardd.dev
       inputMethodTarget: LowTalkerDevInputMethod
       appIconName: AppIconDev
 
@@ -416,7 +372,7 @@ targets:
       - package: low-talker
         product: LowTalkerCommands
     # Hardened, as every target here is, and so refused the microphone without this:
-    # `record`, `mic` and `dictate` listen. The same entitlement the app carries, for the
+    # `record` and `mic` listen. The same entitlement the app carries, for the
     # same measured reason written above it.
     entitlements:
       path: App/Generated/lowtalker-cli.entitlements
@@ -426,31 +382,8 @@ targets:
       base:
         PRODUCT_NAME: lowtalker
         PRODUCT_BUNDLE_IDENTIFIER: ai.promptctl.low-talker.cli
-        # Passed by hand for the reason the helper's is, below.
-        OTHER_CODE_SIGN_FLAGS: $(inherited) --identifier $(PRODUCT_BUNDLE_IDENTIFIER)
-
-  # The root keyboard helper, built here from the same sources Package.swift builds it
-  # from, because an Xcode app can embed an Xcode tool and cannot embed a package's
-  # executable. `make helper` builds the same program for the LaunchDaemon path.
-  lowtalker-keyboardd:
-    type: tool
-    platform: macOS
-    sources:
-      - Sources/lowtalker-keyboardd
-    dependencies:
-      - package: low-talker
-        product: KeyboardService
-      - package: low-talker
-        product: VirtualKeyboard
-      - package: low-talker
-        product: Keystrokes
-      - package: low-talker
-        product: Signals
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: ai.promptctl.low-talker.keyboardd
         # Xcode signs a tool under its product name and ignores the identifier above, so it
-        # is passed to codesign by hand; the copy into each bundle keeps it. `make helper`
-        # reads the same setting, so both builds of the helper are one code identity. Inherited,
-        # so a Release build keeps the project's --timestamp, which notarization requires.
+        # is passed to codesign by hand; the copy into each bundle keeps it. `make cli` reads
+        # the same setting, so both builds of the CLI are one code identity. Inherited, so a
+        # Release build keeps the project's --timestamp, which notarization requires.
         OTHER_CODE_SIGN_FLAGS: $(inherited) --identifier $(PRODUCT_BUNDLE_IDENTIFIER)

@@ -6,16 +6,9 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [
         .library(name: "LowTalkerCore", targets: ["LowTalkerCore"]),
-        .library(name: "Choices", targets: ["Choices"]),
         .library(name: "Grants", targets: ["Grants"]),
         .library(name: "Flavors", targets: ["Flavors"]),
-        .library(name: "Keystrokes", targets: ["Keystrokes"]),
-        .library(name: "KeyboardLayout", targets: ["KeyboardLayout"]),
-        .library(name: "Pointing", targets: ["Pointing"]),
-        .library(name: "DriverExtension", targets: ["DriverExtension"]),
         .library(name: "Onboarding", targets: ["Onboarding"]),
-        .library(name: "VirtualKeyboard", targets: ["VirtualKeyboard"]),
-        .library(name: "KeyboardService", targets: ["KeyboardService"]),
         .library(name: "Signals", targets: ["Signals"]),
         .library(name: "Typing", targets: ["Typing"]),
         .library(name: "Dictation", targets: ["Dictation"]),
@@ -24,7 +17,6 @@ let package = Package(
         .library(name: "InputSource", targets: ["InputSource"]),
         .library(name: "LowTalkerCommands", targets: ["LowTalkerCommands"]),
         .executable(name: "lowtalker", targets: ["lowtalker"]),
-        .executable(name: "lowtalker-keyboardd", targets: ["lowtalker-keyboardd"]),
         .executable(name: "lowtalker-inputmethod", targets: ["lowtalker-inputmethod"]),
     ],
     dependencies: [
@@ -48,22 +40,15 @@ let package = Package(
         // the input method process linking anything of the app's. [LAW:one-way-deps]
         .target(name: "InputSource", dependencies: ["Flavors", "TextInputSources"]),
         .testTarget(name: "InputSourceTests", dependencies: ["InputSource", "Flavors"]),
-        // What a person chose for this installation - how the words reach them and how the
-        // hotkey is heard - and where the app keeps those answers. It links nothing of
-        // low-talker's, so the setup list reads the choices without linking the transcriber.
-        // [LAW:one-way-deps]
-        .target(name: "Choices"),
-        .testTarget(name: "ChoicesTests", dependencies: ["Choices"]),
-        // What macOS has let this process do - listen, read the keyboard, act on other apps -
-        // read without ever prompting, and asked for only when called. Beneath the core and
-        // the setup list alike, so both read one reading. [LAW:one-way-deps]
+        // What macOS has let this process do - listen - read without ever prompting, and asked
+        // for only when called. Beneath the core and the setup list alike, so both read one
+        // reading. [LAW:one-way-deps]
         .target(name: "Grants"),
         .testTarget(name: "GrantsTests", dependencies: ["Grants"]),
         .target(
             name: "LowTalkerCore",
             dependencies: [
                 "Flavors",
-                "Choices",
                 "Grants",
                 // The app's end of the hotkey port, which the input method tells the modifier
                 // keys to.
@@ -72,71 +57,34 @@ let package = Package(
                 .product(name: "TOMLKit", package: "TOMLKit"),
             ]
         ),
-        // The vocabulary at the seam between deciding what to type and typing it: a HID
-        // usage, the modifiers held with it, and the two names one key goes by. It links
-        // nothing, so neither the layout nor the device has to link the other to speak.
-        .target(name: "Keystrokes"),
-        // Where the Karabiner-DriverKit-VirtualHIDDevice driver extension stands on this
-        // Mac, and the four readings that answer is derived from. It links nothing and
-        // knows nothing of low-talker, so the CLI's driver verbs and the menu-bar app
-        // reach one vocabulary instead of two.
-        // [LAW:one-source-of-truth]
-        .target(name: "DriverExtension"),
-        // The verdict table is a pure function of four readings, so every combination is
-        // exercised here - including the ones this Mac cannot be put into.
-        .testTarget(name: "DriverExtensionTests", dependencies: ["DriverExtension"]),
         // Answering a signal rather than obeying it, for every process here that has an
-        // ending of its own to unwind through. It links nothing, so the root daemon
-        // watches through the same unit as the CLI and the app without linking the
-        // transcriber they reach it through. [LAW:one-source-of-truth]
+        // ending of its own to unwind through. It links nothing, so any process here can
+        // watch through it. [LAW:one-source-of-truth]
         .target(name: "Signals"),
         // The gate and the flag a suite plants in concurrent work to see where it has
         // got to. A plain target because test targets cannot import one another's
         // sources, and in no product because nothing ships it. [LAW:one-source-of-truth]
         .target(name: "TestProbes"),
-        // The same seam for the mouse: a button, a count of motion, a move and a scroll.
-        // Like Keystrokes it links nothing, so the device and the click decision share a
-        // vocabulary without sharing a dependency. [LAW:one-way-deps]
-        .target(name: "Pointing"),
-        // Carbon lives here and not in VirtualKeyboard, so the privileged side that owns
-        // the device never links a window server API. [LAW:one-way-deps]
-        .target(name: "KeyboardLayout", dependencies: ["Keystrokes", "TextInputSources"]),
-        // [LAW:one-way-deps] Everything about the virtual devices, the keyboard and the
-        // pointing one, and nothing about low-talker: no dependency on LowTalkerCore, so
-        // it leaves for its own package by a move rather than by an untangling.
-        .target(name: "VirtualKeyboard", dependencies: ["DriverExtension", "Keystrokes", "Pointing"]),
-        // Everything that must hold before low-talker can type, as a list a reader can
-        // act on: what was read off this Mac, and the step for whatever is missing. It
-        // links the driver's vocabulary, the service seam, the flavor, the grants, the
-        // choices and the input source's switch, and not the core - so both the CLI and the menu-bar
-        // app can show the same words, and the app's guided setup walks the same list.
-        // [LAW:one-source-of-truth] [LAW:one-way-deps]
-        .target(name: "Onboarding", dependencies: ["DriverExtension", "KeyboardService", "Flavors", "Choices", "Grants", "InputSource"]),
+        // Everything that must hold before low-talker can hear and type, as a list a reader
+        // can act on: what was read off this Mac, and the step for whatever is missing. It
+        // links the flavor, the grants and the input source's switch, and not the core - so
+        // both the CLI and the menu-bar app can show the same words, and the app's guided
+        // setup walks the same list. [LAW:one-source-of-truth] [LAW:one-way-deps]
+        .target(name: "Onboarding", dependencies: ["Flavors", "Grants", "InputSource"]),
         // The steps are what a person acts on, so they are asserted as values rather
         // than scraped off a terminal.
-        .testTarget(name: "OnboardingTests", dependencies: ["Onboarding", "DriverExtension", "KeyboardService", "Flavors", "Choices", "Grants"]),
-        // What crosses the privilege boundary, and the client's side of it. It links the
-        // two vocabularies and nothing else: not the layout, because a root helper must
-        // never read one, and not the device, because a client must never open one.
-        // [LAW:one-way-deps]
-        .target(name: "KeyboardService", dependencies: ["Flavors", "Keystrokes", "Pointing"]),
-        .testTarget(name: "KeyboardServiceTests", dependencies: ["KeyboardService", "Flavors", "Keystrokes", "Pointing"]),
-        // The app's one inserter and its one pointer: text and chords lowered to keystrokes,
-        // clicks and scrolls to pointing reports, with the hotkey refused and the target app
-        // re-proven in front before each one. It links the core for the actions it performs,
-        // the layout and both vocabularies, and takes the keyboard and the mouse as values,
-        // which is what lets each run against the helper in the app and against the
-        // driver under sudo. [LAW:composability]
-        .target(name: "Typing", dependencies: ["LowTalkerCore", "Choices", "KeyboardLayout", "Keystrokes", "Pointing", "Signals", "Insertion"]),
-        // Driven against a keyboard the test plays, so a run can be stopped inside any
-        // keystroke and its report read back.
-        .testTarget(name: "TypingTests", dependencies: ["Typing", "LowTalkerCore", "KeyboardLayout", "Keystrokes", "Pointing", "Signals", "Insertion", "TestProbes"]),
-        // The loop from a press to typed text, with every collaborator taken as a value.
+        .testTarget(name: "OnboardingTests", dependencies: ["Onboarding", "Flavors", "Grants"]),
+        // The app's one inserter: a route's actions asked of the input method, which puts the
+        // words at the cursor. It takes the inserter as a value, which is what lets it run
+        // against the input method in the app and against a fake in a test. [LAW:composability]
+        .target(name: "Typing", dependencies: ["LowTalkerCore", "Insertion"]),
+        .testTarget(name: "TypingTests", dependencies: ["Typing", "LowTalkerCore", "Signals", "Insertion", "TestProbes"]),
+        // The loop from a press to inserted text, with every collaborator taken as a value.
         // Its own target rather than app code so the loop runs under `swift test`; the
-        // app links it and hands over the real microphone, engine and keyboard.
+        // app links it and hands over the real microphone, engine and inserter.
         // [LAW:decomposition]
-        .target(name: "Dictation", dependencies: ["LowTalkerCore", "Typing", "KeyboardLayout"]),
-        .testTarget(name: "DictationTests", dependencies: ["Dictation", "LowTalkerCore", "Grants", "Typing", "KeyboardLayout", "Keystrokes", "Pointing", "TestProbes"]),
+        .target(name: "Dictation", dependencies: ["LowTalkerCore", "Typing"]),
+        .testTarget(name: "DictationTests", dependencies: ["Dictation", "LowTalkerCore", "Grants", "Typing", "Insertion", "TestProbes"]),
         // What the input method process answers with, kept out of the process itself so the
         // suite compiles and exercises it: an Xcode-only target would be invisible to
         // `make test` the way App/LowTalker's sources are.
@@ -163,20 +111,6 @@ let package = Package(
         // The process macOS launches out of the input method bundle. It holds the effects -
         // reading the bundle, opening the port, running the loop - and nothing else.
         .executableTarget(name: "lowtalker-inputmethod", dependencies: ["InputMethod", "Insertion", "Flavors"]),
-        // The root daemon that owns the devices. It links VirtualKeyboard, both vocabularies,
-        // the seam and the signal watch, DriverExtension for the identity the keyboard files
-        // its Keyboard Setup Assistant answer under, and deliberately not KeyboardLayout:
-        // text never reaches this process.
-        .executableTarget(
-            name: "lowtalker-keyboardd",
-            dependencies: ["KeyboardService", "VirtualKeyboard", "DriverExtension", "Keystrokes", "Pointing", "Signals", "Flavors"]
-        ),
-        // The authorization boundary of a root keystroke service, checked against the
-        // test process's own identity and audit token: real code signing, no root.
-        .testTarget(
-            name: "lowtalker-keyboarddTests",
-            dependencies: ["lowtalker-keyboardd", "KeyboardService", "VirtualKeyboard", "DriverExtension", "Keystrokes", "Pointing", "Signals", "Flavors"]
-        ),
         // Every command the CLI has, as a library, so the one program has two builds of the
         // same code: SwiftPM's `.build/debug/lowtalker` for this tree, and the copy Xcode
         // embeds in each app bundle, which cannot embed a package's executable. Both are the
@@ -186,17 +120,10 @@ let package = Package(
             name: "LowTalkerCommands",
             dependencies: [
                 "LowTalkerCore",
-                "Choices",
                 "Grants",
                 "Flavors",
-                "DriverExtension",
                 "Onboarding",
-                "VirtualKeyboard",
-                "KeyboardLayout",
-                "KeyboardService",
-                "Keystrokes",
-                "Typing",
-                "Dictation",
+                "Signals",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
@@ -205,7 +132,6 @@ let package = Package(
             name: "LowTalkerCoreTests",
             dependencies: [
                 "LowTalkerCore",
-                "Choices",
                 "Grants",
                 "TestProbes",
                 // The tests build WhisperKit's result types by hand to exercise the
@@ -214,33 +140,10 @@ let package = Package(
             ],
             resources: [.copy("Fixtures")]
         ),
-        // The wire protocol against a fake daemon on the other end of a socketpair, so
-        // the framing is proven without root and without the driver.
-        .testTarget(
-            name: "VirtualKeyboardTests",
-            dependencies: ["VirtualKeyboard", "DriverExtension", "Keystrokes", "Pointing"]
-        ),
-        // The vocabulary stands on its own, so its tests do too: nothing here imports a
-        // layout or a device. [LAW:decomposition]
-        .testTarget(
-            name: "KeystrokesTests",
-            dependencies: ["Keystrokes"]
-        ),
-        .testTarget(
-            name: "PointingTests",
-            dependencies: ["Pointing"]
-        ),
-        // The reverse map is built from a real layout's own data, so these read the
-        // installed US and Dvorak layouts rather than a fixture that could agree with a
-        // wrong reading of them.
-        .testTarget(
-            name: "KeyboardLayoutTests",
-            dependencies: ["KeyboardLayout", "Keystrokes"]
-        ),
         // The CLI's table shape is its contract; this pins column names to fields.
         .testTarget(
             name: "lowtalkerTests",
-            dependencies: ["LowTalkerCommands", "LowTalkerCore", "VirtualKeyboard", "Keystrokes", "Typing", "KeyboardService", "Onboarding", "DriverExtension", "Flavors"]
+            dependencies: ["LowTalkerCommands", "LowTalkerCore", "Onboarding", "Flavors"]
         ),
     ]
 )

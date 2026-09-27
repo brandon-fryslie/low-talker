@@ -51,65 +51,33 @@ public extension Requirement.Row {
     /// compile without the answers a person needs before being asked for it.
     func explanation(for flavor: Flavor) -> Explanation {
         let app = flavor.displayName
-        let otherHotkey = "The hotkey stays off. The other hotkey, under Hotkey source in the menu, needs no permission."
-        let otherDelivery = "\(app) can't type. Input Method, under Delivery in the menu, needs no driver."
         return switch self {
         case .microphone:
             Explanation(
                 why: "\(app) listens only while you hold your dictation key. Audio stays on this Mac.",
                 ifSkipped: "\(app) can't hear you.")
-        case .accessibility:
-            Explanation(
-                why: "Stops your dictation key from also reaching the app you're typing in.",
-                ifSkipped: otherHotkey)
-        case .inputMonitoring:
-            Explanation(
-                why: "Lets \(app) notice your dictation key. Every other key is ignored.",
-                ifSkipped: otherHotkey)
         case .inputMethod:
             Explanation(
-                why: "Puts your words at the cursor in any app.",
-                ifSkipped: "Your words can't reach the cursor. Virtual Keyboard, under Delivery in the menu, is the other way.")
-        case .driverExtension:
-            Explanation(
-                why: "The virtual keyboard needs a driver. Installing it takes an administrator password, then an approval in System Settings.",
-                ifSkipped: otherDelivery)
-        case .keyboardHelper:
-            Explanation(
-                why: "A background helper drives the virtual keyboard. macOS keeps it off until you allow it.",
-                ifSkipped: otherDelivery)
-        case .keyboardSetupAssistant:
-            Explanation(
-                why: "\(app)'s helper answers the macOS keyboard setup window, so it doesn't take your first dictation.",
-                ifSkipped: "Nothing to do. This clears once the helper runs.")
+                why: "Hears your dictation key and puts your words at the cursor in any app.",
+                ifSkipped: "\(app) can't hear your dictation key, and your words can't reach the cursor.")
         }
     }
 
-    /// The button that asks macOS, named for what it asks, or nil for a row the app cannot
-    /// ask for: the driver is installed by an administrator, and the assistant's answer is
-    /// filed by the helper. The ellipsis says a dialog follows.
-    var askTitle: String? {
+    /// The button that asks macOS, named for what it asks. The ellipsis says a dialog
+    /// follows.
+    var askTitle: String {
         switch self {
         case .microphone: "Allow Microphone…"
-        case .inputMonitoring: "Allow Input Monitoring…"
-        case .accessibility: "Allow Accessibility…"
         case .inputMethod: "Switch On Input Method…"
-        case .keyboardHelper: "Allow Keyboard Helper…"
-        case .driverExtension, .keyboardSetupAssistant: nil
         }
     }
 
     /// The System Settings pane where this grant is switched by hand, which is where a
-    /// person goes after declining macOS's dialog: most of these dialogs are shown once.
-    var settingsPane: URL? {
-        let privacy = "x-apple.systempreferences:com.apple.preference.security?"
-        return switch self {
-        case .microphone: URL(string: privacy + "Privacy_Microphone")
-        case .inputMonitoring: URL(string: privacy + "Privacy_ListenEvent")
-        case .accessibility: URL(string: privacy + "Privacy_Accessibility")
-        case .inputMethod: URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension")
-        case .driverExtension, .keyboardHelper: URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")
-        case .keyboardSetupAssistant: nil
+    /// person goes after declining macOS's dialog: the microphone's is shown once.
+    var settingsPane: URL {
+        switch self {
+        case .microphone: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!
+        case .inputMethod: URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension")!
         }
     }
 
@@ -133,8 +101,7 @@ public extension Requirement.Row {
             on a new input method only after the next one: log out and back in, then open \
             \(flavor.displayName) and press this again.
             """
-        case .microphone, .inputMonitoring, .accessibility, .keyboardHelper,
-             .driverExtension, .keyboardSetupAssistant:
+        case .microphone:
             nil
         }
     }

@@ -2,7 +2,7 @@ import ArgumentParser
 import Foundation
 import Grants
 import LowTalkerCore
-import Typing
+import Signals
 
 /// The microphone from the command line: what macOS will let this process do with it, and
 /// what macOS shows the user while something is doing it. The request, the denied state, a

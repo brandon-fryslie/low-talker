@@ -6,8 +6,8 @@ private let repository = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
 /// The app names its carried CLI by a path project.yml decides. If the embed moved and
-/// this did not, the menu would print an install command for a file that is not there,
-/// and nothing that builds under `swift test` would notice: the app is not part of it.
+/// this did not, the app would read its grants through a file that is not there, and
+/// nothing that builds under `swift test` would notice: the app is not part of it.
 @Suite struct CarriedCLITests {
     @Test func theAppNamesTheCLIWhereProjectYmlPutsIt() throws {
         let yaml = try String(contentsOf: repository.appending(path: "project.yml"), encoding: .utf8)

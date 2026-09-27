@@ -1,5 +1,5 @@
-import DriverExtension
 import Flavors
+import Grants
 import Testing
 @testable import Onboarding
 
@@ -8,261 +8,30 @@ import Testing
 /// is left without one, and that a fact nobody could read never reads as fine.
 /// [LAW:behavior-not-structure]
 @Suite struct RequirementTests {
-    /// The installation these steps are read against where one has to be picked. Derived,
-    /// never spelled: a literal here would agree with the release flavor until someone
-    /// renamed it, and then pin a name no installation carries. [LAW:one-source-of-truth]
+    /// The installation these steps are read against where one has to be picked.
     static let flavor = Flavor.release
-    static let service = Flavor.release.machServiceName
-    /// A CLI path as an app names it, space and all, so the quoting is under test too.
-    static let cli = "/Applications/LowTalker Dev.app/Contents/Helpers/lowtalker"
 
-    // MARK: - the driver extension
-
-    /// The two states macOS reaches once the user has done their part, and the only two
-    /// that ask for nothing. `running` additionally means a client has opened the driver,
-    /// which is not something anyone can be told to do.
-    @Test func onlyAnEnabledDriverAsksNothingOfAnyone() {
-        for state in DriverState.allCases {
-            let nothingToDo = Requirement.driverExtension(state, cli: Self.cli).met
-            #expect(nothingToDo == (state == .enabled || state == .running), "\(state.rawValue)")
-        }
-    }
-
-    /// Every word the probe can return has a step of its own. A state that fell through
-    /// to a shared "the driver is not ready" would send a Mac needing an install and a
-    /// Mac needing a restart the same way.
-    @Test func everyDriverStateThatNeedsSomethingSaysWhat() {
-        for state in DriverState.allCases where state != .enabled && state != .running {
-            let step = Requirement.driverExtension(state, cli: Self.cli).step
-            #expect(step?.isEmpty == false, "\(state.rawValue) carries no step")
-        }
-    }
-
-    /// The three states that need a person at System Settings send them to the one pane
-    /// that has both approvals in it, and name the extension they are turning on.
-    @Test func theStatesNeedingAClickNameThePaneAndTheExtension() {
-        for state in [DriverState.awaitingApproval, .disabled] {
-            let step = Requirement.driverExtension(state, cli: Self.cli).step ?? ""
-            #expect(step.contains("Login Items & Extensions"))
-            #expect(step.contains(DriverProbe.bundleID))
-        }
-    }
-
-    /// macOS's activation notice names the driver's Manager app rather than low-talker, so
-    /// the steps that run `install` - the only ones that ask macOS to activate it - say that
-    /// name before the notice appears, and no other state promises a notice that never comes.
-    @Test(arguments: DriverState.allCases)
-    func onlyTheStepsThatActivateTheDriverWarnOfTheManagerNamedNotice(state: DriverState) {
-        let step = Requirement.driverExtension(state, cli: Self.cli).step ?? ""
-        let warns = step.contains("macOS then asks about \"Karabiner-VirtualHIDDevice-Manager\"")
-        #expect(warns == [.absent, .installedInactive, .residue].contains(state))
-    }
-
-    /// A state nobody could read is never dressed up as a step to take. It points at the
-    /// verb that says what could not be read. [LAW:no-silent-failure]
-    @Test func anUnreadableDriverPointsAtWhatWouldSayWhy() {
-        let step = Requirement.driverExtension(.unknown, cli: Self.cli).step ?? ""
-        #expect(step.contains("'\(Self.cli)' driver state"))
-    }
-
-    /// A state a command can repair names the command that repairs it. `state` takes a
-    /// reading and changes nothing, so a step promising a repair has to say it in the
-    /// verbs that perform one - which a step merely being non-empty cannot tell apart.
-    @Test func everyStateACommandCanRepairNamesTheVerbsThatRepairIt() {
-        let repairs: [(DriverState, [String])] = [
-            (.absent, ["'\(Self.cli)' driver install"]),
-            (.installedInactive, ["'\(Self.cli)' driver install"]),
-            (.residue, ["'\(Self.cli)' driver remove", "'\(Self.cli)' driver install"]),
-        ]
-        for (state, verbs) in repairs {
-            let step = Requirement.driverExtension(state, cli: Self.cli).step ?? ""
-            for verb in verbs {
-                #expect(step.contains(verb), "\(state.rawValue) never names `\(verb)`")
-            }
-        }
-    }
-
-    /// The reading is shown whatever it is, so a report says what it saw and not only
-    /// what it wants done.
-    @Test func everyDriverStateReadsBackAsItsOwnWord() {
-        for state in DriverState.allCases {
-            #expect(Requirement.driverExtension(state, cli: Self.cli).reads == state.rawValue)
-        }
-    }
-
-    // MARK: - the keyboard helper
-
-    /// Holding the Mach service with this installation's own helper is the only thing that
-    /// means the helper will answer, whether the app's job holds it or the LaunchDaemon
-    /// `helper install` loaded. In particular, a job that is loaded and running but lost the
-    /// name is not ready - that is the whole failure this requirement exists to catch.
-    @Test func onlyAHelperHoldingTheServiceIsReady() {
-        let answering: Set<HelperStanding> = [.holdingTheService, .answeringAsALaunchDaemon]
-        for standing in HelperStanding.allCases {
-            let requirement = Requirement.keyboardHelper(standing, flavor: Self.flavor, cli: Self.cli)
-            #expect(requirement.met == answering.contains(standing), "\(standing)")
-        }
-    }
-
-    /// The list `make check-docs` holds README to is the vocabulary the row actually
-    /// prints, and no two standings share a line of it.
-    ///
-    /// Both halves are load-bearing. If the list stopped being derived from the row, the
-    /// check would prove README agreed with a list nobody reads. And a reading is how a
-    /// person - or an agent grepping the log, which is the only way to read the menu
-    /// without a screen - tells one standing from another, so two standings printing one
-    /// string would put back exactly the ambiguity that splitting them removed, while
-    /// leaving README and the enum in perfect agreement about it.
-    @Test func everyStandingReadsBackAsItsOwnLineAndNoTwoShareOne() {
-        #expect(Self.readings(for: .keyboardHelper) == HelperStanding.allCases.map {
-            Requirement.keyboardHelper($0, flavor: Self.flavor, cli: Self.cli).reads
-        })
-        #expect(Set(Self.readings(for: .keyboardHelper)).count == HelperStanding.allCases.count)
-    }
-
-    /// What the table says one row can read.
     static func readings(for row: Requirement.Row) -> [String] {
         Requirement.readings.filter { $0.row == row }.map(\.reading)
     }
 
-    /// An app whose helper is enabled while something else holds the name reports enabled
-    /// and types nothing. The step names the service that was lost and the one way left
-    /// to find the holder, because nothing else on the Mac will say: launchd does not
-    /// make the loser loud.
-    ///
-    /// It names both holders no label governs, because there are two and the plist is the
-    /// one a reader misses. The refusal at bootstrap covers a second job under *this*
-    /// flavor's label; it says nothing about a job filed under another label that names
-    /// this service, which is the shape every installation predating the joined labels
-    /// has. A step offering only `pgrep` sends that reader hunting a process that is
-    /// behaving exactly as it should.
-    @Test func aServiceLostToAnUnidentifiedHolderNamesBothHoldersNoLabelGoverns() {
-        let step = Requirement.keyboardHelper(.anotherJobHoldsTheService, flavor: Self.flavor, cli: Self.cli).step ?? ""
-        #expect(step.contains(Self.service))
-        #expect(step.contains("pgrep"))
-        #expect(step.contains("/Library/LaunchDaemons"))
-        // Still not this one: removing a plist is the *other* standing's step, and the
-        // holder here is by definition not a job this script installed.
-        #expect(!step.contains("helper remove"))
+    // MARK: - the input method
+
+    /// Switched on asks for nothing; switched off sends the reader to the step that asks.
+    @Test func onlyASwitchedOnInputMethodAsksNothing() {
+        #expect(Requirement.inputMethod(switchedOn: true, flavor: Self.flavor).met)
+        let off = Requirement.inputMethod(switchedOn: false, flavor: Self.flavor)
+        #expect(!off.met)
+        #expect(off.step?.contains(GuidedSetup.title(for: Self.flavor)) == true)
     }
 
-    /// The holder the app can name gets the step that names it. Its whole difference from
-    /// the row above is that there is something to remove and a command that removes it.
-    @Test func aBootstrappedJobHoldingTheLabelIsSentToRemoveItsPlist() {
-        let step = Requirement.keyboardHelper(.aBootstrappedJobHoldsTheLabel, flavor: Self.flavor, cli: Self.cli).step ?? ""
-        #expect(step.contains("/Library/LaunchDaemons"))
-        #expect(step.contains(HelperJob.command(Self.cli, "remove", flavor: Self.flavor)))
-    }
+    // MARK: - the vocabulary README keeps a copy of
 
-    @Test func aHelperWaitingForItsApprovalIsSentToLoginItems() {
-        let step = Requirement.keyboardHelper(.awaitingApproval, flavor: Self.flavor, cli: Self.cli).step ?? ""
-        #expect(step.contains("Login Items & Extensions"))
-    }
-
-    /// A step that names an app names the one it was asked about. Both standings below sit
-    /// in front of a switch in Login Items, and with two installations there are two
-    /// switches - so a step naming the wrong copy sends a person to turn on an app that is
-    /// already running and leaves the one that asked still waiting.
-    ///
-    /// Containment alone cannot say this, and that is why the steps are required to
-    /// differ: "LowTalker Dev" contains "LowTalker", so a step hardcoding the release name
-    /// satisfies `contains(displayName)` for *both* flavors. Two installations reading one
-    /// instruction is the failure itself, whatever words it is built from.
-    @Test func aStepNamingAnAppNamesTheInstallationItWasAskedAbout() {
-        for standing in [HelperStanding.awaitingApproval, .noJob] {
-            let steps = Flavor.allCases.map { flavor -> String in
-                let step = Requirement.keyboardHelper(standing, flavor: flavor, cli: Self.cli).step ?? ""
-                #expect(step.contains(flavor.displayName), "\(standing) never names \(flavor.displayName)")
-                return step
-            }
-            #expect(Set(steps).count == Flavor.allCases.count, "\(standing) reads the same for every installation")
-        }
-    }
-
-    /// launchd holds no job whether the helper was never registered or is registered and
-    /// waiting for its click, so only the app - which can put the question to
-    /// SMAppService - can tell them apart, and only when it has an answer.
-    @Test func onlyTheAppsOwnRegistrationTellsNoJobFromAwaitingApproval() {
-        #expect(HelperStanding.noJob.sharpenedByTheAppsOwnRegistration(approvalPending: true) == .awaitingApproval)
-        #expect(HelperStanding.noJob.sharpenedByTheAppsOwnRegistration(approvalPending: false) == .noJob)
-    }
-
-    /// Sharpening only ever answers the question launchd could not. A helper that is
-    /// answering, or one that lost the name, is a reading launchd took itself, and no
-    /// pending approval may overwrite it.
-    @Test func sharpeningNeverOverwritesAReadingLaunchdCouldTake() {
-        for standing in HelperStanding.allCases where standing != .noJob {
-            #expect(standing.sharpenedByTheAppsOwnRegistration(approvalPending: true) == standing, "\(standing)")
-        }
-    }
-
-    // MARK: - the Keyboard Setup Assistant
-
-    /// Not an approval, and the one thing here that appears on first use: an unanswered
-    /// assistant takes the first dictation's keystrokes. The write that stops it wants
-    /// root, and the keyboard helper is root and has to be running before anything can
-    /// type - so it files the answer as it starts, and this row waits behind the helper's
-    /// rather than handing the reader a command. This is what "the row stops naming a
-    /// command" has to keep meaning. [LAW:behavior-not-structure]
-    /// Held for both arms, because the helper's standing changes what is left to do about
-    /// the answer and never who writes it. A step that regrew the paste in either arm
-    /// would be the row going back to asking a person for the thing the helper does.
-    @Test(arguments: [false, true]) func anUnansweredAssistantAsksTheReaderToRunNothing(aHelperHasRun: Bool) {
-        let step = Self.assistantStep(aHelperHasRun: aHelperHasRun)
-        #expect(step.contains("keyboard helper"))
-        for pasted in ["sudo", "defaults", VirtualKeyboardIdentity.keyboardTypeDomain, VirtualKeyboardIdentity.keyboardTypeKey] {
-            #expect(!step.contains(pasted), "the step hands the reader \(pasted) to run")
-        }
-    }
-
-    /// Waiting is only true while there is something to wait for. Told to someone whose
-    /// helper is answering, "this clears itself once the helper is answering" sends them
-    /// to wait out a failure that has already happened - the filing is the only thing
-    /// left that can be wrong, and the helper has already said why in its log.
-    /// [LAW:no-silent-failure]
-    @Test func anAnsweringHelperAndNoAnswerSendsTheReaderToTheHelpersLog() {
-        let step = Self.assistantStep(aHelperHasRun: true)
-        #expect(step.contains("log show"))
-        #expect(step.contains(Self.service), "the step names no subsystem to read")
-        #expect(!step.contains("clears itself"), "the step tells a reader to wait for something that already happened")
-    }
-
-    /// The window that step names is a guess, and the step has to admit it. The helper
-    /// logs the filing once, as it starts, while the standing that picks this arm says
-    /// only that a helper is up now - launchd holds the name for as long as the Mac is up.
-    /// So a reader whose helper started days ago runs the command and gets nothing back,
-    /// and nothing is exactly what reads as "no failure here" - the silence this arm was
-    /// added to break, arriving by a different door. [LAW:no-silent-failure]
-    @Test func theLogThisStepNamesAdmitsItsWindowMayBeTooSmall() {
-        let step = Self.assistantStep(aHelperHasRun: true)
-        #expect(!step.contains("--last 1h"),
-                "the window closes before a helper that started this morning")
-        #expect(step.contains("widen"),
-                "an empty result reads as no failure and the step never says otherwise")
-    }
-
-    /// And the other way round: a helper that is not answering yet has not had its chance
-    /// to file anything, so nothing has failed and there is no log to send anyone to.
-    @Test func aHelperThatIsNotAnsweringYetIsWhatTheRowIsWaitingBehind() {
-        let step = Self.assistantStep(aHelperHasRun: false)
-        #expect(step.contains("clears itself"))
-        #expect(!step.contains("log show"), "the step blames a filing that was never attempted")
-    }
-
-    private static func assistantStep(aHelperHasRun: Bool) -> String {
-        Requirement.keyboardSetupAssistant(
-            answered: false, aHelperHasRun: aHelperHasRun, helperSubsystem: service).step ?? ""
-    }
-
-    /// The readings table covers this row too. It carried the helper's five alone until
-    /// these two sat hand-copied into README with nothing holding them to the code, which
-    /// is the drift the table exists to catch - so what is asserted is that the row is in
-    /// it at all, and that what is in it is what the row prints.
-    /// [LAW:one-source-of-truth]
-    @Test func bothOfTheAssistantsReadingsAreInTheTableThatHoldsReadmeToThem() {
-        #expect(Self.readings(for: .keyboardSetupAssistant) == [true, false].map {
-            Requirement.keyboardSetupAssistant(answered: $0, aHelperHasRun: false, helperSubsystem: Self.service).reads
-        })
+    /// Each row's readings in the table are the ones the row prints. [LAW:one-source-of-truth]
+    @Test func eachRowsReadingsAreTheOnesItPrints() {
+        let answers: [MicrophoneAuthorization.Withheld?] = [nil] + MicrophoneAuthorization.Withheld.allCases
+        #expect(Self.readings(for: .microphone) == answers.map { Requirement.microphone($0, flavor: Self.flavor).reads })
+        #expect(Self.readings(for: .inputMethod) == [true, false].map { Requirement.inputMethod(switchedOn: $0, flavor: Self.flavor).reads })
     }
 
     /// Every row is in the table, and no row's readings are borrowed from another's. A
@@ -275,43 +44,13 @@ import Testing
         #expect(Requirement.readings.count == Requirement.Row.allCases.reduce(0) { $0 + Self.readings(for: $1).count })
     }
 
-    /// The key is `<product>-<vendor>-<country>`, which is not the order the device is
-    /// initialised in. Getting it backwards writes an entry for a device that does not
-    /// exist and leaves the assistant returning on every run.
-    @Test func theCacheKeyIsProductThenVendorThenCountry() {
-        #expect(VirtualKeyboardIdentity.keyboardTypeKey == "10203-5824-0")
-    }
-
-    @Test func anAnsweredAssistantAsksNothing() {
-        #expect(Requirement.keyboardSetupAssistant(answered: true, aHelperHasRun: true, helperSubsystem: Self.service).met)
-        #expect(Requirement.keyboardSetupAssistant(answered: true, aHelperHasRun: false, helperSubsystem: Self.service).met)
-    }
-
-    // MARK: - the CLI the reader has
-
-    /// A quote in the path is escaped rather than ending the quoting early, so the command
-    /// a step names is always one the shell reads as a single path.
-    @Test func aPathHoldingAQuoteIsStillOnePath() {
-        let step = Requirement.driverExtension(.absent, cli: "/tmp/it's/lowtalker").step ?? ""
-        #expect(step.contains(#"'/tmp/it'\''s/lowtalker' driver install"#))
-    }
-
-    /// The activation has to be asked for by the logged-in user - macOS attributes the
-    /// request to whoever asks, and the approval answers that request - so a step that
-    /// let a reader reach for sudo would send them to an install that cannot complete.
-    @Test func theActivationTellsTheReaderNotToTakeItUnderSudo() {
-        for state in [DriverState.absent, .installedInactive, .residue] {
-            let step = Requirement.driverExtension(state, cli: Self.cli).step ?? ""
-            #expect(step.contains("not under sudo"), "\(state)")
-        }
-    }
-
     // MARK: - the list
 
     /// A fact nobody could read never counts as met, so a report cannot come out ready
     /// on the strength of a reading nobody took. [LAW:no-silent-failure]
     @Test func aRequirementThatCouldNotBeReadIsNeverMet() {
-        let requirement = Requirement.unreadable(.driverExtension, OnboardingUnreadable.plistUnreadable(path: "/p", reason: "why"))
+        struct Unreadable: Error, CustomStringConvertible { var description: String { "why" } }
+        let requirement = Requirement.unreadable(.inputMethod, Unreadable())
         #expect(!requirement.met)
         #expect(requirement.step?.contains("why") == true)
         #expect(!Readiness([requirement]).ready)
@@ -322,19 +61,20 @@ import Testing
     /// checked". [LAW:dataflow-not-control-flow]
     @Test func theListShowsEveryRequirementWhetherOrNotItNeedsAnything() {
         let readiness = Readiness([
-            .driverExtension(.running, cli: Self.cli),
-            .keyboardHelper(.holdingTheService, flavor: Self.flavor, cli: Self.cli),
+            .microphone(nil, flavor: Self.flavor),
+            .inputMethod(switchedOn: true, flavor: Self.flavor),
         ])
         #expect(readiness.ready)
-        #expect(readiness.description.contains("Driver extension: running"))
-        #expect(readiness.description.contains("Keyboard helper: answering"))
+        #expect(readiness.description.contains("Microphone: allowed"))
+        #expect(readiness.description.contains("Input method: switched on"))
     }
 
     @Test func oneUnmetRequirementIsEnoughToStopTheList() {
         let readiness = Readiness([
-            .driverExtension(.running, cli: Self.cli),
-            .keyboardHelper(.anotherJobHoldsTheService, flavor: Self.flavor, cli: Self.cli),
+            .microphone(nil, flavor: Self.flavor),
+            .inputMethod(switchedOn: false, flavor: Self.flavor),
         ])
         #expect(!readiness.ready)
+        #expect(readiness.unmet.map(\.row) == [.inputMethod])
     }
 }

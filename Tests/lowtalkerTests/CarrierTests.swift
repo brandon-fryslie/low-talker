@@ -4,7 +4,7 @@ import Foundation
 import Testing
 
 /// The CLI acts on the installation whose bundle carries it, so the copy inside each app
-/// reaches the one helper signed to admit it. Asserted against real bundles on disk, laid
+/// reads that app's config and hears on that app's hotkey port. Asserted against real bundles on disk, laid
 /// out the way Xcode lays them out, because the answer is read from the file system.
 @Suite struct CarrierTests {
     /// A bundle holding an executable at `Contents/Helpers/lowtalker`, under `identifier`.
@@ -46,6 +46,6 @@ import Testing
 
     /// A loose build is a checkout's, which is the development copy.
     @Test func aLooseBuildIsTheDevelopmentCopy() {
-        #expect(Carrier.installation(of: URL(fileURLWithPath: "/Users/someone/low-talker/.build/debug/lowtalker-keyboardd")) == .development)
+        #expect(Carrier.installation(of: URL(fileURLWithPath: "/Users/someone/low-talker/.build/debug/lowtalker")) == .development)
     }
 }

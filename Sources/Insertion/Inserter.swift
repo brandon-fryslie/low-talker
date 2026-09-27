@@ -82,9 +82,9 @@ public struct InputMethodInserter: Inserter {
     /// app arrives before this end stops listening; `CommitterTests` holds the two apart.
     public static let standardTimeout = Duration.seconds(5)
 
-    /// `flavor` says which installation's input method this reaches. No default, for the
-    /// reason `HelperConnection` has none: both copies run at once, and a channel that
-    /// guessed would put one installation's words in the other's window.
+    /// `flavor` says which installation's input method this reaches. No default: both copies
+    /// run at once, and a channel that guessed would put one installation's words in the
+    /// other's window.
     public init(flavor: Flavor, timeout: Duration = standardTimeout) {
         self.init(
             portName: flavor.inputMethodPortName, timeout: timeout,

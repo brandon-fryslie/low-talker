@@ -1,51 +1,39 @@
-/// Keys pressed together: the hotkey a user holds to speak, or the keystroke a
-/// SendKeys action posts. Never empty: every constructor takes at least one key.
+/// Modifier keys held together: the hotkey a user holds to speak. Never empty: every
+/// constructor takes at least one modifier.
 ///
-/// [LAW:one-type-per-behavior] Both are the same thing to the OS, so they are the same
-/// type here; a chord read off the event tap can be replayed by SendKeys unchanged.
+/// [LAW:types-are-the-program] Modifiers and nothing else, because the input method is told
+/// only when a modifier key moves: a chord with any other key in it would never complete, so
+/// it cannot be written down.
 public struct KeyChord: Hashable, Codable, Sendable, CustomStringConvertible {
     public let modifiers: Set<Modifier>
-    /// The non-modifier key, if the chord has one. A push-to-talk hotkey such as Right
-    /// Option is modifiers only.
-    public let key: Key?
-
-    public init(key: Key, modifiers: Set<Modifier> = []) {
-        self.modifiers = modifiers
-        self.key = key
-    }
 
     public init(modifiers first: Modifier, _ rest: Modifier...) {
         self.modifiers = Set(rest).union([first])
-        self.key = nil
     }
 
     /// [LAW:parse-dont-validate] The one place a chord made of parts arrives unproven, a
-    /// decoded one and a spelled one alike; an empty one is nil here so no consumer has to
-    /// check. [LAW:single-enforcer]
-    public init?(modifiers: Set<Modifier>, key: Key?) {
-        guard key != nil || !modifiers.isEmpty else { return nil }
+    /// decoded one included; an empty one is nil here so no consumer has to check.
+    /// [LAW:single-enforcer]
+    public init?(modifiers: Set<Modifier>) {
+        guard !modifiers.isEmpty else { return nil }
         self.modifiers = modifiers
-        self.key = key
     }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let modifiers = try container.decode(Set<Modifier>.self, forKey: .modifiers)
-        let key = try container.decodeIfPresent(Key.self, forKey: .key)
-        guard let chord = KeyChord(modifiers: modifiers, key: key) else {
-            throw DecodingError.dataCorruptedError(forKey: .modifiers, in: container, debugDescription: "a chord needs at least one key")
+        guard let chord = KeyChord(modifiers: try container.decode(Set<Modifier>.self, forKey: .modifiers)) else {
+            throw DecodingError.dataCorruptedError(forKey: .modifiers, in: container, debugDescription: "a chord needs at least one modifier")
         }
         self = chord
     }
 
-    /// The chord as `lowtalker config check` reads it back: `rightOption`, or
-    /// `leftCommand+leftShift+key 1`. Never empty, because a chord never is.
+    /// The chord as `lowtalker config check` reads it back: `rightCommand+rightOption`.
+    /// Never empty, because a chord never is.
     ///
-    /// Sorted, because `modifiers` is a Set and a Set has no order: without this, two
-    /// runs over one config could spell one chord two ways. [LAW:one-source-of-truth]
+    /// Sorted, because `modifiers` is a Set and a Set has no order: without this, two runs
+    /// over one config could spell one chord two ways. [LAW:one-source-of-truth]
     public var description: String {
-        (modifiers.map(\.description).sorted() + (key.map { ["key \($0.rawValue)"] } ?? []))
-            .joined(separator: "+")
+        modifiers.map(\.description).sorted().joined(separator: "+")
     }
 }
 
@@ -70,16 +58,5 @@ public enum Modifier: String, Hashable, Codable, CaseIterable, Sendable, CustomS
             throw decoder.fault("\"\(raw)\" is not a modifier: \(Modifier.allCases.map(\.rawValue).joined(separator: ", "))")
         }
         self = modifier
-    }
-}
-
-/// A macOS virtual key code (the `kVK_*` constants; `CGKeyCode`). Key codes rather
-/// than characters because posting an event needs the code, and the code is the same
-/// under every keyboard layout.
-public struct Key: RawRepresentable, Hashable, Codable, Sendable {
-    public let rawValue: UInt16
-
-    public init(rawValue: UInt16) {
-        self.rawValue = rawValue
     }
 }
