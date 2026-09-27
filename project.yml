@@ -225,6 +225,9 @@ targetTemplates:
         # The name every system dialog, notice and list puts in front of a person: macOS
         # reads the display name first, and a prompt names whatever bundle raised it.
         INFOPLIST_KEY_CFBundleDisplayName: ${displayName}
+        # One icon per installation, so the two copies side by side in Finder, the Dock
+        # and System Settings are told apart before their names are read.
+        ASSETCATALOG_COMPILER_APPICON_NAME: ${appIconName}
         # Shown inside macOS's microphone dialog, under the app's name. The guided setup
         # explains the same thing first, so the dialog repeats what the person just read.
         INFOPLIST_KEY_NSMicrophoneUsageDescription: ${displayName} listens only while you hold or tap your dictation key, to turn what you say into text. What it hears never leaves this Mac.
@@ -360,6 +363,7 @@ targets:
       bundleIdentifier: ai.promptctl.low-talker
       launchdLabel: ai.promptctl.low-talker.keyboardd
       inputMethodTarget: LowTalkerInputMethod
+      appIconName: AppIcon
 
   # The copy built from the working tree, installed and running beside the one above.
   LowTalkerDev:
@@ -369,6 +373,7 @@ targets:
       bundleIdentifier: ai.promptctl.low-talker.dev
       launchdLabel: ai.promptctl.low-talker.keyboardd.dev
       inputMethodTarget: LowTalkerDevInputMethod
+      appIconName: AppIconDev
 
   # The input method each app above carries, one bundle per installation.
   LowTalkerInputMethod:

@@ -88,6 +88,7 @@ private let repository = URL(fileURLWithPath: #filePath)
         )
         #expect(mine.sets["displayName"] == flavor.displayName)
         #expect(mine.sets["launchdLabel"] == flavor.launchdLabel)
+        #expect(mine.sets["appIconName"] == flavor.appIconName)
     }
 
     /// Each app carries the target that builds its own flavor's input method.
