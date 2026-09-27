@@ -1,3 +1,4 @@
+import Choices
 import Flavors
 import Foundation
 import LowTalkerCore
@@ -10,7 +11,7 @@ import Testing
         """
         [[modes]]
         name = "dictation"
-        chord = { modifiers = ["\(chord)"] }
+        chord = { eventTap = { modifiers = ["\(chord)"] } }
         """
     }
 
@@ -147,7 +148,7 @@ import Testing
 
         let reload = try #require(await reloads.next())
         #expect(reload == .adopted(try Self.reading(Self.onLeftControl, at: file)))
-        #expect(reload.running.config.chords == [KeyChord(modifiers: .leftControl)])
+        #expect(reload.running.config.chords(heardBy: .eventTap) == [KeyChord(modifiers: .leftControl)])
     }
 
     /// The done-condition's other half, against a real save: a syntax error leaves the

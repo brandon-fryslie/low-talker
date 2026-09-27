@@ -28,7 +28,7 @@ import Testing
             try Config(toml: """
                 [[modes]]
                 name = "dictation"
-                chord = { modifiers = ["rightOption"] }
+                chord = { eventTap = { modifiers = ["rightOption"] } }
                 """, flavor: flavor),
             at: file,
             flavor: flavor
@@ -39,7 +39,7 @@ import Testing
     /// is described one way whether it is asked about once or watched all afternoon.
     @Test func aConfigTakenUpReadsAsTheReport() throws {
         let narration = ConfigCommand.Watch.narration(
-            of: .adopted(try Self.running()), appExists: Self.noApps
+            of: .adopted(try Self.running()), chosen: nil, appExists: Self.noApps
         )
 
         #expect(narration.hasPrefix("\n"), "a blank line opens each report, so a run of them reads as several")
@@ -51,7 +51,7 @@ import Testing
     /// than printing the defaults as though somebody had written them.
     @Test func aDeletedFileReadsAsTheDefaultsAndSaysSo() {
         let narration = ConfigCommand.Watch.narration(
-            of: .adopted(.noFile(at: Self.file, flavor: Self.flavor)), appExists: Self.noApps
+            of: .adopted(.noFile(at: Self.file, flavor: Self.flavor)), chosen: nil, appExists: Self.noApps
         )
 
         #expect(narration.contains(Self.file.path))
@@ -64,7 +64,7 @@ import Testing
     @Test func aRefusedSaveNamesTheErrorFirstAndWhatIsStillRunningSecond() throws {
         let running = try Self.running()
         let lines = ConfigCommand.Watch.narration(
-            of: .kept(running, because: .unknownKeys(["modle"])), appExists: Self.noApps
+            of: .kept(running, because: .unknownKeys(["modle"])), chosen: nil, appExists: Self.noApps
         ).components(separatedBy: "\n")
 
         #expect(lines.count == 3)

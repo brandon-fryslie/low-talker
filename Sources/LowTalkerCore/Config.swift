@@ -1,3 +1,4 @@
+import Choices
 import Flavors
 import Foundation
 
@@ -6,8 +7,8 @@ import Foundation
 /// `Config(toml:)` is where a file becomes one.
 ///
 /// [LAW:parse-dont-validate] A Config in hand is one that holds together: it has at
-/// least one mode, no two modes answer to the same chord, and no two share a name or
-/// go without one. The initializer is the only way to make a Config, so those facts
+/// least one mode, no two modes answer to one chord through one hotkey source, and no
+/// two share a name or go without one. The initializer is the only way to make a Config, so those facts
 /// are established once here and never asked again downstream - which is why
 /// `mode(for:)` can speak of *the* mode a chord selects.
 public struct Config: Hashable, Sendable {
@@ -23,11 +24,15 @@ public struct Config: Hashable, Sendable {
     public init(model: ModelName, microphone: MicrophoneAtRest, modes: [Mode]) throws(ConfigError) {
         guard !modes.isEmpty else { throw ConfigError.noModes }
         var names: Set<String> = []
-        var chords: Set<KeyChord> = []
+        var heard: [HotkeySource: Set<KeyChord>] = [:]
         for mode in modes {
             guard !mode.name.isEmpty else { throw ConfigError.modeUnnamed }
             guard names.insert(mode.name).inserted else { throw ConfigError.twoModesNamed(mode.name) }
-            guard chords.insert(mode.chord).inserted else { throw ConfigError.twoModesOnOneChord(mode.name) }
+            for source in HotkeySource.allCases {
+                guard heard[source, default: []].insert(mode.chords[source]).inserted else {
+                    throw ConfigError.twoModesOnOneChord(mode.name, heardBy: source)
+                }
+            }
         }
         self.model = model
         self.microphone = microphone
@@ -49,20 +54,29 @@ public struct Config: Hashable, Sendable {
         try! Config(model: .default, microphone: .shut, modes: [.dictation(for: flavor)])
     }
 
-    /// The mode the chord that started listening selects, or none when no mode claims
-    /// it. `chords` is what the tap is told to listen for, so in a running app a
-    /// Context always names one; a Context assembled by hand need not.
-    public func mode(for chord: KeyChord) -> Mode? {
-        modes.first { $0.chord == chord }
+    /// The mode the chord that started listening selects through `source`, or none when no
+    /// mode claims it. `chords(heardBy:)` is what the hotkey is told to listen for, so in a
+    /// running app a Context always names one; a Context assembled by hand need not.
+    public func mode(for chord: KeyChord, heardBy source: HotkeySource) -> Mode? {
+        modes.first { $0.chords[source] == chord }
     }
 
-    /// What the hotkey listens for. One chord per mode, and never empty.
-    public var chords: Set<KeyChord> {
-        Set(modes.map(\.chord))
+    /// What the hotkey listens for when `source` hears it. One chord per mode, and never
+    /// empty.
+    ///
+    /// [LAW:one-source-of-truth] Every hotkey reads its chords here, and so does every
+    /// surface that names them, so the chord a person edits is the chord that is heard.
+    public func chords(heardBy source: HotkeySource) -> Set<KeyChord> {
+        Set(modes.map { $0.chords[source] })
+    }
+
+    /// Every chord this config listens for, through whichever source.
+    public var everyChord: Set<KeyChord> {
+        Set(HotkeySource.allCases.flatMap(chords(heardBy:)))
     }
 }
 
-/// One way of speaking: the chord that starts it, what the engine is told to expect
+/// One way of speaking: the chords that start it, what the engine is told to expect
 /// before any words arrive, and the routes that turn what was said into actions.
 ///
 /// [LAW:one-type-per-behavior] Dictation is not a case in code. It is a Mode like
@@ -70,9 +84,10 @@ public struct Config: Hashable, Sendable {
 public struct Mode: Hashable, Sendable {
     /// How the mode is spoken of in errors and in `lowtalker config check`.
     public let name: String
-    /// The chord that selects this mode. `Context.chord` carries it, so which mode is
-    /// running is settled before a word is heard.
-    public let chord: KeyChord
+    /// The chord that selects this mode, one for each hotkey source. `Context.chord`
+    /// carries the one that was held, so which mode is running is settled before a word is
+    /// heard.
+    public let chords: HeardChords
     /// What the engine is told to expect, so a name it could not have guessed is
     /// spelled the way this mode wants it.
     public let vocabulary: Vocabulary
@@ -80,17 +95,17 @@ public struct Mode: Hashable, Sendable {
 
     /// The name arrives trimmed, as a Vocabulary term does, so that two modes cannot
     /// differ by spacing alone.
-    public init(name: String, chord: KeyChord, vocabulary: Vocabulary = .empty, router: Router) {
+    public init(name: String, chords: HeardChords, vocabulary: Vocabulary = .empty, router: Router) {
         self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.chord = chord
+        self.chords = chords
         self.vocabulary = vocabulary
         self.router = router
     }
 
-    /// Hold the hotkey, speak, and the words are typed wherever the focus is. The event
-    /// tap's chord, which is the hearing `lowtalker dictate` listens with.
+    /// Hold the hotkey, speak, and the words are typed wherever the focus is, on this
+    /// installation's own chords.
     public static func dictation(for flavor: Flavor) -> Mode {
-        Mode(name: "dictation", chord: Hotkey.defaultChord(for: flavor, heardBy: .eventTap), vocabulary: .empty, router: .dictation)
+        Mode(name: "dictation", chords: .default(for: flavor), vocabulary: .empty, router: .dictation)
     }
 }
 
@@ -112,7 +127,7 @@ public enum ConfigError: Error, Equatable, Sendable, CustomStringConvertible {
     case noModes
     case modeUnnamed
     case twoModesNamed(String)
-    case twoModesOnOneChord(String)
+    case twoModesOnOneChord(String, heardBy: HotkeySource)
     /// The file exists but could not be read at all, in the words the system used.
     case unreadable(path: String, why: String)
     /// A refusal the parser reported that this file has no better words for. Carried
@@ -133,8 +148,8 @@ public enum ConfigError: Error, Equatable, Sendable, CustomStringConvertible {
             "a mode has no name"
         case .twoModesNamed(let name):
             "two modes are named \"\(name)\""
-        case .twoModesOnOneChord(let name):
-            "mode \"\(name)\" answers to a chord another mode already answers to"
+        case .twoModesOnOneChord(let name, let source):
+            "mode \"\(name)\" answers to a chord another mode already answers to through \(source)"
         case .unreadable(let path, let why):
             "\(path) could not be read: \(why)"
         case .notUnderstood(let why):

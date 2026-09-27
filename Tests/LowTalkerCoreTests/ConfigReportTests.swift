@@ -1,3 +1,4 @@
+import Choices
 import Flavors
 import Foundation
 import LowTalkerCore
@@ -28,11 +29,11 @@ import Testing
         let config = try Self.config("""
             [[modes]]
             name = "dictation"
-            chord = { modifiers = ["rightOption"] }
+            chord = { eventTap = { modifiers = ["rightOption"] } }
 
             [[modes]]
             name = "silent"
-            chord = { modifiers = ["rightCommand"] }
+            chord = { eventTap = { modifiers = ["rightCommand"] }, registeredHotKey = { modifiers = ["leftCommand"], key = 2 }, inputMethod = { modifiers = ["rightCommand"] } }
             routes = []
             """)
         #expect(config.gaps(appExists: Self.noApps) == [.modeClaimsNothing(mode: "silent")])
@@ -42,7 +43,7 @@ import Testing
         let config = try Self.config("""
             [[modes]]
             name = "dictation"
-            chord = { modifiers = ["rightOption"] }
+            chord = { eventTap = { modifiers = ["rightOption"] } }
             """)
         #expect(config.gaps(appExists: Self.noApps).isEmpty)
     }
@@ -67,7 +68,7 @@ import Testing
         let config = try Self.config("""
             [[modes]]
             name = "slack"
-            chord = { modifiers = ["rightOption"] }
+            chord = { eventTap = { modifiers = ["rightOption"] } }
             routes = [
               { when = "always", then = { insert = { app = "com.tinyspeck.slackmacgap" } } },
               { when = "always", then = { insert = { app = "com.tinyspeck.slackmacgap" } } },
@@ -82,12 +83,12 @@ import Testing
         let config = try Self.config("""
             [[modes]]
             name = "first"
-            chord = { modifiers = ["rightOption"] }
+            chord = { eventTap = { modifiers = ["rightOption"] } }
             routes = []
 
             [[modes]]
             name = "second"
-            chord = { modifiers = ["rightCommand"] }
+            chord = { eventTap = { modifiers = ["rightCommand"] }, registeredHotKey = { modifiers = ["leftCommand"], key = 2 }, inputMethod = { modifiers = ["rightCommand"] } }
             routes = []
             """)
         #expect(config.gaps(appExists: Self.noApps) == [
@@ -106,17 +107,21 @@ import Testing
         let config = try Self.config("""
             [[modes]]
             name = "dictation"
-            chord = { modifiers = ["rightOption"] }
+            chord = { eventTap = { modifiers = ["rightOption"] } }
             """)
-        let report = ConfigReport(.file(config, at: url, flavor: Self.flavor), appExists: Self.noApps)
+        let report = ConfigReport(.file(config, at: url, flavor: Self.flavor), chosen: .registeredHotKey, appExists: Self.noApps)
         #expect(report.description == """
             /tmp/low-talker-example.toml
 
             model: \(ModelName.default)
             microphone: \(MicrophoneAtRest.shut)
+            hotkey source: registeredHotKey, as chosen in the app
 
             mode "dictation"
-              chord: rightOption
+              chord:
+                eventTap: rightOption
+                registeredHotKey: \(Hotkey.defaultChord(for: Self.flavor, heardBy: .registeredHotKey)) (heard)
+                inputMethod: \(Hotkey.defaultChord(for: Self.flavor, heardBy: .inputMethod))
               vocabulary:
               routes:
                 always → insert into the focused element
@@ -130,17 +135,17 @@ import Testing
     /// about to debug a file nothing is reading.
     @Test func aReportWithNoFileSaysThereIsNoFile() {
         let url = URL(filePath: "/tmp/low-talker-absent.toml")
-        let report = ConfigReport(.noFile(at: url, flavor: Self.flavor), appExists: Self.noApps)
+        let report = ConfigReport(.noFile(at: url, flavor: Self.flavor), chosen: nil, appExists: Self.noApps)
         #expect(report.description.hasPrefix("no file at /tmp/low-talker-absent.toml, so these are the defaults"))
     }
 
     /// A chord, a vocabulary and a route are each read back in the words the file
     /// writes them in, so what is printed can be found in the file.
     @Test func aModeIsReadBackInTheWordsTheFileUses() throws {
-        let report = ConfigReport(.file(try Self.config(Self.slack), at: URL(filePath: "/tmp/x.toml"), flavor: Self.flavor), appExists: { _ in true })
+        let report = ConfigReport(.file(try Self.config(Self.slack), at: URL(filePath: "/tmp/x.toml"), flavor: Self.flavor), chosen: nil, appExists: { _ in true })
         let lines = report.description.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         #expect(lines.contains(#"mode "slack""#))
-        #expect(lines.contains("  chord: leftCommand+leftShift+key 1"))
+        #expect(lines.contains("    eventTap: leftCommand+leftShift+key 1"))
         #expect(lines.contains("    Kubernetes"))
         #expect(lines.contains("    always → insert into com.tinyspeck.slackmacgap"))
     }
@@ -149,12 +154,28 @@ import Testing
     /// list to decide what to exit with.
     @Test func theReportPrintsTheGapsItFound() throws {
         let config = try Self.config(Self.slack)
-        let report = ConfigReport(.file(config, at: URL(filePath: "/tmp/x.toml"), flavor: Self.flavor), appExists: Self.noApps)
+        let report = ConfigReport(.file(config, at: URL(filePath: "/tmp/x.toml"), flavor: Self.flavor), chosen: nil, appExists: Self.noApps)
         #expect(report.gaps == config.gaps(appExists: Self.noApps))
         #expect(report.description.hasSuffix("""
             gaps:
               mode "slack" inserts into com.tinyspeck.slackmacgap, which no app on this Mac answers to
             """))
+    }
+
+    /// The chord the report marks as heard is the chosen source's, which is the chord the
+    /// app's menu names; an installation that has not chosen yet is told so, and nothing is
+    /// marked.
+    @Test(arguments: HotkeySource.allCases) func theChosenSourcesChordIsTheOneMarkedHeard(_ chosen: HotkeySource) throws {
+        let config = try Self.config(Self.slack)
+        let report = ConfigReport(.file(config, at: URL(filePath: "/tmp/x.toml"), flavor: Self.flavor), chosen: chosen, appExists: Self.noApps)
+        let heard = report.description.split(separator: "\n").filter { $0.hasSuffix(" (heard)") }
+        #expect(heard == ["    \(chosen): \(try #require(config.modes.first).chords[chosen]) (heard)"])
+    }
+
+    @Test func aSourceNotYetChosenIsSaidAndNothingIsMarked() throws {
+        let report = ConfigReport(.file(try Self.config(Self.slack), at: URL(filePath: "/tmp/x.toml"), flavor: Self.flavor), chosen: nil, appExists: Self.noApps)
+        #expect(report.description.contains("hotkey source: none chosen yet; the app asks at its next launch"))
+        #expect(!report.description.contains("(heard)"))
     }
 
     /// A Set has no order, so a chord with several modifiers has to be given one here
@@ -168,7 +189,7 @@ import Testing
     private static let slack = """
         [[modes]]
         name = "slack"
-        chord = { modifiers = ["leftCommand", "leftShift"], key = 1 }
+        chord = { eventTap = { modifiers = ["leftCommand", "leftShift"], key = 1 }, registeredHotKey = { modifiers = ["leftCommand", "leftShift"], key = 1 }, inputMethod = { modifiers = ["leftCommand", "leftShift"] } }
         vocabulary = ["Kubernetes"]
         routes = [{ when = "always", then = { insert = { app = "com.tinyspeck.slackmacgap" } } }]
         """

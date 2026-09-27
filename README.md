@@ -195,46 +195,56 @@ The tap needs Input Monitoring and Accessibility, and no tap is created until bo
     make cli
     .build/debug/lowtalker config check
 
-reads this installation's file in `~/.config/low-talker` — `config.dev.toml` for the copy built from this tree, which is what `.build/debug/lowtalker` defaults to, and `config.toml` for the installed one under `--flavor release` — and prints what the app would run with. It starts nothing. `--path` reads some other file instead, which is how a file is checked before it is installed, and it needs `--flavor` said out loud: which installation a file is read as decides every default it does not set, and the command refuses to guess. No file at all is not an error: the app runs on the defaults, dictation on this installation's own chord with the default model. A file that exists but cannot be read, or cannot be understood, is an error and is never quietly replaced by the defaults, since a config the user wrote and the app silently ignored is worse than one it refuses.
+reads this installation's file in `~/.config/low-talker` — `config.dev.toml` for the copy built from this tree, which is what `.build/debug/lowtalker` defaults to, and `config.toml` for the installed one under `--flavor release` — and prints what the app would run with. It starts nothing. `--path` reads some other file instead, which is how a file is checked before it is installed, and it needs `--flavor` said out loud: which installation a file is read as decides every default it does not set, and the command refuses to guess. No file at all is not an error: the app runs on the defaults, dictation on this installation's own chords with the default model. A file that exists but cannot be read, or cannot be understood, is an error and is never quietly replaced by the defaults, since a config the user wrote and the app silently ignored is worse than one it refuses.
 
-The file names a `model`, a model folder name such as `base.en`, an optional `[microphone]` table saying what the device does between presses, and an array of `[[modes]]` tables. Each mode takes a `name`, a `chord`, an optional `vocabulary` of terms, and an optional `routes`.
+The file names a `model`, a model folder name such as `base.en`, an optional `[microphone]` table saying what the device does between presses, and an array of `[[modes]]` tables. Each mode takes a `name`, an optional `chord`, an optional `vocabulary` of terms, and an optional `routes`.
 
     model = "base.en"
 
     [[modes]]
     name = "dictation"
-    chord = { modifiers = ["rightOption"] }
+    chord = { eventTap = { modifiers = ["rightOption"] } }
     routes = [{ when = "always", then = { insert = "focus" } }]
 
     [[modes]]
     name = "safari"
-    chord = { modifiers = ["leftCommand", "leftShift"], key = 1 }
     vocabulary = ["Kubernetes", "Anthropic"]
     routes = [{ when = "always", then = { insert = { app = "com.apple.Safari" } } }]
+    [modes.chord]
+    eventTap = { modifiers = ["leftCommand", "leftShift"], key = 1 }
+    registeredHotKey = { modifiers = ["leftCommand", "leftShift"], key = 1 }
+    inputMethod = { modifiers = ["leftCommand", "leftShift"] }
 
-A chord is its modifiers and, where one is wanted, a key code; it needs at least one key either way. A route's `insert` is either the word `"focus"`, whatever has focus when the route fires, or a table naming an app by bundle id. A key the schema has no place for is refused rather than ignored, so a typo is told rather than silently doing nothing.
+A chord is its modifiers and, where one is wanted, a key code; it needs at least one key either way. A mode's `chord` names one per hotkey source, `eventTap`, `registeredHotKey` and `inputMethod`, because the three hear different things (see "The hotkey source" below), and it is the chord the app, `lowtalker dictate` and `lowtalker hotkey` listen for and the menu names. A source the table leaves out, or every source when a mode has no `chord`, listens for this installation's own chord for that source. So a second mode has to name all three: two modes leaving one source out would both listen for the same chord through it, and the file is refused naming the mode and the source. A chord its source cannot hear is refused where it is written, as `modes[0].chord.registeredHotKey: rightOption is modifiers alone, and a registered hot key needs a key besides them`, or for the input method, which is told only of the modifier keys, a chord with any other key in it. A route's `insert` is either the word `"focus"`, whatever has focus when the route fires, or a table naming an app by bundle id. A key the schema has no place for is refused rather than ignored, so a typo is told rather than silently doing nothing.
 
 The `[microphone]` table is optional, and the file above leaves it out: with no table at all the microphone is `shut`, opened when the hotkey goes down and closed when it comes up, so the indicator in the menu bar is a record of what you dictated rather than of how long the app has been running. `at_rest = "open"` takes the trade the other way and holds the microphone from launch to quit. What that buys is the look-back, the 0.3 s of already-captured audio a press reaches back over, so a key pressed a syllable into a word still catches that word; what it costs is a lit indicator and a privacy report saying low-talker is listening on a Mac nobody has spoken to. There is no wake word yet, so `at_rest` is the only thing that holds the microphone open while nobody is dictating: it is in the file or it does not happen. The key is required once the heading is there. A `[microphone]` with nothing under it is refused as `microphone.at_rest is missing`, since a heading somebody wrote on purpose cannot be read as the default they were already getting, and any other word is refused with that word quoted back, as `microphone.at_rest: "sometimes" is not something the microphone does at rest`.
 
-Where a fault is reported depends on how far reading got. A file that is not TOML at all names the line reading stopped on. Anything that is TOML but wrong is named by its path in the document instead, as `modes[1].routes[0].when: "sometyme" is not something a route can match on` or `modes[1].chord is missing`, and carries no line number: decoding reports the path it was at, and the TOML library exposes source positions only for a parse error, not for a document that parsed. The path counts `[[modes]]` entries from zero, the way the file writes them, so the entry it names is one the reader can count to.
+Where a fault is reported depends on how far reading got. A file that is not TOML at all names the line reading stopped on. Anything that is TOML but wrong is named by its path in the document instead, as `modes[1].routes[0].when: "sometyme" is not something a route can match on` or `modes[1].name is missing`, and carries no line number: decoding reports the path it was at, and the TOML library exposes source positions only for a parse error, not for a document that parsed. The path counts `[[modes]]` entries from zero, the way the file writes them, so the entry it names is one the reader can count to.
 
 A file can also parse and still say something nobody meant, and those gaps are reported too. A mode whose `routes` is an empty list claims nothing: it listens, and nothing it hears becomes anything. A mode with no `routes` key at all dictates instead. The two look almost alike in a file and mean different things, which is why the report tells them apart. A bundle id no app on this Mac answers to is reported as well; that one is checked against the machine rather than against the file, which is why it is the check command's own work and not something reading the file could ever have found.
 
-Every heading is printed every time, so a mode with no vocabulary shows an empty `vocabulary:` rather than leaving the reader to wonder whether the key was read and ignored. On the file above, with a mode inserting into an app this Mac does not have and a mode with no routes added after it:
+Every heading is printed every time, so a mode with no vocabulary shows an empty `vocabulary:` rather than leaving the reader to wonder whether the key was read and ignored. Every mode's chord is printed for every source, and the one for the source the app was told to hear by, read from the app's own defaults, is marked `(heard)`: that is the chord the app's menu names. On the file above, read by the development copy with the registered hot key chosen, and with a mode inserting into an app this Mac does not have and a mode with no routes added after it:
 
     /Users/you/.config/low-talker/config.dev.toml
 
     model: base.en
     microphone: open only while you dictate
+    hotkey source: registeredHotKey, as chosen in the app
 
     mode "dictation"
-      chord: rightOption
+      chord:
+        eventTap: rightOption
+        registeredHotKey: leftCommand+leftOption+key 7 (heard)
+        inputMethod: rightCommand+rightOption
       vocabulary:
       routes:
         always → insert into the focused element
 
     mode "safari"
-      chord: leftCommand+leftShift+key 1
+      chord:
+        eventTap: leftCommand+leftShift+key 1
+        registeredHotKey: leftCommand+leftShift+key 1 (heard)
+        inputMethod: leftCommand+leftShift
       vocabulary:
         Kubernetes
         Anthropic
@@ -242,13 +252,19 @@ Every heading is printed every time, so a mode with no vocabulary shows an empty
         always → insert into com.apple.Safari
 
     mode "ghost"
-      chord: rightCommand
+      chord:
+        eventTap: rightCommand
+        registeredHotKey: leftCommand+key 2 (heard)
+        inputMethod: rightCommand
       vocabulary:
       routes:
         always → insert into com.example.nope
 
     mode "silent"
-      chord: function
+      chord:
+        eventTap: function
+        registeredHotKey: leftCommand+key 3 (heard)
+        inputMethod: function
       vocabulary:
       routes:
 
@@ -262,7 +278,7 @@ The exit status is 0 when the file is understood and has no gaps, 1 when it cann
 
     .build/debug/lowtalker config watch
 
-prints the same report and then stays up, printing it again each time the file is saved into something different. The app reads the file once, at launch, and a save after that does not reach it; teaching it to keep up with the file as it is edited is low-app-3sp.5's work, and for now this is where a chord can be changed and seen to take effect.
+prints the same report and then stays up, printing it again each time the file is saved into something different. The app reads the file once, at launch, for the microphone and the chords alike, and a save after that does not reach it; teaching it to keep up with the file as it is edited is low-app-3sp.5's work, and for now this is where a chord can be changed and seen to take effect.
 
 A save that cannot be understood does not disturb what is running. It is named the way `check` names it, followed by the file still in force:
 
@@ -318,7 +334,7 @@ The status menu lists both under "Delivery" with the current one checked, and ch
 
 ### The hotkey source
 
-How the hotkey is heard is a second choice, asked beside the delivery and independent of it: any source goes with any delivery.
+How the hotkey is heard is a second choice, asked beside the delivery and independent of it: any source goes with any delivery. The chords below are each installation's own, which it listens for until its config file names others (see "The config file" above).
 
 - **Event tap.** Right Option (Right Command+Right Option for the development copy, Right Command first). A chord of modifiers alone, which only a tap on every key can hear, so it needs Input Monitoring and Accessibility.
 - **Registered hot key.** Option+Shift+Command+X (Option+Command+X for the development copy), registered with the window server, so it needs nothing. macOS registers only a chord with a key in it.

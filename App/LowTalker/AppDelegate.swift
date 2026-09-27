@@ -184,6 +184,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// and `KeptChoices` holds the one spelling of each key.
     private let kept = KeptChoices(.standard)
 
+    /// The config this app runs on, read the first time it is asked for and never again:
+    /// what the microphone does at rest and the chords every hotkey listens for, from one
+    /// reading, so the two cannot come from different versions of the file. The menu's
+    /// names for the chords read it too, so what the menu says to hold is what is heard.
+    /// [LAW:one-source-of-truth]
+    private lazy var config = Result { () throws(ConfigError) in try Config.load(for: Self.flavor).config }
+
     /// The delivery the user chose, or nil for an installation that has never been asked.
     private var chosenDelivery: Delivery? {
         get { kept.delivery }
@@ -296,9 +303,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .success: await install(setup.source)
         case .failure(let refusal): .failure(refusal)
         }
+        // `comeUp` reads the config before it adopts any setup and adopts none on a config it
+        // cannot read, so a loop is only ever built over one that was read.
+        guard case .success(let config) = config else { preconditionFailure("a loop is adopted only once the config has been read") }
         // The tap's grants from a fresh reading: this process's own answer can be the one it
         // had before the person allowed them. See `PrivacyReading`.
-        let hotkey = Hotkey(for: Self.flavor, heardBy: setup.source) { [unowned self] in
+        let hotkey = Hotkey(for: Self.flavor, heardBy: setup.source, listeningFor: config) { [unowned self] in
             // A reading that failed is its own error, not a missing grant. [LAW:no-silent-failure]
             try readPrivacy().get().eventTapHeld
         }
@@ -485,17 +495,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ([button(of: source)] + [source.unheard].compactMap { $0 }).joined(separator: " — ")
     }
 
-    /// This installation's chord for `source`, named on the layout the user types on now.
-    /// Read at each use rather than kept, since the user can switch layouts at any moment.
+    /// The chords the config has `source` listen for, named on the layout the user types on
+    /// now. Read at each use rather than kept, since the user can switch layouts at any
+    /// moment.
     private func chordName(heardBy source: HotkeySource) -> String {
-        let chord = Hotkey.defaultChord(for: Self.flavor, heardBy: source)
-        do {
-            return try Hotkey.named(chord, heardBy: source, on: KeyboardLayout.current())
-        } catch {
-            // [LAW:no-silent-failure] A layout that cannot be read still leaves the reader a
-            // chord to press, in the spelling `held` gives every chord, and the log says why.
-            log.error("keyboard layout: \(String(describing: error), privacy: .public); naming \(chord, privacy: .public) by its codes")
-            return Hotkey.held(chord)
+        switch config {
+        case .success(let config):
+            do {
+                return try Hotkey.named(heardBy: source, in: config, on: KeyboardLayout.current())
+            } catch {
+                // [LAW:no-silent-failure] A layout that cannot be read still leaves the reader
+                // a chord to press, in the spelling `held` gives every chord, and the log says
+                // why.
+                log.error("keyboard layout: \(String(describing: error), privacy: .public); naming the chords by their codes")
+                return config.modes.map { Hotkey.held($0.chords[source]) }.joined(separator: " or ")
+            }
+        // The status line already says why nothing is heard; a button still has to say
+        // which source it is.
+        case .failure:
+            return "no chord: the config cannot be read"
         }
     }
 
@@ -711,8 +729,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // what came up short was the hotkey or the delivery, which `choose` rebuilds.
             // Restarting it would close and reopen an engine the resting mode holds open.
             if capture.atRest == nil {
-                let config = try Config.load(for: Self.flavor).config
-                try capture.start(try readPrivacy().get().microphoneAuthorization.grant(), atRest: config.microphone)
+                try capture.start(try readPrivacy().get().microphoneAuthorization.grant(), atRest: try config.get().microphone)
                 // Readied before the hotkey goes up, so the first press opens a microphone
                 // already reached rather than paying for reaching one.
                 capture.waitUntilReadied()

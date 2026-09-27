@@ -1,3 +1,4 @@
+import Choices
 import Flavors
 import Foundation
 import TOMLKit
@@ -41,7 +42,8 @@ public extension Config {
         try self.init(
             model: file.model ?? Config.default(for: flavor).model,
             microphone: file.microphone?.atRest ?? Config.default(for: flavor).microphone,
-            modes: file.modes?.map { $0.mode() } ?? Config.default(for: flavor).modes
+            modes: file.modes?.enumerated().map { index, entry throws(ConfigError) in try entry.mode(at: index, for: flavor) }
+                ?? Config.default(for: flavor).modes
         )
     }
 
@@ -70,6 +72,38 @@ public extension Config {
             throw ConfigError.unreadable(path: url.path, why: error.localizedDescription)
         }
         return .file(try Config(toml: text, flavor: flavor), at: url, flavor: flavor)
+    }
+
+    /// Every chord an installation on this Mac listens for, as the config files say now:
+    /// the set a typist must refuse to press.
+    ///
+    /// [LAW:one-source-of-truth] A typist that refused only its own installation's chord
+    /// still refused *a* hotkey, which is what made the omission read as complete at each
+    /// call site that spelled it. But the release chord is a strict subset of the
+    /// development one, and the helper's keystrokes are hardware to macOS: a development
+    /// typist pressing a bare Right Option is the release app's hotkey exactly, so the
+    /// transcript starts a dictation in the other copy. The fact is "every chord an
+    /// installation listens for", it is one fact, and it is read here from every flavor's
+    /// own file so a third flavor is covered by existing. [LAW:dataflow-not-control-flow]
+    ///
+    /// Every flavor's, not every *installed* flavor's: whether the other copy is on this
+    /// Mac is a question with a different answer every minute, and a typist that refused
+    /// on the strength of it would type the chord in the window where the answer was
+    /// stale. The cost of refusing a chord nobody listens for is a keystroke the helper
+    /// declines; the cost of the other mistake is two apps dictating at once. Every hotkey
+    /// source's too, for the same reason: which source the other copy hears by is a choice
+    /// its user can change from its menu at any moment.
+    ///
+    /// A file that cannot be read stands as its installation's defaults. That installation
+    /// comes up on no chord while it cannot read it - the app and `lowtalker dictate` both
+    /// stop on such a file - and its own defaults are what it listens for once it is gone.
+    /// The error is that installation's to report, where its owner will see it.
+    ///
+    /// - Parameter read: how an installation's file is read; a test hands in its own.
+    static func everyInstallationsChord(
+        read: (Flavor) throws(ConfigError) -> Loaded = { flavor throws(ConfigError) in try load(for: flavor) }
+    ) -> Set<KeyChord> {
+        Set(Flavor.allCases.flatMap { flavor in ((try? read(flavor))?.config ?? .default(for: flavor)).everyChord })
     }
 
     /// One reading: what it found, the file it read, and the installation that read it.
@@ -170,23 +204,58 @@ private struct MicrophoneEntry: Decodable {
 /// One `[[modes]]` table.
 private struct ModeEntry: Decodable {
     let name: String
-    let chord: KeyChord
+    let chord: ChordEntry?
     let vocabulary: [Vocabulary.Term]?
     let routes: [RouteEntry]?
 
-    /// [LAW:single-enforcer] The chord, each term, and every route arrived through
-    /// their own decoders, so what each may be is settled where those types live and is
-    /// not restated here - which is why this can no longer fail.
-    func mode() -> Mode {
-        Mode(
+    /// [LAW:single-enforcer] Each chord, each term, and every route arrived through their
+    /// own decoders, and whether a source can hear its chord is `HeardChords`' to say, so
+    /// what each may be is settled where those types live and is not restated here.
+    ///
+    /// [LAW:one-source-of-truth] A source the file gives no chord listens for this
+    /// installation's own, which is the chord `Config.default` names for it.
+    func mode(at index: Int, for flavor: Flavor) throws(ConfigError) -> Mode {
+        let chords: HeardChords
+        do {
+            chords = try HeardChords { chord?.chords[$0] ?? HeardChords.default(for: flavor)[$0] }
+        } catch {
+            throw ConfigError.wrongShape("modes[\(index)].chord.\(error.source): \(error)")
+        }
+        return Mode(
             name: name,
-            chord: chord,
+            chords: chords,
             vocabulary: Vocabulary(vocabulary ?? []),
             // A mode that names no routes dictates, which is the only thing it could
             // have meant; one that names an empty list claims nothing, and `lowtalker
             // config check` is where that gap is reported.
             router: routes.map { Router(routes: $0.map(\.route)) } ?? .dictation
         )
+    }
+}
+
+/// A mode's `chord` table: a chord under the name of each source that should hear
+/// something other than this installation's own, as in `eventTap = { modifiers =
+/// ["rightOption"] }`.
+private struct ChordEntry: Decodable {
+    let chords: [HotkeySource: KeyChord]
+
+    /// Only a source's own name is asked for, so any other key is left unread and strict
+    /// decoding names it as a typo. [LAW:no-silent-failure]
+    private struct SourceKey: CodingKey {
+        let stringValue: String
+        var intValue: Int? { nil }
+        init(_ source: HotkeySource) { stringValue = source.rawValue }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue _: Int) { nil }
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: SourceKey.self)
+        var chords: [HotkeySource: KeyChord] = [:]
+        for source in HotkeySource.allCases {
+            chords[source] = try container.decodeIfPresent(KeyChord.self, forKey: SourceKey(source))
+        }
+        self.chords = chords
     }
 }
 
