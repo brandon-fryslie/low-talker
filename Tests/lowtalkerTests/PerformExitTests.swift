@@ -58,7 +58,7 @@ import Testing
     }
 
     @Test func anUnreachableHelperThatIsNotAnsweringIsFour() {
-        for standing in HelperStanding.allCases where standing != .holdingTheService {
+        for standing in HelperStanding.allCases where !Requirement.keyboardHelper(standing, flavor: .release, cli: "lowtalker").met {
             let failure = PerformExit.classify(Self.stoppedOnTheWire, flavor: .release, machine: Self.machine(driver: .enabled, helper: standing), cli: "lowtalker")
             #expect(failure.exit == .helperNotApproved, "\(standing)")
             #expect(failure.said.contains("Keyboard helper: "))

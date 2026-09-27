@@ -18,7 +18,7 @@ import os
 ///
 /// The refusal is filed under every flavor's service name, because which one this would
 /// have been is exactly what is not known - and every reader already asks under a service
-/// name: `scripts/keyboard-helper log` and the onboarding step both do. A name of its own
+/// name: README's `log show` for the helper and the onboarding step both do. A name of its own
 /// would be one more subsystem for each of them to learn, for the one message that most
 /// needs finding. The arguments it prints say which plist it was. [LAW:no-silent-failure]
 let flavor: Flavor = {

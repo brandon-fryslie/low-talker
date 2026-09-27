@@ -38,27 +38,14 @@ struct FlavorOption: ParsableArguments {
     /// The installation a command acts on when none is stated, for the reason above. Named
     /// once, because the help text, this option and `ConfigSource` all say it.
     /// [LAW:one-source-of-truth]
-    static let defaultFlavor: Flavor = Bundle.main.executableURL.flatMap(carrier(of:)) ?? .development
-
-    /// [LAW:parse-dont-validate] Which installation's bundle holds the executable at this
-    /// path, or nil when none does. The bundle's identifier is the one fact that says so -
-    /// the same one the app reads to learn which copy it is - so nothing per-flavor is
-    /// written into the binary, and one build serves both bundles.
     ///
-    /// Links are resolved first. `Bundle.main` answers for the path the process was started
-    /// by, so a CLI reached through a link on PATH - the way a person without a checkout is
-    /// told to reach it - sees no bundle at all, and would act on the development helper from
-    /// inside the release app, refused by it. Measured: a tool inside `X.app/Contents` reads
-    /// X.app's identifier when run in place and nil when run through a symlink.
-    ///
-    /// The nearest enclosing `.app` is the carrier, wherever inside it project.yml puts the
-    /// binary, so the subpath is written in one place only. [LAW:one-source-of-truth]
-    static func carrier(of executable: URL) -> Flavor? {
-        let bundle = sequence(first: executable.resolvingSymlinksInPath()) { url in
-            url.pathComponents.count > 1 ? url.deletingLastPathComponent() : nil
-        }.first { $0.pathExtension == "app" }
-        return bundle.flatMap { Bundle(url: $0)?.bundleIdentifier }.flatMap(Flavor.init(bundleIdentifier:))
-    }
+    /// The enclosing bundle's identifier is the one fact that says which installation this
+    /// is - the same one the app reads to learn which copy it is - so nothing per-flavor is
+    /// written into the binary, and one build serves both bundles. `Carrier` resolves links
+    /// first: `Bundle.main` answers for the path the process was started by, and a CLI
+    /// reached through a link would otherwise act on the development helper from inside
+    /// the release app, refused by it.
+    static let defaultFlavor: Flavor = Bundle.main.executableURL.flatMap(Carrier.installation(of:)) ?? .development
 
     /// The installation this command acts on.
     var flavor: Flavor { stated ?? Self.defaultFlavor }

@@ -1,5 +1,5 @@
 import Foundation
-import Onboarding
+import Flavors
 import Testing
 
 private let repository = URL(fileURLWithPath: #filePath)
@@ -19,6 +19,6 @@ private let repository = URL(fileURLWithPath: #filePath)
         let target = try #require(yaml.range(of: "\n  lowtalker-cli:\n"), "project.yml declares no lowtalker-cli target")
         let product = try #require(yaml[target.upperBound...].split(separator: "\n").lazy
             .compactMap { $0.split(separator: "PRODUCT_NAME: ", maxSplits: 1).dropFirst().first }.first)
-        #expect("\(subpath)/\(product)" == CarriedCLI.pathInBundle)
+        #expect("\(subpath)/\(product)" == Carrier.cliInBundle)
     }
 }

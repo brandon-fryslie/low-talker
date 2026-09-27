@@ -127,7 +127,7 @@ public enum DriverInstall {
     /// - Parameter cli: the lowtalker binary this reader has - the running CLI's own path,
     ///   or the copy inside the app's bundle - never a bare name PATH may not hold.
     public static func command(_ cli: String, _ verbs: String) -> String {
-        "'\(cli.replacingOccurrences(of: "'", with: "'\\''"))' driver \(verbs)"
+        "\(Command.quoted(cli)) driver \(verbs)"
     }
 
     /// The click macOS waits for, said once for both places that say it.

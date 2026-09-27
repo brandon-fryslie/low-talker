@@ -24,7 +24,7 @@ import Testing
     func aCarriedCopyActsOnItsCarrier(flavor: Flavor) throws {
         let (executable, root) = try carried(by: flavor.bundleIdentifier)
         defer { try? FileManager.default.removeItem(at: root) }
-        #expect(FlavorOption.carrier(of: executable) == flavor)
+        #expect(Carrier.installation(of: executable) == flavor)
     }
 
     /// A link on PATH is how a person without a checkout reaches the CLI, and the process
@@ -34,15 +34,18 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
         let link = root.appending(path: "lowtalker")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: executable)
-        #expect(FlavorOption.carrier(of: link) == .release)
+        #expect(Carrier.installation(of: link) == .release)
     }
 
-    /// Carried by something that is neither installation - a loose build, or any other app -
-    /// is carried by none.
-    @Test func noInstallationCarriesAnythingElse() throws {
+    /// Carried by any other app is carried by no installation.
+    @Test func noInstallationCarriesAnotherAppsExecutable() throws {
         let (executable, root) = try carried(by: "com.example.other")
         defer { try? FileManager.default.removeItem(at: root) }
-        #expect(FlavorOption.carrier(of: executable) == nil)
-        #expect(FlavorOption.carrier(of: root.appending(path: "lowtalker")) == nil)
+        #expect(Carrier.installation(of: executable) == nil)
+    }
+
+    /// A loose build is a checkout's, which is the development copy.
+    @Test func aLooseBuildIsTheDevelopmentCopy() {
+        #expect(Carrier.installation(of: URL(fileURLWithPath: "/Users/someone/low-talker/.build/debug/lowtalker-keyboardd")) == .development)
     }
 }

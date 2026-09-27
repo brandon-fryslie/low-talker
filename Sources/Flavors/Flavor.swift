@@ -76,7 +76,7 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
     ///
     /// **The same string as the service, and that is load-bearing.** A flavor's helper can
     /// be registered two ways - `SMAppService` from inside the app, or a plist in
-    /// /Library/LaunchDaemons that `scripts/keyboard-helper` bootstraps - and exactly one
+    /// /Library/LaunchDaemons that `lowtalker helper install` bootstraps - and exactly one
     /// of them may hold the flavor at a time. Giving both paths this one label is what
     /// makes a second claimant fail loudly instead of quietly. Measured on this Mac:
     ///
