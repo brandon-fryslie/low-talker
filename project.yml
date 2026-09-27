@@ -28,7 +28,7 @@ settings:
     # the third. scripts/release refuses a build number no higher than the count of release
     # tags already pushed.
     MARKETING_VERSION: 0.1.0
-    CURRENT_PROJECT_VERSION: "4"
+    CURRENT_PROJECT_VERSION: "5"
   # A build to hand to someone else: the Developer ID certificate, which Gatekeeper trusts
   # and notarization accepts, in place of the dev identity nobody trusts. The app and
   # everything embedded in it change certificate together. scripts/sign-release builds
