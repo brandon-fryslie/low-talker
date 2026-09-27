@@ -80,6 +80,7 @@ public enum HelperJob {
         case heldByTheAppWithThePlistRemoved(plist: String, label: String, path: String)
         case launchctl(verb: String, status: Int32, said: String)
         case lostTheService(service: String)
+        case stillLoaded(label: String, after: String)
 
         public var description: String {
             switch self {
@@ -104,6 +105,8 @@ public enum HelperJob {
                 """
             case .launchctl(let verb, let status, let said):
                 "launchctl \(verb) exited \(status)\(said.isEmpty ? "" : ": \(said)")"
+            case .stillLoaded(let label, let after):
+                "\(after); taking the job back down failed, and one is still loaded under \(label): sudo launchctl bootout system/\(label)"
             case .lostTheService(let service):
                 """
                 launchd gave \(service) to another claimant, so the job was taken back down \
@@ -188,30 +191,30 @@ public enum HelperJob {
             try discard(staged)
             throw error
         }
-        if let holder {
-            try succeed(Command("/bin/launchctl", "bootout", "system/\(flavor.launchdLabel)"))
-            try discard(holder.path)
-        }
         let path = plistPath(for: flavor)
         do {
+            if let holder {
+                try succeed(Command("/bin/launchctl", "bootout", "system/\(flavor.launchdLabel)"))
+                try discard(holder.path)
+            }
             try discard(program)
             try FileManager.default.moveItem(atPath: staged, toPath: program)
             let written = try PropertyListSerialization.data(fromPropertyList: plist(for: flavor), format: .xml, options: 0)
             try written.write(to: URL(fileURLWithPath: path), options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o644, .ownerAccountID: 0, .groupOwnerAccountID: 0], ofItemAtPath: path)
             try succeed(Command("/bin/launchctl", "bootstrap", "system", path))
-        } catch {
-            try [staged, program, path].forEach(discard)
-            throw error
-        }
-        // A job that did not get the endpoint is taken back down: left loaded it would be a
-        // root process nobody can reach, restarted by KeepAlive forever. So is one whose
-        // endpoint could not be read.
-        do {
+            // A job that did not get the endpoint is taken back down: left loaded it would be
+            // a root process nobody can reach, restarted by KeepAlive forever. So is one whose
+            // endpoint could not be read.
             guard try record(for: flavor)?.holdsTheService == true else { throw Refusal.lostTheService(service: flavor.machServiceName) }
         } catch {
-            try succeed(Command("/bin/launchctl", "bootout", "system/\(flavor.launchdLabel)"))
-            try [program, path].forEach(discard)
+            // One way back from every step above, whichever one failed: nothing under the
+            // label, loaded or on disk. [LAW:single-enforcer]
+            _ = try Command("/bin/launchctl", "bootout", "system/\(flavor.launchdLabel)").run()
+            try [staged, program, path].forEach(discard)
+            // What launchd holds afterwards is the answer, not what bootout exited with, which
+            // is non-zero for a label that was never loaded. [LAW:no-silent-failure]
+            guard try record(for: flavor) == nil else { throw Refusal.stillLoaded(label: flavor.launchdLabel, after: "\(error)") }
             throw error
         }
         return "loaded a copy of \(helper.path) as \(flavor.launchdLabel), from \(path)"
