@@ -32,9 +32,9 @@ import Testing
     /// Each state draws its own icon: the ready engine listening, the wait and the failure
     /// their own.
     @Test func eachStateDrawsItsOwnIcon() {
-        #expect(EngineReadiness.preparing(.loading, since: launch).symbolName() == "hourglass")
-        #expect(EngineReadiness.failed("x").symbolName() == "exclamationmark.triangle.fill")
-        #expect(EngineReadiness.ready(.default, after: .seconds(5)).symbolName() == "mic.fill")
+        #expect(EngineReadiness.preparing(.loading, since: launch).statusGlyph() == .symbol("hourglass"))
+        #expect(EngineReadiness.failed("x").statusGlyph() == .symbol("exclamationmark.triangle.fill"))
+        #expect(EngineReadiness.ready(.default, after: .seconds(5)).statusGlyph() == .mark)
     }
 
     @Test func theIconNamesItsStateToAccessibility() {

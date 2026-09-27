@@ -16,6 +16,7 @@ struct FlavorTests {
         ("display name", { @Sendable (f: Flavor) in f.displayName }),
         ("config file", { @Sendable (f: Flavor) in f.configFileName }),
         ("app icon", { @Sendable (f: Flavor) in f.appIconName }),
+        ("status mark", { @Sendable (f: Flavor) in f.statusMarkName }),
         ("input method bundle identifier", { @Sendable (f: Flavor) in f.inputMethodBundleIdentifier }),
         ("input source identifier", { @Sendable (f: Flavor) in f.inputSourceIdentifier }),
         ("input method connection name", { @Sendable (f: Flavor) in f.inputMethodConnectionName }),
