@@ -1,8 +1,8 @@
 import AppKit
 import InputMethodKit
 
-/// The controller macOS offers every key to while this input method is the selected source,
-/// which declines every one of them.
+/// The controller macOS offers the modifier keys to while this input method is the selected
+/// source, which declines every one of them.
 ///
 /// An input method sits between the keyboard and whatever the person is typing into, so the
 /// keys it does not hand back are keys that never arrive anywhere. Declining all of them is
@@ -22,12 +22,28 @@ import InputMethodKit
 /// it; `InputMethodPlistTests` holds that string to this name.
 @objc(DictationInputController)
 public final class DictationInputController: IMKInputController {
-    /// Every event, declined. The signature is `IMKInputController`'s; returning false is
-    /// how it says "not mine", which is the whole behaviour this controller has toward
-    /// keys - low-input-method-s71.31s added insertion through a door of the app's, and
-    /// changed nothing here.
+    /// The events this controller is handed: changes of the modifier keys, and nothing
+    /// typed. What the text input system offers when nobody says is key-downs alone (0x400,
+    /// read off `super` on studious, 2026-09-27), which is every key typed and no modifier
+    /// ever moving. Asking for these instead is what lets the app hear a chord of modifiers
+    /// alone with no grant, and it means the keys a person types never reach this process.
+    override public func recognizedEvents(_: Any!) -> Int {
+        Int(NSEvent.EventTypeMask.flagsChanged.rawValue)
+    }
+
+    /// Every event, declined, and each one told to `ModifierChanges` as a change of the
+    /// modifier keys: `recognizedEvents` asks for nothing else. The signature is
+    /// `IMKInputController`'s; returning false is how it says "not mine", which is the whole
+    /// behaviour this controller has toward keys - low-input-method-s71.31s added insertion
+    /// through a door of the app's, and low-hotkey-aws.yvl the telling, and neither changed
+    /// the answer.
+    ///
+    /// Told whatever the event, rather than after asking which kind it is: what is told is
+    /// the state of the modifier keys read off the session, so an event that changed none of
+    /// them tells the app nothing it does not already hold. [LAW:dataflow-not-control-flow]
     override public func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
-        false
+        ModifierChanges.shared.moved(at: event.timestamp)
+        return false
     }
 
     /// The text input system gave this controller's client focus, which is the only way

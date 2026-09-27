@@ -100,7 +100,7 @@ let committer = Committer(label: "\(flavor.inputMethodPortName).commits")
 /// A door that will not open is not the end of this process, unlike the server above it.
 /// The controller's whole promise is that every key passes through untouched, so a person
 /// with this source selected keeps a working keyboard even when nothing here can insert.
-/// The fault names the `InsertionPort.NotHosted` case that stopped it - most often the name
+/// The fault names the `PortNotHosted` case that stopped it - most often the name
 /// already held by another instance of this input method, whose own cursor then answers the
 /// app. [LAW:no-silent-failure]
 let insertions: InsertionPort? = {
@@ -141,6 +141,25 @@ let insertions: InsertionPort? = {
         return nil
     }
 }()
+
+/// Every change of the modifier keys, told to this installation's app, which hears its
+/// hotkey from them when that is how it was asked to hear it. Off the main thread, which is
+/// where the keys are handled, and waiting on nothing: a change the app did not take is
+/// corrected by the next, since each carries the whole state.
+///
+/// Said in the log when how the telling fares changes, and not on every change: the app not
+/// listening is the ordinary state of an app hearing its hotkey some other way, and a line
+/// per modifier key pressed would bury everything else here. Every key still passes through
+/// whatever this says. [LAW:no-silent-failure]
+let tellingTheApp = Task.detached {
+    let sender = ModifierSender(flavor: flavor)
+    var fared: ModifierSender.Told?
+    for await held in ModifierChanges.shared.changes {
+        let told = sender.tell(held)
+        if told != fared { logger.log(level: told.isFault ? .error : .default, "\(told.description, privacy: .public)") }
+        fared = told
+    }
+}
 
 /// A cursor outlives its app unless someone says otherwise, and the text input system does
 /// not always say. This is where the workspace is watched for it. [LAW:effects-at-boundaries]

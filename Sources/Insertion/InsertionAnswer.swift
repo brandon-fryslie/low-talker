@@ -169,8 +169,9 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
 
 /// The wire, which is the one place either half turns a value into bytes or back.
 ///
-/// Two messages cross it, told apart by their Mach id: the greeting, empty, which the input
-/// method answers empty once it has admitted the sender, and the words.
+/// Three messages cross it, told apart by their Mach id: the greeting, empty, which the input
+/// method answers empty once it has admitted the sender; the words; and, the other way, the
+/// modifier keys the input method was just handed, which nobody answers.
 /// [LAW:single-enforcer]
 ///
 /// The request is the text and nothing else, so it crosses as its own UTF-8 and carries no
@@ -181,6 +182,7 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
 enum Wire {
     static let greeting: mach_msg_id_t = 1
     static let insert: mach_msg_id_t = 2
+    static let modifiers: mach_msg_id_t = 3
 
     static func request(_ text: String) -> Data { Data(text.utf8) }
 
@@ -201,5 +203,19 @@ enum Wire {
     /// is believed, and it refuses one at its own border, in `Client.init?`. [LAW:single-enforcer]
     static func answer(of data: Data) -> InsertionAnswer? {
         try? JSONDecoder().decode(InsertionAnswer.self, from: data)
+    }
+
+    /// Two words, the flags and then the moment, in this Mac's own byte order: both ends run
+    /// on the one machine.
+    static func modifiers(_ held: HeldModifiers) -> Data {
+        withUnsafeBytes(of: (held.flags, held.uptimeNanoseconds)) { Data($0) }
+    }
+
+    /// [LAW:parse-dont-validate] Held modifiers or nothing at all: bytes of any other length
+    /// are not a message this wire sends.
+    static func heldModifiers(of data: Data) -> HeldModifiers? {
+        guard data.count == MemoryLayout<(UInt64, UInt64)>.size else { return nil }
+        let (flags, uptime) = data.withUnsafeBytes { $0.loadUnaligned(as: (UInt64, UInt64).self) }
+        return HeldModifiers(flags: flags, uptimeNanoseconds: uptime)
     }
 }

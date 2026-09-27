@@ -9,7 +9,7 @@ import Foundation
 /// own choosing - the window server nanoseconds, CoreAudio the machine's raw ticks.
 /// Each becomes one of these at the seam that parses it, so nothing downstream holds
 /// a number whose clock and unit it has to remember.
-public struct HostTime: Hashable, Sendable {
+public struct HostTime: Hashable, Comparable, Sendable {
     public let uptime: Duration
 
     public init(uptime: Duration) {
@@ -28,5 +28,9 @@ public struct HostTime: Hashable, Sendable {
 
     public static func + (moment: HostTime, elapsed: Duration) -> HostTime {
         HostTime(uptime: moment.uptime + elapsed)
+    }
+
+    public static func < (moment: HostTime, later: HostTime) -> Bool {
+        moment.uptime < later.uptime
     }
 }

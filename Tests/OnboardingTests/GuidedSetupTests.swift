@@ -184,5 +184,15 @@ import Testing
     @Test func aHotkeySourceNamesTheGrantsTheListGivesIt() {
         #expect(HotkeySource.eventTap.asks == "needs Accessibility and Input Monitoring")
         #expect(HotkeySource.registeredHotKey.asks == "needs nothing")
+        #expect(HotkeySource.inputMethod.asks == "needs Input method")
+    }
+
+    /// The input method is one row serving both halves: a setup that hears through it needs
+    /// it switched on whatever the delivery, and one that neither hears nor delivers
+    /// through it does not.
+    @Test func theInputMethodRowServesItsHearingAsWellAsItsDelivery() {
+        #expect(OnboardingProbe.needed(delivery: .virtualKeyboard, source: .inputMethod).contains(.inputMethod))
+        #expect(!OnboardingProbe.needed(delivery: .virtualKeyboard, source: .inputMethod).contains(.inputMonitoring))
+        #expect(!OnboardingProbe.needed(delivery: .virtualKeyboard, source: .registeredHotKey).contains(.inputMethod))
     }
 }

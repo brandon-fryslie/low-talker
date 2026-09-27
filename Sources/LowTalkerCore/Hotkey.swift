@@ -114,6 +114,10 @@ public final class Hotkey {
     /// press it, and two spellings of one chord would be a hotkey the typist could type.
     /// [LAW:one-source-of-truth]
     ///
+    /// The input method hears what the event tap hears - modifiers alone, told apart by
+    /// side - so it listens for the same chord, and there is one chord of modifiers per
+    /// installation rather than a second spelling of it.
+    ///
     /// **A registered hot key cannot be a modifier alone**, so that hearing gets a key: Command+Option+X for the development copy, and
     /// Shift added for the release. Carbon matches modifiers exactly, so neither completes
     /// the other. No Control: the chord is held while the person speaks, and a Control chord
@@ -123,8 +127,8 @@ public final class Hotkey {
     nonisolated public static func defaultChord(for flavor: Flavor, heardBy hearing: HotkeySource) -> KeyChord {
         let x = Key(rawValue: UInt16(kVK_ANSI_X))
         return switch (hearing, flavor) {
-        case (.eventTap, .release): KeyChord(modifiers: .rightOption)
-        case (.eventTap, .development): KeyChord(modifiers: .rightOption, .rightCommand)
+        case (.eventTap, .release), (.inputMethod, .release): KeyChord(modifiers: .rightOption)
+        case (.eventTap, .development), (.inputMethod, .development): KeyChord(modifiers: .rightOption, .rightCommand)
         case (.registeredHotKey, .release): KeyChord(key: x, modifiers: [.leftShift, .leftCommand, .leftOption])
         case (.registeredHotKey, .development): KeyChord(key: x, modifiers: [.leftCommand, .leftOption])
         }
@@ -228,6 +232,7 @@ public final class Hotkey {
         let tap: any KeyboardTap = switch hearing {
         case .eventTap: GrantedKeyboardTap(granted: granted)
         case .registeredHotKey: RegisteredHotKeys()
+        case .inputMethod: InputMethodModifiers(flavor: flavor)
         }
         self.init(chords: [Self.defaultChord(for: flavor, heardBy: hearing)], tapThreshold: tapThreshold, tap: tap)
     }

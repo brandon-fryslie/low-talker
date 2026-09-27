@@ -86,6 +86,23 @@ private let anEditor = "com.example.editor"
         withExtendedLifetime(port) {}
     }
 
+    /// Hosted from the main actor, as the input method's top-level code hosts it, and
+    /// answered on the port's own queue. A closure formed there that took the main actor's
+    /// isolation trapped the input method on its first insert, after the words had landed -
+    /// measured on studious, 2026-09-27 - so the port takes only closures that hold none.
+    @MainActor @Test func aPortHostedOnTheMainActorAnswersOffIt() async throws {
+        let name = aPortNobodyElseUses()
+        let port = try InsertionPort(
+            portName: name, senders: try OwnProcess.identity(), queue: DispatchQueue(label: name),
+            told: { Issue.record("the port was told \($0)") }
+        ) { text in
+            Optional(text).map { InsertionAnswer.inserted(characters: $0.count, into: anEditor) } ?? .refused(.noClientHasFocus)
+        }
+
+        #expect(try await inserter(name).insert("hello") == Inserted(characters: 5, into: anEditor))
+        withExtendedLifetime(port) {}
+    }
+
     /// Nothing to say is still something to send. `inserted(characters: 0)` is a modelled
     /// outcome, and a zero-length payload has to arrive as an empty request rather than as
     /// no request, or it would be answered `requestWasNotText` and the count never reached.
@@ -150,7 +167,7 @@ private let anEditor = "com.example.editor"
         #expect {
             _ = try hostInsertion(name: name) { _ in .refused(.noClientHasFocus) }
         } throws: { error in
-            guard case InsertionPort.NotHosted.nameIsTaken(name)? = error as? InsertionPort.NotHosted else { return false }
+            guard case PortNotHosted.nameIsTaken(name)? = error as? PortNotHosted else { return false }
             return true
         }
         #expect(try await inserter(name).insert("hello") == Inserted(characters: 5, into: anEditor))
