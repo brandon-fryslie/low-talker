@@ -15,6 +15,13 @@ public struct Command {
         self.arguments = arguments
     }
 
+    /// One word as a shell reads it back: quoted whole, since a path can hold a space, with
+    /// any quote in it escaped. Every command a step prints is spelled through this.
+    /// [LAW:single-enforcer]
+    public static func quoted(_ word: String) -> String {
+        "'\(word.replacingOccurrences(of: "'", with: "'\\''"))'"
+    }
+
     public struct Output {
         public let status: Int32
         public let stdout: String

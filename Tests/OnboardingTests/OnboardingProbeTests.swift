@@ -20,6 +20,7 @@ import Testing
     static let holdingTheService = """
     system/ai.promptctl.low-talker.keyboardd = {
     \tactive count = 1
+    \tpath = (submitted by smd.338)
     \tstate = running
     \tendpoints = {
     \t\t"ai.promptctl.low-talker.keyboardd" = {
@@ -117,6 +118,33 @@ import Testing
         let standing = try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service, helper: Self.helper)
         #expect(standing == .answeringAsALaunchDaemon)
         #expect(standing.aHelperHasRun)
+    }
+
+    /// launchd reports the program as it was written, and a checkout's `.build/debug` is a
+    /// link, so a job loaded through one is still this installation's helper.
+    @Test func aPlistJobRunningThisInstallationsHelperThroughALinkIsAnswering() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let built = root.appending(path: "arm64-apple-macosx/debug")
+        try FileManager.default.createDirectory(at: built, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: root.appending(path: "debug"), withDestinationURL: built)
+        // Foundation resolves a link only on a path that exists, as a shipped helper does.
+        FileManager.default.createFile(atPath: built.appending(path: "lowtalker-keyboardd").path, contents: nil)
+        let throughTheLink = root.appending(path: "debug/lowtalker-keyboardd").path
+        let printed = Command.Output(
+            status: 0,
+            stdout: Self.installedByTheCLI.replacingOccurrences(of: "program = \(Self.helper.path)", with: "program = \(throughTheLink)"),
+            stderr: "")
+        #expect(try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service, helper: built.appending(path: "lowtalker-keyboardd")) == .answeringAsALaunchDaemon)
+    }
+
+    /// A job naming no path says nothing about who holds the label, so it is not read as
+    /// the app's. [LAW:no-silent-failure]
+    @Test func aJobNamingNoPathIsUnreadable() {
+        let printed = Command.Output(status: 0, stdout: Self.installedByTheCLI.replacingOccurrences(of: "\tpath = /Library/LaunchDaemons/ai.promptctl.low-talker.keyboardd.plist\n", with: ""), stderr: "")
+        #expect(throws: OnboardingUnreadable.self) {
+            try OnboardingProbe.standing(from: printed, label: Self.label, service: Self.service, helper: Self.helper)
+        }
     }
 
     /// The same job without the endpoint has not got the name, whoever's helper it runs.

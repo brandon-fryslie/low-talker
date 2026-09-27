@@ -59,6 +59,9 @@ public enum HelperJob {
                 lines.first { $0.hasPrefix("\(name) = ") }.map { String($0.dropFirst("\(name) = ".count)) } ?? ""
             }
             path = field("path")
+            // A record naming no path says nothing about who holds the label, and nothing
+            // is not an answer to act on. [LAW:no-silent-failure]
+            guard !path.isEmpty else { throw OnboardingUnreadable.noPath(label: label, record: printed.stdout) }
             program = field("program")
             holdsTheService = printed.stdout.contains("\"\(service)\" = {")
         }
@@ -70,6 +73,7 @@ public enum HelperJob {
         case notRoot
         case noHelper(String)
         case signedAdHoc(String)
+        case unreadableSignature(path: String, said: String)
         case heldByTheApp(label: String, path: String)
         case launchctl(verb: String, status: Int32, said: String)
         case lostTheService(service: String)
@@ -82,6 +86,8 @@ public enum HelperJob {
                 "no keyboard helper at \(path), which is where this lowtalker's own is shipped"
             case .signedAdHoc(let path):
                 "\(path) is signed ad hoc, so it would admit no caller and refuses to start; build it with make helper, which signs it"
+            case .unreadableSignature(let path, let said):
+                "codesign could not read \(path): \(said)"
             case .heldByTheApp(let label, let path):
                 """
                 \(label) is held by the app's own registration, through SMAppService - launchd \
@@ -104,7 +110,7 @@ public enum HelperJob {
 
     /// The command a step names, spelled so it pastes into a shell whatever the path holds.
     public static func command(_ cli: String, _ verb: String, flavor: Flavor) -> String {
-        "sudo '\(cli.replacingOccurrences(of: "'", with: "'\\''"))' helper \(verb) --flavor \(flavor)"
+        "sudo \(Command.quoted(cli)) helper \(verb) --flavor \(flavor)"
     }
 
     /// Where this flavor's job is written.
@@ -135,6 +141,7 @@ public enum HelperJob {
         // A helper signed ad hoc admits no caller and refuses to start, for a reason it
         // logs; said here too, before a job is loaded that would only start and stop.
         let signature = try Command("/usr/bin/codesign", "-dvv", helper.path).run()
+        guard signature.status == 0 else { throw Refusal.unreadableSignature(path: helper.path, said: signature.merged) }
         guard signature.merged.split(separator: "\n").contains(where: { $0.hasPrefix("Authority=") }) else {
             throw Refusal.signedAdHoc(helper.path)
         }
@@ -147,21 +154,27 @@ public enum HelperJob {
         let path = plistPath(for: flavor)
         let written = try PropertyListSerialization.data(fromPropertyList: plist(for: flavor, helper: helper), format: .xml, options: 0)
         try written.write(to: URL(fileURLWithPath: path), options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o644, .ownerAccountID: 0, .groupOwnerAccountID: 0], ofItemAtPath: path)
-        // The job an earlier install loaded goes now that nothing is left to refuse, and a
-        // plist under another file name goes with it, or it would load first at the next
-        // boot and hold the label against this one. [LAW:no-ambient-temporal-coupling]
-        if let holder {
-            try succeed(Command("/bin/launchctl", "bootout", "system/\(flavor.launchdLabel)"))
-            if holder.path != path { try FileManager.default.removeItem(atPath: holder.path) }
-        }
-        try succeed(Command("/bin/launchctl", "bootstrap", "system", path))
-        // A job that did not get the endpoint is taken back down: left loaded it would be a
-        // root process nobody can reach, restarted by KeepAlive forever. [LAW:no-silent-failure]
-        guard try record(for: flavor)?.holdsTheService == true else {
-            try succeed(Command("/bin/launchctl", "bootout", "system/\(flavor.launchdLabel)"))
-            try FileManager.default.removeItem(atPath: path)
-            throw Refusal.lostTheService(service: flavor.machServiceName)
+        // From here every failure takes the plist back out: left behind it loads at the next
+        // boot ahead of the app and holds the label against it. [LAW:no-silent-failure]
+        do {
+            try FileManager.default.setAttributes([.posixPermissions: 0o644, .ownerAccountID: 0, .groupOwnerAccountID: 0], ofItemAtPath: path)
+            // The job an earlier install loaded goes now that nothing is left to refuse, and a
+            // plist under another file name goes with it, or it would load first at the next
+            // boot and hold the label against this one. [LAW:no-ambient-temporal-coupling]
+            if let holder {
+                try succeed(Command("/bin/launchctl", "bootout", "system/\(flavor.launchdLabel)"))
+                if holder.path != path { try discard(holder.path) }
+            }
+            try succeed(Command("/bin/launchctl", "bootstrap", "system", path))
+            // A job that did not get the endpoint is taken back down: left loaded it would be
+            // a root process nobody can reach, restarted by KeepAlive forever.
+            guard try record(for: flavor)?.holdsTheService == true else {
+                try succeed(Command("/bin/launchctl", "bootout", "system/\(flavor.launchdLabel)"))
+                throw Refusal.lostTheService(service: flavor.machServiceName)
+            }
+        } catch {
+            try discard(path)
+            throw error
         }
         return "loaded \(helper.path) as \(flavor.launchdLabel), from \(path)"
     }
@@ -176,11 +189,11 @@ public enum HelperJob {
         guard geteuid() == 0 else { throw Refusal.notRoot }
         let holder = try record(for: flavor)
         let path = plistPath(for: flavor)
-        if FileManager.default.fileExists(atPath: path) { try FileManager.default.removeItem(atPath: path) }
+        try discard(path)
         guard let holder else { return "no job held \(flavor.launchdLabel)" }
         guard holder.loadedFromLaunchDaemons else { throw Refusal.heldByTheApp(label: flavor.launchdLabel, path: holder.path) }
         try succeed(Command("/bin/launchctl", "bootout", "system/\(flavor.launchdLabel)"))
-        if holder.path != path, FileManager.default.fileExists(atPath: holder.path) { try FileManager.default.removeItem(atPath: holder.path) }
+        if holder.path != path { try discard(holder.path) }
         return "removed the job under \(flavor.launchdLabel)"
     }
 
@@ -188,6 +201,11 @@ public enum HelperJob {
         try Record(
             Command("/bin/launchctl", "print", "system/\(flavor.launchdLabel)").run(),
             label: flavor.launchdLabel, service: flavor.machServiceName)
+    }
+
+    /// A plist gone, whether or not it was there to begin with.
+    private static func discard(_ path: String) throws {
+        if FileManager.default.fileExists(atPath: path) { try FileManager.default.removeItem(atPath: path) }
     }
 
     private static func succeed(_ command: Command) throws {

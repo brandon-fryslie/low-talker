@@ -27,12 +27,13 @@ public enum OnboardingProbe {
     /// a holder outside launchd by the field launchd answers with.
     /// [LAW:no-silent-failure]
     ///
-    /// - Parameter helper: the keyboard helper that shipped with this reader, the one a job
-    ///   loaded from /Library/LaunchDaemons must run to count as this installation's.
-    public static func helperStanding(label: String, service: String, helper: URL) throws -> HelperStanding {
+    /// - Parameter cli: the lowtalker binary this reader has. The helper shipped with it is
+    ///   the one a job loaded from /Library/LaunchDaemons must run to count as this
+    ///   installation's.
+    public static func helperStanding(label: String, service: String, cli: String) throws -> HelperStanding {
         try standing(
             from: Command("/bin/launchctl", "print", "system/\(label)").run(),
-            label: label, service: service, helper: helper)
+            label: label, service: service, helper: Carrier.keyboardHelper(shippedWith: URL(fileURLWithPath: cli)))
     }
 
     /// What launchd said, read.
@@ -52,7 +53,9 @@ public enum OnboardingProbe {
         guard job.loadedFromLaunchDaemons else {
             return job.holdsTheService ? .holdingTheService : .anotherJobHoldsTheService
         }
-        return job.program == helper.resolvingSymlinksInPath().path && job.holdsTheService
+        // Both sides resolved: launchd reports the program as it was written, and a
+        // checkout's `.build/debug` is itself a link.
+        return URL(fileURLWithPath: job.program).resolvingSymlinksInPath() == helper.resolvingSymlinksInPath() && job.holdsTheService
             ? .answeringAsALaunchDaemon : .aBootstrappedJobHoldsTheLabel
     }
 
@@ -232,7 +235,7 @@ public extension OnboardingProbe {
             let standing = try helperStanding(
                 label: flavor.launchdLabel,
                 service: flavor.machServiceName,
-                helper: Carrier.keyboardHelper(shippedWith: URL(fileURLWithPath: cli)))
+                cli: cli)
                 .sharpenedByTheAppsOwnRegistration(approvalPending: approvalPending)
             return (.keyboardHelper(standing, flavor: flavor, cli: cli), standing.aHelperHasRun)
         } catch { return (.unreadable(.keyboardHelper, error), false) }
@@ -253,6 +256,7 @@ public extension OnboardingProbe {
 public enum OnboardingUnreadable: Error, CustomStringConvertible, Equatable {
     case launchdRefused(label: String, status: Int32, complaint: String)
     case plistUnreadable(path: String, reason: String)
+    case noPath(label: String, record: String)
 
     public var description: String {
         switch self {
@@ -260,6 +264,8 @@ public enum OnboardingUnreadable: Error, CustomStringConvertible, Equatable {
             "could not read what launchd holds for \(label): `launchctl print` exited \(status)\(complaint.isEmpty ? "" : ": \(complaint)")"
         case .plistUnreadable(let path, let reason):
             "could not read \(path): \(reason)"
+        case .noPath(let label, let record):
+            "launchd reports a job under \(label) with no path, so who holds it is unknown: \(record)"
         }
     }
 }

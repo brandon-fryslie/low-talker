@@ -23,6 +23,14 @@ public enum Carrier {
     /// plist names, which `HelperPlistTests` holds this to.
     public static let helperInBundle = "Contents/MacOS/lowtalker-keyboardd"
 
+    /// Where an app bundle keeps the lowtalker CLI, which onboarding names to a person who
+    /// installed only the app: project.yml's `lowtalker-cli` embed, which `CarriedCLITests`
+    /// holds this to, since xcodegen cannot read Swift.
+    public static let cliInBundle = "Contents/Helpers/lowtalker"
+
+    /// The CLI inside `bundle`.
+    public static func cli(in bundle: URL) -> String { bundle.appending(path: cliInBundle).path }
+
     /// The keyboard helper that shipped with this executable: the one in the enclosing
     /// app, or the one built beside it.
     public static func keyboardHelper(shippedWith executable: URL) -> URL {

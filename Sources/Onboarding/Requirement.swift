@@ -417,8 +417,10 @@ public enum HelperStanding: Sendable, Hashable, CaseIterable {
     /// A job loaded from /Library/LaunchDaemons runs the helper this installation shipped
     /// and holds the service: what `lowtalker helper install` loads, which needs sudo and
     /// no approval anyone has to click, so an agent can bring a helper up on a Mac with no
-    /// checkout. The app's own registration is shadowed by it and never spawns, which
-    /// costs nothing while this job answers.
+    /// checkout. The app's own registration never spawns while it holds the label, and BTM
+    /// binds that registration to this job's plist - measured, README "The keyboard
+    /// helper" - so removing the job takes the app's registration with it, and the app's
+    /// helper is registered again from its step.
     case answeringAsALaunchDaemon
     /// A job under this flavor's label is loaded, and something else holds the service.
     ///
