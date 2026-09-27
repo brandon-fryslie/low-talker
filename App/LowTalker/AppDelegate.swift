@@ -242,15 +242,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// with a live tap in front of the session's keyboard. [LAW:no-ambient-temporal-coupling]
     private var quitting = false
 
-    /// The words the last press copied, while no press has begun since: what the Insert
-    /// Dictation service hands back, and what the status item's icon is drawn from, so the
-    /// icon cannot say something the service would not return. [LAW:one-source-of-truth]
-    private var lastDictation: String? {
-        didSet { drawStatusIcon() }
-    }
-
-    private var wordsOnClipboard: Bool { lastDictation != nil }
-
     /// Why the last press's words reached no cursor, while no press has begun since.
     private var lastFailure: String?
 
@@ -259,8 +250,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // these icons in the menu bar and this label is what tells them apart - to a
         // reader with VoiceOver, and to an agent reading the bar over Accessibility.
         statusItem.button?.image = NSImage(
-            systemSymbolName: engineReadiness.symbolName(wordsOnClipboard: wordsOnClipboard),
-            accessibilityDescription: engineReadiness.iconDescription(for: Self.flavor.displayName, wordsOnClipboard: wordsOnClipboard))
+            systemSymbolName: engineReadiness.symbolName(),
+            accessibilityDescription: engineReadiness.iconDescription(for: Self.flavor.displayName))
     }
 
     /// Takes `setup` down to the loop: the old loop's hotkey comes down first, ending any
@@ -293,8 +284,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // replaced would be the worse failure of the two. [LAW:no-silent-failure]
             do { try await previous.dictation.finish() } catch { report(.failure(error)) }
         }
-        // `lastDictation` is left as it stands: a session the wait let finish may just
-        // have copied, and words on the clipboard stay there whichever delivery comes next.
         // [LAW:no-ambient-temporal-coupling] The delivery is made ready before the hotkey
         // goes up, so no press is heard that has nowhere to go yet, and the one status write
         // below comes after every half has answered - nothing can say the loop works before
@@ -329,7 +318,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let hearing = hearable.flatMap {
             Result {
                 try hotkey.start({ [unowned self] transition in
-                    if case .began = transition { (lastDictation, lastFailure) = (nil, nil) }
+                    if case .began = transition { lastFailure = nil }
                     dictation.press(transition)
                 }, onLapse: { [unowned self] in report($0) })
             }.mapError { error in
@@ -669,11 +658,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         show(.preparing(nil, since: launched))
         statusItem.isVisible = true
-        // The Insert Dictation service, declared under NSServices in project.yml, is
-        // answered by this delegate. The update makes a freshly built copy's entry
-        // known without a logout.
-        NSApp.servicesProvider = self
-        NSUpdateDynamicServices()
         _ = engine
         showHotkeyStatus("starting…")
         Task { await listen() }
@@ -877,17 +861,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch outcome {
         case .success(let session):
             sessions.notice("\(session.description, privacy: .public): \(session.transcript.text, privacy: .private)")
-            // Whatever left the words on the clipboard: the icon says words are waiting and
-            // the Insert Dictation service can place them. [LAW:no-silent-failure]
-            lastDictation = session.performed.compactMap {
-                switch $0.what {
-                case .copied(let text): text
-                // Named rather than defaulted, so an outcome added later that also leaves
-                // words on the clipboard cannot compile past this and silently never reach
-                // the icon or the Service. [LAW:no-silent-failure]
-                case .typed, .pressed, .clicked, .scrolled, .inserted: nil
-                }
-            }.last
         case .failure(let error):
             // [LAW:no-silent-failure] The words went nowhere, so the menu says why, in full:
             // only the person who dictated them reads it. A stopped route is named by what
@@ -923,37 +896,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .comeDown:
             showHotkeyStatus("off — kept lapsing; choose a hotkey below to start it again")
         }
-    }
-
-    // MARK: - the Insert Dictation service
-
-    /// The Insert Dictation service: the words of the last completed dictation, handed to
-    /// the app that asked, which puts them at its cursor. No key is posted and nothing is
-    /// pressed in that app, so it needs no grant; the app's own Services machinery does the
-    /// inserting.
-    ///
-    /// It hands back what is ready and drives nothing: the user ends their own dictation —
-    /// releasing a hold, or a second tap — and the words land in `lastDictation` the moment
-    /// that session is heard, the same moment they reach the clipboard and the icon becomes
-    /// one. So a service call is a read, not a wait: it cannot end a listening whose words
-    /// are not yet transcribed and then return the press before it, and it cannot block the
-    /// main actor the transcription needs. [LAW:no-ambient-temporal-coupling]
-    ///
-    /// [LAW:no-silent-failure] With no words ready it refuses with a reason rather than
-    /// inserting nothing. `began` clears `lastDictation`, so a press in flight refuses until
-    /// it completes rather than serving the one before it; under the virtual keyboard, where
-    /// a session types rather than copies, nothing is ever left here and the service has
-    /// nothing to insert, which is right — those words are already in the app.
-    @objc func insertDictation(_ pasteboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
-        guard let words = lastDictation else {
-            let reason = "no dictation ready to insert — dictate first, and insert once the words are on the clipboard"
-            error.pointee = reason as NSString
-            log.notice("insert dictation: \(reason, privacy: .public)")
-            return
-        }
-        pasteboard.clearContents()
-        pasteboard.setString(words, forType: .string)
-        log.notice("insert dictation: returned \(words.count, privacy: .public) characters")
     }
 
     // MARK: - the menu
@@ -1030,7 +972,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if case .preparing = engineReadiness { menu.addItem(readout("A press now is heard once the model is ready")) }
         menu.addItem(readout("Microphone: \(microphone)"))
         menu.addItem(readout("Hotkey: \(hotkeyStatus)"))
-        if wordsOnClipboard { menu.addItem(readout("Your last dictation was copied to the clipboard")) }
         lastFailure.map { menu.addItem(readout("Your last dictation was not placed: \($0)")) }
         // Every requirement, met or not, and its step under it as the lines it was
         // written in - one item per line, so nothing here wraps text the requirement

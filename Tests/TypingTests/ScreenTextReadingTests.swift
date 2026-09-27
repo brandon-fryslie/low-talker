@@ -20,9 +20,8 @@ import Testing
         #expect(try TargetApp.text(from: .success, value: "" as CFTypeRef) == .answeredEmpty)
     }
 
-    /// The two `AXError`s that mean the attribute is absent, which `SystemAlerts` and
-    /// `PasteMenuItem` also count as absence. An element really holding nothing is a
-    /// reading, and a run may act on it.
+    /// The two `AXError`s that mean the attribute is absent, which `SystemAlerts` also
+    /// counts as absence. An element really holding nothing is a reading, and a run may act on it.
     @Test func theTwoAnswersThatMeanThereIsNoTextAreAReading() throws {
         #expect(try TargetApp.text(from: .noValue, value: nil) == .noValue)
         #expect(try TargetApp.text(from: .attributeUnsupported, value: nil) == .noValue)

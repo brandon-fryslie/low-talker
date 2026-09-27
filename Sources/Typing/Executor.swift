@@ -26,11 +26,10 @@ public struct Executor {
     public typealias Pointers = @MainActor (BundleID) -> Pointer
 
     /// Where the actions go. [LAW:types-are-the-program] One value, so an executor that
-    /// copies holds no keyboard it could reach for, and one that types holds no clipboard.
+    /// types holds no inserter it could reach for, and one that inserts holds no keyboard.
     private enum Output {
         /// `hotkeys` are the chords the tap listens for, which no action may press.
         case devices(keyboard: Keyboards, mouse: Pointers, hotkeys: Set<KeyChord>)
-        case clipboard(Clipboard)
         /// The input method puts the words at the cursor itself.
         case insertion(any Inserter)
     }
@@ -41,13 +40,6 @@ public struct Executor {
     /// `hotkeys` are the chords the tap listens for, which no action may press.
     public init(keyboard: @escaping Keyboards, mouse: @escaping Pointers, hotkeys: Set<KeyChord>, log: Logger = Executor.log) {
         output = .devices(keyboard: keyboard, mouse: mouse, hotkeys: hotkeys)
-        self.log = log
-    }
-
-    /// Text at the focus left on the clipboard for the user to paste; nothing typed or
-    /// clicked. Nothing here can press a key, so there is no hotkey to refuse.
-    public init(copyingTo clipboard: Clipboard, log: Logger = Executor.log) {
-        output = .clipboard(clipboard)
         self.log = log
     }
 
@@ -78,10 +70,6 @@ public struct Executor {
             /// is the acceleration loop's cost and the number worth reading off a run.
             case clicked(at: ScreenPoint, button: MouseButton, times: Clicks, reports: Int)
             case scrolled(at: ScreenPoint, vertical: WheelCounts, horizontal: WheelCounts)
-            /// Left on the clipboard, where the user pastes it: `into` is the app that was
-            /// in front, not an app the text reached. The words themselves, because a copy is
-            /// something the user can still ask for, through the Insert Dictation service.
-            case copied(String)
             /// Committed at the cursor by the input method. The app is `into`, which for
             /// this case is the app the words actually reached and not necessarily the one
             /// this route was decided in front of: the person can move between the chord and
@@ -92,10 +80,10 @@ public struct Executor {
 
         public let what: What
         /// The app this outcome is about, which each case above says its own relation to:
-        /// the app typed into, the app a click landed in, the app in front while words went
-        /// to the clipboard, the app whose cursor took an insert. One field and not one per
-        /// case, so a reader of a list of these - the session line - has one place to look
-        /// and cannot be handed two apps that disagree. [LAW:one-source-of-truth]
+        /// the app typed into, the app a click landed in, the app whose cursor took an insert.
+        /// One field and not one per case, so a reader of a list of these - the session line -
+        /// has one place to look and cannot be handed two apps that disagree.
+        /// [LAW:one-source-of-truth]
         public let into: BundleID
         public let acknowledged: Duration
 
@@ -105,7 +93,6 @@ public struct Executor {
             case .pressed(let chord): "pressed \(Hotkey.held(chord)) into \(into.rawValue)"
             case .clicked(let at, let button, let times, let reports): "clicked \(button.rawValue) \(times.spelled) at \(at) after \(reports) move reports into \(into.rawValue)"
             case .scrolled(let at, let vertical, let horizontal): "scrolled vertical \(vertical.rawValue) horizontal \(horizontal.rawValue) at \(at) into \(into.rawValue)"
-            case .copied(let text): "copied \(text.count) characters to the clipboard with \(into.rawValue) in front"
             case .inserted(let characters): "inserted \(characters) characters at the cursor in \(into.rawValue)"
             }
             return "\(act), key-up to acknowledged \(Int(acknowledged / .milliseconds(1))) ms"
@@ -124,8 +111,8 @@ public struct Executor {
     /// with no hotkey behind it, `lowtalker type`, to invent the chord that started it.
     /// [LAW:types-are-the-program]
     ///
-    /// `layout` is read only by an executor that types: copying needs no layout, so a
-    /// layout that cannot be read costs the clipboard nothing.
+    /// `layout` is read only by an executor that types: inserting needs no layout, so a
+    /// layout that cannot be read costs an insert nothing.
     @discardableResult
     public func perform(_ actions: [Action], in frontmost: BundleID, on layout: @autoclosure () throws -> KeyboardLayout, since keyUp: ContinuousClock.Instant) async throws -> [Performed] {
         let lowered: [Step]
@@ -133,8 +120,6 @@ public struct Executor {
         case .devices(let keyboard, let mouse, let hotkeys):
             let layout = try layout()
             lowered = try actions.map { try lower($0, in: frontmost, on: layout, keyboard: keyboard, mouse: mouse, hotkeys: hotkeys) }
-        case .clipboard(let clipboard):
-            lowered = try actions.map { try copy($0, in: frontmost, to: clipboard) }
         case .insertion(let inserter):
             lowered = try actions.map { try insert($0, through: inserter) }
         }
@@ -161,22 +146,6 @@ public struct Executor {
     /// [LAW:dataflow-not-control-flow]
     private struct Step {
         let perform: @MainActor () async throws -> (what: Performed.What, into: BundleID)
-    }
-
-    private func copy(_ action: Action, in frontmost: BundleID, to clipboard: Clipboard) throws -> Step {
-        switch action {
-        case .insertText(let text, .focus):
-            return Step {
-                try clipboard.write(text)
-                return (.copied(text), frontmost)
-            }
-        // Text for a named app included: the clipboard reaches whatever the user pastes
-        // into, so an action that names its app is one this output would only pretend to.
-        case .insertText(_, .app), .sendKeys, .click, .scroll, .clickElement:
-            throw NeedsTheVirtualKeyboard(action: action, instead: "puts dictation on the clipboard")
-        case .activateApp, .openURL, .runShortcut, .pipe:
-            throw NotAnInput(action: action)
-        }
     }
 
     private func insert(_ action: Action, through inserter: any Inserter) throws -> Step {

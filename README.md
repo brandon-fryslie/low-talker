@@ -305,7 +305,7 @@ A chord is modifier names and one key joined by `+`. Modifiers are the config fi
 
 The exit code says what went wrong, so a script can act on it without reading stderr, and `act` exits the same way: 3 when the text or a chord cannot be typed here and nothing was typed, 4 when the helper cannot be reached because this installation's helper is not the one answering, 5 when the helper cannot be reached because the driver extension is not activated. Anything else is 1, with the account on stderr, and a misspelled chord is a usage error, 64. The helper is tried before anything is read about it: only when it cannot be reached are the driver and the helper read, and the unmet row is printed with its step, the same row and step `lowtalker onboard` prints.
 
-`scripts/live-type-check` types into TextEdit and Terminal with these commands, presses Return with `keys`, checks that text the layout cannot type exits 3 and leaves the document unchanged, and compares the pasteboard before and after. It reads back through the probe `scripts/live-paste-check` uses, under the same conditions: an unlocked screen and a terminal with Accessibility.
+`scripts/live-type-check` types into TextEdit and Terminal with these commands, presses Return with `keys`, checks that text the layout cannot type exits 3 and leaves the document unchanged, and compares the pasteboard before and after. It reads back through `scripts/live-probe`, under the same conditions: an unlocked screen and a terminal with Accessibility.
 
 ## Deliveries
 
@@ -339,19 +339,6 @@ The model is loaded before the tap goes up, so `ready: hold Right Command+Right 
 The app wires the same loop to the real microphone, the WhisperKit engine and the root keyboard helper, and writes each session to the unified log under the `dictation` category rather than to stdout. On this Mac it launched, loaded `large-v3-v20240930_turbo_632MB` and armed the hotkey, the model ready about 2.7 seconds after launch; two utterances spoken at the microphone were transcribed and typed into TextEdit, 26 characters and 24 characters, 649 ms and 668 ms after key-up. A separate run played a recorded fixture through the speakers for the microphone to hear and typed "Hello world, this is Low Talker." into TextEdit. Both times fall in the range the batch column of the table under "The latency harness" shows for the default model, and both are more than twice the 300 ms the loop is aiming at; getting under that is the encoder's problem, not this loop's.
 
 The loop is its own module, `Sources/Dictation`, and the microphone, engine, router, executor, keyboard layout, frontmost-app reader and the reporter that hears the outcome are values it is given, so the whole of it runs under `swift test` against a fake of each. What legitimately differs between the surfaces crosses one boundary rather than being spelled three times: the app, `lowtalker act` and `lowtalker dictate` all build their executor through `Executor.guarding`, so the guard that refuses a keystroke once the operator has interrupted or the target app has left the front gives one answer in all three.
-
-## Paste
-
-Paste is a CLI command, kept as it stands, and not the app's inserter. That is the keyboard helper, which the app drives today through the same executor `lowtalker act` and `lowtalker dictate` above build.
-
-    swift run lowtalker paste "hello there"            # paste into the frontmost app now
-    swift run lowtalker paste "hello there" --delay 3  # three seconds to bring the receiving app forward
-
-The text goes on the pasteboard and the frontmost app is asked to paste through Accessibility: its own Paste menu item, the one bound to Cmd+V, is pressed, and the prior pasteboard contents go back once the app has run it, every item and every type, images included. A posted Cmd+V says nothing about when the app acts on it, and a clipboard manager pulling the pasteboard is indistinguishable from the paste, so neither serves as the signal. No wait is invented: Accessibility gives up on an app that does not answer after its own messaging timeout, 1.5 s by default, and the pasteboard goes back then. The line printed names the app and says whether the pasteboard was `restored`; when something else takes the pasteboard during the paste, that is left in place and the line says so. With no app frontmost, as at the lock screen, there is nothing to ask and the command says so. An app with no Cmd+V menu item cannot be pasted into this way; the command says so and names it. An app whose Paste item is disabled is not pressed either, since a press on a disabled item does nothing: apps validate that item on a one-second clock of their own, so the command gives a reading taken before the text went on the pasteboard one period to change before it says the item is disabled. An app that takes the press and then stops answering leaves the paste unknown, and the command says so rather than that it landed or did not: retrying may paste twice. The item carries nspasteboard.org's transient marker, so clipboard managers that honor it do not keep the dictated text.
-
-Pressing another app's menu item needs Accessibility, charged to the terminal for this command; without it the command prints `Accessibility is off for the calling process; grant it in System Settings > Privacy & Security > Accessibility`.
-
-`scripts/live-paste-check` pastes into TextEdit and Terminal, checks what landed (the file TextEdit writes when its window is closed, the text Terminal echoes, read through Accessibility), and compares the pasteboard before and after. It needs an unlocked screen and uses no AppleScript, because an Automation prompt nobody answers becomes a denial.
 
 ## Insert
 

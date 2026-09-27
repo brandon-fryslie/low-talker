@@ -33,8 +33,8 @@ public struct Transcript: Hashable, Codable, Sendable {
     /// drops whitespace-only input to no words, but the engine can hand back a lone
     /// whitespace word, so an empty utterance is this predicate — not `text.isEmpty`,
     /// which a whitespace-only word slips past.
-    /// [LAW:one-source-of-truth] one test for "nothing said", so the route that inserts
-    /// nothing and the Insert Dictation service that refuses agree on what nothing is.
+    /// [LAW:one-source-of-truth] one test for "nothing said", so a route that emits nothing
+    /// and the executor that inserts nothing agree on what nothing is.
     public var isBlank: Bool {
         !text.contains { !$0.isWhitespace }
     }

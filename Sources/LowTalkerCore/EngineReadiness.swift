@@ -45,22 +45,21 @@ public enum EngineReadiness: Sendable, Equatable {
         }
     }
 
-    /// The SF Symbol the status item draws. `wordsOnClipboard` only shows once the engine
-    /// is ready: a press waits for the engine, so no words can be waiting before it is.
-    public func symbolName(wordsOnClipboard: Bool) -> String {
+    /// The SF Symbol the status item draws.
+    public func symbolName() -> String {
         switch self {
         case .preparing: "hourglass"
-        case .ready: wordsOnClipboard ? "doc.on.clipboard.fill" : "mic.fill"
+        case .ready: "mic.fill"
         case .failed: "exclamationmark.triangle.fill"
         }
     }
 
     /// What the icon says to VoiceOver, and to an agent reading the menu bar over
     /// Accessibility, for the installation named `name`.
-    public func iconDescription(for name: String, wordsOnClipboard: Bool) -> String {
+    public func iconDescription(for name: String) -> String {
         switch self {
         case .preparing: "\(name): preparing the model"
-        case .ready: wordsOnClipboard ? "\(name): last dictation copied to the clipboard" : name
+        case .ready: name
         case .failed: "\(name): the model failed to load"
         }
     }
