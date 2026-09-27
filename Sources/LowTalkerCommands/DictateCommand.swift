@@ -34,27 +34,29 @@ struct DictateCommand: AsyncParsableCommand {
         let reporter = PhaseReporter()
         let transcriber = try await WhisperKitTranscriber.load(options.model, in: options.store(), from: source.source, phase: reporter.report)
         let capture = AudioCapture()
-        // The resting mode is not read from the config here, and not because the config is
-        // unavailable: a command run from a terminal is watched by the operator who ran it
-        // and ends when they interrupt it, so the reason to hold the microphone between
-        // presses - an agent running all day that the user has to be able to trust - is
-        // not this command's situation. The app is where that setting is honoured.
+        // The config is read for its chords alone. The resting mode is not taken from it,
+        // and not because it is unavailable: a command run from a terminal is watched by the
+        // operator who ran it and ends when they interrupt it, so the reason to hold the
+        // microphone between presses - an agent running all day that the user has to be
+        // able to trust - is not this command's situation. The app is where that setting
+        // is honoured.
+        let config = try Config.load(for: installation.flavor).config
         try capture.start(try await MicrophonePermission().request().grant(), atRest: .shut)
         // Readied before the tap goes up, so the first press opens a microphone already reached.
         capture.waitUntilReadied()
         // Watched before the tap goes up, so no key can be down when an interrupt lands.
         let interrupt = Interrupt.watched()
         let helper = HelperConnection(flavor: installation.flavor)
-        // Heard by the event tap, named once here: the chord, the tap that hears it and the
-        // words it is printed in all read this one value. [LAW:one-source-of-truth]
+        // Heard by the event tap, named once here: the chords, the tap that hears them and
+        // the words they are printed in all read this one value and the config.
+        // [LAW:one-source-of-truth]
         let hearing = HotkeySource.eventTap
-        let chord = Hotkey.defaultChord(for: installation.flavor, heardBy: hearing)
         // [LAW:decomposition] What this installation listens for and what its typist must
         // refuse to press are two sets that happened to be equal while there was one
-        // installation. Listening is this copy's own chord - hearing the other's would be
+        // installation. Listening is this copy's own chords - hearing the other's would be
         // dictating on somebody else's hotkey - while refusing has to cover every chord
         // any copy listens for, because the keystrokes reach macOS as hardware. The hotkey
-        // below hears this copy's chord alone.
+        // below hears this copy's chords alone.
         let dictation = Dictation(
             capture: capture,
             transcriber: { transcriber },
@@ -70,7 +72,7 @@ struct DictateCommand: AsyncParsableCommand {
                 }
             }
         )
-        let hotkey = Hotkey(for: installation.flavor, heardBy: hearing)
+        let hotkey = Hotkey(for: installation.flavor, heardBy: hearing, listeningFor: config)
         // A tap that has come down will never hear another press, and a command that goes
         // on polling looks ready while being deaf - with the one line that said otherwise
         // long scrolled away. [LAW:no-silent-failure] The loop below ends on it, so the
@@ -80,7 +82,7 @@ struct DictateCommand: AsyncParsableCommand {
             print("\(lapse)")
             if case .comeDown = lapse.response { cameDown.lapse = lapse }
         }
-        print("ready: hold \(try Hotkey.named(chord, heardBy: hearing, on: KeyboardLayout.current())) to dictate")
+        print("ready: hold \(try Hotkey.named(heardBy: hearing, in: config, on: KeyboardLayout.current())) to dictate")
         // The tap runs on the main run loop; this keeps the command on it until the
         // operator's interrupt, which is read rather than let end the process, so a
         // session it lands in still releases its keys.

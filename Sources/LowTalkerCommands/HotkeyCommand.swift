@@ -38,8 +38,8 @@ struct HotkeyCommand: AsyncParsableCommand {
     @MainActor
     func run() async throws {
         setvbuf(stdout, nil, _IOLBF, 0)
-        let chord = Hotkey.defaultChord(for: installation.flavor, heardBy: heardBy)
-        let hotkey = Hotkey(for: installation.flavor, heardBy: heardBy, tapThreshold: .milliseconds(tapThreshold))
+        let config = try Config.load(for: installation.flavor).config
+        let hotkey = Hotkey(for: installation.flavor, heardBy: heardBy, listeningFor: config, tapThreshold: .milliseconds(tapThreshold))
         try hotkey.start { transition in
             // The press's own stamp beside the moment it was handled, so a tap whose
             // clock is not the uptime clock shows as a gap nobody could press through.
@@ -55,10 +55,10 @@ struct HotkeyCommand: AsyncParsableCommand {
             // [LAW:no-silent-failure]
             if case .comeDown = lapse.response { Foundation.exit(1) }
         }
-        // Named from the chord rather than spelled here, because the two installations
-        // do not watch the same keys, and in the app's words for how it is heard.
-        // [LAW:one-source-of-truth]
-        print("watching \(try Hotkey.named(chord, heardBy: heardBy, on: KeyboardLayout.current()))")
+        // Named from the config the hotkey was built from rather than spelled here, because
+        // the two installations do not watch the same keys, and in the app's words for how
+        // it is heard. [LAW:one-source-of-truth]
+        print("watching \(try Hotkey.named(heardBy: heardBy, in: config, on: KeyboardLayout.current()))")
         // A registered hot key reaches its owner through the application's event loop, and
         // a command with no loop registers it and hears nothing. The tap needs no loop but
         // runs under this one the same, so both are watched one way. The app has no Dock

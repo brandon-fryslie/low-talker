@@ -65,6 +65,13 @@ public struct RegisteredHotKeys: KeyboardTap {
 
     public init() {}
 
+    /// Refuses a chord the window server could not register, for the same reasons `install`
+    /// would. [LAW:single-enforcer] Both ask `Registration`, so a config refuses exactly
+    /// what registering would.
+    nonisolated static func registrable(_ chord: KeyChord) throws(RegisteredHotKeyError) {
+        _ = try Registration(chord)
+    }
+
     /// `onLapse` is never called. The system hands this handler the one chord it
     /// registered and nothing else, so it is not in front of the session's keyboard and
     /// there is no tap for the system to switch off.

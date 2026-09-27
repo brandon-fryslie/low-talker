@@ -1,6 +1,7 @@
 import Choices
 import Dispatch
 import Flavors
+import Foundation
 import LowTalkerCore
 import Testing
 
@@ -309,11 +310,35 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
     /// bare Right Option happily, and the helper's keystrokes are hardware to macOS: the
     /// release app's tap takes it and dictates.
     @Test func everyFlavoursChordIsOneTheTypistRefuses() {
+        let refused = Config.everyInstallationsChord { flavor throws(ConfigError) in .noFile(at: URL(filePath: "/nonexistent"), flavor: flavor) }
         for flavor in Flavor.allCases {
             for hearing in HotkeySource.allCases {
-                #expect(Hotkey.everyInstallationsChord.contains(Hotkey.defaultChord(for: flavor, heardBy: hearing)),
+                #expect(refused.contains(Hotkey.defaultChord(for: flavor, heardBy: hearing)),
                         "\(flavor)'s \(hearing) chord is not in the set a typist refuses")
             }
+        }
+    }
+
+    /// A chord an installation's file names is the chord it listens for, so it is one a
+    /// typist refuses.
+    @Test func aChordAConfigNamesIsOneTheTypistRefuses() throws {
+        let edited = try Config(toml: """
+            [[modes]]
+            name = "dictation"
+            chord = { eventTap = { modifiers = ["leftControl"] } }
+            """, flavor: .release)
+        let refused = Config.everyInstallationsChord { flavor throws(ConfigError) in
+            flavor == .release ? .file(edited, at: URL(filePath: "/tmp/config.toml"), flavor: flavor) : .noFile(at: URL(filePath: "/nonexistent"), flavor: flavor)
+        }
+        #expect(refused.contains(KeyChord(modifiers: .leftControl)))
+    }
+
+    /// A file that cannot be read stands as its installation's defaults: that copy comes
+    /// up on nothing until it can read it, and on its defaults once the file is gone.
+    @Test func anUnreadableFileRefusesItsInstallationsDefaults() {
+        let refused = Config.everyInstallationsChord { flavor throws(ConfigError) in throw .noModes }
+        for flavor in Flavor.allCases {
+            #expect(refused.isSuperset(of: Config.default(for: flavor).everyChord))
         }
     }
 

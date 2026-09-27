@@ -94,7 +94,8 @@ public final class Hotkey {
     /// time base in a decision `HostTime` already answers, and hand it one that can jump
     /// under it. [LAW:one-source-of-truth]
     nonisolated public static let lapseWindow: Duration = .seconds(60)
-    /// The chord an installation listens for, as `hearing` hears it.
+    /// The chord an installation listens for, as `hearing` hears it, where its config names
+    /// no other: what `HeardChords.default` is made of.
     ///
     /// Right Option for the installed copy, and Right Option held together with Right
     /// Command for the development one. The development chord is a superset of the
@@ -134,27 +135,11 @@ public final class Hotkey {
         }
     }
 
-    /// Every installation's chord, which is the set a typist must refuse to press.
-    ///
-    /// [LAW:one-source-of-truth] A typist that refused only its own installation's chord
-    /// still refused *a* hotkey, which is what made the omission read as complete at each
-    /// call site that spelled it. But the release chord is a strict subset of
-    /// the development one, and the helper's keystrokes are hardware to macOS: a
-    /// development typist pressing a bare Right Option is the release app's hotkey
-    /// exactly, so the transcript starts a dictation in the other copy. The fact is "every
-    /// chord an installation listens for", it is one fact, and it is derived here from
-    /// `Flavor.allCases` so a third flavor is covered by existing. [LAW:dataflow-not-control-flow]
-    ///
-    /// Every flavor's, not every *installed* flavor's: whether the other copy is on this
-    /// Mac is a question with a different answer every minute, and a typist that refused
-    /// on the strength of it would type the chord in the window where the answer was
-    /// stale. The cost of refusing a chord nobody listens for is a keystroke the helper
-    /// declines; the cost of the other mistake is two apps dictating at once.
-    ///
-    /// Every hotkey source's too, for the same reason: which source the other copy hears
-    /// by is a choice its user can change from its menu at any moment.
-    nonisolated public static let everyInstallationsChord: Set<KeyChord> =
-        Set(Flavor.allCases.flatMap { flavor in HotkeySource.allCases.map { defaultChord(for: flavor, heardBy: $0) } })
+    /// Every installation's chord through every source, as their config files said the first
+    /// time this process asked: the set a typist must refuse to press, and the chords
+    /// `pressOrder` orders a press around. Read once, as the app reads its own config once;
+    /// see `Config.everyInstallationsChord(read:)` for why it is every installation's.
+    nonisolated public static let everyInstallationsChord: Set<KeyChord> = Config.everyInstallationsChord()
 
     /// This chord's modifiers in the order a person must press them.
     ///
@@ -219,14 +204,15 @@ public final class Hotkey {
         detector = HotkeyDetector(chords: chords, tapThreshold: tapThreshold)
     }
 
-    /// An installation's hotkey as `hearing` hears it: that hearing's chord, through that
-    /// hearing's tap. [LAW:one-source-of-truth] The one place a hearing becomes the pair, so
-    /// a chord can never be handed to a tap that cannot hear it.
+    /// An installation's hotkey as `hearing` hears it: the chords `config` gives that
+    /// hearing, through that hearing's tap. [LAW:one-source-of-truth] The one place a
+    /// hearing becomes the pair, and `HeardChords` holds only chords their hearing can hear,
+    /// so a chord can never be handed to a tap that cannot hear it.
     ///
     /// - Parameter granted: whether the event tap's grants are held, throwing when that
     ///   could not be read; see `GrantedKeyboardTap`.
     public convenience init(
-        for flavor: Flavor, heardBy hearing: HotkeySource, tapThreshold: Duration = defaultTapThreshold,
+        for flavor: Flavor, heardBy hearing: HotkeySource, listeningFor config: Config, tapThreshold: Duration = defaultTapThreshold,
         granted: @escaping @MainActor () throws -> Bool = { EventTapAccess.held }
     ) {
         let tap: any KeyboardTap = switch hearing {
@@ -234,7 +220,7 @@ public final class Hotkey {
         case .registeredHotKey: RegisteredHotKeys()
         case .inputMethod: InputMethodModifiers(flavor: flavor)
         }
-        self.init(chords: [Self.defaultChord(for: flavor, heardBy: hearing)], tapThreshold: tapThreshold, tap: tap)
+        self.init(chords: config.chords(heardBy: hearing), tapThreshold: tapThreshold, tap: tap)
     }
 
     public var phase: HotkeyDetector.Phase { detector.phase }

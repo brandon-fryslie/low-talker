@@ -17,7 +17,7 @@ import Testing
         try withConfig("""
             [[modes]]
             name = "dictation"
-            chord = { modifiers = ["rightOption"] }
+            chord = { eventTap = { modifiers = ["rightOption"] } }
             """) { check in
             #expect(throws: ExitCode(0)) { try check.run() }
         }
@@ -29,7 +29,7 @@ import Testing
         try withConfig("""
             [[modes]]
             name = "slack"
-            chord = { modifiers = ["rightOption"] }
+            chord = { eventTap = { modifiers = ["rightOption"] } }
             routes = [{ when = "always", then = { insert = { app = "\(Self.noSuchApp)" } } }]
             """) { check in
             #expect(throws: ExitCode(2)) { try check.run() }

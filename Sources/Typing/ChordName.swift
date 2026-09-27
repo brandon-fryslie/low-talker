@@ -23,6 +23,13 @@ public extension Hotkey {
         return (modifiers + (key.map { [$0] } ?? [])).joined(separator: "+")
     }
 
+    /// Every chord `config` has `hearing` listen for, named as above, in the order the file
+    /// declares its modes.
+    @MainActor
+    static func named(heardBy hearing: HotkeySource, in config: Config, on layout: @autoclosure () throws -> KeyboardLayout) rethrows -> String {
+        try config.modes.map { try named($0.chords[hearing], heardBy: hearing, on: try layout()) }.joined(separator: " or ")
+    }
+
     /// `rightOption` as "Right Option": the case's own name split at its capitals, so no
     /// table of names stands beside the cases to fall out of step with them.
     private static func spoken(_ modifier: Modifier) -> String {
