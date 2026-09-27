@@ -121,7 +121,9 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
         let row = requirement.row
         // Asked once in this walk and still unmet: macOS will not show most of these
         // dialogs a second time, so the page offers System Settings where the button was.
-        let askedAlready = asked.contains(row)
+        // A re-askable row is the exception - its dialog returns on the next press
+        // (`Requirement.Row.reAskable`) - so its button stays and it gets neither line.
+        let askedAlready = asked.contains(row) && !row.reAskable
         // A step waiting on another has nothing to ask yet; its way forward is that step.
         let back = requirement.waitsOn.map { earlier in
             button("Set Up \(earlier.rawValue)…") { [unowned self] in walk.revisit(earlier); failure = nil; draw(shown) }
@@ -136,6 +138,12 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
         // stale job, a grant switched off - except words sending the reader to this page.
         if let step = requirement.step, !step.contains(GuidedSetup.title(for: flavor)) {
             add(label(requirement.stepLines.joined(separator: " "), size: 12, color: .secondaryLabelColor))
+        }
+        // Names, on the step itself, what a person cannot see coming: that this row's dialog
+        // returns after a No, and that a source installed this session waits for the next
+        // login before it can switch on. Only the input method has one. [LAW:no-silent-failure]
+        if let note = row.switchOnNote(for: flavor) {
+            add(label(note, size: 12, color: .secondaryLabelColor))
         }
         if askedAlready {
             add(label("macOS asks only once. If you said no, turn it on in System Settings.", size: 12, color: .secondaryLabelColor))

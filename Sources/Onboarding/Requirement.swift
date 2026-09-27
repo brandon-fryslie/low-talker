@@ -117,6 +117,21 @@ public extension Requirement {
             }
         }
 
+        /// Whether pressing this row's ask button again asks macOS again. Most of these
+        /// dialogs macOS shows once per app, so a second press does nothing and the step
+        /// sends the person to System Settings instead. Switching on an input method is not
+        /// one of them: macOS shows its Allow dialog every time the app asks. Measured on
+        /// studious 2026-09-27 (low-input-method-s71.ssn) - declined, the dialog comes back
+        /// on the next press - so the button stays and the row is never given the "asks only
+        /// once" line or sent to System Settings.
+        public var reAskable: Bool {
+            switch self {
+            case .inputMethod: true
+            case .microphone, .inputMonitoring, .accessibility, .keyboardHelper,
+                 .driverExtension, .keyboardSetupAssistant: false
+            }
+        }
+
         /// The rows a person must allow before this hotkey hears anything: the grants it
         /// asks for, read off the list rather than kept beside it.
         public static func grants(for source: HotkeySource) -> [Row] {

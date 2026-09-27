@@ -60,6 +60,58 @@ import Testing
         #expect(Requirement.Row.keyboardSetupAssistant.settingsPane == nil)
     }
 
+    // MARK: - the input method's dialog, which returns
+
+    /// Only the input method is re-askable. macOS shows the others' dialogs once per app, so
+    /// their button is spent after one press and the page sends the person to System
+    /// Settings; the input method's dialog comes back on the next press (measured on
+    /// studious 2026-09-27), so its button must stay and it must never get the "asks only
+    /// once" line. A row landing on the wrong side of this is the exact defect ssn fixes.
+    @Test func onlyTheInputMethodIsReAskable() {
+        for row in Requirement.Row.allCases {
+            #expect(row.reAskable == (row == .inputMethod), "\(row.rawValue)")
+        }
+    }
+
+    /// Only the input method carries a switch-on note. The others' asking is fully covered
+    /// by the generic once-asked line, so a note on them would be a second, competing voice.
+    @Test func onlyTheInputMethodCarriesASwitchOnNote() {
+        for row in Requirement.Row.allCases {
+            #expect((row.switchOnNote(for: Self.flavor) != nil) == (row == .inputMethod), "\(row.rawValue)")
+        }
+    }
+
+    /// The note names both facts a person cannot see coming and would otherwise be left to
+    /// discover: that declining is not the end because the dialog returns, and that nothing
+    /// happening means the source waits for the next login. [LAW:no-silent-failure] Naming
+    /// neither is the silent failure; naming the login as unconditional would be the false
+    /// claim the previous wording made.
+    @Test func theInputMethodNoteNamesTheReturningDialogAndTheLogin() throws {
+        let note = try #require(Requirement.Row.inputMethod.switchOnNote(for: Self.flavor))
+        #expect(note.contains("Allow"), "the note never names the dialog to allow it")
+        #expect(note.contains("again"), "the note never says the dialog returns after a No")
+        #expect(note.contains("log out") && note.contains("back in"), "the note never names the login")
+    }
+
+    /// The note names the installation it is shown in, so the development copy does not tell
+    /// a person to reopen the release. "LowTalker Dev" contains "LowTalker", so the two
+    /// notes are required to differ rather than merely to contain a name.
+    @Test func theInputMethodNoteNamesTheInstallation() {
+        let notes = Flavor.allCases.compactMap { Requirement.Row.inputMethod.switchOnNote(for: $0) }
+        #expect(notes.count == Flavor.allCases.count)
+        #expect(Set(notes).count == Flavor.allCases.count, "the note reads the same for every installation")
+    }
+
+    /// A note that tells the person to press the button again is claiming the same fact
+    /// `reAskable` carries, so the two may not drift: were `reAskable` ever flipped off
+    /// while the note kept saying "again", the page would hide the button the note still
+    /// tells them to press. Ties the prose to the boolean, which nothing else does.
+    @Test func aNotePromisingAnotherPressIsOnlyOnAReAskableRow() {
+        for row in Requirement.Row.allCases where row.switchOnNote(for: Self.flavor)?.contains("again") == true {
+            #expect(row.reAskable, "\(row.rawValue)'s note says to press again but the row is not re-askable")
+        }
+    }
+
     // MARK: - the walk
 
     static let unmetMicrophone = Requirement.microphone(.notDetermined, flavor: flavor)
