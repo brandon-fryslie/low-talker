@@ -13,7 +13,6 @@
     </filter>
   </defs>
   <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
-  <rect x="100" y="100" width="824" height="412" rx="185" fill="#fff" opacity="0.06"/>
   <g filter="url(#sh)">
     <path d="M300 270 H724 A96 96 0 0 1 820 366 V610 A96 96 0 0 1 724 706 H452 L336 800 Q318 814 320 790 L330 706 H300 A96 96 0 0 1 204 610 V366 A96 96 0 0 1 300 270 Z" fill="#F7F6FF"/>
   </g>
@@ -23,6 +22,5 @@
     <rect x="468" y="418" width="44" height="140" rx="22"/>
     <rect x="544" y="453" width="44" height="70" rx="22"/>
     <path d="M632 380 H676 M654 380 V596 M632 596 H676" stroke="url(#bar)" stroke-width="22" stroke-linecap="round" fill="none"/>
-    <rect x="696" y="470" width="12" height="36" rx="6" opacity="0"/>
   </g>
 </svg>

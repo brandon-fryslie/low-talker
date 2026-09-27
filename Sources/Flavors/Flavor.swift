@@ -183,6 +183,15 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
         }
     }
 
+    /// The app icon set in App/LowTalker/Assets.xcassets this installation's bundle
+    /// carries, so the two copies side by side are told apart before their names are read.
+    public var appIconName: String {
+        switch self {
+        case .release: "AppIcon"
+        case .development: "AppIconDev"
+        }
+    }
+
     /// The config file's name inside `~/.config/low-talker`. One directory, two files:
     /// the directory is the project's, and a reader editing one build's settings should
     /// find the other's beside it rather than somewhere else entirely.

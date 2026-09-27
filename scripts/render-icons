@@ -6,26 +6,37 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 catalog=App/LowTalker/Assets.xcassets
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+
+# Dev is the release artwork in amber: one source for the shapes, so they cannot drift.
+cp App/Icons/AppIcon.svg "$scratch/AppIcon.svg"
+sed -e 's/#4B3FD1/#F29A2E/; s/#1E1A5E/#B4501A/; s/#5B4FE6/#E8862A/; s/#2C2585/#A8461A/; s/#0B0930/#4A1E08/' \
+    App/Icons/AppIcon.svg >"$scratch/AppIconDev.svg"
 
 for name in AppIcon AppIconDev; do
     set="$catalog/$name.appiconset"
+    rm -rf "$set"
     mkdir -p "$set"
-    images=()
     for size in 16 32 128 256 512; do
-        rsvg-convert -w "$size" "App/Icons/$name.svg" -o "$set/icon_$size.png"
-        rsvg-convert -w $((size * 2)) "App/Icons/$name.svg" -o "$set/icon_$size@2x.png"
-        for scale in 1x 2x; do
-            file="icon_$size.png"; [ "$scale" = 2x ] && file="icon_$size@2x.png"
-            images+=("{\"idiom\":\"mac\",\"size\":\"${size}x$size\",\"scale\":\"$scale\",\"filename\":\"$file\"}")
-        done
+        rsvg-convert -w "$size" "$scratch/$name.svg" -o "$set/icon_$size.png"
+        rsvg-convert -w $((size * 2)) "$scratch/$name.svg" -o "$set/icon_$size@2x.png"
     done
-    joined=$(IFS=,; echo "${images[*]}")
-    echo "{\"images\":[$joined],\"info\":{\"author\":\"xcode\",\"version\":1}}" | python3 -m json.tool --indent 2 >"$set/Contents.json"
+    {
+        echo '{'
+        echo '  "images" : ['
+        for size in 16 32 128 256 512; do
+            echo "    { \"idiom\" : \"mac\", \"size\" : \"${size}x$size\", \"scale\" : \"1x\", \"filename\" : \"icon_$size.png\" },"
+            comma=,; [ "$size" = 512 ] && comma=
+            echo "    { \"idiom\" : \"mac\", \"size\" : \"${size}x$size\", \"scale\" : \"2x\", \"filename\" : \"icon_$size@2x.png\" }$comma"
+        done
+        echo '  ],'
+        echo '  "info" : { "author" : "xcode", "version" : 1 }'
+        echo '}'
+    } >"$set/Contents.json"
 done
 
 # The Input menu's glyph: a template image, one 16 pt TIFF carrying its 1x and 2x.
-scratch=$(mktemp -d)
-trap 'rm -rf "$scratch"' EXIT
 rsvg-convert -w 16 App/Icons/InputMethod.svg -o "$scratch/glyph.png"
 rsvg-convert -w 32 App/Icons/InputMethod.svg -o "$scratch/glyph@2x.png"
 tiffutil -cathidpicheck "$scratch/glyph.png" "$scratch/glyph@2x.png" -out App/InputMethods/InputMethod.tiff >/dev/null
