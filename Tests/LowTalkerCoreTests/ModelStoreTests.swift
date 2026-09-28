@@ -1,66 +1,14 @@
 import Foundation
 import LowTalkerCore
+import TestProbes
 import Testing
 
 /// What "installed" means, exercised on a scratch directory with small files in
 /// place of model weights. Writing a store is `ModelInstallTests`, over the module
 /// that does it.
 @Suite struct ModelStoreTests {
-    /// A store root with a model folder and a tokenizer folder inside it, deleted when
-    /// the test ends.
-    struct Scratch: ~Copyable {
-        let root: URL
-        let folder: URL
-        let tokenizer: URL
-
-        init(files: [String: String], tokenizer tokenizerFiles: [String: String] = ModelStoreTests.tokenizerFiles) throws {
-            root = FileManager.default.temporaryDirectory.appending(path: "ModelStoreTests-\(UUID().uuidString)")
-            folder = root.appending(components: "models", "argmaxinc", "whisperkit-coreml", "openai_whisper-test")
-            tokenizer = root.appending(components: "models", "openai", "whisper-test")
-            for (base, files) in [(folder, files), (tokenizer, tokenizerFiles)] {
-                for (path, contents) in files {
-                    let url = base.appending(path: path)
-                    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                    try contents.write(to: url, atomically: true, encoding: .utf8)
-                }
-            }
-        }
-
-        /// Writes both manifests over what is on disk, as a finished install would.
-        func record() throws {
-            try Manifest(recording: folder, relativeTo: root).write(to: manifestURL)
-            try Manifest(recording: tokenizer, relativeTo: root).write(to: tokenizerManifestURL)
-        }
-
-        /// Puts `contents` where the store expects the manifest for model `test`.
-        func writeManifest(_ contents: String) throws -> URL {
-            let url = manifestURL
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try contents.write(to: url, atomically: true, encoding: .utf8)
-            return url
-        }
-
-        var manifestURL: URL { root.appending(components: "installed", "test.json") }
-        var tokenizerManifestURL: URL { root.appending(components: "installed", "tokenizer", "test.json") }
-
-        deinit {
-            try? FileManager.default.removeItem(at: root)
-        }
-    }
-
-    static let tokenizerFiles = [
-        "tokenizer.json": "{\"model\": {}}",
-        "tokenizer_config.json": "{}",
-    ]
-
-    static let files = [
-        "config.json": "{}",
-        "AudioEncoder.mlmodelc/model.mil": "program",
-        "AudioEncoder.mlmodelc/weights/weight.bin": "0123456789",
-    ]
-
     @Test func recordingListsEveryFileWithItsSizeInPathOrder() throws {
-        let scratch = try Scratch(files: Self.files)
+        let scratch = try ScratchStore(files: ScratchStore.files)
         let manifest = try Manifest(recording: scratch.folder, relativeTo: scratch.root)
         #expect(manifest.folder == "models/argmaxinc/whisperkit-coreml/openai_whisper-test")
         #expect(manifest.files == [
@@ -74,12 +22,12 @@ import Testing
     /// download, not the model, and a manifest listing them would travel into every
     /// archive packed from it.
     @Test func recordingLeavesOutHiddenFiles() throws {
-        let scratch = try Scratch(files: ["tokenizer.json": "{}", ".cache/huggingface/download/tokenizer.json.metadata": "etag"])
+        let scratch = try ScratchStore(files: ["tokenizer.json": "{}", ".cache/huggingface/download/tokenizer.json.metadata": "etag"])
         #expect(try Manifest(recording: scratch.folder, relativeTo: scratch.root).files == [.init(path: "tokenizer.json", size: 2)])
     }
 
     @Test func recordingRefusesAFolderOutsideTheRoot() throws {
-        let scratch = try Scratch(files: Self.files)
+        let scratch = try ScratchStore(files: ScratchStore.files)
         #expect(throws: ManifestError.self) {
             try Manifest(recording: scratch.folder, relativeTo: FileManager.default.temporaryDirectory.appending(path: "elsewhere"))
         }
@@ -87,14 +35,14 @@ import Testing
 
     /// A walk that stops early must not become a manifest of the files seen so far.
     @Test func recordingAFolderThatDoesNotExistThrows() throws {
-        let scratch = try Scratch(files: [:])
+        let scratch = try ScratchStore(files: [:])
         #expect(throws: ManifestError.self) {
             try Manifest(recording: scratch.folder, relativeTo: scratch.root)
         }
     }
 
     @Test func recordingAnEmptyFolderThrows() throws {
-        let scratch = try Scratch(files: [:])
+        let scratch = try ScratchStore(files: [:])
         try FileManager.default.createDirectory(at: scratch.folder, withIntermediateDirectories: true)
         #expect(throws: ManifestError.noFiles(folder: "models/argmaxinc/whisperkit-coreml/openai_whisper-test")) {
             try Manifest(recording: scratch.folder, relativeTo: scratch.root)
@@ -102,28 +50,28 @@ import Testing
     }
 
     @Test func manifestSurvivesTheRoundTripToDisk() throws {
-        let scratch = try Scratch(files: Self.files)
+        let scratch = try ScratchStore(files: ScratchStore.files)
         let manifest = try Manifest(recording: scratch.folder, relativeTo: scratch.root)
         try manifest.write(to: scratch.manifestURL)
         #expect(try Manifest(contentsOf: scratch.manifestURL) == manifest)
     }
 
     @Test func untouchedFolderHasNoFaults() throws {
-        let scratch = try Scratch(files: Self.files)
+        let scratch = try ScratchStore(files: ScratchStore.files)
         let manifest = try Manifest(recording: scratch.folder, relativeTo: scratch.root)
         #expect(try manifest.faults(in: scratch.folder).isEmpty)
     }
 
     /// Extra files are not damage: the hub adds sidecars of its own.
     @Test func extraFilesAreNotFaults() throws {
-        let scratch = try Scratch(files: Self.files)
+        let scratch = try ScratchStore(files: ScratchStore.files)
         let manifest = try Manifest(recording: scratch.folder, relativeTo: scratch.root)
         try "sidecar".write(to: scratch.folder.appending(path: "extra.metadata"), atomically: true, encoding: .utf8)
         #expect(try manifest.faults(in: scratch.folder).isEmpty)
     }
 
     @Test func missingFileIsAFault() throws {
-        let scratch = try Scratch(files: Self.files)
+        let scratch = try ScratchStore(files: ScratchStore.files)
         let manifest = try Manifest(recording: scratch.folder, relativeTo: scratch.root)
         try FileManager.default.removeItem(at: scratch.folder.appending(path: "AudioEncoder.mlmodelc/weights/weight.bin"))
         #expect(try manifest.faults(in: scratch.folder) == [.init(path: "AudioEncoder.mlmodelc/weights/weight.bin", kind: .missing)])
@@ -132,7 +80,7 @@ import Testing
     /// A download that stopped mid-file leaves a short file behind; the size is the
     /// tell.
     @Test func truncatedFileIsAFault() throws {
-        let scratch = try Scratch(files: Self.files)
+        let scratch = try ScratchStore(files: ScratchStore.files)
         let manifest = try Manifest(recording: scratch.folder, relativeTo: scratch.root)
         try "0123".write(to: scratch.folder.appending(path: "AudioEncoder.mlmodelc/weights/weight.bin"), atomically: true, encoding: .utf8)
         #expect(try manifest.faults(in: scratch.folder) == [.init(path: "AudioEncoder.mlmodelc/weights/weight.bin", kind: .wrongSize(expected: 10, actual: 4))])
@@ -142,7 +90,7 @@ import Testing
     /// a 0-byte file is a legitimate recording, so no size may stand in for "none".
     /// The repair removes the folder rather than leaving the hub client to trust it.
     @Test func folderInAFilesPlaceIsAFaultTheRepairEvicts() throws {
-        let scratch = try Scratch(files: Self.files.merging(["empty.txt": ""]) { _, new in new })
+        let scratch = try ScratchStore(files: ScratchStore.files.merging(["empty.txt": ""]) { _, new in new })
         let store = ModelStore(directory: scratch.root)
         try scratch.record()
         let empty = scratch.folder.appending(path: "empty.txt")
@@ -166,7 +114,7 @@ import Testing
     /// A file this process may not reach is not a missing file: a download would
     /// not repair it, so the trouble is reported as itself.
     @Test func unreachableFileIsAnErrorNotAFault() throws {
-        let scratch = try Scratch(files: Self.files)
+        let scratch = try ScratchStore(files: ScratchStore.files)
         let manifest = try Manifest(recording: scratch.folder, relativeTo: scratch.root)
         let weights = scratch.folder.appending(path: "AudioEncoder.mlmodelc/weights")
         try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: weights.path)
@@ -177,7 +125,7 @@ import Testing
     }
 
     @Test func storeWithoutAManifestIsMissing() throws {
-        let scratch = try Scratch(files: Self.files)
+        let scratch = try ScratchStore(files: ScratchStore.files)
         guard case .missing = try ModelStore(directory: scratch.root).presence(of: "test") else {
             Issue.record("a folder without a manifest must not count as installed")
             return
@@ -185,7 +133,7 @@ import Testing
     }
 
     @Test func storeWithAManifestThatVerifiesIsInstalled() throws {
-        let scratch = try Scratch(files: Self.files)
+        let scratch = try ScratchStore(files: ScratchStore.files)
         let store = ModelStore(directory: scratch.root)
         try scratch.record()
         guard case .installed(let installed) = try store.presence(of: "test") else {
@@ -198,7 +146,7 @@ import Testing
     }
 
     @Test func storeWithAManifestThatDoesNotVerifyIsDamaged() throws {
-        let scratch = try Scratch(files: Self.files)
+        let scratch = try ScratchStore(files: ScratchStore.files)
         let store = ModelStore(directory: scratch.root)
         try scratch.record()
         try FileManager.default.removeItem(at: scratch.folder.appending(path: "config.json"))
@@ -214,7 +162,7 @@ import Testing
     /// A folder this process may not search is not damage a download would repair,
     /// so the store passes the trouble up instead of folding it into `.damaged`.
     @Test func storeThatCannotBeSearchedThrowsRatherThanReadingDamaged() throws {
-        let scratch = try Scratch(files: Self.files)
+        let scratch = try ScratchStore(files: ScratchStore.files)
         let store = ModelStore(directory: scratch.root)
         try scratch.record()
         let weights = scratch.folder.appending(path: "AudioEncoder.mlmodelc/weights")
@@ -228,7 +176,7 @@ import Testing
     /// The hub client never re-fetches a file that exists, so a repair must start by
     /// removing the files the manifest rejects.
     @Test func truncatedFileIsEvictedByARepair() throws {
-        let scratch = try Scratch(files: Self.files)
+        let scratch = try ScratchStore(files: ScratchStore.files)
         let store = ModelStore(directory: scratch.root)
         try scratch.record()
         try "{".write(to: scratch.folder.appending(path: "config.json"), atomically: true, encoding: .utf8)
@@ -236,7 +184,7 @@ import Testing
     }
 
     @Test func storeWithAnUnreadableManifestIsDamaged() throws {
-        let scratch = try Scratch(files: Self.files)
+        let scratch = try ScratchStore(files: ScratchStore.files)
         let url = try scratch.writeManifest("not json")
         let presence = try ModelStore(directory: scratch.root).presence(of: "test")
         guard case .damaged(let damages) = presence, case .manifestUnreadable(let manifest, .weights, _) = damages.first else {
@@ -252,7 +200,7 @@ import Testing
     /// A manifest this process may not read is not a corrupt one: telling the user
     /// to delete the model would be the wrong instruction, so the trouble is passed up.
     @Test func storeWhoseManifestCannotBeReadThrowsRatherThanReadingDamaged() throws {
-        let scratch = try Scratch(files: Self.files)
+        let scratch = try ScratchStore(files: ScratchStore.files)
         let store = ModelStore(directory: scratch.root)
         try scratch.record()
         try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: scratch.manifestURL.path)
@@ -265,7 +213,7 @@ import Testing
     /// The manifest is the only path the store follows blindly, so a manifest that
     /// points outside the store is refused as unreadable rather than followed.
     @Test func manifestPointingOutsideTheStoreIsRefused() throws {
-        let scratch = try Scratch(files: Self.files)
+        let scratch = try ScratchStore(files: ScratchStore.files)
         let url = try scratch.writeManifest(#"{"folder": "../../etc", "files": [{"path": "passwd", "size": 1}]}"#)
         #expect(throws: ManifestError.pathEscapes("../../etc")) {
             try Manifest(contentsOf: url)
@@ -278,7 +226,7 @@ import Testing
 
     /// A manifest listing nothing would verify against any folder at all.
     @Test func manifestWithNoFilesIsRefused() throws {
-        let scratch = try Scratch(files: Self.files)
+        let scratch = try ScratchStore(files: ScratchStore.files)
         let url = try scratch.writeManifest(#"{"folder": "models/x", "files": []}"#)
         #expect(throws: ManifestError.noFiles(folder: "models/x")) {
             try Manifest(contentsOf: url)
@@ -304,7 +252,7 @@ import Testing
         // pass this test vacuously, hiding a regression that began writing under the lock.
         // [LAW:no-silent-failure] the precondition fails loudly rather than proving nothing.
         try #require(geteuid() != 0, "run as a non-root user; 0o555 does not stop root")
-        let scratch = try Scratch(files: Self.files)
+        let scratch = try ScratchStore(files: ScratchStore.files)
         try scratch.record()
         let installedFolder = scratch.root.appending(path: "installed")
         let setMode: (Int, URL) throws -> Void = { mode, url in
@@ -313,7 +261,7 @@ import Testing
         try setMode(0o555, installedFolder)
         try setMode(0o555, scratch.root)
         defer {
-            // Restore write so `Scratch`'s deinit can delete the tree.
+            // Restore write so `ScratchStore`'s deinit can delete the tree.
             try? setMode(0o755, scratch.root)
             try? setMode(0o755, installedFolder)
         }
@@ -326,7 +274,7 @@ import Testing
     /// carried store that is somehow incomplete says why rather than "read-only file
     /// system". [LAW:no-silent-failure]
     @Test func installedModelOnAStoreLackingTheModelFailsWithTheReason() throws {
-        let scratch = try Scratch(files: [:], tokenizer: [:])
+        let scratch = try ScratchStore(files: [:], tokenizer: [:])
         do {
             _ = try ModelStore(directory: scratch.root).installedModel("test")
             Issue.record("a store that lacks the model must fail")
@@ -339,7 +287,7 @@ import Testing
     /// record of the tokenizer: it is not installed, and nothing in it is evicted,
     /// since the repair only has to record a tokenizer the hub folder already holds.
     @Test func storeWithWeightsButNoTokenizerManifestIsDamagedWithNothingToEvict() throws {
-        let scratch = try Scratch(files: Self.files)
+        let scratch = try ScratchStore(files: ScratchStore.files)
         try Manifest(recording: scratch.folder, relativeTo: scratch.root).write(to: scratch.manifestURL)
         let presence = try ModelStore(directory: scratch.root).presence(of: "test")
         guard case .damaged(let damages) = presence, case .unrecorded(.tokenizer) = damages.first, damages.count == 1 else {
@@ -353,7 +301,7 @@ import Testing
     /// Both parts are judged, so a damaged tokenizer is evicted in the same repair as
     /// damaged weights.
     @Test func damageInBothPartsIsReportedAndEvictedTogether() throws {
-        let scratch = try Scratch(files: Self.files)
+        let scratch = try ScratchStore(files: ScratchStore.files)
         try scratch.record()
         try "{".write(to: scratch.folder.appending(path: "config.json"), atomically: true, encoding: .utf8)
         try "{".write(to: scratch.tokenizer.appending(path: "tokenizer.json"), atomically: true, encoding: .utf8)

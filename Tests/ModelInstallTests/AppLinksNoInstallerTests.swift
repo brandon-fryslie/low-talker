@@ -4,63 +4,72 @@ import Testing
 private let repository = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
-/// The app has no way to fetch a model, read off the dependency graph and not off its
-/// call sites: no product the app template links reaches `ModelInstall`, while the
-/// CLI's does. A call site is a fact about today's code; the graph is what a future
-/// call site would first have to change, and this is what would fail when it did.
-/// [LAW:one-way-deps]
+/// Nothing the project builds, other than the CLI, has a way to fetch a model. Read off
+/// the two graphs the build resolves rather than off call sites: what Xcode links into
+/// each target, from the project xcodegen generated, and what each package target
+/// depends on, from SwiftPM's own dump of the manifest. The CLI reaches the installer by
+/// the same read, so the read is not blind. [LAW:one-way-deps]
+///
+/// The tools' own graphs and not a parse of project.yml or Package.swift: a parser is a
+/// second map of the same territory, and the first draft of this test had two ways to
+/// lie that the resolved graphs cannot - a product bundling a second target, and a
+/// target adding to the template it extends. [LAW:one-source-of-truth]
+///
+/// The generated project is read, not generated here, for the reason
+/// `InputMethodPlistTests` gives: `make test` runs xcodegen first, and a suite that
+/// rewrote the project would do so under whatever build is running in the tree.
 @Suite struct AppLinksNoInstallerTests {
     static let installer = "ModelInstall"
+    static let cli = "lowtalker-cli"
 
-    /// Each target Package.swift declares, to the package targets its `dependencies`
-    /// name. Read by balancing parentheses over the manifest with its comments removed,
-    /// so a `.product(...)` inside the list cannot end a declaration early and hide the
-    /// dependency after it, and a parenthesis in a comment cannot unbalance one.
-    static func packageGraph() throws -> [String: Set<String>] {
-        let manifest = try String(contentsOf: repository.appending(path: "Package.swift"), encoding: .utf8)
-        let code = manifest.split(separator: "\n", omittingEmptySubsequences: false)
-            .map { line in line.range(of: "//").map { line[..<$0.lowerBound] } ?? line }
-            .joined(separator: "\n")
-        var declarations: [String] = []
-        var search = code.startIndex
-        while let opening = code.range(of: #"\.(target|executableTarget|testTarget)\("#, options: .regularExpression, range: search..<code.endIndex) {
-            var depth = 0
-            var end = opening.lowerBound
-            scan: for index in code[opening.lowerBound...].indices {
-                switch code[index] {
-                case "(": depth += 1
-                case ")":
-                    depth -= 1
-                    if depth == 0 {
-                        end = code.index(after: index)
-                        break scan
-                    }
-                default: break
-                }
+    /// Package.swift as SwiftPM reads it: each product to the targets it bundles, and each
+    /// target to the package targets it depends on. Dumped into a scratch path of its own,
+    /// so it neither waits on nor disturbs the build running this suite.
+    static func package() throws -> (products: [String: [String]], targets: [String: Set<String>]) {
+        let scratch = FileManager.default.temporaryDirectory.appending(path: "AppLinksNoInstallerTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let dump = try run("/usr/bin/swift", ["package", "dump-package", "--package-path", repository.path, "--scratch-path", scratch.path])
+        let json = try JSONSerialization.jsonObject(with: dump)
+        let manifest = try #require(json as? [String: Any])
+        let targets = try #require(manifest["targets"] as? [[String: Any]])
+        let names = Set(try targets.map { try #require($0["name"] as? String) })
+        try #require(names.contains("LowTalkerCore"), "read no targets out of the manifest: \(names)")
+        let graph = try targets.map { target in
+            let dependencies = try #require(target["dependencies"] as? [[String: Any]])
+            // A dependency is one of `byName`, `target` or `product`, each holding the name
+            // first. Only a package target of this package is an edge here: a product of
+            // another package is where the walk stops.
+            let named = try dependencies.map { dependency -> String? in
+                let value = try #require(dependency.values.first as? [Any], "unrecognised dependency \(dependency)")
+                return value.first as? String
             }
-            try #require(end > opening.lowerBound, "unbalanced parentheses after \(code[opening])")
-            declarations.append(String(code[opening.lowerBound..<end]))
-            search = end
+            return (try #require(target["name"] as? String), Set(named.compactMap { $0 }).intersection(names))
         }
-        let quoted = declarations.map { $0.matches(of: /"([^"]*)"/).map { String($0.1) } }
-        let names = Set(quoted.compactMap(\.first))
-        try #require(names.contains("LowTalkerCore"), "read no targets out of Package.swift: \(names)")
-        return Dictionary(uniqueKeysWithValues: quoted.map { ($0[0], Set($0.dropFirst()).intersection(names)) })
+        let products = try #require(manifest["products"] as? [[String: Any]]).map { product in
+            (try #require(product["name"] as? String), try #require(product["targets"] as? [String]))
+        }
+        return (Dictionary(uniqueKeysWithValues: products), Dictionary(uniqueKeysWithValues: graph))
     }
 
-    /// The products the app template links, as xcodegen reads them: every `product:`
-    /// under `Installation:` in `targetTemplates:`, up to the next template.
-    static func appProducts() throws -> [String] {
-        let lines = try String(contentsOf: repository.appending(path: "project.yml"), encoding: .utf8).split(separator: "\n", omittingEmptySubsequences: false)
-        let templates = try #require(lines.firstIndex(of: "targetTemplates:"))
-        let installation = try #require(lines[templates...].firstIndex(of: "  Installation:"))
-        let block = lines[(installation + 1)...].prefix { $0.isEmpty || $0.hasPrefix("    ") }
-        let products = block.compactMap { line -> String? in
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            return trimmed.hasPrefix("product: ") ? String(trimmed.dropFirst("product: ".count)) : nil
+    /// What Xcode links into each target it builds, off the project xcodegen wrote: the
+    /// package products of every native target. An embedded target is copied into the
+    /// bundle and not linked, so it is not an edge: the CLI the app carries is a program
+    /// of its own, and which of them can write a store is exactly what this test asks.
+    static func project() throws -> [String: Set<String>] {
+        let pbxproj = repository.appending(path: "LowTalker.xcodeproj/project.pbxproj")
+        try #require(FileManager.default.fileExists(atPath: pbxproj.path),
+                     "\(pbxproj.lastPathComponent) has not been generated; run `make test`, which runs xcodegen - `swift test` alone does not")
+        let json = try JSONSerialization.jsonObject(with: try run("/usr/bin/plutil", ["-convert", "json", "-o", "-", pbxproj.path]))
+        let project = try #require(json as? [String: Any])
+        let objects = try #require(project["objects"] as? [String: [String: Any]])
+        let targets = try objects.values.filter { $0["isa"] as? String == "PBXNativeTarget" }.map { target in
+            let products = try (target["packageProductDependencies"] as? [String] ?? []).map { id in
+                try #require(objects[id]?["productName"] as? String, "\(id) is not a package product")
+            }
+            return (try #require(target["name"] as? String), Set(products))
         }
-        try #require(products.contains("LowTalkerCore"), "read no products off the app template: \(products)")
-        return products
+        try #require(targets.contains { $0.0 == cli }, "read no \(cli) target out of the project: \(targets.map(\.0))")
+        return Dictionary(uniqueKeysWithValues: targets)
     }
 
     /// Every target reached from `roots`, themselves included.
@@ -73,21 +82,52 @@ private let repository = URL(fileURLWithPath: #filePath)
         return reached
     }
 
-    @Test func theAppReachesNoInstaller() throws {
-        let graph = try Self.packageGraph()
-        let products = try Self.appProducts()
-        try #require(graph[Self.installer] != nil, "Package.swift declares no \(Self.installer) target")
-        // A product name is its target's name here; one that is not would make this read
-        // pass over nothing, so it is refused rather than skipped. [LAW:no-silent-failure]
-        for product in products {
-            try #require(graph[product] != nil, "\(product) is a product the app links but not a target Package.swift declares")
+    /// The package targets a built target links, through the products it names.
+    static func roots(of target: String, linking products: Set<String>, in package: [String: [String]]) throws -> [String] {
+        try products.sorted().flatMap { product in
+            try #require(package[product], "\(target) links \(product), which Package.swift does not export")
         }
-        let reached = Self.reach(products, in: graph)
-        #expect(!reached.contains(Self.installer), "the app reaches \(Self.installer) through \(reached.sorted())")
     }
 
-    /// The same read finds the installer beneath the CLI, so the read above is not blind.
+    /// Runs `tool` and hands back its stdout, or fails with its stderr: a tool that could
+    /// not run must not read as a graph with nothing in it. [LAW:no-silent-failure]
+    static func run(_ tool: String, _ arguments: [String]) throws -> Data {
+        let process = Process()
+        process.executableURL = URL(filePath: tool)
+        process.arguments = arguments
+        let output = Pipe()
+        process.standardOutput = output
+        // Stderr goes to a file rather than a second pipe, so reading stdout to its end
+        // cannot wait on a stderr nobody is draining.
+        let errors = FileManager.default.temporaryDirectory.appending(path: "AppLinksNoInstallerTests-\(UUID().uuidString).stderr")
+        try #require(FileManager.default.createFile(atPath: errors.path, contents: nil))
+        defer { try? FileManager.default.removeItem(at: errors) }
+        process.standardError = try FileHandle(forWritingTo: errors)
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let message = String(decoding: try Data(contentsOf: errors), as: UTF8.self)
+        try #require(process.terminationStatus == 0, "\(tool) \(arguments.joined(separator: " ")) exited \(process.terminationStatus): \(message)")
+        return data
+    }
+
+    @Test func everyBuiltTargetButTheCLIReachesNoInstaller() throws {
+        let package = try Self.package()
+        try #require(package.targets[Self.installer] != nil, "Package.swift declares no \(Self.installer) target")
+        let built = try Self.project().filter { $0.key != Self.cli }
+        try #require(!built.isEmpty, "the project builds nothing but the CLI")
+        for (target, products) in built.sorted(by: { $0.key < $1.key }) {
+            let reached = Self.reach(try Self.roots(of: target, linking: products, in: package.products), in: package.targets)
+            #expect(!reached.contains(Self.installer), "\(target) reaches \(Self.installer) through \(reached.sorted())")
+        }
+    }
+
+    /// The same two reads find the installer beneath the CLI, so the read above is not
+    /// blind.
     @Test func theCLIReachesIt() throws {
-        #expect(Self.reach(["lowtalker"], in: try Self.packageGraph()).contains(Self.installer))
+        let package = try Self.package()
+        let project = try Self.project()
+        let products = try #require(project[Self.cli])
+        #expect(Self.reach(try Self.roots(of: Self.cli, linking: products, in: package.products), in: package.targets).contains(Self.installer))
     }
 }

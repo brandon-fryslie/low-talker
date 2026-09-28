@@ -6,10 +6,11 @@ import Synchronization
 
 /// Which store, for every command that touches models.
 ///
-/// [LAW:one-source-of-truth] The default store is the app's; the CLI reads and writes
-/// the same directory so a download from the terminal is a download for the app.
+/// [LAW:one-source-of-truth] The default store is the one `make app` copies each bundle's
+/// model out of, so a download from the terminal is what the next build carries. The app
+/// itself never reads it: it loads the store inside its bundle.
 struct StoreOptions: ParsableArguments {
-    @Option(name: .customLong("models-dir"), help: "Where models are stored. Defaults to the app's directory under Application Support.", transform: URL.init(fileURLWithPath:))
+    @Option(name: .customLong("models-dir"), help: "Where models are stored. Defaults to low-talker's store under Application Support, which `make app` copies a bundle's model out of.", transform: URL.init(fileURLWithPath:))
     var modelsDirectory: URL?
 
     func store() throws -> ModelStore {
