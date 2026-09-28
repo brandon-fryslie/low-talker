@@ -379,6 +379,8 @@ The runtime holds a program to a set of restrictions, and each exception is an e
 
 An entitlement goes in only with the failure that needed it, written in the comment beside it in `project.yml`.
 
+Both installations are signed without `get-task-allow`, which Xcode would otherwise add to a build meant for debugging, and a hardened process without it refuses a debugger: `lldb` and Instruments cannot attach to either copy. Read the unified log instead, as the sections below do. Every signature also carries a secure timestamp, which `codesign` fetches from Apple's timestamp server, so a build with no network fails to sign.
+
 After a build that changes only how the embedded CLI is signed, rebuild the bundles from scratch (`rm -rf "DerivedData/Build/Products/Release/LowTalker Dev.app" DerivedData/Build/Products/Release/LowTalker.app`, then `make app` and `make release`): Xcode's copy phase does not see a re-signed tool as changed, and keeps embedding the old one (low-build-mmp).
 
 ### Signing for release

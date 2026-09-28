@@ -26,15 +26,17 @@ configs:
 # notarization accepts, in its place. No DEVELOPMENT_TEAM here, on purpose: Xcode takes a
 # team as a filter on certificates, and the self-signed identity belongs to none, so a team
 # set for every build fails every development build with "No certificate for team". The
-# team rides inside the certificate's name, which is where sign-release spells it.
+# team rides inside the certificate's name, which scripts/sign-release spells in full.
 #
 # Everything else notarization asks of a signature is set here for every build, the
 # development copy included, so the two are signed alike: the Hardened Runtime; no
 # get-task-allow entitlement, which CODE_SIGN_INJECT_BASE_ENTITLEMENTS would add; and a
-# secure timestamp, which Xcode leaves out (--timestamp=none) unless told. The timestamp is
-# the one cost the development copy pays for the likeness: codesign asks Apple's timestamp
-# server for it, measured at 0.6 s a signature with the self-signed identity, and a build
-# with no network fails to sign.
+# secure timestamp, which Xcode leaves out (--timestamp=none) unless told. The likeness
+# costs the development copy two things. A hardened process without get-task-allow refuses
+# a debugger, so lldb and Instruments cannot attach to it; the unified log is how it is
+# read, as it is for the shipped copy. And codesign asks Apple's timestamp server for each
+# signature, measured at 0.6 s with the self-signed identity, so a build with no network
+# fails to sign.
 settings:
   base:
     SWIFT_VERSION: "6.0"

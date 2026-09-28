@@ -71,6 +71,8 @@ jobs:
       # and only building one proves only that one's attributes resolve. A release target
       # left naming the development plist would pass a job that built `make app` alone.
       # The runner has no model to carry, so the bundles are built carrying none, which is
-      # a build every Makefile path allows and one the app names at launch.
+      # a build every Makefile path allows and one the app names at launch. Signing reaches
+      # Apple's timestamp server, as every build's does (project.yml), so this step needs
+      # the network that the build of the package above did not.
       - name: Build both installations
         run: make app release BUNDLED_MODEL_STORE=

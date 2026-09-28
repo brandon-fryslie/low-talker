@@ -17,12 +17,10 @@ app=${1:?$usage}
 out=${2:?$usage}
 # A bundle is a directory, so completion leaves a slash that would hide its name.
 app=${app%/}
-# Resolved before the move to the repo root, which xcodegen needs, so relative paths mean
-# the ones the caller named.
+# Resolved to absolute paths, so the image path printed at the end opens from anywhere.
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
 app=$(cd "$(dirname "$app")" && pwd)/$(basename "$app")
-cd "$(dirname "$0")/.."
 
 fail() {
   echo "make-dmg: $1" >&2

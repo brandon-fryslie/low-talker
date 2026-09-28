@@ -2,7 +2,7 @@
 SHELL := /bin/bash
 DERIVED_DATA := DerivedData
 # The one configuration project.yml defines: every bundle, the development copy included,
-# is built as a release. Named here only so the products path below can be spelled.
+# is built as a release. Passed to xcodebuild and spelled into the products path below.
 CONFIGURATION := Release
 PRODUCTS := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)
 # The certificate every bundle is signed with, when it is not project.yml's development
