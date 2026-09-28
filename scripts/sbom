@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
 """Writes the SBOM of what a release ships, read off the resolved build.
 
-    scripts/sbom <output.cdx.json>
+    scripts/sbom <output.cdx.json> [model store]
 
 CycloneDX 1.6, one component per thing that reaches a user's Mac: every package
 Package.resolved pins, the third-party code vendored inside those packages, and the model
 the app loads (its weights and its tokenizer). Identity, URL, version and revision come
 from Package.resolved, the checkouts under .build, and the CLI; sbom/rules.json holds
-only what none of those can say - the license of each component, and which packages
-carry code no manifest declares. [LAW:one-source-of-truth]
+only what none of those can say - the license of each component, which packages carry
+code no manifest declares, and which Hugging Face repos the default model's two parts come
+from. [LAW:one-source-of-truth]
 
 A component the rules do not know stops the run and names it, because a row missing from
 an SBOM is believed. [LAW:no-silent-failure] The output carries no timestamp and no
 serial number, so the same checkout writes the same bytes twice.
 
-Run through `make sbom`, which resolves the packages and builds the CLI first.
+The model's repos are the one thing here a clean checkout cannot check, since WhisperKit
+picks the tokenizer's repo off the weights' config once they are downloaded. So when a
+store holding the model is named, the rules are held to the folders its install
+manifests record, and a rule naming a repo the install did not fetch from stops the run.
+The store changes nothing in the output; it only refuses a wrong rule.
+
+Run through `make sbom`, which builds the CLI first and names this Mac's store when it
+has one.
 """
 import hashlib
 import json
@@ -34,21 +42,40 @@ def fail(message):
     sys.exit(1)
 
 
+def run(tool, arguments, what):
+    """A tool's stdout, or a failure naming the tool and what it said: a traceback would
+    name a Python line where the reader needs the component."""
+    try:
+        return subprocess.run([tool] + arguments, cwd=repository, capture_output=True, text=True, check=True).stdout
+    except FileNotFoundError:
+        fail(f"{what}: {tool} is not installed")
+    except subprocess.CalledProcessError as error:
+        fail(f"{what}: `{tool} {' '.join(arguments)}` exited {error.returncode}: {error.stderr.strip()}")
+
+
+def need(rule, key, component):
+    if not rule.get(key):
+        fail(f"{component}: rules.json gives no `{key}`")
+    return rule[key]
+
+
 def sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def license_entry(component, path, spdx):
-    """The license id and the digest of the file it names, so the SBOM says which text
-    the id stands for."""
-    if not spdx:
-        fail(f"{component}: rules.json gives no license")
+def license_entry(component, checkout, rule):
+    """The license id, and the file in the checkout it was read from with that file's
+    digest, so the SBOM says which text the reading was of. Paths are relative to the
+    package checkout, like every other path property here."""
+    spdx = need(rule, "license", component)
+    relative = need(rule, "licenseFile", component)
+    path = checkout / relative
     if not path.is_file():
-        fail(f"{component}: license file {path.relative_to(repository)} is not in the checkout")
+        fail(f"{component}: license file {relative} is not in the checkout")
     return (
         [{"license": {"id": spdx}}],
         [
-            {"name": "low-talker:license-file", "value": str(path.relative_to(checkouts))},
+            {"name": "low-talker:license-file", "value": relative},
             {"name": "low-talker:license-file-sha256", "value": sha256(path)},
         ],
     )
@@ -57,15 +84,16 @@ def license_entry(component, path, spdx):
 def vendored_version(component, checkout, rule):
     """The version written into the vendored files, by the rule's expression: group 1 is
     the version, group 2 the revision when the files carry one, unless `as` composes it."""
-    source = checkout / rule["file"]
+    relative = need(rule, "file", component)
+    pattern = need(rule, "match", component)
+    source = checkout / relative
     if not source.is_file():
-        fail(f"{component}: version file {rule['file']} is not in the checkout")
-    found = re.search(rule["match"], source.read_text(errors="replace"), re.MULTILINE)
+        fail(f"{component}: version file {relative} is not in the checkout")
+    found = re.search(pattern, source.read_text(errors="replace"), re.MULTILINE)
     if not found:
-        fail(f"{component}: {rule['file']} does not match {rule['match']!r}, so its version cannot be read")
+        fail(f"{component}: {relative} does not match {pattern!r}, so its version cannot be read")
     if "as" in rule:
-        version = re.sub(r"\$(\d+)", lambda m: found.group(int(m.group(1))), rule["as"])
-        return version, None
+        return re.sub(r"\$(\d+)", lambda m: found.group(int(m.group(1))), rule["as"]), None
     return found.group(1), found.group(2) if found.re.groups >= 2 else None
 
 
@@ -75,14 +103,13 @@ def package_component(pin, rule):
     repo = location.rsplit("/", 1)[-1].removesuffix(".git")
     checkout = checkouts / repo
     if not checkout.is_dir():
-        fail(f"{identity}: no checkout at {checkout.relative_to(repository)}; run `swift package resolve`")
+        fail(f"{identity}: no checkout at {checkout.relative_to(repository)}; run `swift build`")
     state = pin["state"]
     version = state.get("version")
     if not version:
         fail(f"{identity}: Package.resolved pins it by revision alone, with no version")
-    host_path = re.sub(r"^https?://", "", location).removesuffix(".git")
-    ref = f"pkg:swift/{host_path}@{version}"
-    licenses, properties = license_entry(identity, checkout / rule["licenseFile"], rule.get("license"))
+    ref = f"pkg:swift/{re.sub(r'^https?://', '', location).removesuffix('.git')}@{version}"
+    licenses, properties = license_entry(identity, checkout, rule)
     component = {
         "type": "library",
         "bom-ref": ref,
@@ -100,13 +127,13 @@ def package_component(pin, rule):
 
 
 def vendored_component(identity, checkout, parent_ref, rule):
-    name = f"{identity} vendors {rule['name']}"
-    path = checkout / rule["path"]
-    if not path.exists():
-        fail(f"{name}: nothing at {rule['path']} in the checkout")
-    version, revision = vendored_version(name, checkout, rule["version"])
-    licenses, properties = license_entry(name, checkout / rule["licenseFile"], rule.get("license"))
-    properties = [{"name": "low-talker:vendored-at", "value": rule["path"]}] + properties
+    name = f"{identity} vendors {rule.get('name') or '<unnamed>'}"
+    relative = need(rule, "path", name)
+    if not (checkout / relative).exists():
+        fail(f"{name}: nothing at {relative} in the checkout")
+    version, revision = vendored_version(name, checkout, need(rule, "version", name))
+    licenses, properties = license_entry(name, checkout, rule)
+    properties = [{"name": "low-talker:vendored-at", "value": relative}] + properties
     if revision:
         properties.insert(0, {"name": "low-talker:revision", "value": revision})
     return {
@@ -115,19 +142,19 @@ def vendored_component(identity, checkout, parent_ref, rule):
         "name": rule["name"],
         "version": version,
         "licenses": licenses,
-        "externalReferences": [{"type": "vcs", "url": rule["origin"]}],
+        "externalReferences": [{"type": "vcs", "url": need(rule, "origin", name)}],
         "properties": properties,
     }
 
 
-def model_components(rules):
+def model_components(rules, store):
     """The model the CLI names as the default, which is the one the release carries and
     a launch loads where nothing names another. WhisperKit fetches its weights from the
     repo it names and picks the tokenizer's repo off the weights' config, so both repos
-    are the rule's to state."""
+    are the rule's to state and the store's, when there is one, to confirm."""
     if not cli.is_file():
         fail(f"no CLI at {cli.relative_to(repository)}; run `make cli`")
-    model = subprocess.run([str(cli), "model", "default"], capture_output=True, text=True, check=True).stdout.strip()
+    model = run(str(cli), ["model", "default"], "the default model").strip()
     if not model:
         fail("`lowtalker model default` printed nothing")
     rule = rules.get(model)
@@ -135,48 +162,75 @@ def model_components(rules):
         fail(f"the default model is {model} and rules.json has no entry for it")
     components = []
     for part, kind in (("weights", "machine-learning-model"), ("tokenizer", "data")):
-        entry = rule.get(part)
-        if not entry or not entry.get("repo") or not entry.get("license"):
-            fail(f"{model}: rules.json gives no repo and license for its {part}")
+        component = f"{model} {part}"
+        entry = need(rule, part, component)
+        repo = need(entry, "repo", component)
+        spdx = need(entry, "license", component)
+        if store is not None:
+            confirm_against_store(store, model, part, repo)
         # The weights are one folder of a repo holding many models, so the repo is their
         # group and the model their name; the tokenizer is a repo of its own.
-        group, name = (entry["repo"], model) if part == "weights" else entry["repo"].split("/", 1)
-        components.append({
+        group, name = (repo, model) if part == "weights" else repo.split("/", 1)
+        entry = {
             "type": kind,
-            "bom-ref": f"huggingface.co/{entry['repo']}" + (f"/{model}" if part == "weights" else ""),
+            "bom-ref": f"huggingface.co/{repo}" + (f"/{model}" if part == "weights" else ""),
             "group": group,
             "name": name,
-            "licenses": [{"license": {"id": entry["license"]}}],
-            "externalReferences": [{"type": "distribution", "url": f"https://huggingface.co/{entry['repo']}"}],
+            "licenses": [{"license": {"id": spdx}}],
+            "externalReferences": [{"type": "distribution", "url": f"https://huggingface.co/{repo}"}],
             "properties": [{"name": "low-talker:model-part", "value": part}],
-        })
+        }
+        if part == "weights":
+            entry["description"] = f"The folder of {repo} whose name ends in {model}, which is how WhisperKit picks it"
+        components.append(entry)
     return components
 
 
+def confirm_against_store(store, model, part, repo):
+    """Holds a rule's repo to the folder the install wrote, as its manifest records it:
+    `models/<owner>/<repo>[/<folder>]`."""
+    manifest = store / "installed" / (f"tokenizer/{model}.json" if part == "tokenizer" else f"{model}.json")
+    if not manifest.is_file():
+        fail(f"{model} {part}: {store} holds no install manifest at {manifest.relative_to(store)}, so the rule cannot be confirmed against it")
+    folder = json.loads(manifest.read_text()).get("folder", "")
+    parts = folder.split("/")
+    if len(parts) < 3 or parts[0] != "models":
+        fail(f"{model} {part}: manifest {manifest} records folder {folder!r}, not a models/<owner>/<repo> path")
+    installed = f"{parts[1]}/{parts[2]}"
+    if installed != repo:
+        fail(f"{model} {part}: rules.json says {repo}, and the install in {store} came from {installed} ({folder})")
+    if part == "weights" and not folder.endswith(model):
+        fail(f"{model} weights: the install in {store} is {folder}, which is not a folder for {model}")
+
+
 def application():
-    dump = subprocess.run(["xcodegen", "dump", "--type", "json"], cwd=repository, capture_output=True, text=True, check=True).stdout
-    version = json.loads(dump).get("settings", {}).get("base", {}).get("MARKETING_VERSION")
+    settings = json.loads(run("xcodegen", ["dump", "--type", "json"], "the app's version")).get("settings", {}).get("base", {})
+    version = settings.get("MARKETING_VERSION")
     if not version:
         fail("project.yml sets no project-wide MARKETING_VERSION")
     return {"type": "application", "bom-ref": "lowtalker", "name": "LowTalker", "version": str(version)}
 
 
 def main():
-    if len(sys.argv) != 2:
-        fail("usage: scripts/sbom <output.cdx.json>")
+    if len(sys.argv) not in (2, 3):
+        fail("usage: scripts/sbom <output.cdx.json> [model store]")
     output = Path(sys.argv[1])
+    store = Path(sys.argv[2]) if len(sys.argv) == 3 else None
+    if store is not None and not store.is_dir():
+        fail(f"{store} is not a directory")
     rules = json.loads(rules_path.read_text())
     pins = json.loads((repository / "Package.resolved").read_text())["pins"]
 
     pinned = {pin["identity"] for pin in pins}
     ruled = set(rules["packages"])
-    for identity in sorted(pinned - ruled):
-        fail(f"Package.resolved pins {identity}, and sbom/rules.json has no entry for it: its license has not been read")
-    for identity in sorted(ruled - pinned):
-        fail(f"sbom/rules.json has an entry for {identity}, which Package.resolved no longer pins")
+    if pinned - ruled:
+        fail(f"Package.resolved pins {', '.join(sorted(pinned - ruled))}, and sbom/rules.json has no entry for "
+             f"{'it' if len(pinned - ruled) == 1 else 'them'}: the license has not been read")
+    if ruled - pinned:
+        fail(f"sbom/rules.json has an entry for {', '.join(sorted(ruled - pinned))}, which Package.resolved no longer pins")
 
     components = [package_component(pin, rules["packages"][pin["identity"]]) for pin in pins]
-    components += model_components(rules["models"])
+    components += model_components(rules["models"], store)
     components.sort(key=lambda c: c["bom-ref"])
     app = application()
     bom = {
@@ -189,7 +243,8 @@ def main():
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(bom, indent=2, sort_keys=True) + "\n")
-    print(f"{output}: {len(components)} components, {sum(len(c.get('components', [])) for c in components)} vendored")
+    confirmed = f", rules confirmed against {store}" if store is not None else ""
+    print(f"{output}: {len(components)} components, {sum(len(c.get('components', [])) for c in components)} vendored{confirmed}")
 
 
 main()

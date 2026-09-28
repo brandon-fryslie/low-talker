@@ -3,6 +3,7 @@
   "components": [
     {
       "bom-ref": "huggingface.co/argmaxinc/whisperkit-coreml/large-v3-v20240930_turbo_632MB",
+      "description": "The folder of argmaxinc/whisperkit-coreml whose name ends in large-v3-v20240930_turbo_632MB, which is how WhisperKit picks it",
       "externalReferences": [
         {
           "type": "distribution",
@@ -77,7 +78,7 @@
             },
             {
               "name": "low-talker:license-file",
-              "value": "TOMLKit/Sources/CTOML/Sources/toml.hpp"
+              "value": "Sources/CTOML/Sources/toml.hpp"
             },
             {
               "name": "low-talker:license-file-sha256",
@@ -109,7 +110,7 @@
         },
         {
           "name": "low-talker:license-file",
-          "value": "TOMLKit/LICENSE"
+          "value": "LICENSE"
         },
         {
           "name": "low-talker:license-file-sha256",
@@ -143,7 +144,7 @@
         },
         {
           "name": "low-talker:license-file",
-          "value": "swift-argument-parser/LICENSE.txt"
+          "value": "LICENSE.txt"
         },
         {
           "name": "low-talker:license-file-sha256",
@@ -184,7 +185,7 @@
             },
             {
               "name": "low-talker:license-file",
-              "value": "argmax-oss-swift/NOTICES"
+              "value": "NOTICES"
             },
             {
               "name": "low-talker:license-file-sha256",
@@ -216,7 +217,7 @@
         },
         {
           "name": "low-talker:license-file",
-          "value": "argmax-oss-swift/LICENSE"
+          "value": "LICENSE"
         },
         {
           "name": "low-talker:license-file-sha256",

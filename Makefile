@@ -43,7 +43,7 @@ RELEASE_SCHEME := LowTalker
 RELEASE_APP := $(PRODUCTS)/LowTalker.app
 INSTALLED := /Applications/LowTalker.app
 
-.PHONY: app release install run test check-docs cli sbom clean signing-identity
+.PHONY: app release install run test check-docs cli sbom check-sbom clean signing-identity
 
 # Regeneration is unconditional: xcodegen is idempotent and sub-second, and a
 # timestamp rule cannot see removed sources or in-place rewrites of the project.
@@ -127,6 +127,7 @@ test:
 	$(MAKE) check-docs
 	swift test
 	$(MAKE) cli
+	$(MAKE) check-sbom
 
 # [LAW:one-source-of-truth] The onboarding rows' readings are a vocabulary README.md keeps a
 # copy of: each way macOS can answer for the microphone, and the input method switched on or
@@ -168,13 +169,23 @@ check-docs:
 # failing tool aborts loudly.
 CLI := .build/debug/lowtalker
 # What a release ships and under what license, as CycloneDX, read off the resolved
-# build: Package.resolved, the checkouts it resolves to, and the CLI's default model.
-# Resolving first is what puts the checkouts under .build on a clean clone, and the CLI is
-# built because the model's name is read from it, not copied. scripts/sbom stops and
-# names any component sbom/rules.json cannot license. [LAW:no-silent-failure]
+# build: Package.resolved, the checkouts `swift build` resolves under .build, and the
+# CLI's default model. The CLI is built because the model's name is read from it, not
+# copied, and building it is what resolves the checkouts on a clean clone. When this Mac's
+# store holds the model, the rules for its two repos are held to what that install wrote.
+# scripts/sbom stops and names any component sbom/rules.json cannot license.
+# [LAW:no-silent-failure]
 sbom: cli
-	swift package resolve
-	scripts/sbom sbom/lowtalker.cdx.json
+	@set -eu; store="$(MODEL_SOURCE)"; [ -d "$$store" ] || store=""; \
+	scripts/sbom sbom/lowtalker.cdx.json $${store:+"$$store"}
+
+# The committed SBOM is the one the build writes, or `make test` fails: a committed file
+# that can drift from Package.resolved is a maintained list wearing a generated one's name.
+check-sbom: sbom
+	@git ls-files --error-unmatch -- sbom/lowtalker.cdx.json >/dev/null 2>&1 \
+		|| { echo "check-sbom: sbom/lowtalker.cdx.json is not committed" >&2; exit 1; }
+	@git diff --exit-code --stat -- sbom/lowtalker.cdx.json \
+		|| { echo "check-sbom: sbom/lowtalker.cdx.json is not what the build writes; commit the regenerated file" >&2; exit 1; }
 
 cli:
 	swift build --product lowtalker
