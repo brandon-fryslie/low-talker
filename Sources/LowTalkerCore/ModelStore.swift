@@ -28,18 +28,19 @@ public struct ModelStore: Sendable {
         return ModelStore(directory: support.appending(components: "low-talker", "hub"))
     }
 
-    /// The folder in an app bundle's resources where a release carries a store holding
-    /// its model, so a first launch has something to install from with the network off.
+    /// The folder in an app bundle's resources where the bundle carries a store holding
+    /// its model, so a first launch has something to load with the network off.
     ///
     /// [LAW:one-source-of-truth] project.yml copies the store in under its
     /// `MODEL_STORE_RESOURCE` setting, which xcodegen cannot read from Swift;
     /// `CarriedModelStoreTests` holds that copy to this one.
     public static let carriedResourceName = "model-store"
 
-    /// The store `bundle` carries, if it carries one. A release's bundle does and a
-    /// development build's does not.
+    /// The store `bundle` carries, if it carries one. Every bundle `make app` or `make
+    /// release` builds does, the development copy included; only a bundle built with
+    /// `BUNDLED_MODEL_STORE=` (CI's, with no model to carry) does not.
     ///
-    /// A release loads this store in place, read-only, and writes no model data outside
+    /// The app loads this store in place, read-only, and writes no model data outside
     /// its bundle: the carried store is already whole and sealed by the code signature, so
     /// nothing has to be copied out of it first. Inside the bundle rather than beside it on
     /// the disk image, because dragging the app to Applications takes the bundle and leaves
@@ -75,7 +76,7 @@ public struct ModelStore: Sendable {
 
     /// The model, verified present, or the reason the store does not hold it. The read-only
     /// counterpart to `install`: a store already whole is loaded where it sits, with no lock
-    /// and no write, which is how a release loads its carried, code-signed store. A store
+    /// and no write, which is how the app loads its carried, code-signed store. A store
     /// that is not whole cannot be made whole here — nothing to download, nowhere to write —
     /// so it fails with the part-level reason rather than a permission error from a lock it
     /// could not take. [LAW:parse-dont-validate] [LAW:no-silent-failure]
@@ -379,7 +380,7 @@ public enum ModelStoreError: Error, Equatable, CustomStringConvertible {
     case dittoFailed(arguments: [String], status: Int32, message: String)
     case renameFailed(from: URL, to: URL, errno: Int32)
     /// A store that does not hold the model whole, with no source to make it whole from:
-    /// a release's read-only carried store, verified in place. [LAW:no-silent-failure]
+    /// the app's read-only carried store, verified in place. [LAW:no-silent-failure]
     case storeLacksModel(store: URL, model: ModelName, reason: String)
 
     public var description: String {

@@ -11,15 +11,24 @@
 # or a base URL serving the archive `lowtalker model pack` writes. With none, the model comes
 # from Hugging Face.
 #
-# The build is `make release` in the Release configuration, which project.yml signs with the
-# Developer ID identity, Hardened Runtime and a secure timestamp. It goes into a derived-data
-# directory made for this run and removed after it: an incremental build keeps embedding a
-# tool whose only change is its signature (low-build-mmp), so a warm DerivedData could hand
-# over a bundle whose CLI is signed by the dev identity.
+# The build is `make release` signed with the Developer ID identity in place of the
+# development one, and that identity is the only thing this script changes about the build:
+# the Hardened Runtime, the secure timestamp and the entitlements are project.yml's for every
+# build, so the bundle a person develops on is built exactly as this one is. It goes into a
+# derived-data directory made for this run and removed after it: an incremental build keeps
+# embedding a tool whose only change is its signature (low-build-mmp), so a warm DerivedData
+# could hand over a bundle whose CLI is signed by the dev identity.
 #
-# [LAW:one-source-of-truth] The recipe is the Makefile's and the identity and team are
-# project.yml's; this script only chooses the configuration and reads the result back.
+# [LAW:one-source-of-truth] The recipe is the Makefile's; this script only names the
+# certificate and reads the result back. The certificate is named in full, team and all: the
+# team is what the checks below hold every signature to, and it is read off this one string
+# rather than written a second time. project.yml sets no DEVELOPMENT_TEAM, since Xcode takes
+# one as a filter that the self-signed development identity cannot pass.
 set -euo pipefail
+
+identity="Developer ID Application: Brandon Fryslie (6R988MUU27)"
+team=${identity##*(}
+team=${team%)}
 
 out=${1:?usage: scripts/sign-release <output directory> [model source]}
 source=${2:-}
@@ -41,14 +50,12 @@ cli=$(make cli | tee /dev/stderr | tail -n 1)
 fetched="$derived/fetched-store"
 "$cli" model download --models-dir "$fetched" ${source:+--from "$source"} >&2
 
-make release CONFIGURATION=Release DERIVED_DATA="$derived" MODEL_SOURCE="$fetched" >&2
+make release SIGNING_IDENTITY="$identity" DERIVED_DATA="$derived" MODEL_SOURCE="$fetched" >&2
 
 app="$out/LowTalker.app"
 # Removed first: ditto merges into a bundle already there. [LAW:no-silent-failure]
 rm -rf "$app"
 ditto "$derived/Build/Products/Release/LowTalker.app" "$app"
-
-team=$(xcodegen dump --type json | jq -er '.settings.configs.Release.DEVELOPMENT_TEAM // error("project.yml sets no DEVELOPMENT_TEAM for Release")')
 
 fail() {
   echo "sign-release: $1" >&2

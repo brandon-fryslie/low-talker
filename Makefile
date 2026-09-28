@@ -1,8 +1,16 @@
 # `make app` is the one command that turns project.yml into a launchable app bundle.
 SHELL := /bin/bash
 DERIVED_DATA := DerivedData
-CONFIGURATION := Debug
+# The one configuration project.yml defines: every bundle, the development copy included,
+# is built as a release. Named here only so the products path below can be spelled.
+CONFIGURATION := Release
 PRODUCTS := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)
+# The certificate every bundle is signed with, when it is not project.yml's development
+# identity. Empty, xcodebuild signs with the identity project.yml sets; scripts/sign-release
+# names the Developer ID certificate here, and that name, the store the bundle carries and
+# a DerivedData of its own are all it changes. [LAW:one-type-per-behavior] A release and a
+# development build are one recipe run with two values, never two recipes.
+SIGNING_IDENTITY :=
 # A store holding the model, for the bundle to carry.
 #
 # Every bundle carries its model, the development copy included. It is not an optimisation:
@@ -46,7 +54,8 @@ INSTALLED := /Applications/LowTalker.app
 define build_app
 	xcodegen generate
 	xcodebuild -project LowTalker.xcodeproj -scheme $(1) -configuration $(CONFIGURATION) \
-		-derivedDataPath $(DERIVED_DATA) BUNDLED_MODEL_STORE="$(BUNDLED_MODEL_STORE)" build
+		-derivedDataPath $(DERIVED_DATA) BUNDLED_MODEL_STORE="$(BUNDLED_MODEL_STORE)" \
+		$(if $(SIGNING_IDENTITY),CODE_SIGN_IDENTITY="$(SIGNING_IDENTITY)") build
 endef
 
 # The store the bundle carries, copied out of $(MODEL_SOURCE). Two stores and not one,

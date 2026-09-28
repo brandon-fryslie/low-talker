@@ -7,18 +7,42 @@ options:
   deploymentTarget:
     macOS: "15.0"
 
+# One build configuration, so there is one way a bundle is built. A development build is
+# the release recipe run under the development identity: same optimisation, same single
+# Mach-O (Debug splits the code into a stub and a `.debug.dylib` beside it), same
+# entitlements, same timestamped signature. Anything that differs between the copy a
+# person develops on and the copy they ship is a path the development copy never ran.
+# [LAW:no-mode-explosion] [LAW:one-type-per-behavior]
+configs:
+  Release: release
+
 # Shared by every target. macOS keys the Microphone grant to the signing certificate, so
-# dev builds carry a self-signed identity that `make signing-identity` creates once per
-# Mac. Ad hoc signing would key the grant to each build's own hash and lose it on every
+# builds carry a self-signed identity that `make signing-identity` creates once per Mac.
+# Ad hoc signing would key the grant to each build's own hash and lose it on every
 # rebuild. scripts/signing-identity reads it for the CLI build outside Xcode.
+#
+# The identity is the one setting a build to hand to someone else changes:
+# scripts/sign-release passes the Developer ID certificate, which Gatekeeper trusts and
+# notarization accepts, in its place. No DEVELOPMENT_TEAM here, on purpose: Xcode takes a
+# team as a filter on certificates, and the self-signed identity belongs to none, so a team
+# set for every build fails every development build with "No certificate for team". The
+# team rides inside the certificate's name, which is where sign-release spells it.
+#
+# Everything else notarization asks of a signature is set here for every build, the
+# development copy included, so the two are signed alike: the Hardened Runtime; no
+# get-task-allow entitlement, which CODE_SIGN_INJECT_BASE_ENTITLEMENTS would add; and a
+# secure timestamp, which Xcode leaves out (--timestamp=none) unless told. The timestamp is
+# the one cost the development copy pays for the likeness: codesign asks Apple's timestamp
+# server for it, measured at 0.6 s a signature with the self-signed identity, and a build
+# with no network fails to sign.
 settings:
   base:
     SWIFT_VERSION: "6.0"
     CODE_SIGN_STYLE: Manual
     CODE_SIGN_IDENTITY: LowTalker Dev
-    # Notarization refuses a binary without it, and every target in this file is one a
-    # release carries: the app, the CLI, and the input method bundle embedded in it.
     ENABLE_HARDENED_RUNTIME: YES
+    CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+    OTHER_CODE_SIGN_FLAGS: --timestamp
     # [LAW:one-source-of-truth] The one place a version is written. Every bundle takes both
     # from here: GENERATE_INFOPLIST_FILE fills CFBundleShortVersionString and CFBundleVersion
     # from these settings and drops the keys when they are unset, which is how every build
@@ -29,20 +53,6 @@ settings:
     # tags already pushed.
     MARKETING_VERSION: 0.1.0
     CURRENT_PROJECT_VERSION: "5"
-  # A build to hand to someone else: the Developer ID certificate, which Gatekeeper trusts
-  # and notarization accepts, in place of the dev identity nobody trusts. The app and
-  # everything embedded in it change certificate together. scripts/sign-release builds
-  # this configuration.
-  #
-  # Notarization refuses two things Xcode signs in by default, in Release as in Debug:
-  # the get-task-allow entitlement, which CODE_SIGN_INJECT_BASE_ENTITLEMENTS adds, and a
-  # signature with no secure timestamp, since Xcode passes --timestamp=none unless told.
-  configs:
-    Release:
-      CODE_SIGN_IDENTITY: Developer ID Application
-      DEVELOPMENT_TEAM: 6R988MUU27
-      CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
-      OTHER_CODE_SIGN_FLAGS: --timestamp
 
 packages:
   # [LAW:one-way-deps] The app links the SwiftPM package at the repo root; the
