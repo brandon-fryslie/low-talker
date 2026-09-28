@@ -1,0 +1,66 @@
+{
+  "_": [
+    "What scripts/sbom cannot read off the resolved build: the license each component is",
+    "under, and the code vendored inside a package that no manifest declares. Everything",
+    "else in the SBOM - identity, URL, version, revision - is read, never written here.",
+    "A package in Package.resolved with no entry here fails the build by name, and so",
+    "does an entry here for a package Package.resolved no longer pins.",
+    "`licenseFile` is read from the package's checkout and its digest recorded, so the",
+    "SBOM says which text the license id stands for. A vendored component's `version`",
+    "names the file to read it from and a regular expression whose first group is the",
+    "version (and second, if any, the revision), so a re-vendoring moves the SBOM."
+  ],
+  "packages": {
+    "argmax-oss-swift": {
+      "license": "MIT",
+      "licenseFile": "LICENSE",
+      "vendored": [
+        {
+          "name": "swift-transformers",
+          "path": "Sources/ArgmaxCore/External",
+          "origin": "https://github.com/huggingface/swift-transformers",
+          "license": "Apache-2.0",
+          "licenseFile": "NOTICES",
+          "version": {
+            "file": "Sources/ArgmaxCore/External/Hub/Hub.swift",
+            "match": "^// Version: (\\S+) \\(commit: ([0-9a-f]+)\\)"
+          }
+        }
+      ]
+    },
+    "swift-argument-parser": {
+      "license": "Apache-2.0",
+      "licenseFile": "LICENSE.txt"
+    },
+    "tomlkit": {
+      "license": "MIT",
+      "licenseFile": "LICENSE",
+      "vendored": [
+        {
+          "name": "tomlplusplus",
+          "path": "Sources/CTOML/Sources/toml.hpp",
+          "origin": "https://github.com/marzer/tomlplusplus",
+          "license": "MIT",
+          "licenseFile": "Sources/CTOML/Sources/toml.hpp",
+          "version": {
+            "file": "Sources/CTOML/Sources/toml.hpp",
+            "match": "#define TOML_LIB_MAJOR (\\d+)\\s+#define TOML_LIB_MINOR (\\d+)\\s+#define TOML_LIB_PATCH (\\d+)",
+            "as": "$1.$2.$3"
+          }
+        }
+      ]
+    }
+  },
+  "models": {
+    "large-v3-v20240930_turbo_632MB": {
+      "weights": {
+        "repo": "argmaxinc/whisperkit-coreml",
+        "license": "MIT"
+      },
+      "tokenizer": {
+        "repo": "openai/whisper-large-v3",
+        "license": "Apache-2.0"
+      }
+    }
+  }
+}

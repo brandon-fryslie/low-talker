@@ -43,7 +43,7 @@ RELEASE_SCHEME := LowTalker
 RELEASE_APP := $(PRODUCTS)/LowTalker.app
 INSTALLED := /Applications/LowTalker.app
 
-.PHONY: app release install run test check-docs cli clean signing-identity
+.PHONY: app release install run test check-docs cli sbom clean signing-identity
 
 # Regeneration is unconditional: xcodegen is idempotent and sub-second, and a
 # timestamp rule cannot see removed sources or in-place rewrites of the project.
@@ -167,6 +167,15 @@ check-docs:
 # project.yml; the lookups run in the recipe (not $(shell), which discards exit status) so a
 # failing tool aborts loudly.
 CLI := .build/debug/lowtalker
+# What a release ships and under what license, as CycloneDX, read off the resolved
+# build: Package.resolved, the checkouts it resolves to, and the CLI's default model.
+# Resolving first is what puts the checkouts under .build on a clean clone, and the CLI is
+# built because the model's name is read from it, not copied. scripts/sbom stops and
+# names any component sbom/rules.json cannot license. [LAW:no-silent-failure]
+sbom: cli
+	swift package resolve
+	scripts/sbom sbom/lowtalker.cdx.json
+
 cli:
 	swift build --product lowtalker
 	# Read into a variable first: a failed lookup inside the codesign line would sign as "null".

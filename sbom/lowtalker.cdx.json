@@ -1,0 +1,253 @@
+{
+  "bomFormat": "CycloneDX",
+  "components": [
+    {
+      "bom-ref": "huggingface.co/argmaxinc/whisperkit-coreml/large-v3-v20240930_turbo_632MB",
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://huggingface.co/argmaxinc/whisperkit-coreml"
+        }
+      ],
+      "group": "argmaxinc/whisperkit-coreml",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "large-v3-v20240930_turbo_632MB",
+      "properties": [
+        {
+          "name": "low-talker:model-part",
+          "value": "weights"
+        }
+      ],
+      "type": "machine-learning-model"
+    },
+    {
+      "bom-ref": "huggingface.co/openai/whisper-large-v3",
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://huggingface.co/openai/whisper-large-v3"
+        }
+      ],
+      "group": "openai",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "name": "whisper-large-v3",
+      "properties": [
+        {
+          "name": "low-talker:model-part",
+          "value": "tokenizer"
+        }
+      ],
+      "type": "data"
+    },
+    {
+      "bom-ref": "pkg:swift/github.com/LebJe/TOMLKit@0.6.0",
+      "components": [
+        {
+          "bom-ref": "pkg:swift/github.com/LebJe/TOMLKit@0.6.0#tomlplusplus",
+          "externalReferences": [
+            {
+              "type": "vcs",
+              "url": "https://github.com/marzer/tomlplusplus"
+            }
+          ],
+          "licenses": [
+            {
+              "license": {
+                "id": "MIT"
+              }
+            }
+          ],
+          "name": "tomlplusplus",
+          "properties": [
+            {
+              "name": "low-talker:vendored-at",
+              "value": "Sources/CTOML/Sources/toml.hpp"
+            },
+            {
+              "name": "low-talker:license-file",
+              "value": "TOMLKit/Sources/CTOML/Sources/toml.hpp"
+            },
+            {
+              "name": "low-talker:license-file-sha256",
+              "value": "6b5172ad4dd6519aec67b919181fa7a38a2234131e5b2afa232dfe444819783e"
+            }
+          ],
+          "type": "library",
+          "version": "3.4.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/LebJe/TOMLKit.git"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "TOMLKit",
+      "properties": [
+        {
+          "name": "low-talker:revision",
+          "value": "ec6198d37d495efc6acd4dffbd262cdca7ff9b3f"
+        },
+        {
+          "name": "low-talker:license-file",
+          "value": "TOMLKit/LICENSE"
+        },
+        {
+          "name": "low-talker:license-file-sha256",
+          "value": "bccd5fe8b98c6caede07def6c03f55877416ec40ea5fcd18e668b5c6fbb10abe"
+        }
+      ],
+      "purl": "pkg:swift/github.com/LebJe/TOMLKit@0.6.0",
+      "type": "library",
+      "version": "0.6.0"
+    },
+    {
+      "bom-ref": "pkg:swift/github.com/apple/swift-argument-parser@1.8.2",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/apple/swift-argument-parser.git"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "name": "swift-argument-parser",
+      "properties": [
+        {
+          "name": "low-talker:revision",
+          "value": "6a52f3251125d74daf04fcbd5e6f08a75d074382"
+        },
+        {
+          "name": "low-talker:license-file",
+          "value": "swift-argument-parser/LICENSE.txt"
+        },
+        {
+          "name": "low-talker:license-file-sha256",
+          "value": "770af8291f708538d8ff885a0bbc4e045cd700531741c4f99528d435c14d7f55"
+        }
+      ],
+      "purl": "pkg:swift/github.com/apple/swift-argument-parser@1.8.2",
+      "type": "library",
+      "version": "1.8.2"
+    },
+    {
+      "bom-ref": "pkg:swift/github.com/argmaxinc/argmax-oss-swift@1.1.0",
+      "components": [
+        {
+          "bom-ref": "pkg:swift/github.com/argmaxinc/argmax-oss-swift@1.1.0#swift-transformers",
+          "externalReferences": [
+            {
+              "type": "vcs",
+              "url": "https://github.com/huggingface/swift-transformers"
+            }
+          ],
+          "licenses": [
+            {
+              "license": {
+                "id": "Apache-2.0"
+              }
+            }
+          ],
+          "name": "swift-transformers",
+          "properties": [
+            {
+              "name": "low-talker:revision",
+              "value": "573e5c9036c2f136b3a8a071da8e8907322403d0"
+            },
+            {
+              "name": "low-talker:vendored-at",
+              "value": "Sources/ArgmaxCore/External"
+            },
+            {
+              "name": "low-talker:license-file",
+              "value": "argmax-oss-swift/NOTICES"
+            },
+            {
+              "name": "low-talker:license-file-sha256",
+              "value": "8af554e910833382a04c73b2d9eaef669e031335c867de14b5cf631bd2239913"
+            }
+          ],
+          "type": "library",
+          "version": "1.1.6"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/argmaxinc/argmax-oss-swift.git"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "argmax-oss-swift",
+      "properties": [
+        {
+          "name": "low-talker:revision",
+          "value": "1e2a163736dfa5a198e637ae44c114e1c6d5cc2d"
+        },
+        {
+          "name": "low-talker:license-file",
+          "value": "argmax-oss-swift/LICENSE"
+        },
+        {
+          "name": "low-talker:license-file-sha256",
+          "value": "b8673adf319f1d6905c5c38cf69513f8857930fb3445566fa9839c6948bb85c4"
+        }
+      ],
+      "purl": "pkg:swift/github.com/argmaxinc/argmax-oss-swift@1.1.0",
+      "type": "library",
+      "version": "1.1.0"
+    }
+  ],
+  "dependencies": [
+    {
+      "dependsOn": [
+        "huggingface.co/argmaxinc/whisperkit-coreml/large-v3-v20240930_turbo_632MB",
+        "huggingface.co/openai/whisper-large-v3",
+        "pkg:swift/github.com/LebJe/TOMLKit@0.6.0",
+        "pkg:swift/github.com/apple/swift-argument-parser@1.8.2",
+        "pkg:swift/github.com/argmaxinc/argmax-oss-swift@1.1.0"
+      ],
+      "ref": "lowtalker"
+    }
+  ],
+  "metadata": {
+    "component": {
+      "bom-ref": "lowtalker",
+      "name": "LowTalker",
+      "type": "application",
+      "version": "0.1.0"
+    }
+  },
+  "specVersion": "1.6",
+  "version": 1
+}
