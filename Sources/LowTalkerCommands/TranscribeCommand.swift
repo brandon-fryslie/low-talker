@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import LowTalkerCore
+import ModelInstall
 
 /// Runs the real engine on a file and prints what it heard, word by word. This is
 /// how the engine is exercised on a developer's Mac; CI has no model weights and

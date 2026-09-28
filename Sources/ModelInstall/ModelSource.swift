@@ -1,4 +1,5 @@
 import Foundation
+import LowTalkerCore
 import Synchronization
 import WhisperKit
 
@@ -67,25 +68,6 @@ enum OpenSource {
             let unpacked = scratch.appending(path: "store")
             try Archive.unpack(archive, into: unpacked)
             return try await body(.store(ModelStore(directory: unpacked)))
-        }
-    }
-}
-
-/// A part of a model, as a store installs it and a manifest records it.
-public enum ModelPart: String, Sendable, CustomStringConvertible {
-    /// The Core ML bundles and the model's config, in the whisperkit-coreml repo.
-    case weights
-    /// The tokenizer the weights decode with, in an openai repo shared by every model
-    /// of one Whisper size.
-    case tokenizer
-
-    public var description: String { rawValue }
-
-    /// Where this part's files live in a store, in the words a repair instruction uses.
-    var folderDescription: String {
-        switch self {
-        case .weights: "model's folder under models/argmaxinc/whisperkit-coreml"
-        case .tokenizer: "tokenizer's folder under models/openai"
         }
     }
 }
@@ -170,7 +152,7 @@ enum Archive {
         let message = errors.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
-            throw ModelStoreError.dittoFailed(arguments: arguments, status: process.terminationStatus, message: String(decoding: message, as: UTF8.self))
+            throw ModelInstallError.dittoFailed(arguments: arguments, status: process.terminationStatus, message: String(decoding: message, as: UTF8.self))
         }
     }
 
@@ -221,7 +203,7 @@ enum Archive {
             let status = (downloadTask.response as? HTTPURLResponse)?.statusCode
             outcome.withLock { outcome in
                 do {
-                    guard status == 200 else { throw ModelStoreError.downloadRefused(url: source, status: status) }
+                    guard status == 200 else { throw ModelInstallError.downloadRefused(url: source, status: status) }
                     try FileManager.default.moveItem(at: location, to: destination)
                 } catch {
                     outcome = error

@@ -489,8 +489,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return .terminateLater
     }
 
-    /// Off the main path from the first await: the download and the Core ML load
-    /// run on WhisperKit's own threads, and only the status text comes back here.
+    /// Off the main path from the first await: the Core ML load runs on WhisperKit's
+    /// own threads, and only the status text comes back here.
     private func loadEngine() async throws -> WhisperKitTranscriber {
         do {
             // One operation and not two: the bundle carries a store and this loads it in

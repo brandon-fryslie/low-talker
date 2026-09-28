@@ -78,6 +78,9 @@ targetTemplates:
     sources:
       - App/LowTalker
     dependencies:
+      # And not ModelInstall, the store's write side: the app loads the store its bundle
+      # carries and has no way to fetch one, which `AppLinksNoInstallerTests` reads off
+      # this list and Package.swift. [LAW:one-way-deps]
       - package: low-talker
         product: LowTalkerCore
       # The grants the menu reads, beneath both the core and the setup list.

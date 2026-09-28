@@ -115,6 +115,9 @@ let package = Package(
             name: "LowTalkerCommands",
             dependencies: [
                 "LowTalkerCore",
+                // `model download`, `model pack`, and the loads `transcribe` and `bench`
+                // make from a source: the one place a model is written to disk.
+                "ModelInstall",
                 "Grants",
                 "Flavors",
                 "Onboarding",
@@ -124,6 +127,22 @@ let package = Package(
             ]
         ),
         .executableTarget(name: "lowtalker", dependencies: ["LowTalkerCommands"]),
+        // The write side of the model store: fetching from huggingface.co or a published
+        // base, copying from another store, packing one to publish. Beneath the CLI alone.
+        // The app links the core and loads the store its bundle carries, read-only, so the
+        // graph and not the call sites is what says the app cannot download;
+        // `AppLinksNoInstallerTests` reads this graph for that. [LAW:one-way-deps]
+        .target(name: "ModelInstall", dependencies: ["LowTalkerCore", .product(name: "WhisperKit", package: "argmax-oss-swift")]),
+        .testTarget(
+            name: "ModelInstallTests",
+            dependencies: [
+                "ModelInstall",
+                "LowTalkerCore",
+                // The tokenizer-choice test holds the installer's mirror of WhisperKit's
+                // internal decision to WhisperKit's own functions.
+                .product(name: "WhisperKit", package: "argmax-oss-swift"),
+            ]
+        ),
         .testTarget(
             name: "LowTalkerCoreTests",
             dependencies: [
@@ -139,7 +158,7 @@ let package = Package(
         // The CLI's table shape is its contract; this pins column names to fields.
         .testTarget(
             name: "lowtalkerTests",
-            dependencies: ["LowTalkerCommands", "LowTalkerCore", "Onboarding", "Flavors"]
+            dependencies: ["LowTalkerCommands", "LowTalkerCore", "ModelInstall", "Onboarding", "Flavors"]
         ),
     ]
 )

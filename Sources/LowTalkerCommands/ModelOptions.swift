@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import LowTalkerCore
+import ModelInstall
 import Synchronization
 
 /// Which store, for every command that touches models.
@@ -71,7 +72,7 @@ struct VocabularyOptions: ParsableArguments {
 final class PhaseReporter: Sendable {
     private let lastLine = Mutex<String?>(nil)
 
-    func report(_ phase: WhisperKitTranscriber.LoadPhase) {
+    func report(_ phase: WhisperKitTranscriber.InstallingLoadPhase) {
         let line = phase.description
         let changed = lastLine.withLock { last in
             defer { last = line }

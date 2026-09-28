@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import LowTalkerCore
+import ModelInstall
 
 /// The latency harness from the terminal: every fixture in a directory through
 /// every model asked for, held every way asked for, one table out. This is how

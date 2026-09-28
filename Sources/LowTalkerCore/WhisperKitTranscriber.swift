@@ -19,20 +19,6 @@ public final class WhisperKitTranscriber: Transcriber {
         pipeline = try await Pipeline(installed: installed)
     }
 
-    /// The whole road from a store to a resident model: the store installs whatever
-    /// it lacks from `source`, then the model is loaded. `phase` hears each step begin so a status
-    /// item or a terminal can say what the wait is for.
-    public static func load(
-        _ model: ModelName = .default,
-        in store: ModelStore,
-        from source: ModelSource,
-        phase: @escaping @Sendable (LoadPhase) -> Void
-    ) async throws -> WhisperKitTranscriber {
-        let installed = try await store.install(model, from: source) { phase(.installing($0)) }
-        phase(.loading)
-        return try await WhisperKitTranscriber(installed)
-    }
-
     /// Loads a model a store already holds, verified in place and never written to: the
     /// app's carried store is read-only and code-signed, so the model is confirmed
     /// whole where it sits, with no install and no lock. There is no installing phase — a
@@ -48,10 +34,10 @@ public final class WhisperKitTranscriber: Transcriber {
         return try await WhisperKitTranscriber(installed)
     }
 
-    /// What a load is doing right now. There is no "ready" case: the
-    /// returned transcriber is that state.
+    /// What a load is doing right now. One step, because a store this module loads is
+    /// already whole: the road that first installs into a store, with its own phases, is
+    /// `ModelInstall`'s. There is no "ready" case: the returned transcriber is that state.
     public enum LoadPhase: Equatable, Sendable, CustomStringConvertible {
-        case installing(ModelStore.InstallPhase)
         /// Core ML is loading the model. The first load on a Mac, after an OS update,
         /// or after a change to the app's signing identity also specializes the model
         /// for the Neural Engine, which takes minutes.
@@ -59,7 +45,6 @@ public final class WhisperKitTranscriber: Transcriber {
 
         public var description: String {
             switch self {
-            case .installing(let phase): phase.description
             case .loading: "loading model, minutes the first time on this Mac"
             }
         }
