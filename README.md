@@ -383,6 +383,8 @@ Both installations are signed without `get-task-allow`, which Xcode would otherw
 
 After a build that changes only how the embedded CLI is signed, rebuild the bundles from scratch (`rm -rf "DerivedData/Build/Products/Release/LowTalker Dev.app" DerivedData/Build/Products/Release/LowTalker.app`, then `make app` and `make release`): Xcode's copy phase does not see a re-signed tool as changed, and keeps embedding the old one (low-build-mmp).
 
+A checkout that built before the two copies shared one configuration still has a `DerivedData/Build/Products/Debug/` with a `LowTalker Dev.app` in it, under the same bundle identifier as the one `make app` now builds, and LaunchServices may answer a lookup by that identifier with the stale one. Remove it once: `rm -rf DerivedData/Build/Products/Debug`.
+
 ### Signing for release
 
     NOTARY_PROFILE=<profile> scripts/release dist ~/Library/Application\ Support/low-talker/hub   # dist/LowTalker.dmg
