@@ -63,8 +63,13 @@ private let repository = URL(fileURLWithPath: #filePath)
         let project = try #require(json as? [String: Any])
         let objects = try #require(project["objects"] as? [String: [String: Any]])
         let targets = try objects.values.filter { $0["isa"] as? String == "PBXNativeTarget" }.map { target in
-            let products = try (target["packageProductDependencies"] as? [String] ?? []).map { id in
-                try #require(objects[id]?["productName"] as? String, "\(id) is not a package product")
+            // A product of this package carries no package reference, as xcodegen writes
+            // the project; one that does is another package's, and the walk stops there
+            // the way the package side stops at a foreign product.
+            let products = try (target["packageProductDependencies"] as? [String] ?? []).compactMap { id -> String? in
+                let product = try #require(objects[id], "\(id) is not an object of the project")
+                guard product["package"] == nil else { return nil }
+                return try #require(product["productName"] as? String, "\(id) is not a package product")
             }
             return (try #require(target["name"] as? String), Set(products))
         }
