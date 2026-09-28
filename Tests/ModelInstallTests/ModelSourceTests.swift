@@ -1,5 +1,5 @@
 import Foundation
-@testable import LowTalkerCore
+@testable import ModelInstall
 import Testing
 @testable import WhisperKit
 

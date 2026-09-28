@@ -7,7 +7,7 @@ import Testing
 
     @Test func aWaitSaysWhatItIsDoingAndHowLongItHasRun() {
         #expect(EngineReadiness.preparing(nil, since: launch).readout(at: launch + .seconds(0.4)) == "checking the model, 0 s so far")
-        #expect(EngineReadiness.preparing(.installing(.copying), since: launch).readout(at: launch + .seconds(3)) == "copying model, 3 s so far")
+        #expect(EngineReadiness.preparing(.loading, since: launch).readout(at: launch + .seconds(3)) == "loading model, minutes the first time on this Mac, 3 s so far")
         #expect(EngineReadiness.preparing(.loading, since: launch).readout(at: launch + .seconds(164.7)) == "loading model, minutes the first time on this Mac, 2 min 44 s so far")
     }
 
@@ -24,7 +24,7 @@ import Testing
     @Test func aLatePhaseLeavesAFinishedLoadFinished() {
         let failed = EngineReadiness.failed("the carried store lacks the tokenizer")
         let ready = EngineReadiness.ready(.default, after: .seconds(5))
-        #expect(failed.reporting(.installing(.copying)) == failed)
+        #expect(failed.reporting(.loading) == failed)
         #expect(ready.reporting(.loading) == ready)
         #expect(EngineReadiness.preparing(nil, since: launch).reporting(.loading) == .preparing(.loading, since: launch))
     }

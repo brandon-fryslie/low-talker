@@ -1,5 +1,4 @@
 import Foundation
-import WhisperKit
 
 /// The on-disk home of engine models: one directory laid out the way the Hugging
 /// Face hub lays out its cache, so WhisperKit's downloader and tokenizer loader
@@ -11,6 +10,12 @@ import WhisperKit
 /// only record which commit a file came from; a manifest records what arrived, and
 /// proves the *set* is complete, which the sidecars cannot, since a download stopped
 /// between files leaves no trace of the files it never started.
+///
+/// [LAW:one-way-deps] This is the read side: whether a model is here and whole, and the
+/// proof a load takes. Writing a store - fetching what it lacks, copying from another
+/// store, packing one to publish - is `ModelInstall`'s, a module the CLI links and the
+/// app does not, so a process linking only this one has no way to reach the network for
+/// a model.
 public struct ModelStore: Sendable {
     /// The hub root. A model lives at `models/<org>/<repo>/<variant>` beneath it and
     /// its tokenizer at `models/openai/<whisper variant>`.
@@ -50,7 +55,7 @@ public struct ModelStore: Sendable {
     }
 
     /// Where the model stands on disk. Only `.installed` yields the proof a load
-    /// needs; the other two are why `install` is called. Throws when the store itself
+    /// needs; the other two are why an install is called. Throws when the store itself
     /// cannot be examined, such as a file or folder this process may not read.
     ///
     /// [LAW:parse-dont-validate] The checkpoint. Everything past it takes an
@@ -74,12 +79,12 @@ public struct ModelStore: Sendable {
         }
     }
 
-    /// The model, verified present, or the reason the store does not hold it. The read-only
-    /// counterpart to `install`: a store already whole is loaded where it sits, with no lock
-    /// and no write, which is how the app loads its carried, code-signed store. A store
-    /// that is not whole cannot be made whole here — nothing to download, nowhere to write —
-    /// so it fails with the part-level reason rather than a permission error from a lock it
-    /// could not take. [LAW:parse-dont-validate] [LAW:no-silent-failure]
+    /// The model, verified present, or the reason the store does not hold it. A store
+    /// already whole is loaded where it sits, with no lock and no write, which is how the
+    /// app loads its carried, code-signed store. A store that is not whole cannot be made
+    /// whole here — nothing to download, nowhere to write — so it fails with the part-level
+    /// reason rather than a permission error from a lock it could not take.
+    /// [LAW:parse-dont-validate] [LAW:no-silent-failure]
     public func installedModel(_ model: ModelName) throws -> InstalledModel {
         switch try presence(of: model) {
         case .installed(let installed): return installed
@@ -89,13 +94,13 @@ public struct ModelStore: Sendable {
     }
 
     /// What one part's manifest says about its files.
-    enum Recording {
+    package enum Recording {
         case whole(Manifest)
         case unrecorded
         case damaged(Damage)
     }
 
-    func recording(_ part: ModelPart, of model: ModelName) throws -> Recording {
+    package func recording(_ part: ModelPart, of model: ModelName) throws -> Recording {
         let manifestURL = manifestURL(for: model, part)
         let manifest: Manifest
         do {
@@ -110,166 +115,15 @@ public struct ModelStore: Sendable {
         return faults.isEmpty ? .whole(manifest) : .damaged(.files(folder: folder, faults: faults))
     }
 
-    /// The installed model, taking whatever the store lacks from `source` first. A
-    /// part already whole here is not taken again, so a damaged install costs only
-    /// the damaged parts, and an installed one costs nothing. One installer at a
-    /// time: a second, from any process, waits for the first.
-    ///
-    /// [LAW:dataflow-not-control-flow] The sequence never changes; whether a part is
-    /// fetched is decided by its `Recording`, the domain's own discriminator, judged
-    /// under the lock so it describes what this installer owns.
-    public func install(
-        _ model: ModelName,
-        from source: ModelSource,
-        phase: @escaping @Sendable (InstallPhase) -> Void
-    ) async throws -> InstalledModel {
-        try await InstallLock.holding(directory, waiting: { phase(.waitingForAnotherInstall) }) {
-            let presence = try presence(of: model)
-            if case .installed(let installed) = presence { return installed }
-            // [LAW:single-enforcer] The hub client trusts its own sidecar once a file
-            // exists and never hashes the file, so a truncated file would come back as
-            // "already downloaded". The manifest is the one judge of whole; the files it
-            // rejects are removed first so no source has anything to trust.
-            for url in try presence.evictions {
-                try FileManager.default.removeItem(at: url)
-            }
-            return try await OpenSource.with(source, model, beside: self, phase: phase) { source in
-                let weights = try await whole(.weights, of: model) {
-                    switch source {
-                    case .huggingFace:
-                        phase(.downloading(fractionCompleted: 0))
-                        let folder = try await WhisperKit.download(variant: model.rawValue, downloadBase: directory) { phase(.downloading(fractionCompleted: $0.fractionCompleted)) }
-                        // [LAW:no-silent-failure] The hub client answers cancellation by
-                        // returning the folder as far as it got, without throwing. A
-                        // manifest over that folder would certify a partial model as whole.
-                        try Task.checkCancellation()
-                        return try Manifest(recording: folder, relativeTo: directory)
-                    case .store(let store):
-                        phase(.copying)
-                        return try copy(.weights, of: model, from: store)
-                    }
-                }
-                let folder = directory.appending(path: weights.folder)
-                _ = try await whole(.tokenizer, of: model) {
-                    switch source {
-                    case .huggingFace:
-                        // WhisperKit fetches the tokenizer on first load, from the hub,
-                        // when it is not already here; taking it now is what lets that
-                        // load, and every one after, run with the network off.
-                        let variant = try ModelVariant(modelConfig: folder.appending(path: "config.json"))
-                        _ = try await ModelUtilities.loadTokenizer(for: variant, tokenizerFolder: directory)
-                        try Task.checkCancellation()
-                        return try Manifest(recording: directory.appending(components: "models", variant.tokenizerRepo), relativeTo: directory)
-                    case .store(let store):
-                        phase(.copying)
-                        return try copy(.tokenizer, of: model, from: store)
-                    }
-                }
-                return InstalledModel(model: model, folder: folder, hub: directory)
-            }
-        }
-    }
-
-    /// Writes `<directory>/<model>.zip`, the archive a published source serves: a
-    /// store holding `model` alone, taken from this store, which must hold it whole.
-    ///
-    /// [LAW:composability] Packing is an install into an empty store and a zip of the
-    /// result, so an archive holds exactly what an install certifies, manifests and
-    /// all, and nothing a hub client left beside it.
-    public func pack(_ model: ModelName, into directory: URL, phase: @escaping @Sendable (InstallPhase) -> Void) async throws -> URL {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let scratch = try FileManager.default.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: directory, create: true)
-        // [LAW:no-silent-failure] exception: a defer cannot throw, and a staging copy
-        // left behind costs disk, not correctness.
-        defer { try? FileManager.default.removeItem(at: scratch) }
-        let staging = ModelStore(directory: scratch.appending(path: "store"))
-        _ = try await staging.install(model, from: .store(self), phase: phase)
-        let archive = directory.appending(path: ModelSource.archiveName(of: model))
-        try Archive.pack(staging.directory, to: archive)
-        return archive
-    }
-
-    /// The part's manifest, taking the part from `fetch` and recording what arrived
-    /// when it is not already whole here.
-    private func whole(_ part: ModelPart, of model: ModelName, fetch: () async throws -> Manifest) async throws -> Manifest {
-        if case .whole(let manifest) = try recording(part, of: model) { return manifest }
-        let manifest = try await fetch()
-        try manifest.write(to: manifestURL(for: model, part))
-        return manifest
-    }
-
-    /// Copies the files `source`'s manifest lists for the part to the same paths
-    /// here, and hands back that manifest once the copies verify against it.
-    ///
-    /// Each file lands under a temporary name and is renamed over its place, so a
-    /// tokenizer another model shares is never absent while it is replaced. Only the
-    /// listed files are copied: a sidecar beside them in the source is not the model.
-    private func copy(_ part: ModelPart, of model: ModelName, from source: ModelStore) throws -> Manifest {
-        let manifest: Manifest
-        switch try source.recording(part, of: model) {
-        case .whole(let whole): manifest = whole
-        case .unrecorded: throw ModelStoreError.sourceLacks(source: source.directory, model: model, part: part, reason: "not installed there")
-        case .damaged(let damage): throw ModelStoreError.sourceLacks(source: source.directory, model: model, part: part, reason: damage.description)
-        }
-        let from = source.directory.appending(path: manifest.folder)
-        let to = directory.appending(path: manifest.folder)
-        for file in manifest.files {
-            let destination = to.appending(path: file.path)
-            let incoming = destination.deletingLastPathComponent().appending(path: ".\(destination.lastPathComponent).\(UUID().uuidString)")
-            try FileManager.default.createDirectory(at: incoming.deletingLastPathComponent(), withIntermediateDirectories: true)
-            do {
-                try FileManager.default.copyItem(at: from.appending(path: file.path), to: incoming)
-                guard rename(incoming.path, destination.path) == 0 else {
-                    throw ModelStoreError.renameFailed(from: incoming, to: destination, errno: errno)
-                }
-            } catch {
-                // A hidden name is never recorded or evicted, so a partial copy left
-                // here would outlive every retry. [LAW:no-silent-failure] exception:
-                // the copy's own error is the one the caller needs; a failed removal
-                // of what may never have been created adds nothing to it.
-                try? FileManager.default.removeItem(at: incoming)
-                throw error
-            }
-        }
-        let faults = try manifest.faults(in: to)
-        guard faults.isEmpty else {
-            throw ModelStoreError.sourceLacks(source: source.directory, model: model, part: part, reason: "copied, but \(faults.map(\.description).joined(separator: "; "))")
-        }
-        return manifest
-    }
-
     /// `installed/<model>.json` for the weights, where every store before the
     /// tokenizer had a manifest already wrote it, and `installed/tokenizer/<model>.json`
     /// beside it. Kept per model rather than per tokenizer: a model knows its own
     /// manifests' names without reading its weights.
-    private func manifestURL(for model: ModelName, _ part: ModelPart) -> URL {
+    package func manifestURL(for model: ModelName, _ part: ModelPart) -> URL {
         let installed = directory.appending(path: "installed")
         return switch part {
         case .weights: installed.appending(path: "\(model.rawValue).json")
         case .tokenizer: installed.appending(components: "tokenizer", "\(model.rawValue).json")
-        }
-    }
-
-    /// What `install` is doing now. `waitingForAnotherInstall` is reported once,
-    /// when the lock is found held; `downloading` repeats as the fraction grows.
-    ///
-    /// [LAW:one-source-of-truth] The words every surface shows for a phase live here,
-    /// so the menu bar and the terminal cannot describe the same moment differently.
-    public enum InstallPhase: Equatable, Sendable, CustomStringConvertible {
-        case waitingForAnotherInstall
-        case downloading(fractionCompleted: Double)
-        /// A published archive has arrived and is being unzipped.
-        case unpacking
-        /// Files are being copied in from another store.
-        case copying
-
-        public var description: String {
-            switch self {
-            case .waitingForAnotherInstall: "waiting for another install"
-            case .downloading(let fraction): "downloading \(Int(fraction * 100))%"
-            case .unpacking: "unpacking model"
-            case .copying: "copying model"
-            }
         }
     }
 
@@ -333,52 +187,27 @@ public struct ModelStore: Sendable {
     }
 }
 
-/// One installer per store at a time, across processes: the app's launch load and
-/// the CLI's `model download` share the directory, and two downloads into it would
-/// evict and write the same files under each other.
-///
-/// [LAW:no-ambient-temporal-coupling] The store owns the order of evict, download,
-/// and manifest write. A second installer waits its turn by polling the lock between
-/// sleeps, so no cooperative thread is held for the minutes a download can take.
-private enum InstallLock {
-    static func holding<T>(_ directory: URL, waiting: () -> Void, _ body: () async throws -> T) async throws -> T {
-        let lock = directory.appending(components: "installed", ".lock")
-        try FileManager.default.createDirectory(at: lock.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let descriptor = open(lock.path, O_RDONLY | O_CREAT | O_CLOEXEC, 0o644)
-        guard descriptor >= 0 else {
-            throw ModelStoreError.lockUnavailable(lock: lock, errno: errno)
-        }
-        defer { close(descriptor) }
-        if try !acquire(descriptor, lock: lock) {
-            waiting()
-            while try !acquire(descriptor, lock: lock) {
-                try await Task.sleep(for: .milliseconds(500))
-            }
-        }
-        return try await body()
-    }
+/// A part of a model, as a store installs it and a manifest records it.
+public enum ModelPart: String, Sendable, CustomStringConvertible {
+    /// The Core ML bundles and the model's config, in the whisperkit-coreml repo.
+    case weights
+    /// The tokenizer the weights decode with, in an openai repo shared by every model
+    /// of one Whisper size.
+    case tokenizer
 
-    /// False while another process holds the lock; any other refusal is an error.
-    private static func acquire(_ descriptor: Int32, lock: URL) throws -> Bool {
-        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
-            guard errno == EWOULDBLOCK else {
-                throw ModelStoreError.lockUnavailable(lock: lock, errno: errno)
-            }
-            return false
+    public var description: String { rawValue }
+
+    /// Where this part's files live in a store, in the words a repair instruction uses.
+    var folderDescription: String {
+        switch self {
+        case .weights: "model's folder under models/argmaxinc/whisperkit-coreml"
+        case .tokenizer: "tokenizer's folder under models/openai"
         }
-        return true
     }
 }
 
 public enum ModelStoreError: Error, Equatable, CustomStringConvertible {
     case manifestUnreadable(manifest: URL, part: ModelPart, reason: String)
-    case lockUnavailable(lock: URL, errno: Int32)
-    /// A source store that does not hold the part whole, so there is nothing to take.
-    case sourceLacks(source: URL, model: ModelName, part: ModelPart, reason: String)
-    /// A published base answered with something other than the archive.
-    case downloadRefused(url: URL, status: Int?)
-    case dittoFailed(arguments: [String], status: Int32, message: String)
-    case renameFailed(from: URL, to: URL, errno: Int32)
     /// A store that does not hold the model whole, with no source to make it whole from:
     /// the app's read-only carried store, verified in place. [LAW:no-silent-failure]
     case storeLacksModel(store: URL, model: ModelName, reason: String)
@@ -389,16 +218,6 @@ public enum ModelStoreError: Error, Equatable, CustomStringConvertible {
             // The folder a manifest covered is named by the manifest, which is what
             // cannot be read, so the instruction names where that part lives.
             "manifest \(manifest.path) cannot be read (\(reason)); delete it and the \(part.folderDescription), then download again"
-        case .lockUnavailable(let lock, let errno):
-            "cannot lock \(lock.path): \(String(cString: strerror(errno)))"
-        case .sourceLacks(let source, let model, let part, let reason):
-            "\(source.path) cannot supply the \(part) of \(model): \(reason)"
-        case .downloadRefused(let url, let status):
-            "\(url.absoluteString) answered \(status.map { "HTTP \($0)" } ?? "with no HTTP status"), not the model archive"
-        case .dittoFailed(let arguments, let status, let message):
-            "ditto \(arguments.joined(separator: " ")) exited \(status): \(message)"
-        case .renameFailed(let from, let to, let errno):
-            "cannot move \(from.path) to \(to.path): \(String(cString: strerror(errno)))"
         case .storeLacksModel(let store, let model, let reason):
             "\(store.path) does not hold \(model) whole: \(reason)"
         }
@@ -406,7 +225,8 @@ public enum ModelStoreError: Error, Equatable, CustomStringConvertible {
 }
 
 /// Proof that a model's files are all present in a store. Only `ModelStore` makes
-/// one, so holding it means the check ran.
+/// one, so holding it means the check ran: here on a read, and in `ModelInstall` once
+/// an install has written both parts and their manifests.
 public struct InstalledModel: Sendable {
     public let model: ModelName
     /// The folder holding the `.mlmodelc` bundles and config.
@@ -414,7 +234,7 @@ public struct InstalledModel: Sendable {
     /// The store root, where the tokenizer for this model lives or will be fetched.
     public let hub: URL
 
-    fileprivate init(model: ModelName, folder: URL, hub: URL) {
+    package init(model: ModelName, folder: URL, hub: URL) {
         self.model = model
         self.folder = folder
         self.hub = hub

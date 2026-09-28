@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import LowTalkerCore
+import ModelInstall
 
 /// The model store from the terminal: what is on disk, and fetching what is not.
 /// This is how "a fresh install downloads once and the next launch loads from

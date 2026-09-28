@@ -1,5 +1,6 @@
 @testable import LowTalkerCommands
 import LowTalkerCore
+import ModelInstall
 import Testing
 
 @Suite struct SourceOptionsTests {

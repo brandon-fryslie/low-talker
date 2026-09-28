@@ -60,10 +60,12 @@ let package = Package(
         // ending of its own to unwind through. It links nothing, so any process here can
         // watch through it. [LAW:one-source-of-truth]
         .target(name: "Signals"),
-        // The gate and the flag a suite plants in concurrent work to see where it has
-        // got to. A plain target because test targets cannot import one another's
-        // sources, and in no product because nothing ships it. [LAW:one-source-of-truth]
-        .target(name: "TestProbes"),
+        // What more than one suite builds: the gate and the flag a suite plants in
+        // concurrent work to see where it has got to, and the scratch store the core's read
+        // side and the installer's write side are both exercised on. A plain target because
+        // test targets cannot import one another's sources, and in no product because
+        // nothing ships it. [LAW:one-source-of-truth]
+        .target(name: "TestProbes", dependencies: ["LowTalkerCore"]),
         // Everything that must hold before low-talker can hear and type, as a list a reader
         // can act on: what was read off this Mac, and the step for whatever is missing. It
         // links the flavor, the grants and the input source's switch, and not the core - so
@@ -115,6 +117,9 @@ let package = Package(
             name: "LowTalkerCommands",
             dependencies: [
                 "LowTalkerCore",
+                // `model download`, `model pack`, and the loads `transcribe` and `bench`
+                // make from a source: the one place a model is written to disk.
+                "ModelInstall",
                 "Grants",
                 "Flavors",
                 "Onboarding",
@@ -124,6 +129,23 @@ let package = Package(
             ]
         ),
         .executableTarget(name: "lowtalker", dependencies: ["LowTalkerCommands"]),
+        // The write side of the model store: fetching from huggingface.co or a published
+        // base, copying from another store, packing one to publish. Beneath the CLI alone.
+        // The app links the core and loads the store its bundle carries, read-only, so the
+        // graph and not the call sites is what says the app cannot download;
+        // `AppLinksNoInstallerTests` reads this graph for that. [LAW:one-way-deps]
+        .target(name: "ModelInstall", dependencies: ["LowTalkerCore", .product(name: "WhisperKit", package: "argmax-oss-swift")]),
+        .testTarget(
+            name: "ModelInstallTests",
+            dependencies: [
+                "ModelInstall",
+                "LowTalkerCore",
+                "TestProbes",
+                // The tokenizer-choice test holds the installer's mirror of WhisperKit's
+                // internal decision to WhisperKit's own functions.
+                .product(name: "WhisperKit", package: "argmax-oss-swift"),
+            ]
+        ),
         .testTarget(
             name: "LowTalkerCoreTests",
             dependencies: [
@@ -139,7 +161,7 @@ let package = Package(
         // The CLI's table shape is its contract; this pins column names to fields.
         .testTarget(
             name: "lowtalkerTests",
-            dependencies: ["LowTalkerCommands", "LowTalkerCore", "Onboarding", "Flavors"]
+            dependencies: ["LowTalkerCommands", "LowTalkerCore", "ModelInstall", "Onboarding", "Flavors"]
         ),
     ]
 )
