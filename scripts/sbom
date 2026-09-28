@@ -127,7 +127,8 @@ def package_component(pin, rule):
 
 
 def vendored_component(identity, checkout, parent_ref, rule):
-    name = f"{identity} vendors {rule.get('name') or '<unnamed>'}"
+    vendored = need(rule, "name", f"a component {identity} vendors")
+    name = f"{identity} vendors {vendored}"
     relative = need(rule, "path", name)
     if not (checkout / relative).exists():
         fail(f"{name}: nothing at {relative} in the checkout")
@@ -138,8 +139,8 @@ def vendored_component(identity, checkout, parent_ref, rule):
         properties.insert(0, {"name": "low-talker:revision", "value": revision})
     return {
         "type": "library",
-        "bom-ref": f"{parent_ref}#{rule['name']}",
-        "name": rule["name"],
+        "bom-ref": f"{parent_ref}#{vendored}",
+        "name": vendored,
         "version": version,
         "licenses": licenses,
         "externalReferences": [{"type": "vcs", "url": need(rule, "origin", name)}],
@@ -161,13 +162,16 @@ def model_components(rules, store):
     if rule is None:
         fail(f"the default model is {model} and rules.json has no entry for it")
     components = []
+    confirmed = []
     for part, kind in (("weights", "machine-learning-model"), ("tokenizer", "data")):
         component = f"{model} {part}"
         entry = need(rule, part, component)
         repo = need(entry, "repo", component)
+        if repo.count("/") != 1:
+            fail(f"{component}: rules.json names the repo {repo!r}, not <owner>/<repo>")
         spdx = need(entry, "license", component)
-        if store is not None:
-            confirm_against_store(store, model, part, repo)
+        if store is not None and confirm_against_store(store, model, part, repo):
+            confirmed.append(part)
         # The weights are one folder of a repo holding many models, so the repo is their
         # group and the model their name; the tokenizer is a repo of its own.
         group, name = (repo, model) if part == "weights" else repo.split("/", 1)
@@ -183,15 +187,18 @@ def model_components(rules, store):
         if part == "weights":
             entry["description"] = f"The folder of {repo} whose name ends in {model}, which is how WhisperKit picks it"
         components.append(entry)
-    return components
+    return components, confirmed
 
 
 def confirm_against_store(store, model, part, repo):
     """Holds a rule's repo to the folder the install wrote, as its manifest records it:
-    `models/<owner>/<repo>[/<folder>]`."""
+    `models/<owner>/<repo>[/<folder>]`. A store with no manifest for this part has not
+    installed it - another model's store, or a download that stopped - and so has nothing
+    to hold the rule to; only a manifest that disagrees is a failure. Answers whether the
+    rule was confirmed."""
     manifest = store / "installed" / (f"tokenizer/{model}.json" if part == "tokenizer" else f"{model}.json")
     if not manifest.is_file():
-        fail(f"{model} {part}: {store} holds no install manifest at {manifest.relative_to(store)}, so the rule cannot be confirmed against it")
+        return False
     folder = json.loads(manifest.read_text()).get("folder", "")
     parts = folder.split("/")
     if len(parts) < 3 or parts[0] != "models":
@@ -201,6 +208,7 @@ def confirm_against_store(store, model, part, repo):
         fail(f"{model} {part}: rules.json says {repo}, and the install in {store} came from {installed} ({folder})")
     if part == "weights" and not folder.endswith(model):
         fail(f"{model} weights: the install in {store} is {folder}, which is not a folder for {model}")
+    return True
 
 
 def application():
@@ -230,7 +238,8 @@ def main():
         fail(f"sbom/rules.json has an entry for {', '.join(sorted(ruled - pinned))}, which Package.resolved no longer pins")
 
     components = [package_component(pin, rules["packages"][pin["identity"]]) for pin in pins]
-    components += model_components(rules["models"], store)
+    models, confirmed = model_components(rules["models"], store)
+    components += models
     components.sort(key=lambda c: c["bom-ref"])
     app = application()
     bom = {
@@ -243,8 +252,13 @@ def main():
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(bom, indent=2, sort_keys=True) + "\n")
-    confirmed = f", rules confirmed against {store}" if store is not None else ""
-    print(f"{output}: {len(components)} components, {sum(len(c.get('components', [])) for c in components)} vendored{confirmed}")
+    if store is None:
+        held = ""
+    elif confirmed:
+        held = f"; the {' and '.join(confirmed)} rules held to the install in {store}"
+    else:
+        held = f"; {store} holds no install of the default model, so its rules were not confirmed"
+    print(f"{output}: {len(components)} components, {sum(len(c.get('components', [])) for c in components)} vendored{held}")
 
 
 main()

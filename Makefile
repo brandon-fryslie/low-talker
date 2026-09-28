@@ -181,11 +181,13 @@ sbom: cli
 
 # The committed SBOM is the one the build writes, or `make test` fails: a committed file
 # that can drift from Package.resolved is a maintained list wearing a generated one's name.
+# Against HEAD, not the index: a regenerated file that is staged and not committed is
+# still a stale commit.
 check-sbom: sbom
 	@git ls-files --error-unmatch -- sbom/lowtalker.cdx.json >/dev/null 2>&1 \
 		|| { echo "check-sbom: sbom/lowtalker.cdx.json is not committed" >&2; exit 1; }
-	@git diff --exit-code --stat -- sbom/lowtalker.cdx.json \
-		|| { echo "check-sbom: sbom/lowtalker.cdx.json is not what the build writes; commit the regenerated file" >&2; exit 1; }
+	@git diff HEAD --exit-code --stat -- sbom/lowtalker.cdx.json \
+		|| { echo "check-sbom: the committed sbom/lowtalker.cdx.json is not what the build writes; commit the regenerated file" >&2; exit 1; }
 
 cli:
 	swift build --product lowtalker
