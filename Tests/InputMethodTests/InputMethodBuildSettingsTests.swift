@@ -51,9 +51,8 @@ private let repository = URL(fileURLWithPath: #filePath)
     func theBundleIsBuiltUnderItsFlavorsNames(flavor: Flavor) throws {
         let configurations = try Self.inputMethodConfigurations()
         let mine = configurations.filter { $0["INPUT_SOURCE_ID"] == flavor.inputSourceIdentifier }
-        // Every configuration of the target, not the first: a Debug that resolves and a
-        // Release that does not is a development copy that works and a shipped one that
-        // does not, found at release.
+        // Every configuration of the target, not the first, so a second configuration added
+        // to project.yml is held to the names the same way the one it has today is.
         try #require(!mine.isEmpty,
                      "the project builds no input method under \(flavor.inputSourceIdentifier); it builds \(configurations.compactMap { $0["INPUT_SOURCE_ID"] })")
         for settings in mine {

@@ -33,8 +33,8 @@ public final class WhisperKitTranscriber: Transcriber {
         return try await WhisperKitTranscriber(installed)
     }
 
-    /// Loads a model a store already holds, verified in place and never written to: a
-    /// release's carried store is read-only and code-signed, so the model is confirmed
+    /// Loads a model a store already holds, verified in place and never written to: the
+    /// app's carried store is read-only and code-signed, so the model is confirmed
     /// whole where it sits, with no install and no lock. There is no installing phase — a
     /// store that does not hold the model whole fails with the reason before any load
     /// begins. [LAW:parse-dont-validate]

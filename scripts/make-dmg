@@ -17,30 +17,29 @@ app=${1:?$usage}
 out=${2:?$usage}
 # A bundle is a directory, so completion leaves a slash that would hide its name.
 app=${app%/}
-# Resolved before the move to the repo root, which xcodegen needs, so relative paths mean
-# the ones the caller named.
+# Resolved to absolute paths, so the image path printed at the end opens from anywhere.
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
 app=$(cd "$(dirname "$app")" && pwd)/$(basename "$app")
-cd "$(dirname "$0")/.."
 
 fail() {
   echo "make-dmg: $1" >&2
   exit 1
 }
 
-# What the notary service would refuse of the image: no Developer ID signature from the
-# team, or no secure timestamp.
+# What the notary service would refuse of the image: no Developer ID signature, or no secure
+# timestamp. Which team's Developer ID is scripts/sign-release's to hold the app to, once;
+# the image is signed with the app's own certificate below, so it can be no one else's.
+# [LAW:single-enforcer]
 check() {
   local signed=$1 signature
   signature=$(codesign -dvv "$signed" 2>&1)
-  grep -qx "Authority=Developer ID Application: .* ($team)" <<<"$signature" \
-    || fail "$signed is not signed with a Developer ID Application certificate for team $team"
+  grep -q "^Authority=Developer ID Application: " <<<"$signature" \
+    || fail "$signed is not signed with a Developer ID Application certificate"
   grep -q '^Timestamp=' <<<"$signature" \
     || fail "$signed has no secure timestamp"
 }
 
-team=$(xcodegen dump --type json | jq -er '.settings.configs.Release.DEVELOPMENT_TEAM // error("project.yml sets no DEVELOPMENT_TEAM for Release")')
 codesign --verify --deep --strict "$app" || fail "$app does not verify"
 check "$app"
 

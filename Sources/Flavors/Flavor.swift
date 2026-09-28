@@ -20,9 +20,8 @@
 ///   which the text input system keys a text input source by: two copies sharing any one
 ///   of them is the second failing to register beside the first.
 ///
-/// Nothing else needs to differ by flavor. The model store differs too, but by whether
-/// the bundle carries one, not by this type: a release loads the store it carries in place,
-/// read-only, and a development build downloads into Application Support.
+/// Nothing else differs by flavor. Both bundles are built by one recipe and carry their
+/// model the same way, so the development copy runs the path the release ships.
 ///
 /// [LAW:one-way-deps] This module depends on nothing, which is what lets both the input
 /// method - a sandboxed process that must stay lean - and the app's higher layers read from

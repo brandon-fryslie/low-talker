@@ -5,8 +5,8 @@ import Testing
 private let repository = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
-/// A release carries its model in the bundle's resources, and the app installs out of the
-/// store it finds there.
+/// Every bundle carries its model in its resources, and the app loads it from the store it
+/// finds there.
 @Suite struct CarriedModelStoreTests {
     /// A bundle on disk holding `resources`, each a folder under `Contents/Resources`.
     struct FakeApp: ~Copyable {
