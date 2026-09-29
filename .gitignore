@@ -11,3 +11,5 @@ App/Generated/
 .claude/worktrees/
 # What scripts/sign-release and scripts/notarize leave behind to hand out.
 dist/
+# Bytecode from running the script tests by hand; make test runs them with -B.
+__pycache__/
