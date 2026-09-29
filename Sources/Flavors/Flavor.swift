@@ -14,7 +14,7 @@
 ///
 /// - the bundle identifier, which LaunchServices treats as the app's identity and TCC
 ///   keys the Microphone grant to;
-/// - the ports the app and its input method answer on, which exactly one process may own;
+/// - the ports its processes answer on, Mach and TCP, which exactly one process may own;
 /// - the input method's bundle identifier, input source identifier and connection name,
 ///   which the text input system keys a text input source by: two copies sharing any one
 ///   of them is the second failing to register beside the first.
@@ -119,6 +119,19 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
     /// answers on it. The input method is sandboxed, so this name is also the one Mach
     /// lookup its entitlements admit beyond the text input system's.
     public var hotkeyPortName: String { bundleIdentifier + ".hotkey" }
+
+    /// The TCP port this flavor's transcription server answers on (epic low-serve-axq).
+    ///
+    /// Fixed rather than chosen at launch, because its callers are configured by hand: a
+    /// Pipecat pipeline's `base_url` is typed once and has no way to ask which port today's
+    /// launch drew. So it is a name in the same sense as the ones above, one process at a
+    /// time may hold it, and each flavor needs its own for both to serve at once.
+    public var serverPort: UInt16 {
+        switch self {
+        case .release: 8610
+        case .development: 8611
+        }
+    }
 
     /// The name shown in the menu bar, where the whole point is that a person can tell the
     /// two apart at a glance.

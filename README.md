@@ -41,9 +41,9 @@ prints the transcript, then one line per word with its start, end, and confidenc
 
 `make cli` is `swift build` plus a re-signing step; the section below says why it matters.
 
-    .build/debug/lowtalker serve --port 8765
+    .build/debug/lowtalker serve
 
-loads the same engine and answers OpenAI's `POST /v1/audio/transcriptions` and its Realtime transcription socket, `ws://.../v1/realtime?intent=transcription`, on loopback, so a Pipecat `OpenAISTTService` pointed at the base URL it prints, or an `OpenAIRealtimeSTTService` pointed at the same URL as `ws://` plus `/realtime`, transcribes through it. The socket streams a turn's words as deltas while its audio is still arriving and answers each commit with the transcript; it takes 24 kHz PCM16, as the spec requires, and only turns the client commits, so `turn_detection` must be null. It prints one JSON line per request. `scripts/conformance check <base URL>` judges it against the contract Pipecat holds OpenAI to.
+loads the same engine and answers OpenAI's `POST /v1/audio/transcriptions` and its Realtime transcription socket, `ws://.../v1/realtime?intent=transcription`, on loopback at the installation's own port: 8611 for development, 8610 with `--flavor release`. Each installation has its own, so both can serve at once, and a second server for one installation stops with an error naming it and the address. So a Pipecat `OpenAISTTService` pointed at the base URL it prints, or an `OpenAIRealtimeSTTService` pointed at the same URL as `ws://` plus `/realtime`, transcribes through it. The socket streams a turn's words as deltas while its audio is still arriving and answers each commit with the transcript; it takes 24 kHz PCM16, as the spec requires, and only turns the client commits, so `turn_detection` must be null. It prints one JSON line per request. `scripts/conformance check <base URL>` judges it against the contract Pipecat holds OpenAI to.
 
 ### The model store
 

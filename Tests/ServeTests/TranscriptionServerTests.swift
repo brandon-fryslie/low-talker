@@ -1,3 +1,4 @@
+import Flavors
 import Foundation
 import LowTalkerCore
 import Network
@@ -6,6 +7,26 @@ import Synchronization
 import Testing
 
 @Suite struct TranscriptionServerTests {
+    /// A second server on an address already served is refused, naming the installation and
+    /// the address: two copies of one flavor read as that, not as a bare socket error.
+    @Test func aServedAddressIsRefusedByName() async throws {
+        let running = try await Running.start(.ready(Stub()))
+        defer { running.server.stop() }
+        let taken = ListenAddress(flavor: .release, port: running.server.port)
+        await #expect {
+            try await TranscriptionServer.listen(at: taken, engine: { .ready(Stub()) }, record: { _ in }).stop()
+        } throws: { error in
+            "\(error)".hasPrefix("LowTalker (release) cannot serve on 127.0.0.1:\(running.server.port): ")
+                && "\(error)".contains("Address already in use")
+        }
+    }
+
+    /// An installation serves on loopback at its own port unless told otherwise.
+    @Test(arguments: Flavor.allCases)
+    func anInstallationServesOnLoopbackAtItsPort(flavor: Flavor) {
+        #expect("\(ListenAddress(flavor: flavor))" == "127.0.0.1:\(flavor.serverPort)")
+    }
+
     /// The contract, judged by the suite that judges every server (low-serve-axq.50m): its
     /// REST and Realtime checks, sent as Pipecat sends them, all pass over an engine that
     /// hears the fixture and confirms words while the audio streams. The token checks skip,

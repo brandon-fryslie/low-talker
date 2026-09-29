@@ -1,35 +1,39 @@
 import ArgumentParser
 import Foundation
 import LowTalkerCore
-import Network
 import Serve
+import Synchronization
 
 /// Serves OpenAI's transcription endpoint and Realtime socket over the engine this command loads, until it is
 /// stopped: how the endpoint is exercised on a developer's Mac, as `transcribe` exercises
 /// the engine, with `scripts/conformance check` pointed at the URL it prints.
 ///
-/// Stdout is the base URL, then one JSON line per request answered or socket closed.
+/// Stdout is the base URL, once it can transcribe, then one JSON line per request answered or socket closed.
 struct ServeCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "serve",
-        abstract: "Serve OpenAI's POST /v1/audio/transcriptions and /v1/realtime on loopback over WhisperKit."
+        abstract: "Serve OpenAI's POST /v1/audio/transcriptions and /v1/realtime on the installation's loopback port over WhisperKit."
     )
 
-    @Option(help: "The loopback port to listen on; 0 lets the system choose.")
-    var port: UInt16 = 0
+    @OptionGroup var installation: FlavorOption
 
     @OptionGroup var options: ModelOptions
     @OptionGroup var source: SourceOptions
 
     func run() async throws {
-        let transcriber = try await WhisperKitTranscriber.load(options.model, in: options.store(), from: source.source, phase: PhaseReporter().report)
+        // Bound before the model loads, so a port already taken is said at once rather than
+        // a minute later, and a request meanwhile is refused with the reason.
+        let resident = Mutex(ServedEngine.notResident("the model is still loading"))
         let server = try await TranscriptionServer.listen(
-            on: .ipv4(.loopback),
-            port: NWEndpoint.Port(rawValue: port)!,
-            engine: { .ready(transcriber) },
+            for: installation.flavor,
+            engine: { resident.withLock { $0 } },
             record: { line($0.json) }
         )
-        line("http://127.0.0.1:\(server.port.rawValue)/v1")
+        let transcriber = try await WhisperKitTranscriber.load(options.model, in: options.store(), from: source.source, phase: PhaseReporter().report)
+        resident.withLock { $0 = .ready(transcriber) }
+        // The URL is the readiness signal a client waits for; one given it early is refused
+        // with 503 until the model is resident.
+        line(server.baseURL)
         try await server.finished()
     }
 }
