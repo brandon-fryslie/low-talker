@@ -350,6 +350,12 @@ The two repos are the one thing a clean checkout cannot check, because WhisperKi
 
 `make test` then runs `scripts/check-licenses` over the committed file, so every pull request is gated on it in CI, and `scripts/sign-release` runs it before building what it ships. It fails on any component, vendored ones included, whose licenses are not all SPDX ids in the accepted set (`ACCEPTED` in `scripts/check-licenses`: the permissive licenses and public-domain equivalents), and on any component whose license was not identified, naming each one with its version and what it is under. When it fires, the response is already decided: drop the dependency, replace it with a permissively licensed equivalent, or reimplement its behavior clean-room from a black-box specification written by someone who has not read its source. Shipping it while deciding is not an option, because the obligation attaches on distribution.
 
+## What the app sends
+
+Nothing. The app links no code of ours that reaches the network; the only code in it that can is WhisperKit and the Hugging Face hub client vendored in argmax-oss-swift. `scripts/wire-check <app bundle>` watches that on the wire: it relaunches the app under `log stream`, waits for one dictation, and passes only if neither the app nor its input method opened a connection. It makes one request of its own with `nscurl` inside the same capture and fails if it cannot see it, since a blind stream would also come back empty. The hub client does start an `NWPathMonitor` as the tokenizer loads (`HubApi.swift`, `NetworkMonitor`), which asks whether a route exists and opens nothing; the check counts those and passes them.
+
+`silentOnTheWireAt` in `sbom/rules.json` is the argmax-oss-swift revision the check last passed at, and `make sbom` stops on any other, so a bump fails `make test` until someone re-runs the check on a build of it and records the new revision. Measured on 2026-09-29 at 1.1.0 (`1e2a163`) against the installed development build.
+
 ## One-time setup: signing identity
 
 Run once after cloning:
