@@ -1,25 +1,27 @@
 #!/usr/bin/env python3
-"""Watches a built app on the wire through a launch and a dictation, and passes only if it
-opened no connection.
+"""Watches a built app and its input method on the wire through a launch and a dictation, and
+passes only if neither did any network work beyond asking whether a route exists.
 
     scripts/wire-check <app bundle>
-    scripts/wire-check judge <capture> <process name>
+    scripts/wire-check judge <capture> <app process> <input method process>
 
 The app links WhisperKit and the Hugging Face hub client vendored in argmax-oss-swift, code
 that can reach the network and that nobody here wrote. sbom/rules.json records the revision
 of that package this was last run against, and scripts/sbom stops the build on any other, so
 a bump of it is re-checked here rather than believed. [LAW:no-silent-failure]
 
-The first form quits the app, starts `log stream` on its processes (the app and its input
-method, whose names both begin with the app's executable name), relaunches it, and waits for
-one dictation: hold the chord, speak, release. Every connection a process opens through
-URLSession or Network.framework logs under com.apple.network's `connection` category or
-com.apple.CFNetwork, whatever proxy it would or would not honour. A path evaluation - asking
-whether a route exists, which the hub client's NWPathMonitor does as the tokenizer loads -
-logs under `path` and opens nothing, so it is counted and not failed.
+The first form quits the app and the input method it carries, starts `log stream` on both
+processes by their exact names, relaunches the app, and waits for one dictation: hold the
+chord, speak, release. macOS relaunches the input method when a text field takes focus, so
+its launch is inside the capture too. Whatever a process does through URLSession or
+Network.framework logs under com.apple.network or com.apple.CFNetwork. Of all that, only a
+path evaluation - asking whether a route exists, which the hub client's NWPathMonitor does
+as the tokenizer loads - and the few lines around it that a quiet process was measured to
+log are passed; every other line from either process fails the check. The allow list is what
+was seen, not what is believed harmless, so network work nobody has measured fails by default.
 
-An empty capture proves nothing if the stream itself was blind, so the run makes one request
-of its own with nscurl inside the same capture, and the judge fails unless it sees that one.
+An empty capture proves nothing if the stream itself was blind, so the run repeats a request
+of its own with nscurl until the capture shows it, and the judge fails unless it sees one.
 
 The second form judges a capture already taken: the first form writes one and then runs it.
 """
@@ -35,6 +37,19 @@ CONTROL = "nscurl"
 CONTROL_URL = "https://example.com"
 # `log stream --style compact`: date, time, type, then Process[pid:tid] and [subsystem:category].
 LINE = re.compile(r"^\S+ \S+ \S+\s+(?P<process>.+?)\[\d+:[0-9a-f]+\] \[(?P<subsystem>[^:\]]*):?(?P<category>[^\]]*)\] (?P<message>.*)$")
+# The uncategorised com.apple.network lines an idle LowTalker Dev logged through a launch,
+# measured 2026-09-29. nscurl's uncategorised lines in the same capture were flow and socket
+# work (nw_path_evaluator_create_flow_inner, nw_fd_wrapper_create), which is why this names
+# whole functions rather than an nw_path_ prefix.
+QUIET = tuple(f"{function} " for function in (
+    "networkd_settings_read_from_file",
+    "nw_path_copy_interface_with_generation",
+    "nw_path_necp_check_for_updates",
+    "-[NWConcrete_nw_path_evaluator dealloc]",
+))
+# The run holds the stream open this long after the input method takes the dictation's text,
+# so traffic a transcription sets off a moment later is inside the capture.
+TAIL = 10
 
 
 def fail(message):
@@ -42,14 +57,18 @@ def fail(message):
     sys.exit(1)
 
 
+def is_network(subsystem):
+    return subsystem.startswith("com.apple.network") or subsystem.startswith("com.apple.CFNetwork")
+
+
 def is_connection(subsystem, category):
     return subsystem.startswith("com.apple.CFNetwork") or (subsystem == "com.apple.network" and category == "connection")
 
 
-def judge(capture, name):
+def judge(capture, app, input_method):
     """The verdict on one capture, from its lines alone. Returns the summary of a pass."""
-    connections, paths, dictations, ready = [], 0, 0, False
-    control = 0
+    network, paths, control = [], 0, 0
+    ready, dictations, serving, inserts = False, 0, False, 0
     for line in capture.read_text(errors="replace").splitlines():
         found = LINE.match(line)
         if not found:
@@ -57,79 +76,110 @@ def judge(capture, name):
         process, subsystem, category, message = found.group("process", "subsystem", "category", "message")
         if process == CONTROL:
             control += is_connection(subsystem, category)
+        elif process not in (app, input_method):
             continue
-        if not process.startswith(name):
-            continue
-        if is_connection(subsystem, category):
-            connections.append(line)
-        elif subsystem == "com.apple.network" and category == "path" and "nw_path_evaluator_start" in message:
-            paths += 1
-        # AppDelegate's engine readout and Dictation's summary of a finished dictation.
-        elif message.startswith("model: ready"):
-            ready = True
-        elif message.startswith("heard "):
-            dictations += 1
+        elif is_network(subsystem):
+            if subsystem == "com.apple.network" and category == "path":
+                paths += "nw_path_evaluator_start" in message
+            elif not (subsystem == "com.apple.network" and not category and message.startswith(QUIET)):
+                network.append(line)
+        # AppDelegate's engine readout and Dictation's summary of a finished dictation, then
+        # the input method's startup line and its account of the text it was handed.
+        elif process == app:
+            ready |= message.startswith("model: ready")
+            dictations += message.startswith("heard ")
+        else:
+            serving |= " serving " in message
+            inserts += message.startswith("insert of ")
     if not control:
         fail(f"{capture} holds no connection from the {CONTROL} control, so the stream saw nothing and its silence proves nothing")
-    if connections:
-        fail(f"{name} opened connections; the first of {len(connections)} lines:\n" + "\n".join(connections[:5]))
+    if network:
+        fail(f"{app} or {input_method} did network work beyond asking for a route; the first of {len(network)} lines:\n"
+             + "\n".join(network[:5]))
     if not ready:
-        fail(f"{capture} never shows {name} reporting its model ready, so the load was not watched")
+        fail(f"{capture} never shows {app} reporting its model ready, so the load was not watched")
     if not dictations:
-        fail(f"{capture} holds no dictation by {name}, so a dictation was not watched")
-    return f"{name}: no connection through a launch and {dictations} dictation(s); {paths} path evaluation(s), which open none"
+        fail(f"{capture} holds no dictation by {app}, so a dictation was not watched")
+    if not serving:
+        fail(f"{capture} never shows {input_method} starting, so its launch was not watched")
+    if not inserts:
+        fail(f"{capture} never shows {input_method} taking a dictation's text, so it was not watched through one")
+    return (f"{app} and {input_method}: no network work through a launch of each and {dictations} dictation(s); "
+            f"{paths} path evaluation(s), which open none")
 
 
-def bundle_info(app):
-    plist = app / "Contents" / "Info.plist"
+def bundle_info(bundle):
+    plist = bundle / "Contents" / "Info.plist"
     if not plist.is_file():
-        fail(f"{app} is not an app bundle: no {plist}")
+        fail(f"{bundle} is not an app bundle: no {plist}")
     info = plistlib.loads(plist.read_bytes())
     return info["CFBundleIdentifier"], info["CFBundleExecutable"]
 
 
-def wait_for(capture, predicate, what, seconds):
+def wait_for(capture, predicate, what, seconds, poll=0.5):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         if predicate(capture.read_text(errors="replace")):
             return
-        time.sleep(0.5)
+        time.sleep(poll)
     fail(f"gave up after {seconds} s waiting for {what}; the capture so far is {capture}")
+
+
+def control_seen(text):
+    """Makes the control request and reports whether the stream has shown one yet. `log stream`
+    prints nothing, not even its header, until a matching entry arrives, so the stream is live
+    only once it shows traffic, and the control is the traffic."""
+    request = subprocess.run(["/usr/bin/nscurl", "-o", "/dev/null", CONTROL_URL], capture_output=True, text=True)
+    if request.returncode:
+        fail(f"the {CONTROL} control could not fetch {CONTROL_URL}, so nothing can show the stream sees traffic: "
+             f"{request.stderr.strip() or f'exit {request.returncode}'}")
+    return any((found := LINE.match(line)) and found.group("process") == CONTROL and is_connection(*found.group("subsystem", "category"))
+               for line in text.splitlines())
+
+
+def running(name):
+    return subprocess.run(["/usr/bin/pgrep", "-x", name], capture_output=True).returncode == 0
 
 
 def watch(app):
     bundle_id, name = bundle_info(app)
+    carried = sorted((app / "Contents" / "Library" / "InputMethods").glob("*.app"))
+    if len(carried) != 1:
+        fail(f"{app} carries {len(carried)} input methods, not one: {[str(bundle) for bundle in carried]}")
+    input_method_id, input_method = bundle_info(carried[0])
     capture = Path(tempfile.mkdtemp(prefix="wire-check.")) / "capture.log"
-    predicate = (f'(process BEGINSWITH "{name}" OR process == "{CONTROL}") AND '
-                 f'(subsystem BEGINSWITH "com.apple.network" OR subsystem BEGINSWITH "com.apple.CFNetwork" OR subsystem == "{bundle_id}")')
+    predicate = (f'(process == "{name}" OR process == "{input_method}" OR process == "{CONTROL}") AND '
+                 f'(subsystem BEGINSWITH "com.apple.network" OR subsystem BEGINSWITH "com.apple.CFNetwork" '
+                 f'OR subsystem == "{bundle_id}" OR subsystem == "{input_method_id}")')
     with capture.open("w") as out:
         stream = subprocess.Popen(["/usr/bin/log", "stream", "--level", "debug", "--style", "compact", "--predicate", predicate],
                                   stdout=out, stderr=subprocess.STDOUT)
     try:
-        wait_for(capture, lambda text: "Timestamp" in text, "log stream to start", 30)
-        subprocess.run(["/usr/bin/nscurl", "-o", "/dev/null", CONTROL_URL], check=True, capture_output=True)
-        subprocess.run(["/usr/bin/pkill", "-TERM", "-x", name])
-        wait_for(capture, lambda _: subprocess.run(["/usr/bin/pgrep", "-x", name], capture_output=True).returncode != 0,
-                 f"{name} to quit", 30)
-        subprocess.run(["/usr/bin/open", "-g", str(app)], check=True)
+        wait_for(capture, control_seen, f"log stream to show the {CONTROL} control", 30, poll=2)
+        for process in (name, input_method):
+            subprocess.run(["/usr/bin/pkill", "-TERM", "-x", process])
+        wait_for(capture, lambda _: not running(name) and not running(input_method), f"{name} and {input_method} to quit", 30)
+        # LaunchServices refuses the open (-600) for a moment after the process is gone.
+        wait_for(capture, lambda _: subprocess.run(["/usr/bin/open", "-g", str(app)], capture_output=True).returncode == 0,
+                 f"LaunchServices to relaunch {name}", 30, poll=1)
         wait_for(capture, lambda text: f"] [{bundle_id}:engine] model: ready" in text, f"{name} to load its model", 600)
-        print(f"wire-check: {name} is ready; dictate once now: hold the chord, speak, release", flush=True)
-        wait_for(capture, lambda text: f"] [{bundle_id}:dictation] heard " in text, "a dictation", 600)
-        time.sleep(2)
+        print(f"wire-check: {name} is ready; click into a text field, then dictate once: hold the chord, speak, release", flush=True)
+        wait_for(capture, lambda text: f"] [{input_method_id}:inputmethod] insert of " in text, "a dictation's text to reach the input method", 600)
+        time.sleep(TAIL)
     finally:
         stream.terminate()
         stream.wait()
-    return capture, name
+    return capture, name, input_method
 
 
 def main():
-    if len(sys.argv) == 4 and sys.argv[1] == "judge":
-        capture, name = Path(sys.argv[2]), sys.argv[3]
+    if len(sys.argv) == 5 and sys.argv[1] == "judge":
+        capture, app, input_method = Path(sys.argv[2]), sys.argv[3], sys.argv[4]
     elif len(sys.argv) == 2:
-        capture, name = watch(Path(sys.argv[1]).resolve())
+        capture, app, input_method = watch(Path(sys.argv[1]).resolve())
     else:
-        fail("usage: scripts/wire-check <app bundle> | scripts/wire-check judge <capture> <process name>")
-    print(f"wire-check: {judge(capture, name)}; capture at {capture}")
+        fail("usage: scripts/wire-check <app bundle> | scripts/wire-check judge <capture> <app process> <input method process>")
+    print(f"wire-check: {judge(capture, app, input_method)}; capture at {capture}")
 
 
 main()
