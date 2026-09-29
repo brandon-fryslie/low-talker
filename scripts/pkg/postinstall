@@ -12,6 +12,8 @@
 # each person it was running for, and it registers and selects the input method that now
 # stands in /Library/Input Methods.
 set -euo pipefail
+# Bytewise, the order make-pkg sorted the payload list in, for every sort and comm below.
+export LC_ALL=C
 
 say() { echo "postinstall: $*"; }
 lines() { if [ -n "$1" ]; then wc -l <<<"$1" | tr -d ' '; else echo 0; fi; }
@@ -46,7 +48,7 @@ for bundle in "$app" "/Library/Input Methods/$input_method_name"; do
   while IFS= read -r path; do
     rm -rf "${path#.}"
     removed=$((removed + 1))
-  done < <(comm -23 <(cd / && find ".$bundle" | LC_ALL=C sort) "$payload")
+  done < <(comm -23 <(cd / && find ".$bundle" | sort) "$payload")
   say "removed $removed paths from $bundle that this package does not carry"
   codesign --verify --deep --strict "$bundle" || { say "$bundle does not verify; remove it and install again"; exit 1; }
 done
