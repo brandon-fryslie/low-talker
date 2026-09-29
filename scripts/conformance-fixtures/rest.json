@@ -1,5 +1,24 @@
 {
  "path": "audio/transcriptions",
+ "headers": {
+  "host": "127.0.0.1:55258",
+  "accept-encoding": "gzip, deflate",
+  "connection": "keep-alive",
+  "authorization": "Bearer sk-conformance-capture",
+  "accept": "application/json",
+  "user-agent": "AsyncOpenAI/Python 3.22.0",
+  "x-stainless-lang": "python",
+  "x-stainless-package-version": "3.22.0",
+  "x-stainless-os": "MacOS",
+  "x-stainless-arch": "arm64",
+  "x-stainless-runtime": "CPython",
+  "x-stainless-runtime-version": "3.12.11",
+  "x-stainless-async": "async:asyncio",
+  "x-stainless-retry-count": "0",
+  "x-stainless-read-timeout": "600",
+  "content-length": "120677",
+  "content-type": "multipart/form-data; boundary=01041eb61353fc30a07d905008311d45"
+ },
  "parts": [
   {
    "name": "model",

@@ -1,6 +1,7 @@
-"""scripts/conformance judged against a server that answers 200 {"text": ""} to everything:
-a suite that passed it would pass anything. Its passing against api.openai.com is the other
-half of the proof and needs the funded key, so it is run by hand (low-serve-axq.50m)."""
+"""scripts/conformance judged against a server that answers 200 {"text": ""} to everything,
+which a suite that passed would pass anything, and against its own reference endpoint, which
+answers as OpenAI did and must pass every check. Its passing against api.openai.com needs the
+funded key, so it is run by hand (low-serve-axq.50m)."""
 import json
 import os
 import subprocess
@@ -60,6 +61,26 @@ class ConformanceTests(unittest.TestCase):
         skipped = [r["check"] for r in summary["results"] if r["outcome"] == "skip"]
         self.assertEqual(skipped, ["rest no token is 401", "rest wrong token is 401",
                                    "realtime wrong token is an error then close 3000"])
+
+    def test_every_check_passes_against_the_reference_endpoint(self):
+        env = {**os.environ, "CONFORMANCE_TOKEN": "sk-test"}
+        reference = subprocess.Popen([str(suite), "serve", "--token-env", "CONFORMANCE_TOKEN"], stdout=subprocess.PIPE,
+                                     stderr=subprocess.DEVNULL, text=True, env=env)
+        self.addCleanup(reference.stdout.close)
+        self.addCleanup(reference.wait)
+        self.addCleanup(reference.kill)
+        url = json.loads(reference.stdout.readline())["url"]
+        result = subprocess.run([str(suite), "check", url, "--token-env", "CONFORMANCE_TOKEN"], capture_output=True,
+                                text=True, timeout=120, env=env)
+        summary = json.loads(result.stdout.splitlines()[-1])
+        self.assertEqual(summary["counts"], {"pass": 10, "fail": 0, "skip": 0}, result.stdout)
+        self.assertEqual(result.returncode, 0)
+
+    def test_a_base_url_that_is_not_http_stops_the_run(self):
+        result = subprocess.run([str(suite), "check", "127.0.0.1:8000/v1"], capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("is not an http(s) base URL", result.stderr)
 
     def test_a_named_token_variable_that_is_unset_stops_the_run(self):
         result = self.run_suite("--token-env", "CONFORMANCE_UNSET_TOKEN", env={"CONFORMANCE_UNSET_TOKEN": ""})
