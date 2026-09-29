@@ -42,6 +42,10 @@ plist() { /usr/libexec/PlistBuddy -c "Print :$2" "$1/Contents/Info.plist"; }
 app_id=$(plist "$app" CFBundleIdentifier)
 version=$(plist "$app" CFBundleShortVersionString)
 input_method_id=$(plist "$input_method" CFBundleIdentifier)
+# Every identifier this product has used begins with the part of this one up to its name,
+# and the postinstall knows an older installation's input method by that prefix.
+[[ $input_method_id == *low-talker.* ]] || fail "$input_method_id does not name low-talker, so no older input method can be told by it"
+family="${input_method_id%%low-talker.*}low-talker."
 # Where the two land. InstalledInputMethod.systemDirectory is the app's reading of the second.
 app_path="/Applications/$(basename "$app")"
 input_method_path="/Library/Input Methods/$(basename "$input_method")"
@@ -53,41 +57,39 @@ mkdir -p "$root/Applications" "$root/Library/Input Methods" "$staging/scripts"
 ditto "$app" "$root$app_path"
 ditto "$input_method" "$root$input_method_path"
 
-# Each bundle installs where it is named and nowhere else, whatever the Mac already holds.
-# Relocatable - pkgbuild's default - sends a bundle to wherever LaunchServices last saw one
-# with its identifier, which on a Mac that builds LowTalker is a copy in DerivedData. Version
-# checked - also the default - skips a bundle whose version on disk is not older, which is
-# every rebuild of one version. The package is what decides what is installed.
-# [LAW:one-source-of-truth]
-#
-# Updated in place rather than upgraded, pkgbuild's default, which deletes the old bundle
-# before writing the new one. Measured on studious 2026-09-29: the text input system drops an
-# input method whose bundle disappears, switched-on state and all, and a bundle that appears
-# again is a new input method it will not run until the next login, so every upgrade cost
-# the enable alert and a logout. Updated in place, the input method stayed switched on and
-# selected and the next request ran the new code. A file a newer build no longer has stays
-# behind and would break the bundle's seal, so the postinstall removes every path in either
-# bundle that the payload list below does not name.
+# Neither bundle is a bundle component: the component list is empty, so the installer writes
+# both as the files they are, where they are named, whatever the Mac already holds. Every
+# rule a bundle component carries is one that broke an install [LAW:one-source-of-truth]:
+# - relocatable, the default, sends a bundle to wherever LaunchServices last saw one with its
+#   identifier, which on a Mac that builds LowTalker is a copy in DerivedData;
+# - version checked, the default, skips a bundle whose version on disk is not older, which is
+#   every rebuild of one version;
+# - upgraded, the default, deletes the old bundle before writing the new one. Measured on
+#   studious 2026-09-29: the text input system drops an input method whose bundle disappears,
+#   and one that appears again will not run in that login session;
+# - updated, the one action that writes in place, skips a bundle not already on disk
+#   ("Skipping update component ... because there is no version on-disk", install.log,
+#   2026-09-29), so a fresh Mac got neither bundle.
+# Written as files, the bundle directory stays where it is across an install (its inode is
+# kept), and a file an older build had and this one does not would stay behind and break the
+# bundle's seal, so the postinstall removes every path in either bundle that the payload list
+# below does not name.
 components="$staging/components.plist"
-pkgbuild --analyze --root "$root" "$components" >/dev/null
-count=0
-while /usr/libexec/PlistBuddy -c "Print :$count" "$components" >/dev/null 2>&1; do
-  /usr/libexec/PlistBuddy -c "Set :$count:BundleIsRelocatable false" \
-    -c "Set :$count:BundleIsVersionChecked false" \
-    -c "Set :$count:BundleOverwriteAction update" "$components"
-  count=$((count + 1))
-done
-[ "$count" -eq 2 ] || fail "pkgbuild found $count bundles in the package root, not the app and its input method"
+cat >"$components" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><array/></plist>
+EOF
 
 # The postinstall, with the names it acts on written in from the bundles themselves. %q
 # quotes each for bash, so a name with a space in it is one word.
 {
   echo '#!/bin/bash'
-  printf 'input_method_id=%q\n' "$input_method_id"
   printf 'input_method_name=%q\n' "$(basename "$input_method")"
   printf 'input_method_executable=%q\n' "$(plist "$input_method" CFBundleExecutable)"
   printf 'app=%q\n' "$app_path"
   printf 'app_executable=%q\n' "$(plist "$app" CFBundleExecutable)"
+  printf 'family=%q\n' "$family"
   cat "$(dirname "$0")/pkg/postinstall"
 } >"$staging/scripts/postinstall"
 chmod 755 "$staging/scripts/postinstall"
