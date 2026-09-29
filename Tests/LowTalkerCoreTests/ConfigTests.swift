@@ -33,7 +33,7 @@ import Testing
         chord = { modifiers = ["leftCommand", "leftShift"] }
         vocabulary = ["Kubernetes", "  Anthropic\\n"]
         routes = [
-          { when = "always", then = { insert = { app = "com.tinyspeck.slackmacgap" } } },
+          { when = "always", then = { insert = "focus" } },
         ]
 
         [[modes]]
@@ -52,11 +52,11 @@ import Testing
         #expect(slack.chord == KeyChord(modifiers: .leftCommand, .leftShift))
         #expect(slack.vocabulary.terms.map(\.text) == ["Kubernetes", "Anthropic"])
         #expect(slack.router.routes == [
-            Route(when: .always, then: .insertTranscript(target: .app(bundleID: BundleID(rawValue: "com.tinyspeck.slackmacgap")))),
+            Route(when: .always, then: .insertTranscript),
         ])
 
         let notes = try #require(config.modes.first { $0.name == "notes" })
-        #expect(notes.router.routes == [Route(when: .always, then: .insertTranscript(target: .focus))])
+        #expect(notes.router.routes == [Route(when: .always, then: .insertTranscript)])
     }
 
     /// The whole point of defaults: the app runs with no file written at all.
@@ -344,9 +344,12 @@ import Testing
         }
     }
 
-    @Test func aTypoInsideInsertIsNamed() {
-        #expect(throws: ConfigError.unknownKeys(["modes[0].routes[0].then.insert.typo"])) {
-            try Self.config(Self.mode(routes: #"[{ when = "always", then = { insert = { app = "com.tinyspeck.slackmacgap", typo = 1 } } }]"#))
+    /// [LAW:no-silent-failure] The input method reaches only the cursor of the app in
+    /// front, so a route naming an app is refused where the file is read rather than
+    /// accepted and then refused at every press.
+    @Test func aTargetNamingAnAppIsRefused() {
+        #expect(throws: ConfigError.wrongShape(#"modes[0].routes[0].then.insert: insert is the word "focus", the cursor of the app in front: the one place the input method puts text"#)) {
+            try Self.config(Self.mode(routes: #"[{ when = "always", then = { insert = { app = "com.tinyspeck.slackmacgap" } } }]"#))
         }
     }
 

@@ -15,11 +15,6 @@ import Testing
         try Config(toml: toml, flavor: flavor)
     }
 
-    /// Nothing installed, so every bundle id a config names is one this Mac does not
-    /// have. The predicate is a value, which is why these tests say the same thing on a
-    /// machine with Slack and a machine without it.
-    static func noApps(_ app: BundleID) -> Bool { false }
-
     // MARK: - Gaps
 
     /// The two files this distinguishes look almost alike and mean different things: an
@@ -35,7 +30,7 @@ import Testing
             chord = { modifiers = ["rightCommand"] }
             routes = []
             """)
-        #expect(config.gaps(appExists: Self.noApps) == [.modeClaimsNothing(mode: "silent")])
+        #expect(config.gaps == [.modeClaimsNothing(mode: "silent")])
     }
 
     @Test func aModeWithNoRoutesKeyDictatesAndIsNoGap() throws {
@@ -44,36 +39,7 @@ import Testing
             name = "dictation"
             chord = { modifiers = ["rightOption"] }
             """)
-        #expect(config.gaps(appExists: Self.noApps).isEmpty)
-    }
-
-    /// [LAW:parse-dont-validate] `BundleID` takes any string on purpose - whether an app
-    /// exists is a fact about this Mac, not about the file - so this is the one place
-    /// that fact is checked, and it is checked against an answer handed in.
-    @Test func aRouteIntoAnAppThisMacDoesNotHaveIsNamed() throws {
-        let config = try Self.config(Self.slack)
-        #expect(config.gaps(appExists: Self.noApps) == [
-            .noSuchApp(mode: "slack", app: BundleID(rawValue: "com.tinyspeck.slackmacgap")),
-        ])
-    }
-
-    @Test func aRouteIntoAnAppThisMacHasIsNoGap() throws {
-        let config = try Self.config(Self.slack)
-        #expect(config.gaps(appExists: { $0.rawValue == "com.tinyspeck.slackmacgap" }).isEmpty)
-    }
-
-    /// One missing app is one thing to fix, however many routes mention it.
-    @Test func oneMissingAppNamedTwiceIsReportedOnce() throws {
-        let config = try Self.config("""
-            [[modes]]
-            name = "slack"
-            chord = { modifiers = ["rightOption"] }
-            routes = [
-              { when = "always", then = { insert = { app = "com.tinyspeck.slackmacgap" } } },
-              { when = "always", then = { insert = { app = "com.tinyspeck.slackmacgap" } } },
-            ]
-            """)
-        #expect(config.gaps(appExists: Self.noApps).count == 1)
+        #expect(config.gaps.isEmpty)
     }
 
     /// Gaps come back in the order the file declares its modes, so two runs over one
@@ -90,7 +56,7 @@ import Testing
             chord = { modifiers = ["rightCommand"] }
             routes = []
             """)
-        #expect(config.gaps(appExists: Self.noApps) == [
+        #expect(config.gaps == [
             .modeClaimsNothing(mode: "first"),
             .modeClaimsNothing(mode: "second"),
         ])
@@ -108,7 +74,7 @@ import Testing
             name = "dictation"
             chord = { modifiers = ["rightOption"] }
             """)
-        let report = ConfigReport(.file(config, at: url, flavor: Self.flavor), appExists: Self.noApps)
+        let report = ConfigReport(.file(config, at: url, flavor: Self.flavor))
         #expect(report.description == """
             /tmp/low-talker-example.toml
 
@@ -119,7 +85,7 @@ import Testing
               chord: rightOption
               vocabulary:
               routes:
-                always → insert into the focused element
+                always → insert at the cursor
 
             gaps:
             """)
@@ -130,30 +96,35 @@ import Testing
     /// about to debug a file nothing is reading.
     @Test func aReportWithNoFileSaysThereIsNoFile() {
         let url = URL(filePath: "/tmp/low-talker-absent.toml")
-        let report = ConfigReport(.noFile(at: url, flavor: Self.flavor), appExists: Self.noApps)
+        let report = ConfigReport(.noFile(at: url, flavor: Self.flavor))
         #expect(report.description.hasPrefix("no file at /tmp/low-talker-absent.toml, so these are the defaults"))
     }
 
     /// A chord, a vocabulary and a route are each read back in the words the file
     /// writes them in, so what is printed can be found in the file.
     @Test func aModeIsReadBackInTheWordsTheFileUses() throws {
-        let report = ConfigReport(.file(try Self.config(Self.slack), at: URL(filePath: "/tmp/x.toml"), flavor: Self.flavor), appExists: { _ in true })
+        let report = ConfigReport(.file(try Self.config(Self.notes), at: URL(filePath: "/tmp/x.toml"), flavor: Self.flavor))
         let lines = report.description.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        #expect(lines.contains(#"mode "slack""#))
+        #expect(lines.contains(#"mode "notes""#))
         #expect(lines.contains("  chord: leftCommand+leftShift"))
         #expect(lines.contains("    Kubernetes"))
-        #expect(lines.contains("    always → insert into com.tinyspeck.slackmacgap"))
+        #expect(lines.contains("    always → insert at the cursor"))
     }
 
     /// The gaps the report holds are the gaps it prints; the command reads the same
     /// list to decide what to exit with.
     @Test func theReportPrintsTheGapsItFound() throws {
-        let config = try Self.config(Self.slack)
-        let report = ConfigReport(.file(config, at: URL(filePath: "/tmp/x.toml"), flavor: Self.flavor), appExists: Self.noApps)
-        #expect(report.gaps == config.gaps(appExists: Self.noApps))
+        let config = try Self.config("""
+            [[modes]]
+            name = "silent"
+            chord = { modifiers = ["rightOption"] }
+            routes = []
+            """)
+        let report = ConfigReport(.file(config, at: URL(filePath: "/tmp/x.toml"), flavor: Self.flavor))
+        #expect(report.gaps == config.gaps)
         #expect(report.description.hasSuffix("""
             gaps:
-              mode "slack" inserts into com.tinyspeck.slackmacgap, which no app on this Mac answers to
+              mode "silent" has no routes, so nothing said in it becomes anything
             """))
     }
 
@@ -165,11 +136,11 @@ import Testing
         #expect("\(KeyChord(modifiers: .rightOption))" == "rightOption")
     }
 
-    private static let slack = """
+    private static let notes = """
         [[modes]]
-        name = "slack"
+        name = "notes"
         chord = { modifiers = ["leftCommand", "leftShift"] }
         vocabulary = ["Kubernetes"]
-        routes = [{ when = "always", then = { insert = { app = "com.tinyspeck.slackmacgap" } } }]
+        routes = [{ when = "always", then = { insert = "focus" } }]
         """
 }

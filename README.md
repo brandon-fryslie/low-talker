@@ -208,15 +208,15 @@ The file names a `model`, a model folder name such as `base.en`, an optional `[m
     chord = { modifiers = ["leftCommand", "leftShift"] }
     vocabulary = ["Kubernetes", "Anthropic"]
 
-A chord is modifier keys, at least one. The input method is told only when a modifier key moves, so a key besides them could never complete a chord, and a `key` is refused as a word the schema has no place for. It is the chord the app and `lowtalker hotkey` listen for and the menu names. A mode with no `chord` listens for this installation's own, so only one mode may leave it out: two would listen for one chord, and the file is refused naming the second. A route's `insert` is either the word `"focus"`, whatever has focus when the route fires, or a table naming an app by bundle id. The input method reaches only the cursor of the app in front, so a route naming an app is refused at the press, by name, with nothing inserted. A key the schema has no place for is refused rather than ignored, so a typo is told rather than silently doing nothing. A chord written under a hotkey source's name, `chord = { inputMethod = { … } }`, the way a config named one per source before the input method was the only way the chord is heard, is refused as `modes[0].chord.modifiers is missing`.
+A chord is modifier keys, at least one. The input method is told only when a modifier key moves, so a key besides them could never complete a chord, and a `key` is refused as a word the schema has no place for. It is the chord the app and `lowtalker hotkey` listen for and the menu names. A mode with no `chord` listens for this installation's own, so only one mode may leave it out: two would listen for one chord, and the file is refused naming the second. A route's `insert` is the word `"focus"`: the cursor of the app in front when the words are ready, the one place the input method puts text. A table naming an app is refused where the file is read. A key the schema has no place for is refused rather than ignored, so a typo is told rather than silently doing nothing. A chord written under a hotkey source's name, `chord = { inputMethod = { … } }`, the way a config named one per source before the input method was the only way the chord is heard, is refused as `modes[0].chord.modifiers is missing`.
 
 The `[microphone]` table is optional, and the file above leaves it out: with no table at all the microphone is `shut`, opened when the hotkey goes down and closed when it comes up, so the indicator in the menu bar is a record of what you dictated rather than of how long the app has been running. `at_rest = "open"` takes the trade the other way and holds the microphone from launch to quit. What that buys is the look-back, the 0.3 s of already-captured audio a press reaches back over, so a key pressed a syllable into a word still catches that word; what it costs is a lit indicator and a privacy report saying low-talker is listening on a Mac nobody has spoken to. There is no wake word yet, so `at_rest` is the only thing that holds the microphone open while nobody is dictating: it is in the file or it does not happen. The key is required once the heading is there. A `[microphone]` with nothing under it is refused as `microphone.at_rest is missing`, since a heading somebody wrote on purpose cannot be read as the default they were already getting, and any other word is refused with that word quoted back, as `microphone.at_rest: "sometimes" is not something the microphone does at rest`.
 
 Where a fault is reported depends on how far reading got. A file that is not TOML at all names the line reading stopped on. Anything that is TOML but wrong is named by its path in the document instead, as `modes[1].routes[0].when: "sometyme" is not something a route can match on` or `modes[1].name is missing`, and carries no line number: decoding reports the path it was at, and the TOML library exposes source positions only for a parse error, not for a document that parsed. The path counts `[[modes]]` entries from zero, the way the file writes them, so the entry it names is one the reader can count to.
 
-A file can also parse and still say something nobody meant, and those gaps are reported too. A mode whose `routes` is an empty list claims nothing: it listens, and nothing it hears becomes anything. A mode with no `routes` key at all dictates instead. The two look almost alike in a file and mean different things, which is why the report tells them apart. A bundle id no app on this Mac answers to is reported as well; that one is checked against the machine rather than against the file, which is why it is the check command's own work and not something reading the file could ever have found.
+A file can also parse and still say something nobody meant, and those gaps are reported too. A mode whose `routes` is an empty list claims nothing: it listens, and nothing it hears becomes anything. A mode with no `routes` key at all dictates instead. The two look almost alike in a file and mean different things, which is why the report tells them apart.
 
-Every heading is printed every time, so a mode with no vocabulary shows an empty `vocabulary:` rather than leaving the reader to wonder whether the key was read and ignored. On the file above, read by the development copy, with a mode inserting into an app this Mac does not have and a mode with no routes added after it:
+Every heading is printed every time, so a mode with no vocabulary shows an empty `vocabulary:` rather than leaving the reader to wonder whether the key was read and ignored. On the file above, read by the development copy, with a mode with no routes added after it:
 
     /Users/you/.config/low-talker/config.dev.toml
 
@@ -227,7 +227,7 @@ Every heading is printed every time, so a mode with no vocabulary shows an empty
       chord: rightOption
       vocabulary:
       routes:
-        always → insert into the focused element
+        always → insert at the cursor
 
     mode "notes"
       chord: leftCommand+leftShift
@@ -235,13 +235,7 @@ Every heading is printed every time, so a mode with no vocabulary shows an empty
         Kubernetes
         Anthropic
       routes:
-        always → insert into the focused element
-
-    mode "ghost"
-      chord: rightCommand
-      vocabulary:
-      routes:
-        always → insert into com.example.nope
+        always → insert at the cursor
 
     mode "silent"
       chord: function
@@ -249,7 +243,6 @@ Every heading is printed every time, so a mode with no vocabulary shows an empty
       routes:
 
     gaps:
-      mode "ghost" inserts into com.example.nope, which no app on this Mac answers to
       mode "silent" has no routes, so nothing said in it becomes anything
 
 The exit status is 0 when the file is understood and has no gaps, 1 when it cannot be understood, and 2 when it is understood but has gaps.
@@ -274,7 +267,7 @@ Deleting the file reloads too, back to the defaults, and the report says the fil
     make cli
     .build/debug/lowtalker route --context '{"chord":{"modifiers":["rightOption"]},"press":"hold","frontmostApp":"com.apple.TextEdit","focusedElementRole":"AXTextArea"}' --text "hello from the router"
 
-prints the actions the router decides for that context and text, as the JSON array a Pipe program would hand back, and performs none of them. The app performs a route's actions through the input method: `insertText` at the focus is put at the cursor, and every other action - text for a named app, `activateApp`, `openURL`, `runShortcut`, `pipe` - is refused by name before anything is inserted, so a route is never half performed.
+prints the actions the router decides for that context and text, as the JSON array a Pipe program would hand back, and performs none of them. The app performs a route's actions through the input method: `insertText` is put at the cursor, and every other action - `activateApp`, `openURL`, `runShortcut`, `pipe` - is refused by name before anything is inserted, so a route is never half performed.
 
 ## The input method
 

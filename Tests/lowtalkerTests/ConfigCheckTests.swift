@@ -9,10 +9,6 @@ import Testing
 /// know whether the file is usable without reading the report. These pin the three
 /// answers it can give.
 @Suite struct ConfigCheckTests {
-    /// A bundle id no Mac answers to, so the gap this produces is the same on every
-    /// machine and does not depend on what happens to be installed.
-    static let noSuchApp = "com.example.low-talker-\(UUID().uuidString)"
-
     @Test func aFileWithNoGapsExitsZero() throws {
         try withConfig("""
             [[modes]]
@@ -23,14 +19,14 @@ import Testing
         }
     }
 
-    /// Understood, and still not what its author meant: the file runs, and the app it
-    /// names is not here.
+    /// Understood, and still not what its author meant: the file runs, and the mode it
+    /// declares turns nothing it hears into anything.
     @Test func aFileWithAGapExitsTwo() throws {
         try withConfig("""
             [[modes]]
-            name = "slack"
+            name = "silent"
             chord = { modifiers = ["rightOption"] }
-            routes = [{ when = "always", then = { insert = { app = "\(Self.noSuchApp)" } } }]
+            routes = []
             """) { check in
             #expect(throws: ExitCode(2)) { try check.run() }
         }
@@ -41,6 +37,20 @@ import Testing
     @Test func aFileThatCannotBeUnderstoodLeavesAsItsError() throws {
         try withConfig(#"modle = "base.en""#) { check in
             #expect(throws: ConfigError.unknownKeys(["modle"])) { try check.run() }
+        }
+    }
+
+    /// A route naming an app is refused where the file is read: the input method reaches
+    /// only the cursor of the app in front, so a check that passed it would be vouching
+    /// for a route every press refuses.
+    @Test func aRouteNamingAnAppLeavesAsItsError() throws {
+        try withConfig("""
+            [[modes]]
+            name = "slack"
+            chord = { modifiers = ["rightOption"] }
+            routes = [{ when = "always", then = { insert = { app = "com.tinyspeck.slackmacgap" } } }]
+            """) { check in
+            #expect(throws: ConfigError.wrongShape(#"modes[0].routes[0].then.insert: insert is the word "focus", the cursor of the app in front: the one place the input method puts text"#)) { try check.run() }
         }
     }
 

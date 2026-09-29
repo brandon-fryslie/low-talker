@@ -245,27 +245,22 @@ private struct EmitEntry: Decodable {
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        emit = .insertTranscript(target: try container.decode(TargetEntry.self, forKey: .insert).target)
+        emit = try container.decode(InsertEntry.self, forKey: .insert).emit
     }
 }
 
-/// `insert = "focus"`, or `insert = { app = "com.slack.Slack" }`: the word when the
-/// target carries nothing, the table when it carries a bundle id.
-private struct TargetEntry: Decodable {
-    let target: InsertTarget
-
-    private enum CodingKeys: String, CodingKey { case app }
+/// `insert = "focus"`: the cursor of the app in front, the one place the input method puts
+/// text. Anything else is refused here, where the file is read, so no route reaches a press
+/// it could only refuse.
+/// [LAW:parse-dont-validate]
+private struct InsertEntry: Decodable {
+    let emit = Route.Emit.insertTranscript
 
     init(from decoder: any Decoder) throws {
-        if let name = try? decoder.singleValueContainer().decode(String.self) {
-            guard name == "focus" else {
-                throw decoder.fault("\"\(name)\" is not somewhere text can be inserted")
-            }
-            target = .focus
-        } else {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            target = .app(bundleID: try container.decode(BundleID.self, forKey: .app))
+        guard let word = try? decoder.singleValueContainer().decode(String.self) else {
+            throw decoder.fault(#"insert is the word "focus", the cursor of the app in front: the one place the input method puts text"#)
         }
+        guard word == "focus" else { throw decoder.fault("\"\(word)\" is not somewhere text can be inserted") }
     }
 }
 

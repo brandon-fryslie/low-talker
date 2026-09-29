@@ -1,4 +1,3 @@
-import AppKit
 import ArgumentParser
 import Flavors
 import Foundation
@@ -11,15 +10,6 @@ struct ConfigCommand: ParsableCommand {
         subcommands: [Check.self, Watch.self]
     )
 }
-
-/// [LAW:effects-at-boundaries] The one question these commands ask of the machine rather
-/// than of the file, at the edge, so `ConfigReport` stays a pure function of what the
-/// file said and what this returned. [LAW:one-source-of-truth] `check` and `watch` print
-/// the same report, so they ask it the same way.
-private func appExists(_ id: BundleID) -> Bool {
-    NSWorkspace.shared.urlForApplication(withBundleIdentifier: id.rawValue) != nil
-}
-
 
 extension ConfigCommand {
     /// Reads the config file and prints what the app would run with. Nothing is
@@ -51,7 +41,7 @@ extension ConfigCommand {
 
         func run() throws {
             let source = try ConfigSource(path: path, stated: installation.stated)
-            let report = ConfigReport(try Config.load(source.path, for: source.flavor), appExists: appExists)
+            let report = ConfigReport(try Config.load(source.path, for: source.flavor))
             print(report)
             // The code is a value computed the one way every time, rather than an exit
             // taken on some runs and not others. [LAW:dataflow-not-control-flow]
@@ -91,9 +81,9 @@ extension ConfigCommand {
             // after the first reading is a reload.
             let source = try ConfigSource(path: path, stated: installation.stated)
             let loaded = try Config.load(source.path, for: source.flavor)
-            print(ConfigReport(loaded, appExists: appExists))
+            print(ConfigReport(loaded))
             for await reload in Config.reloads(after: loaded) {
-                print(Self.narration(of: reload, appExists: appExists))
+                print(Self.narration(of: reload))
             }
         }
 
@@ -102,12 +92,12 @@ extension ConfigCommand {
         /// [LAW:effects-at-boundaries] The whole of what this command says, with no
         /// printing in it, so a test reads what a watcher sees instead of driving a file
         /// and catching stdout to find out.
-        static func narration(of reload: Config.Reload, appExists: (BundleID) -> Bool) -> String {
+        static func narration(of reload: Config.Reload) -> String {
             // A blank line first, so a run of these reads as several reports and not one
             // long one.
             switch reload {
             case .adopted(let loaded):
-                "\n\(ConfigReport(loaded, appExists: appExists))"
+                "\n\(ConfigReport(loaded))"
             case .kept(let loaded, let error):
                 // The error first, because it is the news; what is still running second,
                 // because that is the reassurance.

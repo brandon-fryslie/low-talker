@@ -50,7 +50,7 @@ import Testing
     @Test func wordsAtTheFocusAreInsertedAtTheCursor() async throws {
         let inputMethod = Self.inserting(into: Self.textEdit)
         let performed = try await Executor(insertingThrough: inputMethod)
-            .perform([.insertText(text: "héllo there", target: .focus)], since: .now)
+            .perform([.insertText(text: "héllo there")], since: .now)
 
         #expect(inputMethod.texts == ["héllo there"])
         #expect(performed.count == 1)
@@ -65,7 +65,7 @@ import Testing
     /// commits where the cursor is then. [FRAMING:representation]
     @Test func theAppNamedIsTheOneTheInputMethodReached() async throws {
         let performed = try await Executor(insertingThrough: Self.inserting(into: Self.slack))
-            .perform([.insertText(text: "hi", target: .focus)], since: .now)
+            .perform([.insertText(text: "hi")], since: .now)
 
         #expect(performed[0].into == Self.slack)
         #expect("\(performed[0])".hasPrefix("inserted 2 characters at the cursor in com.tinyspeck.slackmacgap, key-up to acknowledged "))
@@ -79,7 +79,7 @@ import Testing
         let inputMethod = AnInputMethod { _ in throw refusal }
         let stopped = try await #require(throws: RouteStopped.self) {
             try await Executor(insertingThrough: inputMethod)
-                .perform([.insertText(text: "héllo there", target: .focus)], since: .now)
+                .perform([.insertText(text: "héllo there")], since: .now)
         }
 
         #expect(stopped.cause as? Refusal == refusal)
@@ -93,7 +93,7 @@ import Testing
         let inputMethod = AnInputMethod { _ in throw late }
         let stopped = try await #require(throws: RouteStopped.self) {
             try await Executor(insertingThrough: inputMethod)
-                .perform([.insertText(text: "héllo there", target: .focus)], since: .now)
+                .perform([.insertText(text: "héllo there")], since: .now)
         }
 
         #expect(stopped.cause as? NotYetTaken == late)
@@ -115,19 +115,17 @@ import Testing
         let inputMethod = AnInputMethod { _ in throw why }
         let stopped = try await #require(throws: RouteStopped.self) {
             try await Executor(insertingThrough: inputMethod)
-                .perform([.insertText(text: "héllo there", target: .focus)], since: .now)
+                .perform([.insertText(text: "héllo there")], since: .now)
         }
 
         #expect(stopped.cause as? Unreachable == why)
         #expect(stopped.performed.isEmpty)
     }
 
-    /// Everything that is not text at the focus is refused before anything is sent, so a
-    /// list with one of them in it inserts nothing. Text for a named app is among them: the
-    /// input method reaches only the cursor the text input system is holding.
-    @Test func whatIsNotTextAtTheFocusIsRefusedByNameAndNothingIsSent() async throws {
+    /// Everything that is not text at the cursor is refused before anything is sent, so a
+    /// list with one of them in it inserts nothing.
+    @Test func whatIsNotTextAtTheCursorIsRefusedByNameAndNothingIsSent() async throws {
         let refused: [Action] = [
-            .insertText(text: "a", target: .app(bundleID: Self.slack)),
             .activateApp(bundleID: Self.slack),
             .openURL(url: URL(string: "https://example.com")!),
             .runShortcut(name: "x", input: nil),
@@ -137,7 +135,7 @@ import Testing
             let inputMethod = Self.inserting(into: Self.textEdit)
             let refusal = try await #require(throws: NotAnInsert.self) {
                 try await Executor(insertingThrough: inputMethod)
-                    .perform([.insertText(text: "first", target: .focus), action], since: .now)
+                    .perform([.insertText(text: "first"), action], since: .now)
             }
 
             #expect(refusal.action == action)

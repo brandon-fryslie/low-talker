@@ -10,17 +10,13 @@ import Testing
 /// save taken up and a save turned away is ever said out loud. `ConfigWatchTests` pins
 /// which `Reload` a reading produces; these pin what that reload reads as.
 @Suite struct ConfigWatchCommandTests {
-    /// A Mac with nothing installed, so what the report says is the same on every
-    /// machine that runs these.
-    static func noApps(_: BundleID) -> Bool { false }
-
     /// The release copy throughout, because `file` is the release copy's own path: a
     /// reading that named one and was read as the other is the mismatch these types now
     /// make unrepresentable, and a test should not be the one place it is spelled.
     static let flavor = Flavor.release
-    /// Spelled out rather than taken from `Config.fileURL(for:)`, for the reason `noApps`
-    /// exists: a literal reads the same on every machine, where the real path carries
-    /// whoever's home directory ran the suite. It is the release copy's file name.
+    /// Spelled out rather than taken from `Config.fileURL(for:)`: a literal reads the same
+    /// on every machine, where the real path carries whoever's home directory ran the
+    /// suite. It is the release copy's file name.
     static let file = URL(filePath: "/Users/someone/.config/low-talker/config.toml")
 
     static func running() throws -> Config.Loaded {
@@ -39,7 +35,7 @@ import Testing
     /// is described one way whether it is asked about once or watched all afternoon.
     @Test func aConfigTakenUpReadsAsTheReport() throws {
         let narration = ConfigCommand.Watch.narration(
-            of: .adopted(try Self.running()), appExists: Self.noApps
+            of: .adopted(try Self.running())
         )
 
         #expect(narration.hasPrefix("\n"), "a blank line opens each report, so a run of them reads as several")
@@ -51,7 +47,7 @@ import Testing
     /// than printing the defaults as though somebody had written them.
     @Test func aDeletedFileReadsAsTheDefaultsAndSaysSo() {
         let narration = ConfigCommand.Watch.narration(
-            of: .adopted(.noFile(at: Self.file, flavor: Self.flavor)), appExists: Self.noApps
+            of: .adopted(.noFile(at: Self.file, flavor: Self.flavor))
         )
 
         #expect(narration.contains(Self.file.path))
@@ -64,7 +60,7 @@ import Testing
     @Test func aRefusedSaveNamesTheErrorFirstAndWhatIsStillRunningSecond() throws {
         let running = try Self.running()
         let lines = ConfigCommand.Watch.narration(
-            of: .kept(running, because: .unknownKeys(["modle"])), appExists: Self.noApps
+            of: .kept(running, because: .unknownKeys(["modle"]))
         ).components(separatedBy: "\n")
 
         #expect(lines.count == 3)
