@@ -112,8 +112,15 @@ def vendored_version(component, checkout, rule):
     return found.group(1), found.group(2) if found.re.groups >= 2 else None
 
 
+# Every key a package's rule is read with. Any other is a misspelling of one of these, and a
+# misspelt `silentOnTheWireAt` would turn its gate off without a word. [LAW:no-silent-failure]
+PACKAGE_KEYS = {"license", "licenseFile", "licenseMatch", "silentOnTheWireAt", "vendored"}
+
+
 def package_component(pin, rule):
     identity = pin["identity"]
+    if unknown := sorted(set(rule) - PACKAGE_KEYS):
+        fail(f"{identity}: rules.json gives {unknown}, which no rule is read with; the keys are {sorted(PACKAGE_KEYS)}")
     location = pin["location"]
     repo = location.rsplit("/", 1)[-1].removesuffix(".git")
     checkout = checkouts / repo

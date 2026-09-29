@@ -63,6 +63,19 @@ class WireCheckJudgeTests(unittest.TestCase):
     def test_an_uncategorised_line_outside_the_allow_list_fails(self):
         self.assertFailsQuoting(APP_SOCKET)
 
+    def test_a_path_line_outside_the_allow_list_fails(self):
+        self.assertFailsQuoting(APP_FLOW.replace("[com.apple.network:]", "[com.apple.network:path]"))
+
+    def test_a_dictation_before_the_relaunch_is_not_counted(self):
+        result = self.judge(CONTROL, HEARD, INSERT, READY, SERVING)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("holds no dictation", result.stderr)
+
+    def test_an_insert_before_the_input_method_started_is_not_counted(self):
+        result = self.judge(CONTROL, INSERT, READY, SERVING, HEARD)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("taking a dictation's text", result.stderr)
+
     def test_another_processs_connection_is_not_the_apps(self):
         result = self.judge(*WATCHED, OTHER_APP_CONNECTION)
         self.assertEqual(result.returncode, 0, result.stderr)
