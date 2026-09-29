@@ -175,7 +175,8 @@ private func error(_ body: Data) throws -> [String: Any] {
     }
 
     /// A refusal made before the body is read still reaches a client that is sending one
-    /// larger than the socket holds, and the body it went on sending is counted.
+    /// larger than the socket holds, and the drain is recorded. How much of the body the
+    /// client goes on sending once it hears the refusal is the client's choice.
     @Test func aRefusedBodyIsDrainedSoTheClientHearsTheRefusal() async throws {
         let running = try await Running.start(.ready(Stub()))
         defer { running.server.stop() }
@@ -184,7 +185,7 @@ private func error(_ body: Data) throws -> [String: Any] {
         #expect(response.statusCode == 413)
         #expect(try error(body)["code"] as? String == "request_too_large")
         let event = try await running.nextEvent()
-        #expect(event.status == 413 && (event.unread ?? 0) > 0 && event.lost == nil)
+        #expect(event.status == 413 && event.unread != nil && event.lost == nil)
     }
 
     /// A client that closes before its request is whole is recorded as lost, unanswered.
