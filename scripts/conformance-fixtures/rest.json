@@ -1,0 +1,19 @@
+{
+ "path": "audio/transcriptions",
+ "parts": [
+  {
+   "name": "model",
+   "value": "gpt-transcribe"
+  },
+  {
+   "name": "language",
+   "value": "en"
+  },
+  {
+   "name": "file",
+   "filename": "audio.wav",
+   "content_type": "audio/wav",
+   "file": "rest-file.wav"
+  }
+ ]
+}

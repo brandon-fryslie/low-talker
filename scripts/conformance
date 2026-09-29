@@ -1,0 +1,719 @@
+#!/usr/bin/env python3
+"""Judges any server against the contract Pipecat's two OpenAI speech-to-text services hold
+it to (epic low-serve-axq), with the requests those services really send.
+
+    scripts/conformance check <base url> [--token-env NAME]
+    scripts/conformance capture
+
+`check` takes the base URL a Pipecat pipeline would be given, `http://127.0.0.1:<port>/v1`
+or `https://api.openai.com/v1`, and derives the Realtime socket from it as Pipecat does
+(`ws`/`wss` + `/realtime`). The bearer token is read from the environment variable named by
+--token-env, never from the command line, where every process on the Mac can read it. A
+token given is a token the server requires, so the checks that send none or a wrong one run
+only then. Stdout carries one line per check, `pass`, `fail` or `skip`, then a JSON summary
+line; the exit status is 0 when nothing failed, 1 when a check failed, 2 when the suite
+itself could not run. [LAW:nothing-unseen]
+
+`capture` re-records the requests in scripts/conformance-fixtures: it runs Pipecat, unmodified
+and as a black box (scripts/conformance-pipecat), against an endpoint in this process that
+writes down every byte it is sent and answers with OpenAI's own captured replies. Expected
+responses come from those captures and OpenAI's published spec, never from any
+implementation's source (epic low-serve-axq).
+
+Standard library only, the websocket included (RFC 6455), so it runs wherever python3 does
+and depends on nothing in LowTalker.
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import base64
+import hashlib
+import json
+import os
+import re
+import ssl
+import sys
+import time
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from urllib.parse import urlsplit
+
+FIXTURES = Path(__file__).resolve().parent / "conformance-fixtures"
+REST_FIXTURE = FIXTURES / "rest.json"
+REALTIME_FIXTURE = FIXTURES / "realtime.jsonl"
+# What the fixture audio says, as every transcript of it so far has heard it ("Hello world,
+# this is Lo Talker."). A server that hears neither word did not transcribe it.
+SPOKEN = ("hello", "world")
+TIMEOUT = 60.0
+
+
+class Refused(Exception):
+    """A check's finding: what the server did, against what the contract asks."""
+
+
+# ---------------------------------------------------------------------------------------
+# The wire: HTTP/1.1 requests and RFC 6455 frames over one asyncio stream each.
+
+
+@dataclass
+class Endpoint:
+    """Where a base URL points, split the way both transports need it."""
+    secure: bool
+    host: str
+    port: int
+    path: str  # the base path, "/v1", no trailing slash
+
+    @staticmethod
+    def parse(url):
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            raise SystemExit(f"conformance: {url} is not an http(s) base URL like http://127.0.0.1:8000/v1")
+        secure = parts.scheme == "https"
+        return Endpoint(secure, parts.hostname, parts.port or (443 if secure else 80), parts.path.rstrip("/"))
+
+    async def open(self):
+        context = ssl.create_default_context() if self.secure else None
+        return await asyncio.wait_for(
+            asyncio.open_connection(self.host, self.port, ssl=context, server_hostname=self.host if self.secure else None),
+            TIMEOUT)
+
+    @property
+    def authority(self):
+        default = 443 if self.secure else 80
+        return self.host if self.port == default else f"{self.host}:{self.port}"
+
+
+async def read_head(reader):
+    """The status or request line and the headers, lower-cased by name."""
+    head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), TIMEOUT)
+    first, *lines = head.decode("latin-1").split("\r\n")[:-2]
+    headers = {}
+    for line in lines:
+        name, _, value = line.partition(":")
+        headers[name.strip().lower()] = value.strip()
+    return first, headers
+
+
+async def read_body(reader, headers):
+    if "content-length" in headers:
+        return await asyncio.wait_for(reader.readexactly(int(headers["content-length"])), TIMEOUT)
+    if headers.get("transfer-encoding", "").lower() == "chunked":
+        body = b""
+        while True:
+            size = int((await reader.readuntil(b"\r\n")).split(b";")[0], 16)
+            chunk = await reader.readexactly(size + 2)
+            if size == 0:
+                return body
+            body += chunk[:-2]
+    return await asyncio.wait_for(reader.read(), TIMEOUT)
+
+
+@dataclass
+class Response:
+    status: int
+    headers: dict
+    body: bytes
+
+    def json(self):
+        try:
+            return json.loads(self.body)
+        except ValueError:
+            raise Refused(f"answered {self.status} with a body that is not JSON: {self.body[:200]!r}")
+
+
+async def post(endpoint, path, headers, body):
+    reader, writer = await endpoint.open()
+    try:
+        lines = [f"POST {endpoint.path}/{path} HTTP/1.1", f"Host: {endpoint.authority}",
+                 f"Content-Length: {len(body)}", "Connection: close"]
+        lines += [f"{name}: {value}" for name, value in headers.items()]
+        writer.write(("\r\n".join(lines) + "\r\n\r\n").encode("latin-1") + body)
+        await writer.drain()
+        status_line, response_headers = await read_head(reader)
+        response_body = await read_body(reader, response_headers)
+        if response_headers.get("content-encoding"):
+            raise Refused(f"answered with content-encoding {response_headers['content-encoding']}, which was not asked for")
+        return Response(int(status_line.split()[1]), response_headers, response_body)
+    finally:
+        writer.close()
+
+
+def multipart(parts):
+    """A multipart/form-data body from (name, filename or None, content type or None, bytes)."""
+    boundary = uuid.uuid4().hex
+    body = b""
+    for name, filename, content_type, value in parts:
+        disposition = f'form-data; name="{name}"' + (f'; filename="{filename}"' if filename is not None else "")
+        body += f"--{boundary}\r\nContent-Disposition: {disposition}\r\n".encode()
+        if content_type is not None:
+            body += f"Content-Type: {content_type}\r\n".encode()
+        body += b"\r\n" + value + b"\r\n"
+    return f"multipart/form-data; boundary={boundary}", body + f"--{boundary}--\r\n".encode()
+
+
+GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+TEXT, CLOSE, PING, PONG = 0x1, 0x8, 0x9, 0xA
+
+
+def accept_key(key):
+    return base64.b64encode(hashlib.sha1((key + GUID).encode()).digest()).decode()
+
+
+@dataclass
+class Closed:
+    """The peer's close frame: the code and reason it gave, or None for a bare close."""
+    code: int | None
+    reason: str
+
+
+class Socket:
+    """One RFC 6455 connection. `masked` is the client's side: a client masks every frame it
+    sends and a server masks none."""
+
+    def __init__(self, reader, writer, masked):
+        self.reader, self.writer, self.masked = reader, writer, masked
+
+    def _frame(self, opcode, payload):
+        head = bytes([0x80 | opcode])
+        mask_bit = 0x80 if self.masked else 0
+        n = len(payload)
+        if n < 126:
+            head += bytes([mask_bit | n])
+        elif n < 1 << 16:
+            head += bytes([mask_bit | 126]) + n.to_bytes(2, "big")
+        else:
+            head += bytes([mask_bit | 127]) + n.to_bytes(8, "big")
+        if self.masked:
+            mask = os.urandom(4)
+            payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+            head += mask
+        return head + payload
+
+    async def send(self, text):
+        self.writer.write(self._frame(TEXT, text.encode()))
+        await self.writer.drain()
+
+    async def close(self, code=1000):
+        self.writer.write(self._frame(CLOSE, code.to_bytes(2, "big")))
+        await self.writer.drain()
+        self.writer.close()
+
+    async def receive(self):
+        """The next message's text, or Closed. Pings are answered here, where they arrive."""
+        message = b""
+        while True:
+            first, second = await self.reader.readexactly(2)
+            opcode, n = first & 0x0F, second & 0x7F
+            if n == 126:
+                n = int.from_bytes(await self.reader.readexactly(2), "big")
+            elif n == 127:
+                n = int.from_bytes(await self.reader.readexactly(8), "big")
+            mask = await self.reader.readexactly(4) if second & 0x80 else None
+            payload = await self.reader.readexactly(n)
+            if mask:
+                payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+            if opcode == PING:
+                self.writer.write(self._frame(PONG, payload))
+                continue
+            if opcode == CLOSE:
+                code = int.from_bytes(payload[:2], "big") if len(payload) >= 2 else None
+                return Closed(code, payload[2:].decode(errors="replace"))
+            if opcode == PONG:
+                continue
+            message += payload
+            if first & 0x80:
+                return message.decode()
+
+
+async def connect(endpoint, query, token):
+    """The Realtime socket at <base>/realtime?<query>, upgraded as Pipecat upgrades it: a
+    bearer token and no subprotocol. Refused, with what came back, when the upgrade is not."""
+    reader, writer = await endpoint.open()
+    key = base64.b64encode(os.urandom(16)).decode()
+    lines = [f"GET {endpoint.path}/realtime?{query} HTTP/1.1", f"Host: {endpoint.authority}",
+             "Upgrade: websocket", "Connection: Upgrade", f"Sec-WebSocket-Key: {key}", "Sec-WebSocket-Version: 13"]
+    if token is not None:
+        lines.append(f"Authorization: Bearer {token}")
+    writer.write(("\r\n".join(lines) + "\r\n\r\n").encode("latin-1"))
+    await writer.drain()
+    status_line, headers = await read_head(reader)
+    status = int(status_line.split()[1])
+    if status != 101:
+        body = await read_body(reader, headers)
+        writer.close()
+        raise Refused(f"the upgrade to a websocket was answered {status}, not 101: {body[:200]!r}")
+    if headers.get("sec-websocket-accept") != accept_key(key):
+        writer.close()
+        raise Refused("the upgrade's Sec-WebSocket-Accept does not answer the key that was sent")
+    return Socket(reader, writer, masked=True)
+
+
+# ---------------------------------------------------------------------------------------
+# The contract, as checks. Each takes the run's context and returns None to pass or raises
+# Refused naming what was wrong.
+
+
+@dataclass
+class Context:
+    """One run: the server, its token, and the captured requests to send it."""
+    endpoint: Endpoint
+    token: str | None
+    rest: dict
+    realtime_query: str
+    realtime_update: dict
+    realtime_appends: list  # (seconds after the first append, frame text)
+
+    def auth(self, token):
+        return {} if token is None else {"Authorization": f"Bearer {token}"}
+
+
+def rest_parts(context, **changes):
+    """The captured request's parts in their order, a part named in `changes` sent with that
+    value instead, and a part the capture lacks added before the file, which comes last."""
+    parts = []
+    for part in context.rest["parts"]:
+        value = changes.pop(part["name"]) if part["name"] in changes else (
+            (FIXTURES / part["file"]).read_bytes() if "file" in part else part["value"].encode())
+        parts.append((part["name"], part.get("filename"), part.get("content_type"), value))
+    added = [(name, None, None, value) for name, value in changes.items()]
+    return parts[:-1] + added + parts[-1:]
+
+
+async def transcribe(context, token=..., **changes):
+    content_type, body = multipart(rest_parts(context, **changes))
+    headers = {"Content-Type": content_type, "Accept": "application/json",
+               **context.auth(context.token if token is ... else token)}
+    return await post(context.endpoint, context.rest["path"], headers, body)
+
+
+def heard(transcript):
+    words = re.findall(r"[a-z]+", transcript.lower())
+    missing = [word for word in SPOKEN if word not in words]
+    if missing:
+        raise Refused(f"the transcript {transcript!r} does not have {', '.join(missing)}, which the fixture says")
+
+
+def expect_status(response, status):
+    if response.status != status:
+        raise Refused(f"answered {response.status}, not {status}: {response.body[:300]!r}")
+
+
+def media_type(response):
+    return [piece.strip().lower() for piece in response.headers.get("content-type", "").split(";")]
+
+
+def usage(usage_value, where):
+    if not (isinstance(usage_value, dict) and usage_value.get("type") == "duration"
+            and isinstance(usage_value.get("seconds"), (int, float))):
+        raise Refused(f"{where} usage is {usage_value!r}, not {{\"type\": \"duration\", \"seconds\": <number>}}")
+
+
+def rest_error(response, status):
+    """OpenAI's error body: {"error": {"message", "type", "param", "code"}}, every key present."""
+    expect_status(response, status)
+    error = response.json().get("error") if isinstance(response.json(), dict) else None
+    missing = [key for key in ("message", "type", "param", "code") if not isinstance(error, dict) or key not in error]
+    if missing:
+        raise Refused(f"the {status} body {response.body[:300]!r} lacks error.{', error.'.join(missing)}")
+
+
+def json_transcript(response):
+    """The body of a 200 json transcription, once it has heard the fixture."""
+    expect_status(response, 200)
+    if media_type(response)[0] != "application/json":
+        raise Refused(f"content-type is {response.headers.get('content-type')!r}, not application/json")
+    body = response.json()
+    if not isinstance(body, dict) or not isinstance(body.get("text"), str):
+        raise Refused(f"the body {response.body[:300]!r} has no string text")
+    heard(body["text"])
+    return body
+
+
+async def rest_json(context):
+    usage(json_transcript(await transcribe(context)).get("usage"), "the body's")
+
+
+async def rest_text(context):
+    response = await transcribe(context, response_format=b"text")
+    expect_status(response, 200)
+    if media_type(response) != ["text/plain", "charset=utf-8"]:
+        raise Refused(f"content-type is {response.headers.get('content-type')!r}, not text/plain; charset=utf-8")
+    text = response.body.decode("utf-8")
+    if not text.endswith("\n"):
+        raise Refused(f"the body {text!r} does not end in a newline")
+    heard(text)
+
+
+async def rest_prompt(context):
+    json_transcript(await transcribe(context, prompt=b"LowTalker"))
+
+
+async def rest_empty_file(context):
+    rest_error(await transcribe(context, file=b""), 400)
+
+
+async def rest_unsupported_format(context):
+    rest_error(await transcribe(context, response_format=b"not-a-format"), 400)
+
+
+async def rest_no_token(context):
+    rest_error(await transcribe(context, token=None), 401)
+
+
+async def rest_wrong_token(context):
+    rest_error(await transcribe(context, token="sk-conformance-wrong-token"), 401)
+
+
+class Session:
+    """A Realtime socket with every server event it has received, in order, stamped with
+    whether the client had committed yet. The reader runs beside the sender, as Pipecat's
+    does, so an event is seen when it arrives and not when the client next looks."""
+
+    def __init__(self, socket):
+        self.socket, self.events, self.closed, self.committed = socket, [], None, False
+        self.arrived = asyncio.Event()
+        self.reader = asyncio.ensure_future(self._read())
+
+    async def _read(self):
+        while True:
+            message = await self.socket.receive()
+            if isinstance(message, Closed):
+                self.closed = message
+                self.arrived.set()
+                return
+            try:
+                event = json.loads(message)
+            except ValueError:
+                event = {"type": None, "unparsed": message[:200]}
+            self.events.append((self.committed, event))
+            self.arrived.set()
+
+    async def next(self, predicate, what, after=0):
+        """The first event, from the `after`th on, that predicate accepts."""
+        deadline = time.monotonic() + TIMEOUT
+        seen = after
+        while True:
+            for _, event in self.events[seen:]:
+                if predicate(event):
+                    return event
+            seen = len(self.events)
+            if self.closed is not None:
+                raise Refused(f"the socket closed ({self.closed.code} {self.closed.reason!r}) before {what}; got {self.types()}")
+            if self.reader.done() and self.reader.exception():
+                raise Refused(f"the socket failed before {what}: {self.reader.exception()!r}")
+            self.arrived.clear()
+            try:
+                await asyncio.wait_for(self.arrived.wait(), max(0.0, deadline - time.monotonic()))
+            except asyncio.TimeoutError:
+                raise Refused(f"no {what} within {TIMEOUT:.0f} s; got {self.types()}")
+
+    def types(self):
+        return [event.get("type") for _, event in self.events] or "nothing"
+
+    def errors(self):
+        return [event for _, event in self.events if event.get("type") == "error"]
+
+    async def end(self):
+        self.reader.cancel()
+        self.socket.writer.close()
+
+
+def realtime_error(event):
+    """OpenAI's error event: {type: "error", event_id, error: {type, code, message, param, event_id}}."""
+    error = event.get("error")
+    missing = [f"error.{key}" for key in ("type", "code", "message", "param", "event_id")
+               if not isinstance(error, dict) or key not in error]
+    missing += [] if "event_id" in event else ["event_id"]
+    if missing:
+        raise Refused(f"the error event {json.dumps(event)[:300]} lacks {', '.join(missing)}")
+
+
+async def open_session(context):
+    """Connected and configured as Pipecat configures it: session.created first, the
+    captured session.update, and a session.updated that echoes it."""
+    session = Session(await connect(context.endpoint, context.realtime_query, context.token))
+    first = await session.next(lambda event: True, "session.created")
+    if first.get("type") != "session.created" or (first.get("session") or {}).get("type") != "transcription":
+        raise Refused(f"the server's first event is {json.dumps(first)[:300]}, not a transcription session.created")
+    update = context.realtime_update
+    await session.socket.send(json.dumps(update))
+    updated = await session.next(lambda event: event.get("type") in ("session.updated", "error"), "session.updated")
+    if updated["type"] == "error":
+        raise Refused(f"session.update was answered with {json.dumps(updated)[:300]}")
+    sent = update["session"]["audio"]["input"]
+    echoed = ((updated.get("session") or {}).get("audio") or {}).get("input") or {}
+    for key in ("model", "language"):
+        if (echoed.get("transcription") or {}).get(key) != sent["transcription"][key]:
+            raise Refused(f"session.updated echoes transcription {echoed.get('transcription')!r}, not {key} {sent['transcription'][key]!r}")
+    if "turn_detection" not in echoed or echoed["turn_detection"] is not None:
+        raise Refused(f"session.updated echoes turn_detection {echoed.get('turn_detection', 'absent')!r}, not null")
+    return session
+
+
+async def realtime_exchange(context):
+    session = await open_session(context)
+    try:
+        # Paced as captured, so deltas have the time to arrive while audio still is.
+        start = time.monotonic()
+        for at, frame in context.realtime_appends:
+            await asyncio.sleep(max(0.0, start + at - time.monotonic()))
+            await session.socket.send(frame)
+        session.committed = True
+        await session.socket.send(json.dumps({"type": "input_audio_buffer.commit"}))
+        completed = await session.next(
+            lambda event: event.get("type") in ("conversation.item.input_audio_transcription.completed", "error"),
+            "conversation.item.input_audio_transcription.completed")
+        if session.errors():
+            raise Refused(f"the exchange drew an error event: {json.dumps(session.errors()[0])[:300]}")
+        order = ["input_audio_buffer.committed", "conversation.item.added", "conversation.item.done",
+                 "conversation.item.input_audio_transcription.completed"]
+        seen = [event for _, event in session.events if event.get("type") in order]
+        if [event["type"] for event in seen] != order:
+            raise Refused(f"after the commit the server sent {[event['type'] for event in seen]}, not {order}")
+        item = seen[0].get("item_id")
+        for event in seen[1:3]:
+            if (event.get("item") or {}).get("id") != item:
+                raise Refused(f"{event['type']} names item {(event.get('item') or {}).get('id')!r}, not the committed {item!r}")
+        if completed.get("item_id") != item or completed.get("content_index") != 0:
+            raise Refused(f"completed names item {completed.get('item_id')!r} index {completed.get('content_index')!r}, not {item!r} index 0")
+        transcript = completed.get("transcript")
+        if not isinstance(transcript, str):
+            raise Refused(f"completed carries transcript {transcript!r}, not a string")
+        heard(transcript)
+        usage(completed.get("usage"), "completed's")
+        deltas = [(before, event) for before, event in session.events
+                  if event.get("type") == "conversation.item.input_audio_transcription.delta"]
+        strays = [event for _, event in deltas if event.get("item_id") != item or event.get("content_index") != 0]
+        if strays:
+            raise Refused(f"a delta names item {strays[0].get('item_id')!r} index {strays[0].get('content_index')!r}, not {item!r} index 0")
+        if not any(not before for before, _ in deltas):
+            raise Refused(f"no delta arrived while audio was still being appended ({len(deltas)} after the commit)")
+        joined = "".join(event.get("delta", "") for _, event in deltas)
+        if joined.strip() != transcript.strip():
+            raise Refused(f"the deltas join to {joined!r}, which is not the completed transcript {transcript!r}")
+    finally:
+        await session.end()
+
+
+async def realtime_empty_commit(context):
+    session = await open_session(context)
+    try:
+        await session.socket.send(json.dumps({"type": "input_audio_buffer.commit"}))
+        error = await session.next(lambda event: event.get("type") in ("error", "input_audio_buffer.committed"),
+                                   "an error event for the empty commit")
+        if error["type"] != "error":
+            raise Refused("a commit of an empty buffer was answered input_audio_buffer.committed, not an error")
+        realtime_error(error)
+        # Still open: the socket answers the next request.
+        before = len(session.events)
+        await session.socket.send(json.dumps(context.realtime_update))
+        await session.next(lambda event: event.get("type") == "session.updated",
+                           "session.updated after the error, so the socket stayed open", after=before)
+    finally:
+        await session.end()
+
+
+async def realtime_wrong_token(context):
+    session = Session(await connect(context.endpoint, context.realtime_query, "sk-conformance-wrong-token"))
+    try:
+        error = await session.next(lambda event: event.get("type") == "error", "an error event for the wrong token")
+        realtime_error(error)
+        deadline = time.monotonic() + TIMEOUT
+        while session.closed is None and time.monotonic() < deadline:
+            session.arrived.clear()
+            try:
+                await asyncio.wait_for(session.arrived.wait(), deadline - time.monotonic())
+            except asyncio.TimeoutError:
+                break
+        if session.closed is None or session.closed.code != 3000:
+            raise Refused(f"after the error the socket {'stayed open' if session.closed is None else f'closed {session.closed.code}'}, not closed 3000")
+    finally:
+        await session.end()
+
+
+# Every check, in the order it runs, and whether it needs a token to mean anything.
+CHECKS = [
+    ("rest json", rest_json, False),
+    ("rest text", rest_text, False),
+    ("rest prompt", rest_prompt, False),
+    ("rest empty file is 400", rest_empty_file, False),
+    ("rest unsupported response_format is 400", rest_unsupported_format, False),
+    ("rest no token is 401", rest_no_token, True),
+    ("rest wrong token is 401", rest_wrong_token, True),
+    ("realtime exchange", realtime_exchange, False),
+    ("realtime empty commit is an error, socket stays open", realtime_empty_commit, False),
+    ("realtime wrong token is an error then close 3000", realtime_wrong_token, True),
+]
+
+
+def load_context(url, token):
+    rest = json.loads(REST_FIXTURE.read_text())
+    frames = [json.loads(line) for line in REALTIME_FIXTURE.read_text().splitlines()]
+    sent = [(frame["at"], frame["text"], json.loads(frame["text"])["type"]) for frame in frames[1:]]
+    update = next(json.loads(text) for _, text, kind in sent if kind == "session.update")
+    appends = [(at, text) for at, text, kind in sent if kind == "input_audio_buffer.append"]
+    return Context(Endpoint.parse(url), token, rest, frames[0]["query"], update,
+                   [(at - appends[0][0], text) for at, text in appends])
+
+
+async def run_checks(context):
+    results = []
+    for name, check, needs_token in CHECKS:
+        started = time.monotonic()
+        if needs_token and context.token is None:
+            outcome, reason = "skip", "no token was given, so none is required"
+        else:
+            try:
+                await check(context)
+                outcome, reason = "pass", ""
+            except Refused as refused:
+                outcome, reason = "fail", str(refused)
+            except (OSError, asyncio.IncompleteReadError, asyncio.TimeoutError) as error:
+                outcome, reason = "fail", f"the connection failed: {error!r}"
+            # An answer shaped so that reading it broke the check is the server's failure,
+            # said with what broke, and the checks after it still run. [LAW:no-silent-failure]
+            except Exception as error:
+                outcome, reason = "fail", f"the answer could not be read: {error!r}"
+        results.append({"check": name, "outcome": outcome, "reason": reason,
+                        "duration_ms": round((time.monotonic() - started) * 1000)})
+        print(f"{outcome:4}  {name}" + (f": {reason}" if reason else ""), flush=True)
+    return results
+
+
+def check_command(args):
+    token = None
+    if args.token_env is not None:
+        token = os.environ.get(args.token_env)
+        if not token:
+            print(f"conformance: --token-env names {args.token_env}, which is not set", file=sys.stderr)
+            return 2
+    context = load_context(args.url, token)
+    results = asyncio.run(run_checks(context))
+    counts = {outcome: sum(r["outcome"] == outcome for r in results) for outcome in ("pass", "fail", "skip")}
+    print(json.dumps({"event": "conformance", "url": args.url, "token": token is not None, "counts": counts, "results": results}))
+    return 1 if counts["fail"] else 0
+
+
+# ---------------------------------------------------------------------------------------
+# Capture: Pipecat against an endpoint that records it and answers as OpenAI answered.
+
+# OpenAI's replies, captured 2026-09-29 (low-serve-axq.50m), trimmed to what the client reads.
+CAPTURED_REST = {"text": "Hello world, this is LoTalker.", "languages": [{"code": "en"}], "usage": {"type": "duration", "seconds": 4}}
+CAPTURED_SESSION = {"type": "transcription", "object": "realtime.transcription_session", "id": "sess_capture", "expires_at": 0,
+                    "audio": {"input": {"format": {"type": "audio/pcm", "rate": 24000}, "transcription": None, "noise_reduction": None,
+                                        "turn_detection": {"type": "server_vad", "threshold": 0.5, "prefix_padding_ms": 300, "silence_duration_ms": 200}}},
+                    "include": None}
+CAPTURED_TRANSCRIPT = "Hello world, this is Lo Talker."
+
+
+def parse_multipart(content_type, body):
+    boundary = re.search(r"boundary=([^;]+)", content_type).group(1).strip('"').encode()
+    parts = []
+    for chunk in body.split(b"--" + boundary)[1:-1]:
+        head, _, value = chunk[2:].partition(b"\r\n\r\n")
+        headers = dict(line.split(": ", 1) for line in head.decode().split("\r\n"))
+        disposition = headers["Content-Disposition"]
+        part = {"name": re.search(r'name="([^"]*)"', disposition).group(1)}
+        filename = re.search(r'filename="([^"]*)"', disposition)
+        if filename:
+            part["filename"] = filename.group(1)
+        if "Content-Type" in headers:
+            part["content_type"] = headers["Content-Type"]
+        parts.append((part, value[:-2]))
+    return parts
+
+
+class Recorder:
+    """The capturing endpoint: one listener for both services, as a LowTalker would be."""
+
+    def __init__(self, out):
+        self.out, self.rest, self.realtime = out, None, None
+
+    async def serve(self, reader, writer):
+        request_line, headers = await read_head(reader)
+        method, target, _ = request_line.split(" ", 2)
+        if method == "POST":
+            body = await read_body(reader, headers)
+            parts = parse_multipart(headers["content-type"], body)
+            recorded = []
+            for part, value in parts:
+                if "filename" in part:
+                    (self.out / "rest-file.wav").write_bytes(value)
+                    part["file"] = "rest-file.wav"
+                else:
+                    part["value"] = value.decode()
+                recorded.append(part)
+            self.rest = {"path": target.split("/v1/", 1)[1], "parts": recorded}
+            reply = json.dumps(CAPTURED_REST).encode()
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n" % len(reply) + reply)
+            await writer.drain()
+            writer.close()
+            return
+        writer.write(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                      f"Sec-WebSocket-Accept: {accept_key(headers['sec-websocket-key'])}\r\n\r\n").encode())
+        socket = Socket(reader, writer, masked=False)
+        frames = [{"query": target.split("?", 1)[1]}]
+        start = time.monotonic()
+        await socket.send(json.dumps({"type": "session.created", "event_id": "event_capture0", "session": CAPTURED_SESSION}))
+        while not isinstance(message := await socket.receive(), Closed):
+            frames.append({"at": round(time.monotonic() - start, 3), "text": message})
+            event = json.loads(message)
+            if event["type"] == "session.update":
+                transcription = {**event["session"]["audio"]["input"]["transcription"], "prompt": None}
+                session = json.loads(json.dumps(CAPTURED_SESSION))
+                session["audio"]["input"].update(transcription=transcription, turn_detection=None)
+                await socket.send(json.dumps({"type": "session.updated", "event_id": "event_capture1", "session": session}))
+            elif event["type"] == "input_audio_buffer.commit":
+                item = {"id": "item_capture", "type": "message", "status": "completed", "role": "user",
+                        "content": [{"type": "input_audio", "transcript": None}]}
+                for reply in ({"type": "input_audio_buffer.committed", "previous_item_id": None, "item_id": "item_capture"},
+                              {"type": "conversation.item.added", "previous_item_id": None, "item": item},
+                              {"type": "conversation.item.done", "previous_item_id": None, "item": item},
+                              {"type": "conversation.item.input_audio_transcription.completed", "item_id": "item_capture",
+                               "content_index": 0, "transcript": CAPTURED_TRANSCRIPT, "usage": {"type": "duration", "seconds": 4}}):
+                    await socket.send(json.dumps({**reply, "event_id": "event_capture"}))
+        self.realtime = frames
+        await socket.close()
+
+
+def capture_command(args):
+    client = Path(__file__).resolve().parent / "conformance-pipecat"
+    recorder = Recorder(FIXTURES)
+
+    async def main():
+        server = await asyncio.start_server(recorder.serve, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        for service in ("rest", "realtime"):
+            process = await asyncio.create_subprocess_exec(str(client), service, f"http://127.0.0.1:{port}/v1")
+            if await process.wait() != 0:
+                raise SystemExit(f"conformance: the Pipecat {service} client exited {process.returncode}")
+        server.close()
+
+    FIXTURES.mkdir(exist_ok=True)
+    asyncio.run(main())
+    if recorder.rest is None or recorder.realtime is None:
+        print(f"conformance: Pipecat sent {'no REST request' if recorder.rest is None else 'no Realtime session'}", file=sys.stderr)
+        return 1
+    REST_FIXTURE.write_text(json.dumps(recorder.rest, indent=1) + "\n")
+    REALTIME_FIXTURE.write_text("".join(json.dumps(frame) + "\n" for frame in recorder.realtime))
+    appends = sum('"input_audio_buffer.append"' in frame.get("text", "") for frame in recorder.realtime)
+    print(json.dumps({"event": "capture", "rest_parts": [part["name"] for part in recorder.rest["parts"]],
+                      "realtime_frames": len(recorder.realtime) - 1, "realtime_appends": appends}))
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="scripts/conformance", description=__doc__.split("\n\n")[0])
+    commands = parser.add_subparsers(dest="command", required=True)
+    check = commands.add_parser("check", help="judge the server behind a base URL")
+    check.add_argument("url", help="the base URL a Pipecat service would be given, e.g. http://127.0.0.1:8000/v1")
+    check.add_argument("--token-env", help="the environment variable holding the bearer token the server requires")
+    commands.add_parser("capture", help="re-record Pipecat's requests into scripts/conformance-fixtures")
+    args = parser.parse_args()
+    return check_command(args) if args.command == "check" else capture_command(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

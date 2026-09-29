@@ -1,0 +1,76 @@
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["pipecat-ai[openai]==1.12.0"]
+# ///
+"""Pipecat, unmodified, as a black-box client: plays the fixture through one of its two
+OpenAI speech-to-text services pointed at a base URL, the way a Pipecat pipeline would.
+
+    scripts/conformance-pipecat rest|realtime <base url>
+
+scripts/conformance capture runs it against its recording endpoint. Only Pipecat's public
+pipeline API is used here, never its source (epic low-serve-axq). The version is pinned to
+the one the captures were taken with; a new one is a new capture.
+"""
+import asyncio
+import sys
+import wave
+from pathlib import Path
+
+from pipecat.frames.frames import (
+    EndFrame,
+    InputAudioRawFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
+    VADUserStartedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
+)
+from pipecat.pipeline.pipeline import Pipeline
+from pipecat.pipeline.runner import PipelineRunner
+from pipecat.pipeline.task import PipelineParams, PipelineTask
+from pipecat.services.openai.stt import OpenAIRealtimeSTTService, OpenAISTTService
+
+FIXTURE = Path(__file__).resolve().parent.parent / "Tests/LowTalkerCoreTests/Fixtures/hello-16k-mono.wav"
+CHUNK_MS = 20
+KEY = "sk-conformance-capture"  # the recording endpoint takes any token
+
+
+def service(kind, base):
+    if kind == "rest":
+        return OpenAISTTService(api_key=KEY, base_url=base)
+    ws = base.replace("http", "ws", 1)
+    return OpenAIRealtimeSTTService(api_key=KEY, base_url=f"{ws}/realtime")
+
+
+async def main(kind, base):
+    with wave.open(str(FIXTURE), "rb") as fixture:
+        rate, channels = fixture.getframerate(), fixture.getnchannels()
+        pcm = fixture.readframes(fixture.getnframes())
+    step = rate * channels * 2 * CHUNK_MS // 1000
+    silence = b"\x00" * step
+    task = PipelineTask(Pipeline([service(kind, base)]), params=PipelineParams(audio_in_sample_rate=rate))
+
+    async def audio(chunk):
+        await task.queue_frame(InputAudioRawFrame(audio=chunk, sample_rate=rate, num_channels=channels))
+        await asyncio.sleep(CHUNK_MS / 1000)
+
+    # Half a second of silence either side of the speech, bracketed by the local VAD's
+    # frames, as a pipeline with a VAD in front of the service would send them.
+    async def feed():
+        await asyncio.sleep(2.0)
+        for _ in range(25):
+            await audio(silence)
+        await task.queue_frames([VADUserStartedSpeakingFrame(), UserStartedSpeakingFrame()])
+        for i in range(0, len(pcm), step):
+            await audio(pcm[i : i + step])
+        for _ in range(25):
+            await audio(silence)
+        await task.queue_frames([VADUserStoppedSpeakingFrame(), UserStoppedSpeakingFrame()])
+        await asyncio.sleep(3.0)
+        await task.queue_frame(EndFrame())
+
+    await asyncio.gather(PipelineRunner(handle_sigint=False).run(task), feed())
+
+
+if __name__ == "__main__":
+    asyncio.run(main(sys.argv[1], sys.argv[2]))
