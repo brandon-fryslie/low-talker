@@ -277,7 +277,7 @@ While it is the selected input source, macOS hands the input method every change
 
 Hold the chord while you speak, or tap it to start and again to stop.
 
-An installation from before the input method was the only way still holds its old answers in its defaults, under `inputMethod` and `hotkeySource`. Nothing reads them now, so it comes up on the input method with no question asked.
+An installation from before the input method was the only way still holds its old answers in its defaults, under `inputMethod` and `hotkeySource`. Nothing reads them now, so it comes up on the input method with no question asked. Such an installation also still holds the keyboard helper it registered as a background item. Every launch unregisters that helper, so launchd drops its job, and logs `retired keyboard helper:` with the registration it found. System Settings still lists LowTalker under Allow in the Background, keeping the approval, until the app is deleted.
 
 ## Dictation
 

@@ -18,7 +18,9 @@
 /// - the config file, so a setting changed for one build does not move the other;
 /// - the input method's bundle identifier, input source identifier and connection name,
 ///   which the text input system keys a text input source by: two copies sharing any one
-///   of them is the second failing to register beside the first.
+///   of them is the second failing to register beside the first;
+/// - the label the keyboard helper was registered under before it was removed, which
+///   launchd keys a job by, so each copy retires its own.
 ///
 /// Nothing else differs by flavor. Both bundles are built by one recipe and carry their
 /// model the same way, so the development copy runs the path the release ships.
@@ -138,6 +140,21 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
         switch self {
         case .release: "LowTalker"
         case .development: "LowTalker Dev"
+        }
+    }
+
+    /// The launchd label the keyboard helper was registered under, through `SMAppService`,
+    /// by every build before v0.1.0-alpha.5, which removed the helper.
+    ///
+    /// Still a name this installation owns, because an upgraded installation still holds
+    /// that registration: launchd keeps the job loaded and Login Items keeps it listed,
+    /// with nothing left in the bundle to run. Only the app it belongs to can unregister
+    /// it, and `SMAppService` finds the job only by a plist the bundle carries under this
+    /// name, so the bundle carries one for that and nothing else.
+    public var retiredHelperLabel: String {
+        switch self {
+        case .release: "ai.promptctl.low-talker.keyboardd"
+        case .development: "ai.promptctl.low-talker.keyboardd.dev"
         }
     }
 

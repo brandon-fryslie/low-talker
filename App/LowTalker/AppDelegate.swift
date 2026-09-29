@@ -7,6 +7,7 @@ import InputSource
 import Insertion
 import LowTalkerCore
 import Onboarding
+import ServiceManagement
 import Signals
 import os
 
@@ -375,6 +376,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ = engine
         showHotkeyStatus("starting…")
         Task { await listen() }
+        retireKeyboardHelper()
+    }
+
+    /// Unregisters the keyboard helper that builds before v0.1.0-alpha.5 registered, which an
+    /// upgraded installation still holds: launchd keeps the job loaded and Login Items keeps
+    /// listing it, though its program left the bundle with that release.
+    ///
+    /// Every launch, whatever the registration reads: unregistering a job that is not
+    /// registered answers success, so there is nothing to decide first.
+    /// [LAW:dataflow-not-control-flow] Measured on macOS 15 (low-input-method-s71.p3k): with
+    /// the plist carried and the program gone, an approved job unregisters with no prompt,
+    /// launchd drops it, and its Login Items row turns off. The status it read before is
+    /// logged beside the outcome, so the log says whether a launch retired anything.
+    ///
+    /// Goes, with the plist carried for it, once no installation from before alpha.5 is left
+    /// to upgrade: low-cleanup-azl.
+    private func retireKeyboardHelper() {
+        let helper = SMAppService.daemon(plistName: "\(Self.flavor.retiredHelperLabel).plist")
+        let found = helper.status
+        helper.unregister { [log] error in
+            if let error {
+                log.error("retired keyboard helper: SMAppService.Status \(found.rawValue, privacy: .public) before, unregister failed: \(error, privacy: .public)")
+            } else {
+                log.notice("retired keyboard helper: SMAppService.Status \(found.rawValue, privacy: .public) before, unregistered")
+            }
+        }
     }
 
     /// The loop as far as what is already granted allows, then the guided setup when
