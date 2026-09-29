@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Builds the LowTalker installer package to hand to someone else, and proves the signature on
-# everything it installs is one the notary service accepts: the app, the CLI embedded in it,
-# and the input method bundle beside it.
+# Builds the LowTalker installer packages to hand to someone else, one per variant, offline and
+# network, and proves the signature on everything each installs is one the notary service
+# accepts: the app, the CLI embedded in it, and the input method bundle beside it.
 #
-#   scripts/sign-release <output directory> [model source]    # prints <output directory>/LowTalker.pkg
+#   scripts/sign-release <output directory> [model source]
+#     # prints <output directory>/LowTalker-offline.pkg and <output directory>/LowTalker-network.pkg
 #
 # The bundle carries the default model in Contents/Resources/model-store, so a first launch
 # loads it in place with the network off. The model source is what `lowtalker model download
@@ -56,10 +57,6 @@ fetched="$derived/fetched-store"
 # component in it held to the accepted licenses: this release is the distribution.
 make check-licenses MODEL_SOURCE="$fetched" >&2
 
-built=$(make release-package SIGNING_IDENTITY="$identity" DERIVED_DATA="$derived" MODEL_SOURCE="$fetched" | tee /dev/stderr | tail -n 1)
-products="$derived/Build/Products/Release"
-app="$products/LowTalker.app"
-
 fail() {
   echo "sign-release: $1" >&2
   exit 1
@@ -81,40 +78,55 @@ check() {
     || fail "$binary carries com.apple.security.get-task-allow"
 }
 
-codesign --verify --deep --strict "$app" || fail "$app does not verify"
 resources=$(xcodegen dump --type json | jq -er '.targetTemplates.Installation.settings.base')
 store=$(jq -er '.MODEL_STORE_RESOURCE // error("project.yml names no MODEL_STORE_RESOURCE")' <<<"$resources")
-"$cli" model status --models-dir "$app/Contents/Resources/$store" >&2 \
-  || fail "$app does not carry the default model whole"
-check "$app"
-# The CLI the app carries, which it runs to read its own grants.
-check "$app/Contents/Helpers/lowtalker"
-# The input method bundle the package installs beside the app. The notary service refuses
-# the whole upload for one nested bundle it dislikes, long after this script has printed the
-# path as success.
-#
-# The bundle is asked, and its main executable is not, because they answer with one
-# signature: `codesign -dvv` on `X.app/Contents/MacOS/X` resolves the path back to the
-# bundle and prints byte-for-byte what `codesign -dvv X.app` prints - measured. A second
-# `check` there is a second checkpoint for one rule that can never disagree with the first.
-# [LAW:single-enforcer] `lowtalker` above is the opposite case and stays: it is a separate
-# Mach-O in the app's bundle, with its own identifier and its own signature, which nothing
-# else here reads.
-#
-# Found by looking rather than by name: the bundle is called after PRODUCT_NAME, which is
-# project.yml's to decide, and a name spelled here is one more copy to keep in step. The
-# derived data is this run's own, so every bundle in it besides the app is an input method
-# built with it. A build with none is a release whose delivery does not exist, so it fails
-# rather than passing a loop that ran zero times. [LAW:no-silent-failure]
-methods=()
-for bundle in "$products"/*.app; do
-  [ "$bundle" = "$app" ] || methods+=("$bundle")
-done
-[ ${#methods[@]} -gt 0 ] || fail "$products holds no input method bundle beside $app"
-for method in "${methods[@]}"; do
-  check "$method"
-done
+products="$derived/Build/Products/Release"
+app="$products/LowTalker.app"
 
-pkg="$out/$(basename "$built")"
-cp -f "$built" "$pkg"
-echo "$pkg"
+# One variant built, checked and copied out before the next is built over it in the same
+# derived data, which rebuilds only the app's signature.
+release_package() {
+  local variant=$1 built bundle method methods
+  built=$(make release-package VARIANT="$variant" SIGNING_IDENTITY="$identity" DERIVED_DATA="$derived" MODEL_SOURCE="$fetched" | tee /dev/stderr | tail -n 1)
+  codesign --verify --deep --strict "$app" || fail "$app does not verify"
+  "$cli" model status --models-dir "$app/Contents/Resources/$store" >&2 \
+    || fail "$app does not carry the default model whole"
+  check "$app"
+  # The CLI the app carries, which it runs to read its own grants.
+  check "$app/Contents/Helpers/lowtalker"
+  # The input method bundle the package installs beside the app. The notary service refuses
+  # the whole upload for one nested bundle it dislikes, long after this script has printed the
+  # path as success.
+  #
+  # The bundle is asked, and its main executable is not, because they answer with one
+  # signature: `codesign -dvv` on `X.app/Contents/MacOS/X` resolves the path back to the
+  # bundle and prints byte-for-byte what `codesign -dvv X.app` prints - measured. A second
+  # `check` there is a second checkpoint for one rule that can never disagree with the first.
+  # [LAW:single-enforcer] `lowtalker` above is the opposite case and stays: it is a separate
+  # Mach-O in the app's bundle, with its own identifier and its own signature, which nothing
+  # else here reads.
+  #
+  # Found by looking rather than by name: the bundle is called after PRODUCT_NAME, which is
+  # project.yml's to decide, and a name spelled here is one more copy to keep in step. The
+  # derived data is this run's own, so every bundle in it besides the app is an input method
+  # built with it. A build with none is a release whose delivery does not exist, so it fails
+  # rather than passing a loop that ran zero times. [LAW:no-silent-failure]
+  methods=()
+  for bundle in "$products"/*.app; do
+    [ "$bundle" = "$app" ] || methods+=("$bundle")
+  done
+  [ ${#methods[@]} -gt 0 ] || fail "$products holds no input method bundle beside $app"
+  for method in "${methods[@]}"; do
+    check "$method"
+  done
+  cp -f "$built" "$out/"
+  echo "$out/$(basename "$built")"
+}
+
+# Every variant the Makefile builds, each a package of its own: offline and network. Read
+# into a variable first, since a failed command in a for list is a loop that runs zero times.
+variants=$(make --no-print-directory -s variants)
+[ -n "$variants" ] || fail "make variants names no variant to build"
+for variant in $variants; do
+  release_package "$variant"
+done

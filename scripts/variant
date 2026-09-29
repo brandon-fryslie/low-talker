@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Which build an app is, from the entitlements plist on stdin, as
+# `codesign -d --entitlements - --xml <app>` prints it: `offline` when it carries none of the
+# sandbox's network keys, `network` when it carries the server key alone, set true. Any other
+# set is a build neither variant makes, and fails naming the keys.
+#
+#   codesign -d --entitlements - --xml <app> | scripts/variant    # prints offline or network
+#
+# The Makefile's VARIANT decides which set a build signs in; this reads the answer back off the
+# signature, so a package named for it cannot say offline over an app that may accept
+# connections. [LAW:one-source-of-truth]
+set -euo pipefail
+
+network=$(plutil -convert json -o - - \
+  | jq -c '[to_entries[] | select(.key | startswith("com.apple.security.network.")) | [.key, .value]]')
+case "$network" in
+  '[]') echo offline ;;
+  '[["com.apple.security.network.server",true]]') echo network ;;
+  *)
+    echo "variant: the network entitlements $network are neither the offline nor the network build's" >&2
+    exit 1
+    ;;
+esac
