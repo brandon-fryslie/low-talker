@@ -44,7 +44,7 @@ RELEASE_APP := $(PRODUCTS)/LowTalker.app
 XCODE_RESOLVED_DIR := LowTalker.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
 INSTALLED := /Applications/LowTalker.app
 
-.PHONY: app release install run test check-docs cli sbom check-sbom clean signing-identity
+.PHONY: app release install run test check-docs cli sbom check-sbom check-licenses clean signing-identity
 
 # Regeneration is unconditional: xcodegen is idempotent and sub-second, and a
 # timestamp rule cannot see removed sources or in-place rewrites of the project.
@@ -136,7 +136,7 @@ test:
 	swift build
 	$(MAKE) check-docs
 	swift test
-	$(MAKE) check-sbom
+	$(MAKE) check-licenses
 
 # [LAW:one-source-of-truth] The onboarding rows' readings are a vocabulary README.md keeps a
 # copy of: each way macOS can answer for the microphone, and the input method switched on or
@@ -204,6 +204,14 @@ check-sbom: sbom
 		|| { echo "check-sbom: sbom/lowtalker.cdx.json is not committed" >&2; exit 1; }
 	@git diff HEAD --exit-code --stat -- sbom/lowtalker.cdx.json \
 		|| { echo "check-sbom: the committed sbom/lowtalker.cdx.json is not what the build writes; commit the regenerated file" >&2; exit 1; }
+
+# Refuses a pull request that ships a component under a license we have not accepted, or
+# one whose license nobody identified. It reads the committed SBOM, which `check-sbom` has
+# just held to the build, so a dependency cannot reach the tree without passing it. The
+# gate's own tests run first: a gate that passes everything looks exactly like a clean tree.
+check-licenses: check-sbom
+	python3 -B -m unittest discover -s scripts/tests
+	scripts/check-licenses sbom/lowtalker.cdx.json
 
 # Once per Mac. Until it has run, `make app`, `make cli` and `make test` stop with "No
 # certificate matching".
