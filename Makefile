@@ -41,9 +41,10 @@ DEV_SCHEME := LowTalkerDev
 DEV_APP := $(PRODUCTS)/LowTalker Dev.app
 RELEASE_SCHEME := LowTalker
 RELEASE_APP := $(PRODUCTS)/LowTalker.app
+XCODE_RESOLVED_DIR := LowTalker.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
 INSTALLED := /Applications/LowTalker.app
 
-.PHONY: app release install run test check-docs cli clean signing-identity
+.PHONY: app release install run test check-docs cli sbom check-sbom clean signing-identity
 
 # Regeneration is unconditional: xcodegen is idempotent and sub-second, and a
 # timestamp rule cannot see removed sources or in-place rewrites of the project.
@@ -51,9 +52,17 @@ INSTALLED := /Applications/LowTalker.app
 # One recipe for both installations, taking the scheme: they are one app built twice, and
 # a second copy of these two commands is a second thing to keep in step.
 # [LAW:one-type-per-behavior]
+#
+# [LAW:one-source-of-truth] Package.resolved decides the app's package versions, as it does
+# `swift build`'s and the SBOM's. The project xcodegen writes has no resolved file, so
+# xcodebuild would pick versions of its own in a fresh derived-data folder; the root one is
+# copied in and xcodebuild resolves nothing else, stopping on a package it does not pin.
 define build_app
 	xcodegen generate
+	mkdir -p $(XCODE_RESOLVED_DIR)
+	cp Package.resolved $(XCODE_RESOLVED_DIR)/Package.resolved
 	xcodebuild -project LowTalker.xcodeproj -scheme $(1) -configuration $(CONFIGURATION) \
+		-onlyUsePackageVersionsFromResolvedFile \
 		-derivedDataPath $(DERIVED_DATA) BUNDLED_MODEL_STORE="$(BUNDLED_MODEL_STORE)" \
 		$(if $(SIGNING_IDENTITY),CODE_SIGN_IDENTITY="$(SIGNING_IDENTITY)") build
 endef
@@ -115,7 +124,8 @@ run: app
 # ad-hoc signs the product, and the CLI's signing identifier is what the Neural Engine keys
 # its compiled model by, so without this a green run leaves the next `lowtalker` paying the
 # minutes-long specialization again. Unconditional, because a recipe cannot see what SwiftPM
-# chose to link. [LAW:dataflow-not-control-flow]
+# chose to link. [LAW:dataflow-not-control-flow] The signing is `check-sbom`'s: `sbom`
+# builds the CLI through `cli` to read the default model out of it.
 # Generating first is what lets `InputMethodPlistTests` read the plist xcodegen writes
 # without generating it itself: a test that rewrote LowTalker.xcodeproj and App/Generated
 # would be doing it underneath any build already running in this tree.
@@ -126,7 +136,7 @@ test:
 	swift build
 	$(MAKE) check-docs
 	swift test
-	$(MAKE) cli
+	$(MAKE) check-sbom
 
 # [LAW:one-source-of-truth] The onboarding rows' readings are a vocabulary README.md keeps a
 # copy of: each way macOS can answer for the microphone, and the input method switched on or
@@ -173,6 +183,27 @@ cli:
 	identifier=$$(xcodegen dump --type json | jq -er '.targets["lowtalker-cli"].settings.base.PRODUCT_BUNDLE_IDENTIFIER // error("project.yml sets no PRODUCT_BUNDLE_IDENTIFIER for lowtalker-cli")') \
 		&& codesign --force --sign "$$(scripts/signing-identity)" --identifier "$$identifier" "$(CLI)"
 	@echo "$(CLI)"
+
+# What a release ships and under what license, as CycloneDX, read off the resolved
+# build: Package.resolved, the checkouts `swift build` resolves under .build, and the
+# CLI's default model. The CLI is built because the model's name is read from it, not
+# copied, and building it is what resolves the checkouts on a clean clone. When this Mac's
+# store holds the model, the rules for its two repos are held to what that install wrote.
+# scripts/sbom stops and names any component sbom/rules.json cannot license.
+# [LAW:no-silent-failure]
+sbom: cli
+	@set -eu; store="$(MODEL_SOURCE)"; [ -d "$$store" ] || store=""; \
+	scripts/sbom "$(CLI)" sbom/lowtalker.cdx.json $${store:+"$$store"}
+
+# The committed SBOM is the one the build writes, or `make test` fails: a committed file
+# that can drift from Package.resolved is a maintained list wearing a generated one's name.
+# Against HEAD, not the index: a regenerated file that is staged and not committed is
+# still a stale commit.
+check-sbom: sbom
+	@git cat-file -e HEAD:sbom/lowtalker.cdx.json \
+		|| { echo "check-sbom: sbom/lowtalker.cdx.json is not committed" >&2; exit 1; }
+	@git diff HEAD --exit-code --stat -- sbom/lowtalker.cdx.json \
+		|| { echo "check-sbom: the committed sbom/lowtalker.cdx.json is not what the build writes; commit the regenerated file" >&2; exit 1; }
 
 # Once per Mac. Until it has run, `make app`, `make cli` and `make test` stop with "No
 # certificate matching".

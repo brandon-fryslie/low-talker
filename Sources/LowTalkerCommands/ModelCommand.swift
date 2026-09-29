@@ -10,8 +10,22 @@ struct ModelCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "model",
         abstract: "Inspect and download the Whisper model the app loads at launch.",
-        subcommands: [Status.self, Download.self, Pack.self]
+        subcommands: [Status.self, Download.self, Pack.self, Default.self]
     )
+
+    /// The model a release carries and a launch loads where nothing names another, by
+    /// name and nothing else, for scripts: `scripts/sbom` lists it as a component under
+    /// this name, and reading it here rather than copying the constant keeps the SBOM on
+    /// the model the code actually loads. [LAW:one-source-of-truth]
+    struct Default: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Print the name of the model the app loads where nothing names another."
+        )
+
+        func run() {
+            print(ModelName.default.rawValue)
+        }
+    }
 
     struct Status: ParsableCommand {
         static let configuration = CommandConfiguration(

@@ -49,6 +49,9 @@ trap 'rm -rf "$derived"' EXIT
 cli=$(make cli | tee /dev/stderr | tail -n 1)
 fetched="$derived/fetched-store"
 "$cli" model download --models-dir "$fetched" ${source:+--from "$source"} >&2
+# The SBOM's model rules held to the store this release carries, not to whichever store
+# the Mac that last ran `make sbom` had, and the committed SBOM held to this checkout.
+make check-sbom MODEL_SOURCE="$fetched" >&2
 
 make release SIGNING_IDENTITY="$identity" DERIVED_DATA="$derived" MODEL_SOURCE="$fetched" >&2
 
