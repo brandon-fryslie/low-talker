@@ -17,12 +17,13 @@ SIGNING_IDENTITY :=
 # under one identifier, so installing either replaces the other; the package's name is how a
 # person tells them apart, and scripts/make-pkg reads it off the app it packs.
 # [LAW:one-type-per-behavior] Two builds are one recipe run with two values.
+# VARIANTS is every variant, in the order scripts/sign-release builds and notarizes them.
+# [LAW:one-source-of-truth]
+VARIANTS := offline network
 VARIANT := offline
 ACCEPTS_CONNECTIONS_offline := NO
 ACCEPTS_CONNECTIONS_network := YES
-ACCEPTS_CONNECTIONS := $(or $(ACCEPTS_CONNECTIONS_$(VARIANT)),$(error VARIANT is '$(VARIANT)', and it is offline or network))
-# Every variant, for scripts/sign-release to build each. [LAW:one-source-of-truth]
-VARIANTS := $(patsubst ACCEPTS_CONNECTIONS_%,%,$(filter ACCEPTS_CONNECTIONS_%,$(.VARIABLES)))
+ACCEPTS_CONNECTIONS := $(or $(and $(filter $(VARIANT),$(VARIANTS)),$(ACCEPTS_CONNECTIONS_$(VARIANT))),$(error VARIANT is '$(VARIANT)', and it is one of $(VARIANTS)))
 
 # A store holding the model, for the bundle to carry.
 #
@@ -122,19 +123,21 @@ release: $(BUNDLED_MODEL_STORE)
 # development copy included, since the text input system lists an input method only from
 # the standard folders and the app puts nothing there itself. scripts/sign-release builds
 # `release-package` under the Developer ID identity. [LAW:one-type-per-behavior]
-DEV_MAKE_PKG := scripts/make-pkg "$(DEV_APP)" "$(DEV_INPUT_METHOD)" "$(PRODUCTS)"
+define make_pkg
+scripts/make-pkg "$(1)" "$(2)" "$(PRODUCTS)"
+endef
 
 package: app
-	$(DEV_MAKE_PKG)
+	$(call make_pkg,$(DEV_APP),$(DEV_INPUT_METHOD))
 
 release-package: release
-	scripts/make-pkg "$(RELEASE_APP)" "$(RELEASE_INPUT_METHOD)" "$(PRODUCTS)"
+	$(call make_pkg,$(RELEASE_APP),$(RELEASE_INPUT_METHOD))
 
 # The development copy installed from its package, the way a person installs a release: the
 # package replaces what stood there, stops what ran from it, and starts the app again. The
 # package is the one make-pkg names, since it names it after what the app carries.
 install: app
-	pkg=$$($(DEV_MAKE_PKG)) && sudo installer -pkg "$$pkg" -target /
+	pkg=$$($(call make_pkg,$(DEV_APP),$(DEV_INPUT_METHOD))) && sudo installer -pkg "$$pkg" -target /
 
 run: install
 	open "/Applications/LowTalker Dev.app"

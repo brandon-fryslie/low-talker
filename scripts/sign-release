@@ -13,9 +13,10 @@
 # from Hugging Face.
 #
 # The build is `make release-package` signed with the Developer ID identity in place of the
-# development one, and that identity is the only thing this script changes about the build:
-# the Hardened Runtime, the secure timestamp and the entitlements are project.yml's for every
-# build, so the bundle a person develops on is built exactly as this one is. It goes into a
+# development one, once per variant, and the identity and the variant are all this script
+# changes about the build: the Hardened Runtime, the secure timestamp and the entitlements are
+# project.yml's for every build, so the offline bundle a person develops on is built exactly
+# as the offline one here is. It goes into a
 # derived-data directory made for this run and removed after it: an incremental build keeps
 # embedding a tool whose only change is its signature (low-build-mmp), so a warm DerivedData
 # could hand over a bundle whose CLI is signed by the dev identity.
@@ -119,6 +120,11 @@ release_package() {
   for method in "${methods[@]}"; do
     check "$method"
   done
+  # make-pkg names the package after the variant it reads off the app's signature, so this is
+  # where a build whose entitlements did not follow VARIANT stops, rather than shipping as a
+  # second copy of the other variant.
+  [ "$(basename "$built")" = "LowTalker-$variant.pkg" ] \
+    || fail "the $variant build packed as $(basename "$built"), so its entitlements are not the $variant build's"
   cp -f "$built" "$out/"
   echo "$out/$(basename "$built")"
 }
