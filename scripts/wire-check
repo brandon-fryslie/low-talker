@@ -3,7 +3,7 @@
 passes only if neither did any network work beyond asking whether a route exists.
 
     scripts/wire-check <app bundle> <input method bundle>
-    scripts/wire-check judge <capture> <app process> <input method process>
+    scripts/wire-check judge <capture> <app process> <input method process> [<helper process>...]
 
 The app links WhisperKit and the Hugging Face hub client vendored in argmax-oss-swift, code
 that can reach the network and that nobody here wrote. sbom/rules.json records the revision
@@ -69,8 +69,10 @@ def is_connection(subsystem, category):
     return subsystem.startswith("com.apple.CFNetwork") or (subsystem == "com.apple.network" and category == "connection")
 
 
-def judge(capture, app, input_method):
-    """The verdict on one capture, from its lines alone. Returns the summary of a pass."""
+def judge(capture, app, input_method, helpers=()):
+    """The verdict on one capture, from its lines alone. Returns the summary of a pass. `helpers`
+    are the executables the app carries and starts, whose network work is the app's too."""
+    watched = (app, input_method, *helpers)
     network, paths, control = [], 0, 0
     ready, dictations, serving, inserts = False, 0, False, 0
     for line in capture.read_text(errors="replace").splitlines():
@@ -80,7 +82,7 @@ def judge(capture, app, input_method):
         process, subsystem, category, message = found.group("process", "subsystem", "category", "message")
         if process == CONTROL:
             control += is_connection(subsystem, category)
-        elif process not in (app, input_method):
+        elif process not in watched:
             continue
         elif is_network(subsystem):
             if subsystem == "com.apple.network" and message.startswith(QUIET.get(category, ())):
@@ -94,13 +96,13 @@ def judge(capture, app, input_method):
         elif process == app:
             ready |= message.startswith("model: ready")
             dictations += ready and message.startswith("heard ")
-        else:
+        elif process == input_method:
             serving |= " serving " in message
             inserts += serving and message.startswith("insert of ")
     if not control:
         fail(f"{capture} holds no connection from the {CONTROL} control, so the stream saw nothing and its silence proves nothing")
     if network:
-        fail(f"{app} or {input_method} did network work beyond asking for a route; the first of {len(network)} lines:\n"
+        fail(f"{' or '.join(watched)} did network work beyond asking for a route; the first of {len(network)} lines:\n"
              + "\n".join(network[:5]))
     if not ready:
         fail(f"{capture} never shows {app} reporting its model ready, so the load was not watched")
@@ -110,8 +112,8 @@ def judge(capture, app, input_method):
         fail(f"{capture} never shows {input_method} starting, so its launch was not watched")
     if not inserts:
         fail(f"{capture} never shows {input_method} taking a dictation's text, so it was not watched through one")
-    return (f"{app} and {input_method}: no network work through a launch of each and {dictations} dictation(s); "
-            f"{paths} path evaluation(s), which open none")
+    return (f"{app} and {input_method}: no network work through a launch of each and {dictations} dictation(s), "
+            f"nor by the helpers the app starts ({', '.join(helpers) or 'none carried'}); {paths} path evaluation(s), which open none")
 
 
 def took_text_after_starting(text, input_method):
@@ -167,8 +169,16 @@ def executable(name):
 
 
 def pids(name):
-    found = subprocess.run(["/usr/bin/pgrep", "-f", executable(name)], capture_output=True, text=True)
+    """This user's processes running the executable: another user's copy is not ours to quit."""
+    found = subprocess.run(["/usr/bin/pgrep", "-U", str(os.getuid()), "-f", executable(name)], capture_output=True, text=True)
     return {int(pid) for pid in found.stdout.split()}
+
+
+def quit_process(pid):
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass  # gone between pgrep and here, which is what quitting asks for
 
 
 def alive(pid):
@@ -182,8 +192,13 @@ def alive(pid):
 def watch(app, input_method_bundle):
     bundle_id, name = bundle_info(app)
     input_method_id, input_method = bundle_info(input_method_bundle)
+    # The executables the app carries to start - the lowtalker command it runs to read its
+    # privacy grants is the one binary in the bundle linking the model installer.
+    carried = app / "Contents" / "Helpers"
+    helpers = sorted(path.name for path in carried.iterdir() if path.is_file() and os.access(path, os.X_OK)) if carried.is_dir() else []
     capture = Path(tempfile.mkdtemp(prefix="wire-check.")) / "capture.log"
-    predicate = (f'(process == "{name}" OR process == "{input_method}" OR process == "{CONTROL}") AND '
+    processes = " OR ".join(f'process == "{process}"' for process in (name, input_method, *helpers, CONTROL))
+    predicate = (f'({processes}) AND '
                  f'(subsystem BEGINSWITH "com.apple.network" OR subsystem BEGINSWITH "com.apple.CFNetwork" '
                  f'OR subsystem == "{bundle_id}" OR subsystem == "{input_method_id}")')
     with capture.open("w") as out:
@@ -195,7 +210,7 @@ def watch(app, input_method_bundle):
         # app is gone, and a new process is not one that failed to quit.
         quitting = pids(name) | pids(input_method)
         for pid in quitting:
-            os.kill(pid, signal.SIGTERM)
+            quit_process(pid)
         wait_for(capture, lambda _: not any(alive(pid) for pid in quitting), f"{name} and {input_method} to quit", 30)
         # LaunchServices refuses the open (-600) for a moment after the process is gone.
         wait_for(capture, lambda _: subprocess.run(["/usr/bin/open", "-g", str(app)], capture_output=True).returncode == 0,
@@ -207,18 +222,18 @@ def watch(app, input_method_bundle):
     finally:
         stream.terminate()
         stream.wait()
-    return capture, name, input_method
+    return capture, name, input_method, helpers
 
 
 def main():
-    if len(sys.argv) == 5 and sys.argv[1] == "judge":
-        capture, app, input_method = Path(sys.argv[2]), sys.argv[3], sys.argv[4]
+    if len(sys.argv) >= 5 and sys.argv[1] == "judge":
+        capture, app, input_method, helpers = Path(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5:]
     elif len(sys.argv) == 3:
-        capture, app, input_method = watch(Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve())
+        capture, app, input_method, helpers = watch(Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve())
     else:
         fail("usage: scripts/wire-check <app bundle> <input method bundle> | "
-             "scripts/wire-check judge <capture> <app process> <input method process>")
-    print(f"wire-check: {judge(capture, app, input_method)}; capture at {capture}")
+             "scripts/wire-check judge <capture> <app process> <input method process> [<helper process>...]")
+    print(f"wire-check: {judge(capture, app, input_method, helpers)}; capture at {capture}")
 
 
 main()
