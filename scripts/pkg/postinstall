@@ -1,24 +1,24 @@
 # The body of the package's postinstall. scripts/make-pkg writes the lines above this one,
-# naming what it acts on from the bundles it packed: input_method_id, input_method_name,
-# input_method_executable, app and app_executable. It runs as root once the payload stands, and everything it says
-# goes to /var/log/install.log.
+# naming what it acts on from the bundles it packed: input_method_name,
+# input_method_executable, app, app_executable and family. It runs as root once the payload
+# stands, and everything it says goes to /var/log/install.log.
 #
 # The package has just replaced the app and its input method on disk. What still runs is the
 # code that stood there before, so this retires it: the app first, since an app from before
 # the package copied its own input method into the home folder of whoever ran it, and would
-# copy it back; then those copies, which the text input system would go on launching; then
-# every input method process, which the text input system relaunches from the new bundle on
-# the next request for one (measured 84 ms after a kill). Last, the app is started again for
-# each person it was running for, and it registers and selects the input method that now
-# stands in /Library/Input Methods.
+# copy it back; then those copies, which the text input system would go on launching; then,
+# for each person logged in, the new bundles are registered and the input methods whose
+# bundles are gone are switched off; then every input method process, which the text input
+# system relaunches from the new bundle on the next request for one (measured 84 ms after a
+# kill). Last, the app is started again for each person it was running for.
 set -euo pipefail
 # Bytewise, the order make-pkg sorted the payload list in, for every sort and comm below.
 export LC_ALL=C
 
 say() { echo "postinstall: $*"; }
 lines() { if [ -n "$1" ]; then wc -l <<<"$1" | tr -d ' '; else echo 0; fi; }
-# Every identifier this product has used begins with the part of this one up to its name.
-family="${input_method_id%%low-talker.*}low-talker."
+# Runs a command as this uid, inside that person's login session.
+as_user() { launchctl asuser "$1" sudo -u "#$1" "${@:2}"; }
 
 # The processes running this executable name from any bundle, as "pid uid" lines. By path
 # and not by process name, which macOS cuts to 16 characters.
@@ -55,54 +55,6 @@ for bundle in "$app" "/Library/Input Methods/$input_method_name"; do
   codesign --verify --deep --strict "$bundle" || { say "$bundle does not verify; remove it and install again"; exit 1; }
 done
 
-# Registered with LaunchServices by name, as the installer does for a bundle component and
-# does not for the plain files make-pkg writes: nothing watches /Library/Input Methods, and
-# the input method is launched by its identifier. Registered in each login session, since each
-# person's LaunchServices database is their own. Measured on studious 2026-09-29: without
-# this the app had a record and the input method none.
-lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
-# Everyone with a login session now, each by the uid their loginwindow runs as.
-sessions=$(ps -axo uid=,comm= | awk '$2 ~ /\/loginwindow$/ { print $1 }' | sort -u)
-for uid in $sessions; do
-  if launchctl asuser "$uid" sudo -u "#$uid" "$lsregister" -f "$app" "/Library/Input Methods/$input_method_name"; then
-    say "registered both bundles with LaunchServices for uid $uid"
-  else
-    say "could not register the bundles with LaunchServices for uid $uid"; exit 1
-  fi
-done
-
-# A LowTalker input method switched on whose bundle is installed nowhere is a leftover of
-# an installation that is gone, and the text input system keeps its entry. Each person's
-# switched-on list is cut back to the LowTalker input methods /Library/Input Methods holds,
-# through their own preferences daemon (measured 2026-09-29: a write there takes effect at
-# once). Entries of other products are left as they are.
-installed=$(for bundle in "/Library/Input Methods"/*.app; do
-  /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$bundle/Contents/Info.plist" 2>/dev/null || true
-done)
-key=AppleEnabledThirdPartyInputSources
-for uid in $sessions; do
-  # A person who never switched an input method on has no such list, and nothing to cut.
-  launchctl asuser "$uid" sudo -u "#$uid" defaults read com.apple.inputsources "$key" >/dev/null 2>&1 || continue
-  # Exported to its output and written here, since the person cannot write a file root made.
-  prefs=$(mktemp)
-  launchctl asuser "$uid" sudo -u "#$uid" defaults export com.apple.inputsources - >"$prefs" ||
-    { say "could not read the switched-on input methods for uid $uid"; rm -f "$prefs"; exit 1; }
-  count=0
-  while /usr/libexec/PlistBuddy -c "Print :$key:$count" "$prefs" >/dev/null 2>&1; do count=$((count + 1)); done
-  dropped=0
-  # From the end, so a deletion does not move an entry not yet read.
-  for ((i = count - 1; i >= 0; i--)); do
-    id=$(/usr/libexec/PlistBuddy -c "Print :$key:$i:Bundle\ ID" "$prefs" 2>/dev/null) || continue
-    [ "${id#"$family"}" != "$id" ] || continue
-    grep -qxF "$id" <<<"$installed" && continue
-    /usr/libexec/PlistBuddy -c "Delete :$key:$i" "$prefs"
-    say "switched off $id for uid $uid: no bundle with that identifier is installed"
-    dropped=$((dropped + 1))
-  done
-  [ "$dropped" -eq 0 ] || launchctl asuser "$uid" sudo -u "#$uid" defaults import com.apple.inputsources - <"$prefs"
-  rm -f "$prefs"
-done
-
 apps=$(running "$app_executable")
 stop $(cut -d ' ' -f 1 <<<"$apps")
 say "stopped $(lines "$apps") running $app_executable"
@@ -125,6 +77,53 @@ for home in /Users/*; do
   done
 done
 
+# Each person with a login session now, by the uid their loginwindow runs as, gets the two
+# bundles registered with LaunchServices and their switched-on list cut back.
+#
+# Registered by name, as the installer does for a bundle component and does not for the plain
+# files make-pkg writes: nothing watches /Library/Input Methods, and the input method is
+# launched by its identifier. Measured on studious 2026-09-29: without this the app had a
+# record and the input method none, and the app's own TISRegisterInputSource makes none.
+#
+# A LowTalker input method switched on whose bundle is installed nowhere is a leftover of an
+# installation that is gone, and the text input system keeps its entry. The list is cut back
+# to the LowTalker input methods /Library/Input Methods holds, through the person's own
+# preferences daemon (measured 2026-09-29: a write there takes effect at once), and only that
+# key is written, so nothing else in the domain is put back to what it was when it was read.
+# Entries of other products are left as they are. After the old app and its home-folder
+# copies are gone, since that app would switch its copy on again.
+lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+key=AppleEnabledThirdPartyInputSources
+installed=$(for bundle in "/Library/Input Methods"/*.app; do
+  /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$bundle/Contents/Info.plist" 2>/dev/null || true
+done)
+for uid in $(ps -axo uid=,comm= | awk '$2 ~ /\/loginwindow$/ { print $1 }' | sort -u); do
+  as_user "$uid" "$lsregister" -f "$app" "/Library/Input Methods/$input_method_name" ||
+    { say "could not register the bundles with LaunchServices for uid $uid"; exit 1; }
+  say "registered both bundles with LaunchServices for uid $uid"
+
+  # A person who never switched an input method on has no such list, and nothing to cut.
+  as_user "$uid" defaults read com.apple.inputsources "$key" >/dev/null 2>&1 || continue
+  # Read into a file here, since the person cannot write a file root made.
+  list=$(mktemp)
+  as_user "$uid" defaults export com.apple.inputsources - | plutil -extract "$key" xml1 -o "$list" - ||
+    { say "could not read the switched-on input methods for uid $uid"; rm -f "$list"; exit 1; }
+  count=0
+  while /usr/libexec/PlistBuddy -c "Print :$count" "$list" >/dev/null 2>&1; do count=$((count + 1)); done
+  dropped=0
+  # From the end, so a deletion does not move an entry not yet read.
+  for ((i = count - 1; i >= 0; i--)); do
+    id=$(/usr/libexec/PlistBuddy -c "Print :$i:Bundle\ ID" "$list" 2>/dev/null) || continue
+    [ "${id#"$family"}" != "$id" ] || continue
+    grep -qxF "$id" <<<"$installed" && continue
+    /usr/libexec/PlistBuddy -c "Delete :$i" "$list"
+    say "switched off $id for uid $uid: no bundle with that identifier is installed"
+    dropped=$((dropped + 1))
+  done
+  [ "$dropped" -eq 0 ] || as_user "$uid" defaults write com.apple.inputsources "$key" "$(cat "$list")"
+  rm -f "$list"
+done
+
 methods=$(running "$input_method_executable")
 stop $(cut -d ' ' -f 1 <<<"$methods")
 say "stopped $(lines "$methods") running $input_method_executable"
@@ -133,7 +132,7 @@ for uid in $(cut -s -d ' ' -f 2 <<<"$apps" | sort -u); do
   # The files are installed whether or not this start takes, so a failed one is said and
   # the install stands: a person who logged out since the app was stopped has no session
   # to start it in.
-  if launchctl asuser "$uid" sudo -u "#$uid" /usr/bin/open "$app"; then
+  if as_user "$uid" /usr/bin/open "$app"; then
     say "started $app again for uid $uid"
   else
     say "could not start $app again for uid $uid; it starts when that person opens it"
