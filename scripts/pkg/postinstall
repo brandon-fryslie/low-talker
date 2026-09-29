@@ -17,6 +17,8 @@ export LC_ALL=C
 
 say() { echo "postinstall: $*"; }
 lines() { if [ -n "$1" ]; then wc -l <<<"$1" | tr -d ' '; else echo 0; fi; }
+# Every identifier this product has used begins with the part of this one up to its name.
+family="${input_method_id%%low-talker.*}low-talker."
 
 # The processes running this executable name from any bundle, as "pid uid" lines. By path
 # and not by process name, which macOS cuts to 16 characters.
@@ -59,7 +61,9 @@ done
 # person's LaunchServices database is their own. Measured on studious 2026-09-29: without
 # this the app had a record and the input method none.
 lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
-for uid in $(ps -axo uid=,comm= | awk '$2 ~ /\/loginwindow$/ { print $1 }' | sort -u); do
+# Everyone with a login session now, each by the uid their loginwindow runs as.
+sessions=$(ps -axo uid=,comm= | awk '$2 ~ /\/loginwindow$/ { print $1 }' | sort -u)
+for uid in $sessions; do
   if launchctl asuser "$uid" sudo -u "#$uid" "$lsregister" -f "$app" "/Library/Input Methods/$input_method_name"; then
     say "registered both bundles with LaunchServices for uid $uid"
   else
@@ -67,15 +71,45 @@ for uid in $(ps -axo uid=,comm= | awk '$2 ~ /\/loginwindow$/ { print $1 }' | sor
   fi
 done
 
+# A LowTalker input method switched on whose bundle is installed nowhere is a leftover of
+# an installation that is gone, and the text input system keeps its entry. Each person's
+# switched-on list is cut back to the LowTalker input methods /Library/Input Methods holds,
+# through their own preferences daemon (measured 2026-09-29: a write there takes effect at
+# once). Entries of other products are left as they are.
+installed=$(for bundle in "/Library/Input Methods"/*.app; do
+  /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$bundle/Contents/Info.plist" 2>/dev/null || true
+done)
+key=AppleEnabledThirdPartyInputSources
+for uid in $sessions; do
+  # A person who never switched an input method on has no such list, and nothing to cut.
+  launchctl asuser "$uid" sudo -u "#$uid" defaults read com.apple.inputsources "$key" >/dev/null 2>&1 || continue
+  # Exported to its output and written here, since the person cannot write a file root made.
+  prefs=$(mktemp)
+  launchctl asuser "$uid" sudo -u "#$uid" defaults export com.apple.inputsources - >"$prefs" ||
+    { say "could not read the switched-on input methods for uid $uid"; rm -f "$prefs"; exit 1; }
+  count=0
+  while /usr/libexec/PlistBuddy -c "Print :$key:$count" "$prefs" >/dev/null 2>&1; do count=$((count + 1)); done
+  dropped=0
+  # From the end, so a deletion does not move an entry not yet read.
+  for ((i = count - 1; i >= 0; i--)); do
+    id=$(/usr/libexec/PlistBuddy -c "Print :$key:$i:Bundle\ ID" "$prefs" 2>/dev/null) || continue
+    [ "${id#"$family"}" != "$id" ] || continue
+    grep -qxF "$id" <<<"$installed" && continue
+    /usr/libexec/PlistBuddy -c "Delete :$key:$i" "$prefs"
+    say "switched off $id for uid $uid: no bundle with that identifier is installed"
+    dropped=$((dropped + 1))
+  done
+  [ "$dropped" -eq 0 ] || launchctl asuser "$uid" sudo -u "#$uid" defaults import com.apple.inputsources - <"$prefs"
+  rm -f "$prefs"
+done
+
 apps=$(running "$app_executable")
 stop $(cut -d ' ' -f 1 <<<"$apps")
 say "stopped $(lines "$apps") running $app_executable"
 
 # No build installs into a home folder any more, so every LowTalker input method there is one
-# an older app put there, whichever installation or identifier it carried: this product's
-# identifiers all begin with the part of this one up to the product name. Older builds linked
+# an older app put there, whichever installation or identifier it carried. Older builds linked
 # rather than copied, so a link whose bundle is gone is one of them too, known by its name.
-family="${input_method_id%%low-talker.*}low-talker."
 for home in /Users/*; do
   for bundle in "$home/Library/Input Methods"/*.app; do
     if [ -L "$bundle" ] && [ ! -e "$bundle" ]; then
