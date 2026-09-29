@@ -51,7 +51,8 @@ public extension Config {
         try self.init(
             model: file.model ?? Config.default(for: flavor).model,
             microphone: file.microphone?.atRest ?? Config.default(for: flavor).microphone,
-            modes: file.modes?.map { $0.mode(for: flavor) } ?? Config.default(for: flavor).modes
+            modes: file.modes?.map { $0.mode(for: flavor) } ?? Config.default(for: flavor).modes,
+            serve: try file.serve.map { entry throws(ConfigError) in try entry.binding } ?? Config.default(for: flavor).serve
         )
     }
 
@@ -147,6 +148,30 @@ private struct ConfigFile: Decodable {
     let model: ModelName?
     let microphone: MicrophoneEntry?
     let modes: [ModeEntry]?
+    let serve: ServeEntry?
+}
+
+/// `[serve] interface = "192.168.1.20"`, `token = "..."`: both, or neither.
+private struct ServeEntry: Decodable {
+    let interface: String?
+    let token: String?
+
+    /// [LAW:parse-dont-validate] The pair becomes a `ServeBinding` here, so an interface
+    /// without its token is refused while the file is read and exists nowhere after it.
+    var binding: ServeBinding {
+        get throws(ConfigError) {
+            do throws(ServeBindingError) {
+                switch (interface, token) {
+                case (nil, nil): return .loopback
+                case (nil, _?): throw .tokenWithoutInterface
+                case (let interface?, nil): _ = try InterfaceAddress(interface); throw .interfaceWithoutToken(interface)
+                case (let interface?, let token?): return .interface(try InterfaceAddress(interface), token: try BearerToken(token))
+                }
+            } catch {
+                throw .serve(error)
+            }
+        }
+    }
 }
 
 /// `[microphone] at_rest = "shut"`. A table rather than a bare key, so the one setting

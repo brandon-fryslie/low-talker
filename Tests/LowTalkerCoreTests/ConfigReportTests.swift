@@ -65,8 +65,8 @@ import Testing
     // MARK: - The report
 
     /// The whole of what the command prints for a file that is understood and has no
-    /// gaps: where it came from, the model, what the microphone does between presses, and
-    /// every mode with its chord, its vocabulary and its routes.
+    /// gaps: where it came from, the model, what the microphone does between presses, where
+    /// the server listens, and every mode with its chord, its vocabulary and its routes.
     @Test func theReportReadsTheFileBack() throws {
         let url = URL(filePath: "/tmp/low-talker-example.toml")
         let config = try Self.config("""
@@ -80,6 +80,7 @@ import Testing
 
             model: \(ModelName.default)
             microphone: \(MicrophoneAtRest.shut)
+            serve: loopback
 
             mode "dictation"
               chord: rightOption
@@ -143,4 +144,17 @@ import Testing
         vocabulary = ["Kubernetes"]
         routes = [{ when = "always", then = { insert = "focus" } }]
         """
+
+    /// A bound interface is read back with its address and the fact a token guards it,
+    /// never the token: the report is printed, and so is anything pasted from it.
+    @Test func theReportNamesTheInterfaceAndNeverTheToken() throws {
+        let config = try Self.config("""
+            [serve]
+            interface = "192.168.1.20"
+            token = "sk-report-secret"
+            """)
+        let report = ConfigReport(.file(config, at: URL(filePath: "/tmp/x.toml"), flavor: Self.flavor)).description
+        #expect(report.split(separator: "\n").contains("serve: 192.168.1.20, bearer token required"))
+        #expect(!report.contains("sk-report-secret"))
+    }
 }
