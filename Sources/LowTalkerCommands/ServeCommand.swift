@@ -31,8 +31,8 @@ struct ServeCommand: AsyncParsableCommand {
         )
         let transcriber = try await WhisperKitTranscriber.load(options.model, in: options.store(), from: source.source, phase: PhaseReporter().report)
         resident.withLock { $0 = .ready(transcriber) }
-        // The URL is the readiness signal a client waits for; a Realtime client given it
-        // early would meet an error event, which Pipecat takes as fatal.
+        // The URL is the readiness signal a client waits for; one given it early is refused
+        // with 503 until the model is resident.
         line(server.baseURL)
         try await server.finished()
     }
