@@ -5,84 +5,12 @@ import Network
 import Synchronization
 import Testing
 
-/// An engine that hears the conformance fixture's words in whatever it is given, and keeps
-/// what it was given.
-private final class Stub: Transcriber {
-    let heard = Mutex<[(seconds: TimeInterval, vocabulary: Vocabulary)]>([])
-    let answer: Result<Transcript, any Error>
-
-    init(_ answer: Result<Transcript, any Error> = .success(Transcript(typed: " Hello world, this is LowTalker."))) {
-        self.answer = answer
-    }
-
-    func transcribe(
-        _ audio: some AsyncSequence<AudioClip, Never> & Sendable,
-        expecting vocabulary: Vocabulary,
-        partial: @escaping @Sendable (Partial) -> Void
-    ) async throws -> Transcript {
-        let seconds = await audio.reduce(0) { $0 + $1.duration }
-        heard.withLock { $0.append((seconds, vocabulary)) }
-        return try answer.get()
-    }
-}
-
-private struct StubFailure: Error, CustomStringConvertible {
-    var description: String { "the stub engine was told to fail" }
-}
-
-/// A server on a loopback port the system chose, and every event it records.
-private struct Running {
-    let server: TranscriptionServer
-    let events: AsyncStream<ServedRequest>
-
-    static func start(_ engine: ServedEngine) async throws -> Running {
-        let (events, sink) = AsyncStream<ServedRequest>.makeStream()
-        let server = try await TranscriptionServer.listen(on: .ipv4(.loopback), port: .any, engine: { engine }, record: { sink.yield($0) })
-        return Running(server: server, events: events)
-    }
-
-    var base: String { "http://127.0.0.1:\(server.port.rawValue)/v1" }
-
-    func post(_ fields: [(name: String, filename: String?, value: Data)], path: String = "audio/transcriptions") async throws -> (HTTPURLResponse, Data) {
-        let boundary = UUID().uuidString
-        var body = Data()
-        for field in fields {
-            body += Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(field.name)\"".utf8)
-            body += Data((field.filename.map { "; filename=\"\($0)\"" } ?? "").utf8) + Data("\r\n\r\n".utf8)
-            body += field.value + Data("\r\n".utf8)
-        }
-        body += Data("--\(boundary)--\r\n".utf8)
-        return try await post(body, boundary: boundary, path: path)
-    }
-
-    func post(_ body: Data, boundary: String = "b", path: String = "audio/transcriptions") async throws -> (HTTPURLResponse, Data) {
-        var request = URLRequest(url: URL(string: "\(base)/\(path)")!)
-        request.httpMethod = "POST"
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "content-type")
-        let (data, response) = try await URLSession.shared.upload(for: request, from: body)
-        return (response as! HTTPURLResponse, data)
-    }
-
-    func nextEvent() async throws -> ServedRequest {
-        var iterator = events.makeAsyncIterator()
-        return try #require(await iterator.next())
-    }
-}
-
-private func fixture(_ name: String) throws -> Data {
-    try Data(contentsOf: #require(Bundle.module.url(forResource: name, withExtension: nil, subdirectory: "Fixtures")))
-}
-
-private func error(_ body: Data) throws -> [String: Any] {
-    let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
-    return try #require(object["error"] as? [String: Any])
-}
-
 @Suite struct TranscriptionServerTests {
     /// The contract, judged by the suite that judges every server (low-serve-axq.50m): its
-    /// REST checks, sent as Pipecat sends them, all pass over an engine that hears the
-    /// fixture. The Realtime checks are another endpoint's.
-    @Test func passesTheConformanceSuitesRESTChecks() async throws {
+    /// REST and Realtime checks, sent as Pipecat sends them, all pass over an engine that
+    /// hears the fixture and confirms words while the audio streams. The token checks skip,
+    /// since this server requires none.
+    @Test func passesTheConformanceSuite() async throws {
         let running = try await Running.start(.ready(Stub()))
         defer { running.server.stop() }
         let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -103,11 +31,11 @@ private func error(_ body: Data) throws -> [String: Any] {
         }
         let summary = try #require(printed.split(separator: "\n").last.map { Data($0.utf8) })
         let results = try #require((JSONSerialization.jsonObject(with: summary) as? [String: Any])?["results"] as? [[String: Any]])
-        let rest = results.filter { ($0["check"] as? String)?.hasPrefix("rest ") == true }
-        #expect(rest.count == 7, "\(printed)")
-        for result in rest {
+        #expect(results.count == 10, "\(printed)")
+        for result in results {
             #expect(["pass", "skip"].contains(result["outcome"] as? String), "\(result)")
         }
+        #expect(results.filter { $0["outcome"] as? String == "skip" }.count == 3, "\(printed)")
     }
 
     /// An mp3 is decoded as a wav is, and the engine hears all of it.

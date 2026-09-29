@@ -8,6 +8,8 @@ struct RequestHead: Sendable {
     let method: String
     /// The target's path, its query cut off.
     let path: String
+    /// The target's query, by name, percent-decoded.
+    let query: [String: String]
     /// Header names lower-cased, as HTTP compares them.
     let headers: [String: String]
 
@@ -18,8 +20,14 @@ struct RequestHead: Sendable {
         guard requestLine.count == 3, requestLine[2].hasPrefix("HTTP/1.") else {
             throw .malformed("\"\(lines[0])\" is not an HTTP/1.1 request line")
         }
-        let target = requestLine[1]
-        return RequestHead(method: String(requestLine[0]), path: String(target.prefix { $0 != "?" }), headers: try fields(lines.dropFirst()))
+        let target = requestLine[1].split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        let query = URLComponents(string: "?" + (target.dropFirst().first ?? ""))?.queryItems ?? []
+        return RequestHead(
+            method: String(requestLine[0]),
+            path: String(target[0]),
+            query: Dictionary(query.map { ($0.name, $0.value ?? "") }) { first, _ in first },
+            headers: try fields(lines.dropFirst())
+        )
     }
 
     /// Header lines as a map from lower-cased name to value: a request's, or a

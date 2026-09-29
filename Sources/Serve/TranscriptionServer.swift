@@ -12,7 +12,8 @@ public enum ServedEngine: Sendable {
     case notResident(String)
 }
 
-/// OpenAI's `POST /v1/audio/transcriptions` over any `Transcriber`, on one TCP listener
+/// OpenAI's `POST /v1/audio/transcriptions` and its Realtime transcription socket,
+/// `GET /v1/realtime?intent=transcription`, over any `Transcriber`, on one TCP listener
 /// (epic low-serve-axq). It knows nothing of who hosts it or who calls it.
 ///
 /// [LAW:no-ambient-temporal-coupling] A server in hand is listening: `listen` returns only
@@ -102,17 +103,27 @@ private struct Answering: Sendable {
         let started = clock.now
         var event = ServedRequest()
         let deadline = cutOff(connection)
+        var reader = Reader(connection: connection, cancelOnRead: deadline)
         do {
-            let response = try await respond(connection, readDeadline: deadline, &event)
-            event.status = response.status.rawValue
-            try await connection.sendFinal(response.wire)
-            // Closing a socket that still holds a request's unread bytes resets it, and a
-            // client still sending its body then loses the answer as well. So the answer
-            // closes the server's side alone, and what the client sends until it closes
-            // its own is read and dropped.
-            let lingering = cutOff(connection)
-            event.unread = await connection.drain()
-            lingering.cancel()
+            switch try await respond(connection, &reader, &event) {
+            case .http(let response):
+                event.status = response.status.rawValue
+                try await connection.sendFinal(response.wire)
+                // Closing a socket that still holds a request's unread bytes resets it, and a
+                // client still sending its body then loses the answer as well. So the answer
+                // closes the server's side alone, and what the client sends until it closes
+                // its own is read and dropped.
+                let lingering = cutOff(connection)
+                event.unread = await connection.drain()
+                lingering.cancel()
+            case .realtime(let handshake, let socket):
+                // A socket is open as long as the client keeps it: the read deadline is the
+                // request's, and the request is whole.
+                deadline.cancel()
+                try await connection.send(handshake)
+                event.status = 101
+                (event.realtime, event.lost) = await socket.run(connection, &reader)
+            }
         } catch {
             event.lost = "\(error)"
         }
@@ -130,57 +141,84 @@ private struct Answering: Sendable {
         return deadline
     }
 
-    /// The answer to the request `connection` carries. Every refusal is an answer in
-    /// OpenAI's error shape; only a connection that fails before it can be answered throws.
-    private func respond(_ connection: NWConnection, readDeadline: DispatchWorkItem, _ event: inout ServedRequest) async throws -> HTTPResponse {
-        var reader = Reader(connection: connection, cancelOnRead: readDeadline)
+    /// What a request is answered with: a response, or the websocket it upgrades to.
+    private enum Answer {
+        case http(HTTPResponse)
+        case realtime(handshake: Data, RealtimeSocket)
+    }
+
+    /// The answer to the request `reader` reads. Every refusal is an answer in OpenAI's
+    /// error shape; only a connection that fails before it can be answered throws.
+    private func respond(_ connection: NWConnection, _ reader: inout Reader, _ event: inout ServedRequest) async throws -> Answer {
         do {
             let head = try await reader.head()
             event.method = head.method
             event.path = head.path
-            guard head.method == "POST", head.path == "/v1/audio/transcriptions" else {
+            switch head.path {
+            case "/v1/audio/transcriptions" where head.method == "POST":
+                return .http(try await transcription(head, connection, &reader, &event))
+            case "/v1/realtime":
+                return try realtime(head)
+            default:
                 throw APIError.notFound(method: head.method, path: head.path)
             }
-            let length = try head.bodyLength(limit: TranscriptionServer.bodyLimit)
-            // A client that asked to hear the request is wanted before sending its body
-            // (curl, for any large upload) waits for this, or for a timeout, before it sends.
-            if head.headers["expect"]?.lowercased() == "100-continue" {
-                try await connection.send(Data("HTTP/1.1 100 Continue\r\n\r\n".utf8))
-            }
-            let body = try await reader.body(count: length)
-            event.bytes = body.count
-            let request = try TranscriptionRequest.parse(FormField.parse(body, contentType: head.headers["content-type"]))
-            event.model = request.model
-            event.language = request.language?.rawValue
-            event.format = request.format.rawValue
-            event.vocabularyTerms = request.vocabulary.terms.count
-            // Asked before the upload is read, so a server still loading refuses at once.
-            let transcriber: any Transcriber
-            switch engine() {
-            case .ready(let resident): transcriber = resident
-            case .notResident(let reason): throw APIError.notResident(reason)
-            }
-            let clip = try request.upload.clip()
-            event.audioSeconds = clip.duration
-            let transcript: Transcript
-            do {
-                transcript = try await transcriber.transcribe(clip, expecting: request.vocabulary)
-            } catch let refusal as VocabularyError {
-                throw APIError.promptRefused("\(refusal)")
-            } catch {
-                throw APIError.engineFailed("\(error)")
-            }
-            event.words = transcript.words.count
-            return request.format.response(transcript, heard: clip)
         } catch let refusal as APIError {
             event.error = refusal.code
-            return refusal.response
+            return .http(refusal.response)
         }
+    }
+
+    /// The upgrade to a Realtime transcription socket over the engine resident now, which
+    /// the socket keeps. Asked before upgrading, so a server still loading refuses with a
+    /// status rather than opening a socket it cannot serve.
+    private func realtime(_ head: RequestHead) throws(APIError) -> Answer {
+        let handshake = try WebSocket.handshake(head)
+        guard head.query["intent"] == "transcription" else {
+            throw .unsupportedValue(field: "intent", value: head.query["intent"] ?? "(none)", accepted: "transcription")
+        }
+        switch engine() {
+        case .ready(let transcriber): return .realtime(handshake: handshake, RealtimeSocket(transcriber: transcriber))
+        case .notResident(let reason): throw .notResident(reason)
+        }
+    }
+
+    private func transcription(_ head: RequestHead, _ connection: NWConnection, _ reader: inout Reader, _ event: inout ServedRequest) async throws -> HTTPResponse {
+        let length = try head.bodyLength(limit: TranscriptionServer.bodyLimit)
+        // Asked before the body is asked for or read, so a server still loading refuses at once.
+        let transcriber: any Transcriber
+        switch engine() {
+        case .ready(let resident): transcriber = resident
+        case .notResident(let reason): throw APIError.notResident(reason)
+        }
+        // A client that asked to hear the request is wanted before sending its body
+        // (curl, for any large upload) waits for this, or for a timeout, before it sends.
+        if head.headers["expect"]?.lowercased() == "100-continue" {
+            try await connection.send(Data("HTTP/1.1 100 Continue\r\n\r\n".utf8))
+        }
+        let body = try await reader.body(count: length)
+        event.bytes = body.count
+        let request = try TranscriptionRequest.parse(FormField.parse(body, contentType: head.headers["content-type"]))
+        event.model = request.model
+        event.language = request.language?.rawValue
+        event.format = request.format.rawValue
+        event.vocabularyTerms = request.vocabulary.terms.count
+        let clip = try request.upload.clip()
+        event.audioSeconds = clip.duration
+        let transcript: Transcript
+        do {
+            transcript = try await transcriber.transcribe(clip, expecting: request.vocabulary)
+        } catch let refusal as VocabularyError {
+            throw APIError.promptRefused("\(refusal)")
+        } catch {
+            throw APIError.engineFailed("\(error)")
+        }
+        event.words = transcript.words.count
+        return request.format.response(transcript, heard: clip)
     }
 }
 
 /// A connection's bytes, taken as the request needs them.
-private struct Reader {
+struct Reader {
     let connection: NWConnection
     /// Disarmed once the whole request is in: the deadline covers reading, not answering.
     let cancelOnRead: DispatchWorkItem
@@ -190,28 +228,32 @@ private struct Reader {
     private static let endOfHead = Data("\r\n\r\n".utf8)
 
     mutating func head() async throws -> RequestHead {
-        while true {
-            if let end = buffer.firstRange(of: Self.endOfHead) {
-                let head = try RequestHead.parse(Data(buffer[..<end.lowerBound]))
-                buffer = Data(buffer[end.upperBound...])
-                return head
+        try await next { buffer in
+            guard let end = buffer.firstRange(of: Self.endOfHead) else {
+                guard buffer.count < Self.headLimit else { throw APIError.malformed("the request head is over \(Self.headLimit) bytes") }
+                return nil
             }
-            guard buffer.count < Self.headLimit else { throw APIError.malformed("the request head is over \(Self.headLimit) bytes") }
-            buffer += try await more()
+            return (try RequestHead.parse(Data(buffer[..<end.lowerBound])), end.upperBound - buffer.startIndex)
         }
     }
 
     mutating func body(count: Int) async throws -> Data {
-        while buffer.count < count {
-            buffer += try await more()
-        }
+        let body = try await next { buffer in buffer.count < count ? nil : (Data(buffer.prefix(count)), count) }
         cancelOnRead.cancel()
-        return Data(buffer.prefix(count))
+        return body
     }
 
-    private func more() async throws -> Data {
-        guard let chunk = try await connection.receiveChunk() else { throw ConnectionClosed() }
-        return chunk
+    /// The first thing `parse` finds in what the client has sent, read for as long as it
+    /// finds nothing yet; what it took is gone from the buffer, and what follows it stays.
+    mutating func next<T>(_ parse: (Data) throws -> (T, consumed: Int)?) async throws -> T {
+        while true {
+            if let (value, consumed) = try parse(buffer) {
+                buffer = Data(buffer.dropFirst(consumed))
+                return value
+            }
+            guard let chunk = try await connection.receiveChunk() else { throw ConnectionClosed() }
+            buffer += chunk
+        }
     }
 }
 
@@ -250,7 +292,7 @@ extension NWConnection {
     }
 
     /// `data`, whole: a message sent incomplete is held back until it is completed.
-    fileprivate func send(_ data: Data, in context: ContentContext = .defaultMessage) async throws {
+    func send(_ data: Data, in context: ContentContext = .defaultMessage) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
             send(content: data, contentContext: context, isComplete: true, completion: .contentProcessed { error in
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }
@@ -280,6 +322,8 @@ public struct ServedRequest: Sendable, Codable, Equatable {
     public internal(set) var vocabularyTerms: Int?
     public internal(set) var audioSeconds: Double?
     public internal(set) var words: Int?
+    /// What happened on a Realtime socket, for a request that upgraded to one.
+    public internal(set) var realtime: RealtimeActivity?
     public internal(set) var durationMs = 0
 
     static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "lowtalker", category: "serve")
