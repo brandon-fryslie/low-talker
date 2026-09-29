@@ -183,24 +183,6 @@ targetTemplates:
           set -euo pipefail
           "${SRCROOT}/scripts/notices" "${SRCROOT}/sbom/lowtalker.cdx.json" \
             "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/${NOTICES_RESOURCE}"
-      # The keyboard helper's old launchd plists, and only their label and program: builds
-      # before v0.1.0-alpha.5 registered the helper through SMAppService, an upgraded
-      # installation still holds those jobs, and SMAppService finds a job to unregister only
-      # by a plist in Contents/Library/LaunchDaemons. The app unregisters them at every
-      # launch; nothing registers them. Written here from the labels rather than checked in,
-      # so the one copy of the names outside `Flavor` is the attribute below.
-      - name: The retired keyboard helper's plists, to unregister it by
-        basedOnDependencyAnalysis: false
-        script: |
-          set -euo pipefail
-          daemons="${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Library/LaunchDaemons"
-          mkdir -p "${daemons}"
-          for label in ${RETIRED_HELPER_LABELS}; do
-            plist="${daemons}/${label}.plist"
-            plutil -create xml1 "${plist}"
-            plutil -insert Label -string "${label}" "${plist}"
-            plutil -insert BundleProgram -string Contents/MacOS/lowtalker-keyboardd "${plist}"
-          done
       # [LAW:no-silent-failure] A bundle that ships without the version project.yml sets
       # fails the build rather than shipping quietly. Checked here, on the built plist,
       # because no test sees a shipped bundle: `make test` never builds the app. The input
@@ -254,8 +236,6 @@ targetTemplates:
         # The notices' file in the bundle's resources, as Carrier.noticesResource names it;
         # CarriedNoticesTests holds the two equal. [LAW:one-source-of-truth]
         NOTICES_RESOURCE: Acknowledgements.txt
-        # Read by the step that writes the retired keyboard helper's plists, split on spaces.
-        RETIRED_HELPER_LABELS: ${retiredHelperLabels}
 
   # [LAW:one-type-per-behavior] One input method, built once per installation. What
   # separates the two copies is what separates the apps - the names macOS files them under
@@ -384,7 +364,6 @@ targets:
       inputMethodPortName: ai.promptctl.low-talker.inputmethod.dictation.insert
       inputMethodTarget: LowTalkerInputMethod
       appIconName: AppIcon
-      retiredHelperLabels: com.lowtalker.keyboardd ai.promptctl.low-talker.keyboardd
 
   # The copy built from the working tree, installed and running beside the one above.
   LowTalkerDev:
@@ -396,7 +375,6 @@ targets:
       inputMethodPortName: ai.promptctl.low-talker.dev.inputmethod.dictation.insert
       inputMethodTarget: LowTalkerDevInputMethod
       appIconName: AppIconDev
-      retiredHelperLabels: com.lowtalker.keyboardd.dev ai.promptctl.low-talker.keyboardd.dev
 
   # The input method each app above is packaged with, one bundle per installation.
   LowTalkerInputMethod:

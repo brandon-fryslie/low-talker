@@ -15,12 +15,9 @@
 /// - the bundle identifier, which LaunchServices treats as the app's identity and TCC
 ///   keys the Microphone grant to;
 /// - the ports the app and its input method answer on, which exactly one process may own;
-/// - the config file, so a setting changed for one build does not move the other;
 /// - the input method's bundle identifier, input source identifier and connection name,
 ///   which the text input system keys a text input source by: two copies sharing any one
-///   of them is the second failing to register beside the first;
-/// - the labels the keyboard helper was registered under before it was removed, which
-///   launchd keys a job by, so each copy retires its own.
+///   of them is the second failing to register beside the first.
 ///
 /// Nothing else differs by flavor. Both bundles are built by one recipe and carry their
 /// model the same way, so the development copy runs the path the release ships.
@@ -140,22 +137,6 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
         switch self {
         case .release: "LowTalker"
         case .development: "LowTalker Dev"
-        }
-    }
-
-    /// Every launchd label the keyboard helper was registered under, through `SMAppService`,
-    /// by the builds before v0.1.0-alpha.5, which removed the helper: v0.1.0-alpha.1 used
-    /// the com.lowtalker name, and alpha.2 renamed it without unregistering the old job.
-    ///
-    /// Still names this installation owns, because an upgraded installation still holds
-    /// those registrations: launchd keeps the job loaded and Login Items keeps it listed,
-    /// with nothing left in the bundle to run. Only the app it belongs to can unregister
-    /// it, and `SMAppService` finds the job only by a plist the bundle carries under its
-    /// label, so the bundle carries one per label for that and nothing else.
-    public var retiredHelperLabels: [String] {
-        switch self {
-        case .release: ["com.lowtalker.keyboardd", "ai.promptctl.low-talker.keyboardd"]
-        case .development: ["com.lowtalker.keyboardd.dev", "ai.promptctl.low-talker.keyboardd.dev"]
         }
     }
 
