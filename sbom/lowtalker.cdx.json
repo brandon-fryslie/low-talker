@@ -56,7 +56,7 @@
       "bom-ref": "pkg:swift/github.com/LebJe/TOMLKit@0.6.0",
       "components": [
         {
-          "bom-ref": "pkg:swift/github.com/LebJe/TOMLKit@0.6.0#tomlplusplus",
+          "bom-ref": "pkg:github/marzer/tomlplusplus@3.4.0",
           "externalReferences": [
             {
               "type": "vcs",
@@ -85,6 +85,7 @@
               "value": "6b5172ad4dd6519aec67b919181fa7a38a2234131e5b2afa232dfe444819783e"
             }
           ],
+          "purl": "pkg:github/marzer/tomlplusplus@3.4.0",
           "type": "library",
           "version": "3.4.0"
         }
@@ -159,7 +160,7 @@
       "bom-ref": "pkg:swift/github.com/argmaxinc/argmax-oss-swift@1.1.0",
       "components": [
         {
-          "bom-ref": "pkg:swift/github.com/argmaxinc/argmax-oss-swift@1.1.0#swift-transformers",
+          "bom-ref": "pkg:github/huggingface/swift-transformers@1.1.6",
           "externalReferences": [
             {
               "type": "vcs",
@@ -192,6 +193,7 @@
               "value": "8af554e910833382a04c73b2d9eaef669e031335c867de14b5cf631bd2239913"
             }
           ],
+          "purl": "pkg:github/huggingface/swift-transformers@1.1.6",
           "type": "library",
           "version": "1.1.6"
         }

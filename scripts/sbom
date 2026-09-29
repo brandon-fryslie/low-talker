@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Writes the SBOM of what a release ships, read off the resolved build.
 
-    scripts/sbom <output.cdx.json> [model store]
+    scripts/sbom <cli> <output.cdx.json> [model store]
 
 CycloneDX 1.6, one component per thing that reaches a user's Mac: every package
 Package.resolved pins, the third-party code vendored inside those packages, and the model
@@ -21,8 +21,8 @@ store holding the model is named, the rules are held to the folders its install
 manifests record, and a rule naming a repo the install did not fetch from stops the run.
 The store changes nothing in the output; it only refuses a wrong rule.
 
-Run through `make sbom`, which builds the CLI first and names this Mac's store when it
-has one.
+Run through `make sbom`, which builds the CLI first, names it, and names this Mac's store
+when it has one.
 """
 import hashlib
 import json
@@ -34,7 +34,6 @@ from pathlib import Path
 repository = Path(__file__).resolve().parent.parent
 rules_path = repository / "sbom" / "rules.json"
 checkouts = repository / ".build" / "checkouts"
-cli = repository / ".build" / "debug" / "lowtalker"
 
 
 def fail(message):
@@ -93,7 +92,12 @@ def vendored_version(component, checkout, rule):
     if not found:
         fail(f"{component}: {relative} does not match {pattern!r}, so its version cannot be read")
     if "as" in rule:
-        return re.sub(r"\$(\d+)", lambda m: found.group(int(m.group(1))), rule["as"]), None
+        def group(reference):
+            number = int(reference.group(1))
+            if number > found.re.groups or found.group(number) is None:
+                fail(f"{component}: `as` {rule['as']!r} names ${number}, which {pattern!r} did not capture in {relative}")
+            return found.group(number)
+        return re.sub(r"\$(\d+)", group, rule["as"]), None
     return found.group(1), found.group(2) if found.re.groups >= 2 else None
 
 
@@ -120,41 +124,47 @@ def package_component(pin, rule):
         "externalReferences": [{"type": "vcs", "url": location}],
         "properties": [{"name": "low-talker:revision", "value": state["revision"]}] + properties,
     }
-    vendored = [vendored_component(identity, checkout, ref, v) for v in rule.get("vendored", [])]
+    vendored = [vendored_component(identity, checkout, v) for v in rule.get("vendored", [])]
     if vendored:
         component["components"] = sorted(vendored, key=lambda c: c["bom-ref"])
     return component
 
 
-def vendored_component(identity, checkout, parent_ref, rule):
+def vendored_component(identity, checkout, rule):
     vendored = need(rule, "name", f"a component {identity} vendors")
     name = f"{identity} vendors {vendored}"
     relative = need(rule, "path", name)
     if not (checkout / relative).exists():
         fail(f"{name}: nothing at {relative} in the checkout")
     version, revision = vendored_version(name, checkout, need(rule, "version", name))
+    origin = need(rule, "origin", name)
+    found = re.fullmatch(r"https://github\.com/([^/]+/[^/]+?)(?:\.git)?", origin)
+    if not found:
+        fail(f"{name}: origin {origin!r} is not a https://github.com/<owner>/<repo> URL, so it has no purl")
+    ref = f"pkg:github/{found.group(1)}@{version}"
     licenses, properties = license_entry(name, checkout, rule)
     properties = [{"name": "low-talker:vendored-at", "value": relative}] + properties
     if revision:
         properties.insert(0, {"name": "low-talker:revision", "value": revision})
     return {
         "type": "library",
-        "bom-ref": f"{parent_ref}#{vendored}",
+        "bom-ref": ref,
         "name": vendored,
         "version": version,
+        "purl": ref,
         "licenses": licenses,
-        "externalReferences": [{"type": "vcs", "url": need(rule, "origin", name)}],
+        "externalReferences": [{"type": "vcs", "url": origin}],
         "properties": properties,
     }
 
 
-def model_components(rules, store):
+def model_components(cli, rules, store):
     """The model the CLI names as the default, which is the one the release carries and
     a launch loads where nothing names another. WhisperKit fetches its weights from the
     repo it names and picks the tokenizer's repo off the weights' config, so both repos
     are the rule's to state and the store's, when there is one, to confirm."""
     if not cli.is_file():
-        fail(f"no CLI at {cli.relative_to(repository)}; run `make cli`")
+        fail(f"no CLI at {cli}; run `make cli`")
     model = run(str(cli), ["model", "default"], "the default model").strip()
     if not model:
         fail("`lowtalker model default` printed nothing")
@@ -199,7 +209,10 @@ def confirm_against_store(store, model, part, repo):
     manifest = store / "installed" / (f"tokenizer/{model}.json" if part == "tokenizer" else f"{model}.json")
     if not manifest.is_file():
         return False
-    folder = json.loads(manifest.read_text()).get("folder", "")
+    try:
+        folder = json.loads(manifest.read_text()).get("folder", "")
+    except (OSError, ValueError) as error:
+        fail(f"{model} {part}: manifest {manifest} cannot be read ({error}); reinstall the model into {store}")
     parts = folder.split("/")
     if len(parts) < 3 or parts[0] != "models":
         fail(f"{model} {part}: manifest {manifest} records folder {folder!r}, not a models/<owner>/<repo> path")
@@ -220,10 +233,11 @@ def application():
 
 
 def main():
-    if len(sys.argv) not in (2, 3):
-        fail("usage: scripts/sbom <output.cdx.json> [model store]")
-    output = Path(sys.argv[1])
-    store = Path(sys.argv[2]) if len(sys.argv) == 3 else None
+    if len(sys.argv) not in (3, 4):
+        fail("usage: scripts/sbom <cli> <output.cdx.json> [model store]")
+    cli = Path(sys.argv[1]).resolve()
+    output = Path(sys.argv[2])
+    store = Path(sys.argv[3]) if len(sys.argv) == 4 else None
     if store is not None and not store.is_dir():
         fail(f"{store} is not a directory")
     rules = json.loads(rules_path.read_text())
@@ -238,7 +252,7 @@ def main():
         fail(f"sbom/rules.json has an entry for {', '.join(sorted(ruled - pinned))}, which Package.resolved no longer pins")
 
     components = [package_component(pin, rules["packages"][pin["identity"]]) for pin in pins]
-    models, confirmed = model_components(rules["models"], store)
+    models, confirmed = model_components(cli, rules["models"], store)
     components += models
     components.sort(key=lambda c: c["bom-ref"])
     app = application()
