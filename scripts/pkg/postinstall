@@ -19,6 +19,8 @@ say() { echo "postinstall: $*"; }
 lines() { if [ -n "$1" ]; then wc -l <<<"$1" | tr -d ' '; else echo 0; fi; }
 # Runs a command as this uid, inside that person's login session.
 as_user() { launchctl asuser "$1" sudo -u "#$1" "${@:2}"; }
+# The bundle identifier of the bundle at this path; fails for a bundle with none readable.
+identifier() { /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$1/Contents/Info.plist" 2>/dev/null; }
 
 # The processes running this executable name from any bundle, as "pid uid" lines. By path
 # and not by process name, which macOS cuts to 16 characters.
@@ -43,9 +45,12 @@ stop() {
 # one does not is still there. Each bundle is cut back to the paths the package wrote, listed
 # in the payload file beside this script, and then held to its seal, which every grant and
 # the text input system check: one that still does not verify is refused here, where the
-# installer shows it, rather than at the next launch.
+# installer shows it, rather than at the next launch. Each is given to root as the payload
+# lists it, since the installer keeps the owner of a directory already on disk, and a bundle
+# a person once wrote would stay theirs to change (measured 2026-09-29).
 payload="$(dirname "$0")/payload"
 for bundle in "$app" "/Library/Input Methods/$input_method_name"; do
+  chown -R root:wheel "$bundle"
   removed=0
   while IFS= read -r path; do
     rm -rf "${path#.}"
@@ -69,15 +74,16 @@ for home in /Users/*; do
     else
       [ -e "$bundle" ] || continue
       # A bundle with no readable identifier is someone else's, not a copy of this one.
-      identifier=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$bundle/Contents/Info.plist" 2>/dev/null) || continue
-      [ "${identifier#"$family"}" != "$identifier" ] || continue
+      id=$(identifier "$bundle") || continue
+      [ "${id#"$family"}" != "$id" ] || continue
     fi
     rm -rf "$bundle"
     say "removed $bundle, which an older build of the app put there"
   done
 done
 
-# Each person with a login session now, by the uid their loginwindow runs as, gets the two
+# Each person with a login session now, by the uid their loginwindow runs as (root's is the
+# login screen's, and no one's), gets the two
 # bundles registered with LaunchServices and their switched-on list cut back.
 #
 # Registered by name, as the installer does for a bundle component and does not for the plain
@@ -97,10 +103,8 @@ done
 failed=0
 lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 key=AppleEnabledThirdPartyInputSources
-installed=$(for bundle in "/Library/Input Methods"/*.app; do
-  /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$bundle/Contents/Info.plist" 2>/dev/null || true
-done)
-for uid in $(ps -axo uid=,comm= | awk '$2 ~ /\/loginwindow$/ { print $1 }' | sort -u); do
+installed=$(for bundle in "/Library/Input Methods"/*.app; do identifier "$bundle" || true; done)
+for uid in $(ps -axo uid=,comm= | awk '$1 != 0 && $2 ~ /\/loginwindow$/ { print $1 }' | sort -u); do
   if as_user "$uid" "$lsregister" -f "$app" "/Library/Input Methods/$input_method_name"; then
     say "registered both bundles with LaunchServices for uid $uid"
   else
