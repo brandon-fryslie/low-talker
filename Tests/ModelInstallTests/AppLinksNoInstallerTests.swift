@@ -73,8 +73,10 @@ private let repository = URL(fileURLWithPath: #filePath)
             }
             return (try #require(target["name"] as? String), Set(products))
         }
-        try #require(targets.contains { $0.0 == app }, "read no \(app) target out of the project: \(targets.map(\.0))")
-        return Dictionary(uniqueKeysWithValues: targets)
+        let graph = Dictionary(uniqueKeysWithValues: targets)
+        // The app links this package's libraries, so a read that finds it linking none is blind.
+        try #require(!(graph[app] ?? []).isEmpty, "read no package products linked into \(app): \(graph)")
+        return graph
     }
 
     /// Every target reached from `roots`, themselves included.

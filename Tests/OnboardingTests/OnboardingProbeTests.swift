@@ -1,3 +1,4 @@
+import AVFoundation
 import Grants
 import Flavors
 import Testing
@@ -36,9 +37,16 @@ import Testing
         #expect(microphoneRow(.notDetermined)?.reads == "not asked yet")
         #expect(microphoneRow(.denied)?.reads == "turned off")
         #expect(microphoneRow(.restricted)?.met == false)
+        let granted = OnboardingProbe.readiness(flavor: .development, reader: .theApp(microphone: MicrophonePermission(authority: Authorized()).current))
+        #expect(granted.requirements.first { $0.row == .microphone }?.met == true)
     }
 
     static var asTheCLISeesIt: Readiness {
         OnboardingProbe.readiness(flavor: .development, reader: .elsewhere)
     }
+}
+
+private struct Authorized: MicrophoneAuthority {
+    func status() -> AVAuthorizationStatus { .authorized }
+    func requestAccess() async -> Bool { true }
 }

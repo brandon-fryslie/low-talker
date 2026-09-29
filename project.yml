@@ -244,7 +244,7 @@ targetTemplates:
         # Where the bundle's resources hold the carried store, as ModelStore.carriedResourceName
         # names it; CarriedModelStoreTests holds the two equal. [LAW:one-source-of-truth]
         MODEL_STORE_RESOURCE: model-store
-        # The notices' file in the bundle's resources, as Carrier.noticesResource names it;
+        # The notices' file in the bundle's resources, as Notices.resource names it;
         # CarriedNoticesTests holds the two equal. [LAW:one-source-of-truth]
         NOTICES_RESOURCE: Acknowledgements.txt
         # Where the container keeps the config, as Config.pathInContainer names it;

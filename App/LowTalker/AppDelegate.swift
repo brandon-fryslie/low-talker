@@ -351,10 +351,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// since a click that shows nothing tells a person nothing. [LAW:no-silent-failure]
     @objc private func openNotices() {
         do {
-            guard let notices = Bundle.main.url(forResource: Carrier.noticesResource, withExtension: nil) else {
-                throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: Carrier.noticesResource])
+            guard let notices = Bundle.main.url(forResource: Notices.resource, withExtension: nil) else {
+                throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: Notices.resource])
             }
-            let copy = FileManager.default.temporaryDirectory.appending(path: Carrier.noticesResource)
+            let copy = FileManager.default.temporaryDirectory.appending(path: Notices.resource)
             try? FileManager.default.removeItem(at: copy)
             try FileManager.default.copyItem(at: notices, to: copy)
             guard NSWorkspace.shared.open(copy) else { throw CocoaError(.fileReadUnknown, userInfo: [NSFilePathErrorKey: copy.path]) }

@@ -99,9 +99,7 @@ release_package() {
   # signature: `codesign -dvv` on `X.app/Contents/MacOS/X` resolves the path back to the
   # bundle and prints byte-for-byte what `codesign -dvv X.app` prints - measured. A second
   # `check` there is a second checkpoint for one rule that can never disagree with the first.
-  # [LAW:single-enforcer] `lowtalker` above is the opposite case and stays: it is a separate
-  # Mach-O in the app's bundle, with its own identifier and its own signature, which nothing
-  # else here reads.
+  # [LAW:single-enforcer]
   #
   # Found by looking rather than by name: the bundle is called after PRODUCT_NAME, which is
   # project.yml's to decide, and a name spelled here is one more copy to keep in step. The
