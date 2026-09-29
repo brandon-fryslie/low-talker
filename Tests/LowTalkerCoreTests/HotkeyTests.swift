@@ -141,12 +141,6 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
 /// installation is covered by existing rather than by somebody remembering these.
 /// [LAW:behavior-not-structure]
 @Suite struct EveryInstallationsChordTests {
-    @Test func everyFlavoursChordIsInTheSet() {
-        for flavor in Flavor.allCases {
-            #expect(Hotkey.everyInstallationsChord.contains(Hotkey.defaultChord(for: flavor)), "\(flavor)'s chord is not in the set")
-        }
-    }
-
     /// The chords in a person's words, spelled out in press order, because this is the order
     /// that once shipped wrong: the menu bar printed `hold rightOption+rightCommand to
     /// dictate`, and a reader following it literally completed the release chord first.

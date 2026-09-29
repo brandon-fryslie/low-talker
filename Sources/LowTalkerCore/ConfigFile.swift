@@ -12,8 +12,13 @@ public extension Config {
     /// name two files, and `config check` would report on one the app never reads.
     static func fileURL(for flavor: Flavor) -> URL {
         URL(filePath: String(cString: getpwuid(getuid()).pointee.pw_dir), directoryHint: .isDirectory)
-            .appending(path: "Library/Containers/\(flavor.bundleIdentifier)/Data/.config/low-talker/config.toml")
+            .appending(path: "Library/Containers/\(flavor.bundleIdentifier)/Data/\(pathInContainer)")
     }
+
+    /// Where the file sits inside the container. project.yml writes it again, as the place
+    /// the bundle's container migration moves a pre-sandbox file to; `ContainerMigrationTests`
+    /// holds the two equal. [LAW:one-source-of-truth]
+    static let pathInContainer = ".config/low-talker/config.toml"
 
     /// [LAW:parse-dont-validate] The one place config text becomes a Config. What comes
     /// back holds together or this throws naming what does not, so nothing downstream

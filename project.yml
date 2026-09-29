@@ -183,6 +183,20 @@ targetTemplates:
           set -euo pipefail
           "${SRCROOT}/scripts/notices" "${SRCROOT}/sbom/lowtalker.cdx.json" \
             "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/${NOTICES_RESOURCE}"
+      # The config a person wrote before the sandbox, in ~/.config/low-talker, which the
+      # sandboxed app cannot read. macOS reads Contents/Resources/container-migration.plist
+      # once, when it creates the container at the first sandboxed launch, and moves each
+      # listed file in; the development copy's file is renamed on the way, since the two
+      # copies no longer share a directory. Without it an upgrade runs on the defaults and
+      # says nothing. Measured 2026-09-29 with a throwaway sandboxed bundle: both files moved,
+      # the rename applied, and the originals left their old directory.
+      - name: Carry the config from before the sandbox
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Move</key><array><array><string>%s</string><string>%s</string></array></array></dict></plist>\n' \
+            '${Home}/.config/low-talker/'"${UNSANDBOXED_CONFIG_FILE}" "${CONFIG_IN_CONTAINER}" \
+            > "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/container-migration.plist"
       # [LAW:no-silent-failure] A bundle that ships without the version project.yml sets
       # fails the build rather than shipping quietly. Checked here, on the built plist,
       # because no test sees a shipped bundle: `make test` never builds the app. The input
@@ -236,6 +250,11 @@ targetTemplates:
         # The notices' file in the bundle's resources, as Carrier.noticesResource names it;
         # CarriedNoticesTests holds the two equal. [LAW:one-source-of-truth]
         NOTICES_RESOURCE: Acknowledgements.txt
+        # Where the container keeps the config, as Config.pathInContainer names it;
+        # ContainerMigrationTests holds the two equal. [LAW:one-source-of-truth]
+        CONFIG_IN_CONTAINER: .config/low-talker/config.toml
+        # The file's name in ~/.config/low-talker before the sandbox.
+        UNSANDBOXED_CONFIG_FILE: ${unsandboxedConfigFileName}
 
   # [LAW:one-type-per-behavior] One input method, built once per installation. What
   # separates the two copies is what separates the apps - the names macOS files them under
@@ -364,6 +383,7 @@ targets:
       inputMethodPortName: ai.promptctl.low-talker.inputmethod.dictation.insert
       inputMethodTarget: LowTalkerInputMethod
       appIconName: AppIcon
+      unsandboxedConfigFileName: config.toml
 
   # The copy built from the working tree, installed and running beside the one above.
   LowTalkerDev:
@@ -375,6 +395,7 @@ targets:
       inputMethodPortName: ai.promptctl.low-talker.dev.inputmethod.dictation.insert
       inputMethodTarget: LowTalkerDevInputMethod
       appIconName: AppIconDev
+      unsandboxedConfigFileName: config.dev.toml
 
   # The input method each app above is packaged with, one bundle per installation.
   LowTalkerInputMethod:
@@ -400,8 +421,8 @@ targets:
   # The CLI, built here from the entry Package.swift builds `.build/debug/lowtalker` from,
   # over the library holding every command, so the copy an app carries is the program a
   # checkout runs. `make cli` signs that build with this identifier too, so both builds are
-  # one code identity - which is also the key the Neural Engine files its compiled model
-  # under, so either copy warms the other's cache.
+  # one code identity. They no longer share a Neural Engine cache: the sandboxed app keeps
+  # its own inside its container, so warming one leaves the other cold.
   #
   # Named apart from its product: Xcode keeps each target's intermediates in a folder named
   # for the target, and `lowtalker` and the release app's `LowTalker` are one folder on a
