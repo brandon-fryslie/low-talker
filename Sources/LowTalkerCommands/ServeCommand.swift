@@ -30,9 +30,7 @@ struct ServeCommand: AsyncParsableCommand {
             record: { line($0.json) }
         )
         line("http://127.0.0.1:\(server.port.rawValue)/v1")
-        while true {
-            try await Task.sleep(for: .seconds(3600))
-        }
+        try await server.finished()
     }
 }
 

@@ -14,7 +14,8 @@ enum APIError: Error, Equatable, Sendable {
     case missing(field: String)
     case repeated(field: String)
     case unsupportedParameter(String)
-    case unsupportedFormat(String)
+    case unsupportedValue(field: String, value: String, accepted: String)
+    case promptRefused(String)
     case emptyFile
     case unreadableAudio(String)
     case silentFile
@@ -24,7 +25,7 @@ enum APIError: Error, Equatable, Sendable {
 
     var status: Status {
         switch self {
-        case .malformed, .missing, .repeated, .unsupportedParameter, .unsupportedFormat, .emptyFile, .unreadableAudio, .silentFile: .badRequest
+        case .malformed, .missing, .repeated, .unsupportedParameter, .unsupportedValue, .promptRefused, .emptyFile, .unreadableAudio, .silentFile: .badRequest
         case .lengthRequired: .lengthRequired
         case .tooLarge: .contentTooLarge
         case .notFound: .notFound
@@ -42,7 +43,8 @@ enum APIError: Error, Equatable, Sendable {
         case .missing(let field): "The \(field) field is required."
         case .repeated(let field): "The \(field) field is given more than once."
         case .unsupportedParameter(let field): "The \(field) parameter is not supported."
-        case .unsupportedFormat(let format): "The response_format \(format) is not supported; use json or text."
+        case .unsupportedValue(let field, let value, let accepted): "The \(field) \(value) is not supported; use \(accepted)."
+        case .promptRefused(let reason): "The prompt cannot be used: \(reason)."
         case .emptyFile: "The audio file is empty."
         case .unreadableAudio(let reason): "The audio file could not be read: \(reason)."
         case .silentFile: "The audio file holds no audio."
@@ -54,8 +56,8 @@ enum APIError: Error, Equatable, Sendable {
 
     var param: String? {
         switch self {
-        case .missing(let field), .repeated(let field), .unsupportedParameter(let field): field
-        case .unsupportedFormat: "response_format"
+        case .missing(let field), .repeated(let field), .unsupportedParameter(let field), .unsupportedValue(let field, _, _): field
+        case .promptRefused: "prompt"
         case .emptyFile, .unreadableAudio, .silentFile: "file"
         case .malformed, .lengthRequired, .tooLarge, .notFound, .uploadNotStored, .notResident, .engineFailed: nil
         }
@@ -70,7 +72,8 @@ enum APIError: Error, Equatable, Sendable {
         case .missing: "missing_required_parameter"
         case .repeated: "repeated_parameter"
         case .unsupportedParameter: "unsupported_parameter"
-        case .unsupportedFormat: "unsupported_value"
+        case .unsupportedValue: "unsupported_value"
+        case .promptRefused: "invalid_value"
         case .emptyFile: "empty_file"
         case .unreadableAudio: "invalid_audio"
         case .silentFile: "audio_too_short"

@@ -12,7 +12,7 @@ struct TranscriptionRequest: Sendable {
     let vocabulary: Vocabulary
     /// Accepted whatever it names; the answer never claims to be that model.
     let model: String
-    let language: String?
+    let language: Language?
 
     /// The fields this server reads. Any other field is refused by name rather than
     /// ignored, so a client asking for behavior the server lacks (a stream, word
@@ -34,7 +34,7 @@ struct TranscriptionRequest: Sendable {
             format: format,
             vocabulary: vocabulary(prompt: byName["prompt"]?.text),
             model: model.text,
-            language: byName["language"]?.text
+            language: try byName["language"].map { field throws(APIError) in try Language.parse(field.text) }
         )
     }
 
@@ -53,7 +53,7 @@ enum ResponseFormat: String, Sendable, Codable {
     case text
 
     static func parse(_ value: String) throws(APIError) -> ResponseFormat {
-        guard let format = ResponseFormat(rawValue: value) else { throw .unsupportedFormat(value) }
+        guard let format = ResponseFormat(rawValue: value) else { throw .unsupportedValue(field: "response_format", value: value, accepted: "json or text") }
         return format
     }
 
@@ -79,6 +79,19 @@ enum ResponseFormat: String, Sendable, Codable {
             let type = "duration"
             let seconds: Int
         }
+    }
+}
+
+/// The languages the engine hears. WhisperKit decodes as English whenever it is not told
+/// otherwise (`Constants.defaultLanguageCode`), and LowTalker never tells it otherwise, so
+/// a request for another language is refused rather than answered in English.
+/// [LAW:no-silent-failure]
+enum Language: String, Sendable {
+    case english = "en"
+
+    static func parse(_ value: String) throws(APIError) -> Language {
+        guard let language = Language(rawValue: value) else { throw .unsupportedValue(field: "language", value: value, accepted: "en") }
+        return language
     }
 }
 
@@ -111,6 +124,9 @@ struct Upload: Sendable {
         let clip: AudioClip
         do {
             clip = try AudioClip(contentsOf: url)
+        } catch AudioClipError.unreadable(_, let underlying) {
+            // The temporary file's path is the server's business, not the client's.
+            throw .unreadableAudio("\(underlying)")
         } catch {
             throw .unreadableAudio("\(error)")
         }

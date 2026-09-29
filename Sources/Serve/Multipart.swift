@@ -41,8 +41,14 @@ struct FormField: Sendable, Equatable {
     }
 
     /// The value of `name=value` or `name="value"` among a header's `;`-separated parameters.
+    /// A `;` inside quotes is part of a value, as in `filename="take;1.mp3"`.
     static func parameter(_ name: String, in header: String) -> String? {
-        header.split(separator: ";").dropFirst().lazy.compactMap { piece -> String? in
+        var quoted = false
+        let pieces = header.split { character in
+            if character == "\"" { quoted.toggle() }
+            return character == ";" && !quoted
+        }
+        return pieces.dropFirst().lazy.compactMap { piece -> String? in
             let pair = piece.split(separator: "=", maxSplits: 1)
             guard pair.count == 2, pair[0].trimmingCharacters(in: .whitespaces).lowercased() == name else { return nil }
             let value = pair[1].trimmingCharacters(in: .whitespaces)

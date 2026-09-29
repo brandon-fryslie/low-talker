@@ -1,5 +1,6 @@
 import Foundation
 import LowTalkerCore
+import Network
 @testable import Serve
 import Synchronization
 import Testing
@@ -8,9 +9,9 @@ import Testing
 /// what it was given.
 private final class Stub: Transcriber {
     let heard = Mutex<[(seconds: TimeInterval, vocabulary: Vocabulary)]>([])
-    let answer: Result<Transcript, StubFailure>
+    let answer: Result<Transcript, any Error>
 
-    init(_ answer: Result<Transcript, StubFailure> = .success(Transcript(typed: " Hello world, this is LowTalker."))) {
+    init(_ answer: Result<Transcript, any Error> = .success(Transcript(typed: " Hello world, this is LowTalker."))) {
         self.answer = answer
     }
 
@@ -51,6 +52,10 @@ private struct Running {
             body += field.value + Data("\r\n".utf8)
         }
         body += Data("--\(boundary)--\r\n".utf8)
+        return try await post(body, boundary: boundary, path: path)
+    }
+
+    func post(_ body: Data, boundary: String = "b", path: String = "audio/transcriptions") async throws -> (HTTPURLResponse, Data) {
         var request = URLRequest(url: URL(string: "\(base)/\(path)")!)
         request.httpMethod = "POST"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "content-type")
@@ -87,8 +92,15 @@ private func error(_ body: Data) throws -> [String: Any] {
         let output = Pipe()
         suite.standardOutput = output
         try suite.run()
-        let printed = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        suite.waitUntilExit()
+        // Read and waited on off the cooperative pool, which the server answering the
+        // suite runs on.
+        let printed = await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                let data = output.fileHandleForReading.readDataToEndOfFile()
+                suite.waitUntilExit()
+                continuation.resume(returning: String(decoding: data, as: UTF8.self))
+            }
+        }
         let summary = try #require(printed.split(separator: "\n").last.map { Data($0.utf8) })
         let results = try #require((JSONSerialization.jsonObject(with: summary) as? [String: Any])?["results"] as? [[String: Any]])
         let rest = results.filter { ($0["check"] as? String)?.hasPrefix("rest ") == true }
@@ -138,14 +150,59 @@ private func error(_ body: Data) throws -> [String: Any] {
         #expect(String(decoding: body, as: UTF8.self) == "\n")
     }
 
+    /// Refused before the upload is read: a file that is not audio still hears 503.
     @Test func aRequestBeforeTheModelIsResidentIs503() async throws {
         let running = try await Running.start(.notResident("still loading"))
         defer { running.server.stop() }
-        let (response, body) = try await running.post([("model", nil, Data("m".utf8)), ("file", "audio.mp3", fixture("hello-16k-mono.mp3"))])
+        let (response, body) = try await running.post([("model", nil, Data("m".utf8)), ("file", "audio.wav", Data("not audio".utf8))])
         #expect(response.statusCode == 503)
         #expect(try error(body)["code"] as? String == "model_not_ready")
         #expect(try (error(body)["message"] as? String)?.contains("still loading") == true)
-        #expect(try await running.nextEvent().error == "model_not_ready")
+        let event = try await running.nextEvent()
+        #expect(event.error == "model_not_ready" && event.audioSeconds == nil)
+    }
+
+    /// A prompt the engine cannot take is the client's to fix, so it is a 400 naming it.
+    @Test func aPromptTheEngineRefusesIs400() async throws {
+        let running = try await Running.start(.ready(Stub(.failure(VocabularyError.tooLong(tokens: 300, limit: 224)))))
+        defer { running.server.stop() }
+        let (response, body) = try await running.post([
+            ("model", nil, Data("m".utf8)), ("prompt", nil, Data("a long paragraph".utf8)), ("file", "audio.mp3", fixture("hello-16k-mono.mp3")),
+        ])
+        #expect(response.statusCode == 400)
+        #expect(try error(body)["param"] as? String == "prompt")
+        #expect(try error(body)["type"] as? String == "invalid_request_error")
+    }
+
+    /// A refusal made before the body is read still reaches a client that is sending one
+    /// larger than the socket holds, and the body it went on sending is counted.
+    @Test func aRefusedBodyIsDrainedSoTheClientHearsTheRefusal() async throws {
+        let running = try await Running.start(.ready(Stub()))
+        defer { running.server.stop() }
+        let oversize = TranscriptionServer.bodyLimit + 1024 * 1024
+        let (response, body) = try await running.post(Data(count: oversize))
+        #expect(response.statusCode == 413)
+        #expect(try error(body)["code"] as? String == "request_too_large")
+        let event = try await running.nextEvent()
+        #expect(event.status == 413 && (event.unread ?? 0) > 0 && event.lost == nil)
+    }
+
+    /// A client that closes before its request is whole is recorded as lost, unanswered.
+    @Test func aConnectionClosedMidRequestIsLost() async throws {
+        let running = try await Running.start(.ready(Stub()))
+        defer { running.server.stop() }
+        let connection = NWConnection(host: .ipv4(.loopback), port: running.server.port, using: .tcp)
+        connection.start(queue: DispatchQueue(label: "test.client"))
+        connection.send(content: Data("POST /v1/audio/transcriptions HTTP/1.1\r\n".utf8), contentContext: .finalMessage, isComplete: true, completion: .idempotent)
+        defer { connection.cancel() }
+        let event = try await running.nextEvent()
+        #expect(event.status == nil && event.lost != nil)
+    }
+
+    @Test func stoppingEndsTheServer() async throws {
+        let running = try await Running.start(.ready(Stub()))
+        running.server.stop()
+        try await running.server.finished()
     }
 
     @Test func anEngineFailureIs500WithTheReason() async throws {
@@ -163,6 +220,7 @@ private func error(_ body: Data) throws -> [String: Any] {
         ([("model", nil, "m"), ("model", nil, "m"), ("file", "audio.wav", "RIFF")], 400, "repeated_parameter", "model"),
         ([("model", nil, "m"), ("stream", nil, "true"), ("file", "audio.wav", "RIFF")], 400, "unsupported_parameter", "stream"),
         ([("model", nil, "m"), ("file", "audio.wav", "not audio at all")], 400, "invalid_audio", "file"),
+        ([("model", nil, "m"), ("language", nil, "fr"), ("file", "audio.wav", "RIFF")], 400, "unsupported_value", "language"),
     ] as [([(String, String?, String)], Int, String, String)])
     func refusesAndSaysWhat(fields: [(String, String?, String)], status: Int, code: String, param: String) async throws {
         let running = try await Running.start(.ready(Stub()))
@@ -171,6 +229,8 @@ private func error(_ body: Data) throws -> [String: Any] {
         #expect(response.statusCode == status)
         #expect(try error(body)["code"] as? String == code)
         #expect(try error(body)["param"] as? String == param)
+        // The server's own temporary files are not the client's business.
+        #expect(try (error(body)["message"] as? String)?.contains("lowtalker-upload-") == false)
     }
 
     @Test func anotherPathIs404() async throws {
@@ -191,6 +251,10 @@ private func error(_ body: Data) throws -> [String: Any] {
             FormField(name: "model", filename: nil, value: Data("m".utf8)),
             FormField(name: "file", filename: "a.wav", value: Data("\r\nx".utf8)),
         ])
+    }
+
+    @Test func aSemicolonInsideAQuotedFilenameIsPartOfIt() {
+        #expect(FormField.parameter("filename", in: "form-data; name=\"file\"; filename=\"take;1.mp3\"") == "take;1.mp3")
     }
 
     @Test func aBodyWithNoClosingBoundaryIsMalformed() {

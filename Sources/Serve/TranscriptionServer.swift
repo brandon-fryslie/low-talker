@@ -21,15 +21,18 @@ public final class TranscriptionServer: Sendable {
     /// The port bound, which is the one asked for or, for port 0, the one the system chose.
     public let port: NWEndpoint.Port
     private let listener: NWListener
+    private let ended: AsyncThrowingStream<Never, any Error>
 
     /// OpenAI's limit on an uploaded file is 25 MB; the rest is the form around it.
     static let bodyLimit = 26 * 1024 * 1024
-    /// How long a client has to send its whole request before the connection is dropped.
+    /// How long a client has to send its whole request, and then to close its side once
+    /// answered, before the connection is dropped.
     static let readDeadline: DispatchTimeInterval = .seconds(120)
 
-    private init(port: NWEndpoint.Port, listener: NWListener) {
+    private init(port: NWEndpoint.Port, listener: NWListener, ended: AsyncThrowingStream<Never, any Error>) {
         self.port = port
         self.listener = listener
+        self.ended = ended
     }
 
     /// Listens on `host` and `port` until `stop`, answering every request with what `engine`
@@ -49,21 +52,23 @@ public final class TranscriptionServer: Sendable {
             connection.start(queue: queue)
             Task { await answering.serve(connection) }
         }
+        let (ended, end) = AsyncThrowingStream<Never, any Error>.makeStream()
         let bound = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<NWEndpoint.Port, any Error>) in
-            // The state handler runs for every change; only the first ready or failure
-            // decides the listen, and a failure after it is the log's to tell.
+            // The state handler runs for every change; the first ready or failure decides
+            // the listen, and a failure after it ends the server, which `finished` tells.
             let waiting = Mutex<CheckedContinuation<NWEndpoint.Port, any Error>?>(continuation)
             listener.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
                     waiting.withLock { $0.take() }?.resume(returning: listener.port!)
                 case .failed(let error):
-                    guard let continuation = waiting.withLock({ $0.take() }) else {
-                        return ServedRequest.logger.error("listener failed: \(error, privacy: .public)")
-                    }
+                    ServedRequest.logger.error("listener failed: \(error, privacy: .public)")
                     listener.cancel()
-                    continuation.resume(throwing: error)
-                case .setup, .waiting, .cancelled:
+                    waiting.withLock { $0.take() }?.resume(throwing: error)
+                    end.finish(throwing: error)
+                case .cancelled:
+                    end.finish()
+                case .setup, .waiting:
                     break
                 @unknown default:
                     break
@@ -71,12 +76,18 @@ public final class TranscriptionServer: Sendable {
             }
             listener.start(queue: queue)
         }
-        return TranscriptionServer(port: bound, listener: listener)
+        return TranscriptionServer(port: bound, listener: listener, ended: ended)
     }
 
     /// Stops accepting connections. A request already being answered is answered.
     public func stop() {
         listener.cancel()
+    }
+
+    /// Returns once the server has stopped, and throws the failure that stopped it if it
+    /// was not `stop`. One caller waits on it.
+    public func finished() async throws {
+        for try await _ in ended {}
     }
 }
 
@@ -90,14 +101,18 @@ private struct Answering: Sendable {
         let clock = ContinuousClock()
         let started = clock.now
         var event = ServedRequest()
-        // [LAW:no-ambient-temporal-coupling] The deadline is the connection's own: a client
-        // that stops sending is cut off, which fails the pending read.
-        let deadline = DispatchWorkItem { connection.cancel() }
-        queue.asyncAfter(deadline: .now() + TranscriptionServer.readDeadline, execute: deadline)
+        let deadline = cutOff(connection)
         do {
             let response = try await respond(connection, readDeadline: deadline, &event)
             event.status = response.status.rawValue
-            try await connection.sendAll(response.wire)
+            try await connection.sendFinal(response.wire)
+            // Closing a socket that still holds a request's unread bytes resets it, and a
+            // client still sending its body then loses the answer as well. So the answer
+            // closes the server's side alone, and what the client sends until it closes
+            // its own is read and dropped.
+            let lingering = cutOff(connection)
+            event.unread = await connection.drain()
+            lingering.cancel()
         } catch {
             event.lost = "\(error)"
         }
@@ -105,6 +120,14 @@ private struct Answering: Sendable {
         connection.cancel()
         event.durationMs = Int((clock.now - started) / .milliseconds(1))
         record(event)
+    }
+
+    /// [LAW:no-ambient-temporal-coupling] The deadline is the connection's own: a client
+    /// that stops sending is cut off, which fails the pending read.
+    private func cutOff(_ connection: NWConnection) -> DispatchWorkItem {
+        let deadline = DispatchWorkItem { connection.cancel() }
+        queue.asyncAfter(deadline: .now() + TranscriptionServer.readDeadline, execute: deadline)
+        return deadline
     }
 
     /// The answer to the request `connection` carries. Every refusal is an answer in
@@ -122,19 +145,22 @@ private struct Answering: Sendable {
             event.bytes = body.count
             let request = try TranscriptionRequest.parse(FormField.parse(body, contentType: head.headers["content-type"]))
             event.model = request.model
-            event.language = request.language
+            event.language = request.language?.rawValue
             event.format = request.format.rawValue
             event.vocabularyTerms = request.vocabulary.terms.count
-            let clip = try request.upload.clip()
-            event.audioSeconds = clip.duration
+            // Asked before the upload is read, so a server still loading refuses at once.
             let transcriber: any Transcriber
             switch engine() {
             case .ready(let resident): transcriber = resident
             case .notResident(let reason): throw APIError.notResident(reason)
             }
+            let clip = try request.upload.clip()
+            event.audioSeconds = clip.duration
             let transcript: Transcript
             do {
                 transcript = try await transcriber.transcribe(clip, expecting: request.vocabulary)
+            } catch let refusal as VocabularyError {
+                throw APIError.promptRefused("\(refusal)")
             } catch {
                 throw APIError.engineFailed("\(error)")
             }
@@ -202,9 +228,20 @@ extension NWConnection {
         }
     }
 
-    fileprivate func sendAll(_ data: Data) async throws {
+    /// Everything the peer sends until it closes its side or the connection fails, counted
+    /// and dropped. A failure ends the drain as a close does: the answer is already sent.
+    fileprivate func drain() async -> Int {
+        var dropped = 0
+        while let chunk = try? await receiveChunk() {
+            dropped += chunk.count
+        }
+        return dropped
+    }
+
+    /// `data`, and then the end of the server's side of the stream.
+    fileprivate func sendFinal(_ data: Data) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-            send(content: data, completion: .contentProcessed { error in
+            send(content: data, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { error in
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }
             })
         }
@@ -223,6 +260,8 @@ public struct ServedRequest: Sendable, Codable, Equatable {
     public internal(set) var error: String?
     /// Why the connection failed before it could be answered.
     public internal(set) var lost: String?
+    /// Bytes the client sent after it was answered, dropped: a refused request's body.
+    public internal(set) var unread: Int?
     public internal(set) var bytes: Int?
     public internal(set) var model: String?
     public internal(set) var language: String?
