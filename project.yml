@@ -170,23 +170,24 @@ targetTemplates:
           set -euo pipefail
           "${SRCROOT}/scripts/notices" "${SRCROOT}/sbom/lowtalker.cdx.json" \
             "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/${NOTICES_RESOURCE}"
-      # The keyboard helper's old launchd plist, and only its label and program: builds
+      # The keyboard helper's old launchd plists, and only their label and program: builds
       # before v0.1.0-alpha.5 registered the helper through SMAppService, an upgraded
-      # installation still holds that job, and SMAppService finds a job to unregister only
-      # by a plist in Contents/Library/LaunchDaemons. The app unregisters it at every
-      # launch; nothing registers it. Written here from the label rather than checked in,
-      # so the one copy of the name outside `Flavor` is the attribute below.
-      - name: The retired keyboard helper's plist, to unregister it by
+      # installation still holds those jobs, and SMAppService finds a job to unregister only
+      # by a plist in Contents/Library/LaunchDaemons. The app unregisters them at every
+      # launch; nothing registers them. Written here from the labels rather than checked in,
+      # so the one copy of the names outside `Flavor` is the attribute below.
+      - name: The retired keyboard helper's plists, to unregister it by
         basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
           daemons="${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Library/LaunchDaemons"
-          rm -rf "${daemons}"
           mkdir -p "${daemons}"
-          plist="${daemons}/${RETIRED_HELPER_LABEL}.plist"
-          plutil -create xml1 "${plist}"
-          plutil -insert Label -string "${RETIRED_HELPER_LABEL}" "${plist}"
-          plutil -insert BundleProgram -string Contents/MacOS/lowtalker-keyboardd "${plist}"
+          for label in ${RETIRED_HELPER_LABELS}; do
+            plist="${daemons}/${label}.plist"
+            plutil -create xml1 "${plist}"
+            plutil -insert Label -string "${label}" "${plist}"
+            plutil -insert BundleProgram -string Contents/MacOS/lowtalker-keyboardd "${plist}"
+          done
       # [LAW:no-silent-failure] A bundle that ships without the version project.yml sets
       # fails the build rather than shipping quietly. Checked here, on the built plist,
       # because no test sees a shipped bundle: `make test` never builds the app. The input
@@ -240,8 +241,8 @@ targetTemplates:
         # The notices' file in the bundle's resources, as Carrier.noticesResource names it;
         # CarriedNoticesTests holds the two equal. [LAW:one-source-of-truth]
         NOTICES_RESOURCE: Acknowledgements.txt
-        # Read by the step that writes the retired keyboard helper's plist.
-        RETIRED_HELPER_LABEL: ${retiredHelperLabel}
+        # Read by the step that writes the retired keyboard helper's plists, split on spaces.
+        RETIRED_HELPER_LABELS: ${retiredHelperLabels}
 
   # [LAW:one-type-per-behavior] One input method, built once per installation. What
   # separates the two copies is what separates the apps - the names macOS files them under
@@ -368,7 +369,7 @@ targets:
       bundleIdentifier: ai.promptctl.low-talker
       inputMethodTarget: LowTalkerInputMethod
       appIconName: AppIcon
-      retiredHelperLabel: ai.promptctl.low-talker.keyboardd
+      retiredHelperLabels: com.lowtalker.keyboardd ai.promptctl.low-talker.keyboardd
 
   # The copy built from the working tree, installed and running beside the one above.
   LowTalkerDev:
@@ -378,7 +379,7 @@ targets:
       bundleIdentifier: ai.promptctl.low-talker.dev
       inputMethodTarget: LowTalkerDevInputMethod
       appIconName: AppIconDev
-      retiredHelperLabel: ai.promptctl.low-talker.keyboardd.dev
+      retiredHelperLabels: com.lowtalker.keyboardd.dev ai.promptctl.low-talker.keyboardd.dev
 
   # The input method each app above carries, one bundle per installation.
   LowTalkerInputMethod:

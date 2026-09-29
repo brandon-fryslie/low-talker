@@ -7,7 +7,6 @@ import InputSource
 import Insertion
 import LowTalkerCore
 import Onboarding
-import ServiceManagement
 import Signals
 import os
 
@@ -376,30 +375,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ = engine
         showHotkeyStatus("starting…")
         Task { await listen() }
-        retireKeyboardHelper()
+        retireKeyboardHelpers()
     }
 
-    /// Unregisters the keyboard helper that builds before v0.1.0-alpha.5 registered, which an
+    /// Unregisters the keyboard helper every build before v0.1.0-alpha.5 registered, which an
     /// upgraded installation still holds: launchd keeps the job loaded and Login Items keeps
-    /// listing it, though its program left the bundle with that release.
+    /// listing it, though its program left the bundle with that release. One line per label,
+    /// saying what the launch found and did; `HelperRetirement` owns both.
     ///
-    /// Every launch, whatever the registration reads: unregistering a job that is not
-    /// registered answers success, so there is nothing to decide first.
-    /// [LAW:dataflow-not-control-flow] Measured on macOS 15 (low-input-method-s71.p3k): with
-    /// the plist carried and the program gone, an approved job unregisters with no prompt,
-    /// launchd drops it, and its Login Items row turns off. The status it read before is
-    /// logged beside the outcome, so the log says whether a launch retired anything.
-    ///
-    /// Goes, with the plist carried for it, once no installation from before alpha.5 is left
-    /// to upgrade: low-cleanup-azl.
-    private func retireKeyboardHelper() {
-        let helper = SMAppService.daemon(plistName: "\(Self.flavor.retiredHelperLabel).plist")
-        let found = helper.status
-        helper.unregister { [log] error in
-            if let error {
-                log.error("retired keyboard helper: SMAppService.Status \(found.rawValue, privacy: .public) before, unregister failed: \(error, privacy: .public)")
-            } else {
-                log.notice("retired keyboard helper: SMAppService.Status \(found.rawValue, privacy: .public) before, unregistered")
+    /// Measured on macOS 15 (low-input-method-s71.p3k): with the plist carried and the
+    /// program gone, an approved job unregisters with no prompt, launchd drops it, and its
+    /// Login Items row turns off.
+    private func retireKeyboardHelpers() {
+        let labels = Self.flavor.retiredHelperLabels
+        Task.detached { [log] in
+            for label in labels {
+                let retirement = await HelperRetirement.retire(label: label)
+                log.log(level: retirement.level, "\(retirement, privacy: .public)")
             }
         }
     }
@@ -408,7 +400,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// something is left: every requirement stops dictation, so an app missing one can do
     /// nothing until the person has seen why.
     ///
-    /// A launch asks macOS for nothing. Every grant is asked for from its own step in setup,
+    /// A launch asks for no grant. Every grant is asked for from its own step in setup,
     /// after that step has said why; see `ask(_:)`.
     private func listen() async {
         await comeUp()
