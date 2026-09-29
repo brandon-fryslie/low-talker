@@ -50,7 +50,7 @@ import Testing
             chord = { modifiers = ["rightOption"] }
             routes = [{ when = "always", then = { insert = { app = "com.tinyspeck.slackmacgap" } } }]
             """) { check in
-            #expect(throws: ConfigError.wrongShape(#"modes[0].routes[0].then.insert: the input method puts text only at the cursor of the app in front, which is "focus", and reaches no app by name"#)) { try check.run() }
+            #expect(throws: ConfigError.wrongShape(#"modes[0].routes[0].then.insert: insert is the word "focus", the cursor of the app in front: the one place the input method puts text"#)) { try check.run() }
         }
     }
 

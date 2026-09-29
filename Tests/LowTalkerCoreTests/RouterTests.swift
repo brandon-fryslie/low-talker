@@ -27,6 +27,14 @@ import Testing
         #expect(router.actions(for: Transcript(words: [.init(text: " ", time: 0...0, confidence: 1.0)]), in: Self.context) == [])
     }
 
+    /// Routes are an ordered list; the first that claims the utterance decides, so two
+    /// routes that both claim it still insert the words once.
+    @Test func firstMatchingRouteWins() {
+        let actions = Router(routes: [.dictation, .dictation])
+            .actions(for: Transcript(typed: "hi"), in: Self.context)
+        #expect(actions == [.insertText(text: "hi")])
+    }
+
     @Test func noRoutesProducesNoActions() {
         #expect(Router(routes: []).actions(for: Transcript(typed: "hi"), in: Self.context) == [])
     }

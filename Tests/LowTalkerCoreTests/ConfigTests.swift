@@ -348,7 +348,7 @@ import Testing
     /// front, so a route naming an app is refused where the file is read rather than
     /// accepted and then refused at every press.
     @Test func aTargetNamingAnAppIsRefused() {
-        #expect(throws: ConfigError.wrongShape(#"modes[0].routes[0].then.insert: the input method puts text only at the cursor of the app in front, which is "focus", and reaches no app by name"#)) {
+        #expect(throws: ConfigError.wrongShape(#"modes[0].routes[0].then.insert: insert is the word "focus", the cursor of the app in front: the one place the input method puts text"#)) {
             try Self.config(Self.mode(routes: #"[{ when = "always", then = { insert = { app = "com.tinyspeck.slackmacgap" } } }]"#))
         }
     }

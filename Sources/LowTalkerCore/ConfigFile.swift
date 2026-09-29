@@ -245,7 +245,7 @@ private struct EmitEntry: Decodable {
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        emit = try container.decode(TargetEntry.self, forKey: .insert).emit
+        emit = try container.decode(InsertEntry.self, forKey: .insert).emit
     }
 }
 
@@ -253,12 +253,12 @@ private struct EmitEntry: Decodable {
 /// text. Anything else is refused here, where the file is read, so no route reaches a press
 /// it could only refuse.
 /// [LAW:parse-dont-validate]
-private struct TargetEntry: Decodable {
+private struct InsertEntry: Decodable {
     let emit = Route.Emit.insertTranscript
 
     init(from decoder: any Decoder) throws {
         guard let word = try? decoder.singleValueContainer().decode(String.self) else {
-            throw decoder.fault(#"the input method puts text only at the cursor of the app in front, which is "focus", and reaches no app by name"#)
+            throw decoder.fault(#"insert is the word "focus", the cursor of the app in front: the one place the input method puts text"#)
         }
         guard word == "focus" else { throw decoder.fault("\"\(word)\" is not somewhere text can be inserted") }
     }

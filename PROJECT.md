@@ -22,7 +22,7 @@ Every invocation flows through the same three types, whether it is plain dictati
 
 - **Context** is everything known before you speak: which chord was held, whether it was a tap or a hold, the frontmost app's bundle id, and the role of the focused element from the Accessibility API.
 - **Transcript** is what the engine produced, with word timings and confidence attached. It is never a bare string.
-- **Actions** are a small closed set of primitives. `InsertText(target)`, `ActivateApp(bundleId)`, `OpenURL`, `RunShortcut`, and `Pipe`, which hands the transcript to an external program and reads a list of actions back as JSON. Only `InsertText` at the focus is performed today; the app refuses the others by name.
+- **Actions** are a small closed set of primitives. `InsertText`, `ActivateApp(bundleId)`, `OpenURL`, `RunShortcut`, and `Pipe`, which hands the transcript to an external program and reads a list of actions back as JSON. Only `InsertText`, at the cursor of the app in front, is performed today; the app refuses the others by name.
 
 A route maps a context and a transcript to actions. Dictation is the default route: any context, any transcript, insert the text at the focus. Everything in the power layer is another route in the config file, not code. Switching apps by voice is command mode plus `ActivateApp` with fuzzy matching over the running apps. A voice-plus-keyboard combination is exactly a chord-selected mode.
 
