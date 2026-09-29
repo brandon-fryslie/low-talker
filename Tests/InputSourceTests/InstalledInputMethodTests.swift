@@ -41,4 +41,19 @@ import Testing
             identifier: Flavor.development.inputMethodBundleIdentifier, looked: directory
         )) { try InstalledInputMethod(flavor: .development, directory: directory).bundle() }
     }
+
+    @Test func aMissingFolderIsNotInstalledAndAnUnreadableOneSaysWhy() throws {
+        let missing = FileManager.default.temporaryDirectory.appending(path: "input-methods-\(UUID().uuidString)")
+        #expect(throws: InputMethodFailure.notInstalled(
+            identifier: Flavor.development.inputMethodBundleIdentifier, looked: missing
+        )) { try InstalledInputMethod(flavor: .development, directory: missing).bundle() }
+
+        let unreadable = try inputMethods([(name: "Other.app", identifier: "com.example.other")])
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: unreadable.path)
+            try? FileManager.default.removeItem(at: unreadable)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: unreadable.path)
+        #expect(throws: CocoaError.self) { try InstalledInputMethod(flavor: .development, directory: unreadable).bundle() }
+    }
 }

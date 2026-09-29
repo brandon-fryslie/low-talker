@@ -65,7 +65,14 @@ public struct InstalledInputMethod: Sendable {
     /// bundle - while the file name is a display name that a rename would silently change.
     public func bundle() throws -> URL {
         let wanted = flavor.inputMethodBundleIdentifier
-        let contents = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        // A folder that is not there holds no input method; one that cannot be read says why.
+        // [LAW:no-silent-failure]
+        let contents: [URL]
+        do {
+            contents = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        } catch CocoaError.fileReadNoSuchFile {
+            contents = []
+        }
         for candidate in contents where candidate.pathExtension == "app" {
             if Bundle(url: candidate)?.bundleIdentifier == wanted { return candidate }
         }

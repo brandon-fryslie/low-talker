@@ -51,8 +51,9 @@ if [ "$status" != Accepted ]; then
   exit 1
 fi
 
-xcrun stapler staple "$target"
-xcrun stapler validate "$target"
+# The stapler's progress goes to stderr: stdout is the target's path and nothing else.
+xcrun stapler staple "$target" >&2
+xcrun stapler validate "$target" >&2
 assessment=$(spctl --assess "${assess[@]}" -vv "$target" 2>&1) || {
   echo "notarize: Gatekeeper refuses $target: $assessment" >&2
   exit 1

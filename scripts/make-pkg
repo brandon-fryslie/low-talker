@@ -14,14 +14,15 @@
 # Every package is signed with the Developer ID Installer certificate, the development one
 # included: an installer signature needs an installer identity, which the self-signed
 # development identity is not, and one identity for every package is one way a package is
-# made. [LAW:one-type-per-behavior] The team is scripts/sign-release's.
+# made. [LAW:one-type-per-behavior] The holder is scripts/developer-id's.
 set -euo pipefail
 
 usage="usage: scripts/make-pkg <path to .app> <path to input method .app> <output directory>"
 app=${1:?$usage}
 input_method=${2:?$usage}
 out=${3:?$usage}
-identity="Developer ID Installer: Brandon Fryslie (6R988MUU27)"
+source "$(dirname "$0")/developer-id"
+identity="Developer ID Installer: $developer_id"
 
 fail() {
   echo "make-pkg: $1" >&2
@@ -65,7 +66,8 @@ ditto "$input_method" "$root$input_method_path"
 # again is a new input method it will not run until the next login, so every upgrade cost
 # the enable alert and a logout. Updated in place, the input method stayed switched on and
 # selected and the next request ran the new code. A file a newer build no longer has stays
-# behind and breaks the bundle's seal, which the postinstall checks first.
+# behind and would break the bundle's seal, so the postinstall removes every path in either
+# bundle that the payload list below does not name.
 components="$staging/components.plist"
 pkgbuild --analyze --root "$root" "$components" >/dev/null
 count=0
@@ -89,6 +91,9 @@ done
   cat "$(dirname "$0")/pkg/postinstall"
 } >"$staging/scripts/postinstall"
 chmod 755 "$staging/scripts/postinstall"
+# Every path the package writes inside the two bundles, which is all either may hold once it
+# is installed. Sorted bytewise, as the postinstall sorts what it finds, for comm.
+(cd "$root" && find ".$app_path" ".$input_method_path") | LC_ALL=C sort >"$staging/scripts/payload"
 
 component="$staging/component.pkg"
 pkgbuild --quiet --root "$root" --component-plist "$components" --scripts "$staging/scripts" \
@@ -100,7 +105,10 @@ productbuild --quiet --package "$component" --sign "$identity" --timestamp "$pkg
 
 # The package as an installer will read it: signed by the identity named above, and carrying
 # both bundles at the paths the postinstall and the app expect.
-pkgutil --check-signature "$pkg" | grep -qF "1. $identity" || fail "$pkg is not signed by $identity"
+# Read whole before it is searched: grep -q stops reading at its match, and under pipefail
+# the SIGPIPE that reaches pkgutil would fail a package that is signed.
+signature=$(pkgutil --check-signature "$pkg")
+grep -qF "1. $identity" <<<"$signature" || fail "$pkg is not signed by $identity"
 payload=$(pkgutil --payload-files "$pkg")
 for path in "$app_path" "$input_method_path"; do
   grep -qxF ".$path" <<<"$payload" || fail "$pkg does not install $path"

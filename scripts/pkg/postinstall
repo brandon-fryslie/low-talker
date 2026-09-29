@@ -30,17 +30,24 @@ stop() {
   for pid in "$@"; do
     kill "$pid" 2>/dev/null || continue
     for _ in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
-    if kill -0 "$pid" 2>/dev/null; then
-      kill -KILL "$pid"
-      say "forced $pid, which did not end within 5 s"
-    fi
+    # A process that ends between the last look and the KILL is gone, which is the point.
+    if kill -KILL "$pid" 2>/dev/null; then say "forced $pid, which did not end within 5 s"; fi
   done
 }
 
 # Written over in place (scripts/make-pkg says why), so a file an older build had and this
-# one does not is still there, and breaks the seal every grant and the text input system
-# check. Refused here, where the installer shows it, rather than at the next launch.
+# one does not is still there. Each bundle is cut back to the paths the package wrote, listed
+# in the payload file beside this script, and then held to its seal, which every grant and
+# the text input system check: one that still does not verify is refused here, where the
+# installer shows it, rather than at the next launch.
+payload="$(dirname "$0")/payload"
 for bundle in "$app" "/Library/Input Methods/$input_method_name"; do
+  removed=0
+  while IFS= read -r path; do
+    rm -rf "${path#.}"
+    removed=$((removed + 1))
+  done < <(comm -23 <(cd / && find ".$bundle" | LC_ALL=C sort) "$payload")
+  say "removed $removed paths from $bundle that this package does not carry"
   codesign --verify --deep --strict "$bundle" || { say "$bundle does not verify; remove it and install again"; exit 1; }
 done
 
@@ -65,6 +72,12 @@ stop $(cut -d ' ' -f 1 <<<"$methods")
 say "stopped $(lines "$methods") running $input_method_executable"
 
 for uid in $(cut -s -d ' ' -f 2 <<<"$apps" | sort -u); do
-  launchctl asuser "$uid" sudo -u "#$uid" /usr/bin/open "$app"
-  say "started $app again for uid $uid"
+  # The files are installed whether or not this start takes, so a failed one is said and
+  # the install stands: a person who logged out since the app was stopped has no session
+  # to start it in.
+  if launchctl asuser "$uid" sudo -u "#$uid" /usr/bin/open "$app"; then
+    say "started $app again for uid $uid"
+  else
+    say "could not start $app again for uid $uid; it starts when that person opens it"
+  fi
 done
