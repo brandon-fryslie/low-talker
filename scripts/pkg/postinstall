@@ -91,23 +91,28 @@ done
 # preferences daemon (measured 2026-09-29: a write there takes effect at once), and only that
 # key is written, so nothing else in the domain is put back to what it was when it was read.
 # Entries of other products are left as they are. After the old app and its home-folder
-# copies are gone, since that app would switch its copy on again.
+# copies are gone, since that app would switch its copy on again. A step that fails for one
+# person is said and fails the install at the end, once every other step has run, so no one
+# else is left with the app stopped and the old input method running.
+failed=0
 lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 key=AppleEnabledThirdPartyInputSources
 installed=$(for bundle in "/Library/Input Methods"/*.app; do
   /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$bundle/Contents/Info.plist" 2>/dev/null || true
 done)
 for uid in $(ps -axo uid=,comm= | awk '$2 ~ /\/loginwindow$/ { print $1 }' | sort -u); do
-  as_user "$uid" "$lsregister" -f "$app" "/Library/Input Methods/$input_method_name" ||
-    { say "could not register the bundles with LaunchServices for uid $uid"; exit 1; }
-  say "registered both bundles with LaunchServices for uid $uid"
+  if as_user "$uid" "$lsregister" -f "$app" "/Library/Input Methods/$input_method_name"; then
+    say "registered both bundles with LaunchServices for uid $uid"
+  else
+    say "could not register the bundles with LaunchServices for uid $uid"; failed=1
+  fi
 
   # A person who never switched an input method on has no such list, and nothing to cut.
   as_user "$uid" defaults read com.apple.inputsources "$key" >/dev/null 2>&1 || continue
   # Read into a file here, since the person cannot write a file root made.
   list=$(mktemp)
   as_user "$uid" defaults export com.apple.inputsources - | plutil -extract "$key" xml1 -o "$list" - ||
-    { say "could not read the switched-on input methods for uid $uid"; rm -f "$list"; exit 1; }
+    { say "could not read the switched-on input methods for uid $uid"; rm -f "$list"; failed=1; continue; }
   count=0
   while /usr/libexec/PlistBuddy -c "Print :$count" "$list" >/dev/null 2>&1; do count=$((count + 1)); done
   dropped=0
@@ -120,7 +125,8 @@ for uid in $(ps -axo uid=,comm= | awk '$2 ~ /\/loginwindow$/ { print $1 }' | sor
     say "switched off $id for uid $uid: no bundle with that identifier is installed"
     dropped=$((dropped + 1))
   done
-  [ "$dropped" -eq 0 ] || as_user "$uid" defaults write com.apple.inputsources "$key" "$(cat "$list")"
+  [ "$dropped" -eq 0 ] || as_user "$uid" defaults write com.apple.inputsources "$key" "$(cat "$list")" ||
+    { say "could not write the switched-on input methods for uid $uid"; failed=1; }
   rm -f "$list"
 done
 
@@ -138,3 +144,5 @@ for uid in $(cut -s -d ' ' -f 2 <<<"$apps" | sort -u); do
     say "could not start $app again for uid $uid; it starts when that person opens it"
   fi
 done
+
+[ "$failed" -eq 0 ] || { say "the install is in place, but a step above failed for someone logged in"; exit 1; }
