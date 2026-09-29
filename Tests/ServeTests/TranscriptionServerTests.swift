@@ -49,7 +49,7 @@ import Testing
     @Test func onTheLANTheSuitePassesWithTheTokenAndIsRefusedWithout() async throws {
         let running = try await Running.startOnTheLAN(.ready(Stub()), token: "sk-lan-token")
         defer { running.server.stop() }
-        #expect(!running.base.hasPrefix("http://127."))
+        #expect(running.base == "http://\(try lanAddress()):\(running.server.port.rawValue)/v1")
         let results = try await running.conformance(token: "sk-lan-token")
         #expect(results.count == 10, "\(results)")
         for result in results {
@@ -76,6 +76,21 @@ import Testing
         ])
         let event = try await running.nextEvent()
         #expect(event.status == 401 && event.error == "invalid_api_key" && event.bytes == nil)
+    }
+
+    /// The socket's own route answers a caller without the token the same way when what it
+    /// sent is no upgrade: a 401, not the 404 or 400 that would describe the route to it.
+    @Test(arguments: ["POST", "GET"])
+    func withoutTheTokenTheRealtimeRouteIs401WhateverTheRequest(method: String) async throws {
+        let running = try await Running.startOnTheLAN(.ready(Stub()), token: "sk-lan-token")
+        defer { running.server.stop() }
+        var request = URLRequest(url: URL(string: "\(running.base)/realtime?intent=transcription")!)
+        request.httpMethod = method
+        let (body, response) = try await URLSession.shared.data(for: request)
+        #expect((response as! HTTPURLResponse).statusCode == 401)
+        #expect(try error(body)["code"] as? String == "invalid_api_key")
+        let event = try await running.nextEvent()
+        #expect(event.status == 401 && event.error == "invalid_api_key")
     }
 
     /// An mp3 is decoded as a wav is, and the engine hears all of it.

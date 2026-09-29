@@ -36,11 +36,16 @@ struct ServeCommand: AsyncParsableCommand {
         // Bound before the model loads, so a port already taken is said at once rather than
         // a minute later, and a request meanwhile is refused with the reason.
         let file = try ConfigSource(path: path, stated: installation.stated)
-        let binding = try Config.load(file.path, for: file.flavor).config.serve
+        let loaded = try Config.load(file.path, for: file.flavor)
+        // Said every time, as `config check` opens its report, so a `--path` that names no
+        // file reads "no file at ..., so these are the defaults" rather than serving on
+        // loopback in silence.
+        var stderr = StandardError()
+        print("\(loaded)\nserve: \(loaded.config.serve)", to: &stderr)
         let resident = Mutex(ServedEngine.notResident("the model is still loading"))
         let server = try await TranscriptionServer.listen(
-            for: file.flavor,
-            on: binding,
+            for: loaded.flavor,
+            on: loaded.config.serve,
             engine: { resident.withLock { $0 } },
             record: { line($0.json) }
         )

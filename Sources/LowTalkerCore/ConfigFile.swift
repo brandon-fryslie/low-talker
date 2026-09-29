@@ -151,7 +151,7 @@ private struct ConfigFile: Decodable {
     let serve: ServeEntry?
 }
 
-/// `[serve] interface = "192.168.1.20"`, `token = "..."`: both, or neither.
+/// `[serve] interface = "192.168.1.20"`, `token = "..."`: both, or no table at all.
 private struct ServeEntry: Decodable {
     let interface: String?
     let token: String?
@@ -162,7 +162,7 @@ private struct ServeEntry: Decodable {
         get throws(ConfigError) {
             do throws(ServeBindingError) {
                 switch (interface, token) {
-                case (nil, nil): return .loopback
+                case (nil, nil): throw .emptyTable
                 case (nil, _?): throw .tokenWithoutInterface
                 case (let interface?, nil): _ = try InterfaceAddress(interface); throw .interfaceWithoutToken(interface)
                 case (let interface?, let token?): return .interface(try InterfaceAddress(interface), token: try BearerToken(token))

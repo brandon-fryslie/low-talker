@@ -244,13 +244,11 @@ private struct Answering: Sendable {
             event.method = head.method
             event.path = head.path
             // [LAW:single-enforcer] Asked once, before any route: a caller the binding does
-            // not admit reaches nothing, and its refusal is the one its route speaks.
-            let admitted = binding.admits(authorization: head.headers["authorization"])
+            // not admit reaches nothing, and learns only that its key is wrong.
+            guard binding.admits(authorization: head.headers["authorization"]) else { return try refusal(head) }
             switch head.path {
             case "/v1/realtime":
-                return try realtime(head, admitted: admitted)
-            case _ where !admitted:
-                throw APIError.invalidAPIKey
+                return try realtime(head)
             case "/v1/audio/transcriptions" where head.method == "POST":
                 return .http(try await transcription(head, connection, &reader, &event))
             default:
@@ -262,12 +260,20 @@ private struct Answering: Sendable {
         }
     }
 
+    /// The answer to a caller without the token: a socket upgrade is upgraded and ended as
+    /// OpenAI ends a socket opened with a key it does not know, and anything else, a
+    /// handshake that is not one included, is a 401. What the request lacks besides the key
+    /// is not said, since that would describe the server to a caller it does not answer.
+    private func refusal(_ head: RequestHead) throws(APIError) -> Answer {
+        guard head.path == "/v1/realtime", let handshake = try? WebSocket.handshake(head) else { throw .invalidAPIKey }
+        return .refusedSocket(handshake: handshake, .invalidAPIKey)
+    }
+
     /// The upgrade to a Realtime transcription socket over the engine resident now, which
     /// the socket keeps. Asked before upgrading, so a server still loading refuses with a
     /// status rather than opening a socket it cannot serve.
-    private func realtime(_ head: RequestHead, admitted: Bool) throws(APIError) -> Answer {
+    private func realtime(_ head: RequestHead) throws(APIError) -> Answer {
         let handshake = try WebSocket.handshake(head)
-        guard admitted else { return .refusedSocket(handshake: handshake, .invalidAPIKey) }
         guard head.query["intent"] == "transcription" else {
             throw .unsupportedValue(field: "intent", value: head.query["intent"] ?? "(none)", accepted: "transcription")
         }

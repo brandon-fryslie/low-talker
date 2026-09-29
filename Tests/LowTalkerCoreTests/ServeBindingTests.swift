@@ -12,10 +12,14 @@ import Testing
 
     @Test func noTableIsLoopback() throws {
         #expect(try Self.binding("") == .loopback)
-        #expect(try Self.binding("[serve]") == .loopback)
     }
 
-    @Test(arguments: ["192.168.1.20", "0.0.0.0", "fe80::1"])
+    /// As `[microphone]` is: a heading written on purpose is not read as the default.
+    @Test func anEmptyTableIsRefused() {
+        #expect(throws: ConfigError.serve(.emptyTable)) { try Self.binding("[serve]") }
+    }
+
+    @Test(arguments: ["192.168.1.20", "100.64.0.7", "fd7a:115c:a1e0::1"])
     func anInterfaceWithItsTokenBinds(address: String) throws {
         let binding = try Self.binding("""
             [serve]
@@ -47,9 +51,11 @@ import Testing
         }
     }
 
-    @Test(arguments: ["127.0.0.1", "127.8.0.1", "::1"])
-    func aLoopbackInterfaceIsRefused(address: String) {
-        #expect(throws: ConfigError.serve(.loopbackInterface(address))) {
+    /// Loopback, every interface at once, and loopback written as IPv6: each would put
+    /// local callers, who send placeholder keys, behind the token.
+    @Test(arguments: ["127.0.0.1", "127.8.0.1", "::1", "0.0.0.0", "::", "::ffff:127.0.0.1", "::ffff:0.0.0.0"])
+    func anAddressTakingInLoopbackIsRefused(address: String) {
+        #expect(throws: ConfigError.serve(.takesInLoopback(address))) {
             try Self.binding("""
                 [serve]
                 interface = "\(address)"
