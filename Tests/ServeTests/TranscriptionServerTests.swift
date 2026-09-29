@@ -269,6 +269,14 @@ private func error(_ body: Data) throws -> [String: Any] {
         ])
     }
 
+    /// Two lengths for one body are no length: the request is refused, not read by one.
+    @Test func twoContentLengthsAreMalformed() throws {
+        let head = try RequestHead.parse(Data("POST / HTTP/1.1\r\ncontent-length: 5\r\nContent-Length: 6".utf8))
+        #expect(throws: APIError.malformed("content-length \"5, 6\" is not a byte count")) {
+            try head.bodyLength(limit: 100)
+        }
+    }
+
     @Test func aSemicolonInsideAQuotedFilenameIsPartOfIt() {
         #expect(FormField.parameter("filename", in: "form-data; name=\"file\"; filename=\"take;1.mp3\"") == "take;1.mp3")
     }

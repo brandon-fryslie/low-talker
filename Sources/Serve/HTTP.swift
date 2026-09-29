@@ -32,7 +32,10 @@ struct RequestHead: Sendable {
         var headers: [String: String] = [:]
         for line in lines where !line.isEmpty {
             guard let colon = line.firstIndex(of: ":") else { throw .malformed("the header line \"\(line)\" has no colon") }
-            headers[line[..<colon].lowercased()] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            // A repeated field is its values joined by commas (RFC 9110 §5.3), so two
+            // content-lengths read as one that is not a byte count, and are refused.
+            let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            headers.merge([line[..<colon].lowercased(): value]) { "\($0), \($1)" }
         }
         return headers
     }
