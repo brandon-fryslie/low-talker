@@ -19,6 +19,7 @@ struct FlavorTests {
         ("input method bundle identifier", { @Sendable (f: Flavor) in f.inputMethodBundleIdentifier }),
         ("input source identifier", { @Sendable (f: Flavor) in f.inputSourceIdentifier }),
         ("input method connection name", { @Sendable (f: Flavor) in f.inputMethodConnectionName }),
+        ("server port", { @Sendable (f: Flavor) in "\(f.serverPort)" }),
     ] as [(String, @Sendable (Flavor) -> String)])
     func everyFlavorIsNamedApart(named: String, read: @Sendable (Flavor) -> String) {
         let names = Flavor.allCases.map(read)
@@ -102,6 +103,13 @@ struct FlavorTests {
         #expect(Flavor.development.inputMethodBundleIdentifier == "ai.promptctl.low-talker.dev.inputmethod.dictation")
         #expect(Flavor.development.inputSourceIdentifier == "ai.promptctl.low-talker.dev.inputmethod.dictation.text")
         #expect(Flavor.development.inputMethodConnectionName == "ai.promptctl.low-talker.dev.inputmethod.dictation_Connection")
+    }
+
+    /// Both flavors' server ports, spelled out: a client's `base_url` is typed by hand, so
+    /// moving a port breaks every pipeline pointed at it, and that should be loud.
+    @Test func theseAreTheServerPortsClientsAreGiven() {
+        #expect(Flavor.release.serverPort == 8610)
+        #expect(Flavor.development.serverPort == 8611)
     }
 
     /// The rule the names above exist to satisfy, stated as a property rather than as four

@@ -1,3 +1,4 @@
+import Flavors
 import Foundation
 import LowTalkerCore
 import Network
@@ -36,16 +37,40 @@ public final class TranscriptionServer: Sendable {
         self.ended = ended
     }
 
-    /// Listens on `host` and `port` until `stop`, answering every request with what `engine`
-    /// says at that moment and handing one `ServedRequest` per connection to `record`.
+    /// Listens on `flavor`'s port on loopback until `stop`, answering every request with what
+    /// `engine` says at that moment and handing one `ServedRequest` per connection to `record`.
+    /// Throws `ListenRefused` when the address cannot be had, which is most often another
+    /// process of the same installation already serving on it.
     public static func listen(
-        on host: NWEndpoint.Host,
-        port: NWEndpoint.Port,
+        for flavor: Flavor,
         engine: @escaping @Sendable () -> ServedEngine,
         record: @escaping @Sendable (ServedRequest) -> Void = ServedRequest.log
+    ) async throws(ListenRefused) -> TranscriptionServer {
+        try await listen(at: ListenAddress(flavor: flavor), engine: engine, record: record)
+    }
+
+    static func listen(
+        at address: ListenAddress,
+        engine: @escaping @Sendable () -> ServedEngine,
+        record: @escaping @Sendable (ServedRequest) -> Void
+    ) async throws(ListenRefused) -> TranscriptionServer {
+        let server: TranscriptionServer
+        do {
+            server = try await bind(address, engine: engine, record: record)
+        } catch {
+            throw ListenRefused(address: address, reason: error)
+        }
+        ServedRequest.logger.notice("\(address.flavor, privacy: .public) serving on \("\(address.host):\(server.port)", privacy: .public)")
+        return server
+    }
+
+    private static func bind(
+        _ address: ListenAddress,
+        engine: @escaping @Sendable () -> ServedEngine,
+        record: @escaping @Sendable (ServedRequest) -> Void
     ) async throws -> TranscriptionServer {
         let parameters = NWParameters.tcp
-        parameters.requiredLocalEndpoint = .hostPort(host: host, port: port)
+        parameters.requiredLocalEndpoint = .hostPort(host: address.host, port: address.port)
         let listener = try NWListener(using: parameters)
         let queue = DispatchQueue(label: "lowtalker.serve")
         let answering = Answering(engine: engine, record: record, queue: queue)
@@ -89,6 +114,35 @@ public final class TranscriptionServer: Sendable {
     /// was not `stop`. One caller waits on it.
     public func finished() async throws {
         for try await _ in ended {}
+    }
+}
+
+/// Where a server listens, and for which installation: the installation is part of the
+/// address because it is what a person reading a refusal needs to know. The port alone does
+/// not say whose it is.
+struct ListenAddress: Sendable, CustomStringConvertible {
+    let flavor: Flavor
+    let host: NWEndpoint.Host
+    let port: NWEndpoint.Port
+
+    init(flavor: Flavor, host: NWEndpoint.Host = .ipv4(.loopback), port: NWEndpoint.Port? = nil) {
+        self.flavor = flavor
+        self.host = host
+        self.port = port ?? NWEndpoint.Port(rawValue: flavor.serverPort)!
+    }
+
+    var description: String { "\(host):\(port)" }
+}
+
+/// A server that could not start listening, naming the installation and the address.
+/// [LAW:no-silent-failure] A second process binding one flavor's port is the case this
+/// exists for: without the names, it reads as a network error and not as two copies.
+public struct ListenRefused: Error, CustomStringConvertible {
+    let address: ListenAddress
+    let reason: any Error
+
+    public var description: String {
+        "\(address.flavor.displayName) (\(address.flavor)) cannot serve on \(address): \(reason)"
     }
 }
 

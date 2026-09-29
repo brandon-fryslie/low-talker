@@ -1,5 +1,6 @@
 import Foundation
 import LowTalkerCore
+import Flavors
 import Network
 @testable import Serve
 import Synchronization
@@ -45,7 +46,7 @@ struct Running {
 
     static func start(_ engine: ServedEngine) async throws -> Running {
         let (events, sink) = AsyncStream<ServedRequest>.makeStream()
-        let server = try await TranscriptionServer.listen(on: .ipv4(.loopback), port: .any, engine: { engine }, record: { sink.yield($0) })
+        let server = try await TranscriptionServer.listen(at: ListenAddress(flavor: .development, port: .any), engine: { engine }, record: { sink.yield($0) })
         return Running(server: server, events: events)
     }
 

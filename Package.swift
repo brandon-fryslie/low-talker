@@ -59,8 +59,8 @@ let package = Package(
         // OpenAI's speech-to-text API over any Transcriber, for callers other than
         // dictation (epic low-serve-axq). Above the core, so the core never links Network
         // and the offline build's app need not link this at all. [LAW:one-way-deps]
-        .target(name: "Serve", dependencies: ["LowTalkerCore"]),
-        .testTarget(name: "ServeTests", dependencies: ["Serve", "LowTalkerCore"], resources: [.copy("Fixtures")]),
+        .target(name: "Serve", dependencies: ["LowTalkerCore", "Flavors"]),
+        .testTarget(name: "ServeTests", dependencies: ["Serve", "LowTalkerCore", "Flavors"], resources: [.copy("Fixtures")]),
         // Answering a signal rather than obeying it, for every process here that has an
         // ending of its own to unwind through. It links nothing, so any process here can
         // watch through it. [LAW:one-source-of-truth]
