@@ -26,6 +26,14 @@ import Testing
         #expect(retirement.description.hasSuffix("SMAppService.Status 0 before, nothing registered"))
     }
 
+    /// What macOS 15 answers for a label already retired: success, after reading nothing
+    /// registered. Measured on studious; the line must not claim a job was dropped.
+    @Test func successOnNothingRegisteredIsNotAnUnregistering() {
+        let retirement = HelperRetirement(label: label, found: .notRegistered, unregisterError: nil)
+        #expect(retirement.outcome == .nothingRegistered)
+        #expect(retirement.level == .default)
+    }
+
     /// EINVAL is what a bundle without the label's plist answers, measured on macOS 15 and 26.
     @Test func anyOtherErrorIsAFailureAtErrorLevel() {
         let missingPlist = NSError(domain: SMAppServiceErrorDomain, code: 22)

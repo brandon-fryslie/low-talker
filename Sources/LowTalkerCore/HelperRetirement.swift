@@ -17,7 +17,8 @@ public struct HelperRetirement: Sendable, CustomStringConvertible {
         /// The job was registered and launchd has dropped it.
         case unregistered
         /// There was no job under this label: `SMAppService` documents unregistering one
-        /// as `kSMErrorJobNotFound`, though macOS 15 was measured answering success.
+        /// as `kSMErrorJobNotFound`, and macOS 15 was measured answering success after
+        /// reading `.notRegistered`, so either answer means this.
         case nothingRegistered
         /// Anything else, which leaves the job where it was.
         case failed(String)
@@ -32,7 +33,7 @@ public struct HelperRetirement: Sendable, CustomStringConvertible {
         self.found = found
         let error = unregisterError.map { $0 as NSError }
         self.outcome = switch error {
-        case nil: .unregistered
+        case nil: found == .notRegistered ? .nothingRegistered : .unregistered
         case let error? where error.domain == SMAppServiceErrorDomain && error.code == kSMErrorJobNotFound:
             .nothingRegistered
         case let error?: .failed(error.description)
