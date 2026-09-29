@@ -2,7 +2,7 @@
 """Watches a built app and its input method on the wire through a launch and a dictation, and
 passes only if neither did any network work beyond asking whether a route exists.
 
-    scripts/wire-check <app bundle>
+    scripts/wire-check <app bundle> <input method bundle>
     scripts/wire-check judge <capture> <app process> <input method process>
 
 The app links WhisperKit and the Hugging Face hub client vendored in argmax-oss-swift, code
@@ -10,7 +10,8 @@ that can reach the network and that nobody here wrote. sbom/rules.json records t
 of that package this was last run against, and scripts/sbom stops the build on any other, so
 a bump of it is re-checked here rather than believed. [LAW:no-silent-failure]
 
-The first form quits the app and the input method it carries, starts `log stream` on both
+The first form quits the app and its input method - named by bundle, since a build may carry
+it or a package may install it apart - starts `log stream` on both
 processes by their exact names, relaunches the app, and waits for one dictation: hold the
 chord, speak, release. macOS relaunches the input method when a text field takes focus, so
 its launch is inside the capture too. Whatever a process does through URLSession or
@@ -178,12 +179,9 @@ def alive(pid):
     return True
 
 
-def watch(app):
+def watch(app, input_method_bundle):
     bundle_id, name = bundle_info(app)
-    carried = sorted((app / "Contents" / "Library" / "InputMethods").glob("*.app"))
-    if len(carried) != 1:
-        fail(f"{app} carries {len(carried)} input methods, not one: {[str(bundle) for bundle in carried]}")
-    input_method_id, input_method = bundle_info(carried[0])
+    input_method_id, input_method = bundle_info(input_method_bundle)
     capture = Path(tempfile.mkdtemp(prefix="wire-check.")) / "capture.log"
     predicate = (f'(process == "{name}" OR process == "{input_method}" OR process == "{CONTROL}") AND '
                  f'(subsystem BEGINSWITH "com.apple.network" OR subsystem BEGINSWITH "com.apple.CFNetwork" '
@@ -215,10 +213,11 @@ def watch(app):
 def main():
     if len(sys.argv) == 5 and sys.argv[1] == "judge":
         capture, app, input_method = Path(sys.argv[2]), sys.argv[3], sys.argv[4]
-    elif len(sys.argv) == 2:
-        capture, app, input_method = watch(Path(sys.argv[1]).resolve())
+    elif len(sys.argv) == 3:
+        capture, app, input_method = watch(Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve())
     else:
-        fail("usage: scripts/wire-check <app bundle> | scripts/wire-check judge <capture> <app process> <input method process>")
+        fail("usage: scripts/wire-check <app bundle> <input method bundle> | "
+             "scripts/wire-check judge <capture> <app process> <input method process>")
     print(f"wire-check: {judge(capture, app, input_method)}; capture at {capture}")
 
 
