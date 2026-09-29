@@ -1,7 +1,7 @@
 import Foundation
 
-/// Where an installation's executables sit in relation to one another, and the one other
-/// file the app opens out of its own bundle.
+/// Where an installation's executables sit in relation to one another, and where its app
+/// keeps the notices the menu opens.
 ///
 /// Each app carries the programs it runs - itself and its copy of the CLI - and each can find
 /// the other from its own path. A build from a checkout carries nothing. Those two layouts
@@ -35,7 +35,8 @@ public enum Carrier {
     /// The CLI inside `bundle`.
     public static func cli(in bundle: URL) -> String { bundle.appending(path: cliInBundle).path }
 
-    /// Where an app bundle keeps the notices its components' licenses require, which the
-    /// menu opens: project.yml's `NOTICES_RESOURCE`, which `CarriedNoticesTests` holds this to.
-    public static let noticesInBundle = "Contents/Resources/Acknowledgements.txt"
+    /// The resource an app bundle keeps the notices its components' licenses require under,
+    /// which the menu opens: project.yml's `NOTICES_RESOURCE`, which `CarriedNoticesTests`
+    /// holds this to.
+    public static let noticesResource = "Acknowledgements.txt"
 }

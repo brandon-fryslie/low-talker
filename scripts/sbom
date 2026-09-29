@@ -71,8 +71,11 @@ def license_entry(component, root, rule):
     relative = need(rule, "licenseFile", component)
     path = root / relative
     if not path.is_file():
-        fail(f"{component}: license file {relative} is not in {root.name}")
-    text = path.read_text()
+        fail(f"{component}: license file {relative} is not in {root}")
+    try:
+        text = path.read_text()
+    except UnicodeDecodeError as error:
+        fail(f"{component}: license file {relative} is not UTF-8 text ({error})")
     if "licenseMatch" in rule:
         found = re.search(rule["licenseMatch"], text, re.MULTILINE | re.DOTALL)
         if not found:

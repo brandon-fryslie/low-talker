@@ -12,6 +12,6 @@ private let repository = URL(fileURLWithPath: #filePath)
     @Test func theAppOpensTheNoticesWhereTheBuildWritesThem() throws {
         let yaml = try String(contentsOf: repository.appending(path: "project.yml"), encoding: .utf8)
         let settings = yaml.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { $0.hasPrefix("NOTICES_RESOURCE:") }
-        #expect(settings.map { "Contents/Resources/\($0.dropFirst("NOTICES_RESOURCE: ".count))" } == [Carrier.noticesInBundle])
+        #expect(settings == ["NOTICES_RESOURCE: \(Carrier.noticesResource)"])
     }
 }
