@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""Refuses an SBOM carrying a component under a license we have not accepted.
+
+    scripts/check-licenses <sbom.cdx.json>
+
+Every component counts, the code vendored inside a package included. A component passes
+when it states at least one license and every license it states is an SPDX id in ACCEPTED.
+A license the generator could not identify - no license at all, a name with no SPDX id, an
+expression - fails like a refused one: a license nobody identified is not a license
+anybody accepted. Every failing component is named, not only the first.
+
+The SBOM is the one `make sbom` writes, which `check-sbom` holds to the build; this reads
+it and nothing else. [LAW:single-enforcer]
+"""
+import json
+import sys
+
+# The permissive set the tree sits in, and the public-domain equivalents. GPL, LGPL, AGPL,
+# MPL, SSPL and source-available licenses stay out: their obligations attach on
+# distribution, and every release distributes.
+ACCEPTED = {"MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unlicense", "CC0-1.0", "0BSD"}
+
+REMEDY = ("Drop the component, replace it with one under an accepted license, or reimplement "
+          "its behavior clean-room from a black-box specification written by someone who has "
+          "not read its source. Shipping it while deciding is not an option.")
+
+
+def fail(message):
+    print(f"check-licenses: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def named(license):
+    """What an entry says the license is: its SPDX id, or else the words that stand in for
+    one, which are what a reader needs to see why it was not identified."""
+    if "expression" in license:
+        return f"the expression `{license['expression']}`"
+    body = license.get("license", {})
+    if "id" in body:
+        return body["id"]
+    if "name" in body:
+        return f"a license named {body['name']!r} with no SPDX id"
+    return "a license entry with neither an SPDX id nor a name"
+
+
+def refusals(components, within=""):
+    """(component, what it is under) for each component, nested ones included, whose
+    licenses are not all accepted SPDX ids; and how many components were read."""
+    found = []
+    read = 0
+    for component in components:
+        who = f"{within}{component['name']} {component.get('version', '(no version)')}"
+        licenses = component.get("licenses", [])
+        if not licenses:
+            found.append((who, "no license the generator identified"))
+        found += [(who, named(entry)) for entry in licenses if entry.get("license", {}).get("id") not in ACCEPTED]
+        nested, count = refusals(component.get("components", []), f"{who} vendors ")
+        found += nested
+        read += 1 + count
+    return found, read
+
+
+def main():
+    if len(sys.argv) != 2:
+        fail("usage: scripts/check-licenses <sbom.cdx.json>")
+    try:
+        bom = json.loads(open(sys.argv[1]).read())
+    except (OSError, ValueError) as error:
+        fail(f"{sys.argv[1]} cannot be read as JSON ({error})")
+    # No components is a broken SBOM, not a clean one. [LAW:nothing-unseen]
+    if not bom.get("components"):
+        fail(f"{sys.argv[1]} lists no components, so there is nothing to have accepted")
+    found, read = refusals(bom["components"])
+    for who, what in found:
+        print(f"check-licenses: {who} is under {what}, which is not an accepted license", file=sys.stderr)
+    if found:
+        fail(f"accepted: {', '.join(sorted(ACCEPTED))}. {REMEDY}")
+    print(f"check-licenses: all {read} components in {sys.argv[1]} are under accepted licenses")
+
+
+main()
