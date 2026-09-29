@@ -103,6 +103,12 @@ def replay(captured, overrides):
     return {name: value for name, value in {**captured, **overrides}.items() if value is not None}
 
 
+async def send(writer, data):
+    """Written and drained, or failed: a peer that stops reading is a timeout like any other."""
+    writer.write(data)
+    await asyncio.wait_for(writer.drain(), TIMEOUT)
+
+
 async def read_head(reader):
     """The status or request line and the headers, lower-cased by name."""
     head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), TIMEOUT)
@@ -150,15 +156,18 @@ async def post(endpoint, path, headers, body):
     """The answer to one POST, its body decoded from whichever coding the request accepted."""
     reader, writer = await endpoint.open()
     try:
-        writer.write(head(f"POST {endpoint.path}/{path} HTTP/1.1", headers) + body)
-        await writer.drain()
+        await send(writer, head(f"POST {endpoint.path}/{path} HTTP/1.1", headers) + body)
         status_line, response_headers = await read_head(reader)
         response_body = await read_body(reader, response_headers)
         coding = response_headers.get("content-encoding", "identity").lower()
         accepted = {"identity", *(token.split(";")[0].strip().lower() for token in headers.get("accept-encoding", "").split(","))}
         if coding not in accepted:
             raise Refused(f"answered with content-encoding {coding}, which the request did not accept")
-        return Response(int(status_line.split()[1]), response_headers, DECODE[coding](response_body))
+        try:
+            decoded = DECODE[coding](response_body)
+        except zlib.error as error:
+            raise Refused(f"answered with a body that is not the {coding} (RFC 9110) its content-encoding says: {error}")
+        return Response(int(status_line.split()[1]), response_headers, decoded)
     finally:
         writer.close()
 
@@ -221,13 +230,11 @@ class Socket:
         payload = text.encode()
         if self.deflate is not None:
             payload = (self.deflate.compress(payload) + self.deflate.flush(zlib.Z_SYNC_FLUSH))[:-4]
-        self.writer.write(self._frame(TEXT, payload, RSV1 if self.deflate is not None else 0))
-        await self.writer.drain()
+        await send(self.writer, self._frame(TEXT, payload, RSV1 if self.deflate is not None else 0))
 
     async def close(self, code=1000):
         """Sends the close frame; the TCP connection is its owner's to end."""
-        self.writer.write(self._frame(CLOSE, code.to_bytes(2, "big")))
-        await self.writer.drain()
+        await send(self.writer, self._frame(CLOSE, code.to_bytes(2, "big")))
 
     async def receive(self):
         """The next message's text, or Closed. Pings are answered here, where they arrive."""
@@ -267,8 +274,7 @@ async def connect(endpoint, query, captured, token):
         key = base64.b64encode(os.urandom(16)).decode()
         headers = replay(captured, {"host": endpoint.authority, "sec-websocket-key": key,
                                     "authorization": None if token is None else f"Bearer {token}"})
-        writer.write(head(f"GET {endpoint.path}/realtime?{query} HTTP/1.1", headers))
-        await writer.drain()
+        await send(writer, head(f"GET {endpoint.path}/realtime?{query} HTTP/1.1", headers))
         status_line, answer = await read_head(reader)
         status = int(status_line.split()[1])
         if status != 101:
@@ -713,10 +719,9 @@ class Reference:
         # Gzipped whenever the request accepts it, as OpenAI's answers were.
         coding = "gzip" if "gzip" in headers.get("accept-encoding", "") else "identity"
         payload = gzip.compress(payload) if coding == "gzip" else payload
-        writer.write(head(f"HTTP/1.1 {status} {HTTPStatus(status).phrase}",
-                          {"content-type": content_type, "content-encoding": coding, "content-length": len(payload),
-                           "connection": "close"}) + payload)
-        await writer.drain()
+        await send(writer, head(f"HTTP/1.1 {status} {HTTPStatus(status).phrase}",
+                                {"content-type": content_type, "content-encoding": coding, "content-length": len(payload),
+                                 "connection": "close"}) + payload)
 
     async def realtime_session(self, target, headers, reader, writer):
         # permessage-deflate whenever the client offers it, as OpenAI agreed to it.
