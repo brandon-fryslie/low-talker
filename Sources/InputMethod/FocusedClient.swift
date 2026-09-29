@@ -131,6 +131,15 @@ public final class FocusedClient {
 /// inside an accepted commit's round trip, one of 3,471 accepted words never reached the
 /// app - a loss neither this process nor IMK can see, since an off-main commit returns
 /// before the app has taken the words. No word arrived doubled or out of order.
+///
+/// That one loss in 3,471 is left unmitigated, for the reason `Committer` already gives
+/// for the hung-app case: there is no moment at which this process can ask whether the
+/// words landed. A read of the client after the reactivation would be exactly the "did it
+/// take" check `Committer` rejected as unanswerable across apps - Finder's desktop grows a
+/// buffer nobody can see while iTerm2 answers `length()` of 0 whether or not the words
+/// landed - so it would tell this one loss from nothing at a rate no person dictating can
+/// reach in the first place. [LAW:no-silent-failure]'s bar is a refusal by name where one
+/// is knowable, not an invented signal where it is not.
 final class Client: TextCursor, @unchecked Sendable {
     private let client: IMKTextInput
     let application: String
