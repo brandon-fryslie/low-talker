@@ -193,7 +193,7 @@ The command hears the way the app does, through this installation's input method
     make cli
     .build/debug/lowtalker config check
 
-reads this installation's file in `~/.config/low-talker` — `config.dev.toml` for the copy built from this tree, which is what `.build/debug/lowtalker` defaults to, and `config.toml` for the installed one under `--flavor release` — and prints what the app would run with. It starts nothing. `--path` reads some other file instead, which is how a file is checked before it is installed, and it needs `--flavor` said out loud: which installation a file is read as decides every default it does not set, and the command refuses to guess. No file at all is not an error: the app runs on the defaults, dictation on this installation's own chord with the default model. A file that exists but cannot be read, or cannot be understood, is an error and is never quietly replaced by the defaults, since a config the user wrote and the app silently ignored is worse than one it refuses.
+reads this installation's file, `.config/low-talker/config.toml` inside its container, `~/Library/Containers/<bundle id>/Data` — `ai.promptctl.low-talker.dev` for the copy built from this tree, which is what `.build/debug/lowtalker` defaults to, and `ai.promptctl.low-talker` for the installed one under `--flavor release` — and prints what the app would run with. It starts nothing. `--path` reads some other file instead, which is how a file is checked before it is installed, and it needs `--flavor` said out loud: which installation a file is read as decides every default it does not set, and the command refuses to guess. No file at all is not an error: the app runs on the defaults, dictation on this installation's own chord with the default model. A file that exists but cannot be read, or cannot be understood, is an error and is never quietly replaced by the defaults, since a config the user wrote and the app silently ignored is worse than one it refuses.
 
 The file names a `model`, a model folder name such as `base.en`, an optional `[microphone]` table saying what the device does between presses, and an array of `[[modes]]` tables. Each mode takes a `name`, an optional `chord`, an optional `vocabulary` of terms, and an optional `routes`.
 
@@ -219,7 +219,7 @@ A file can also parse and still say something nobody meant, and those gaps are r
 
 Every heading is printed every time, so a mode with no vocabulary shows an empty `vocabulary:` rather than leaving the reader to wonder whether the key was read and ignored. On the file above, read by the development copy, with a mode with no routes added after it:
 
-    /Users/you/.config/low-talker/config.dev.toml
+    /Users/you/Library/Containers/ai.promptctl.low-talker.dev/Data/.config/low-talker/config.toml
 
     model: base.en
     microphone: open only while you dictate
@@ -257,11 +257,11 @@ prints the same report and then stays up, printing it again each time the file i
 A save that cannot be understood does not disturb what is running. It is named the way `check` names it, followed by the file still in force:
 
     refused: line 2 is not TOML: Error while parsing table header: expected ']', saw '\n'
-    still running: /Users/you/.config/low-talker/config.dev.toml
+    still running: /Users/you/Library/Containers/ai.promptctl.low-talker.dev/Data/.config/low-talker/config.toml
 
 Which is the whole point of reloading this way rather than re-reading the file and taking whatever comes back. A config half way through being typed is refused a hundred times over the course of an edit, and if a refusal cost the author their settings the feature would be worse than not having it. The defaults are reached by deleting the file, never by mistyping it.
 
-Deleting the file reloads too, back to the defaults, and the report says the file is gone rather than showing the defaults as though somebody had written them. Creating a file where there was none is picked up as well, and so is creating `~/.config/low-talker/` itself: the watch is placed on the deepest directory of that path that exists, because a watch on a directory that is not there yet is deaf for the life of the process. Saves that change nothing — the file rewritten with the same bytes, or some other file in the same directory — are read and not reported, so what gets printed is the set of changes to what the app would run with, not the set of times the disk was touched.
+Deleting the file reloads too, back to the defaults, and the report says the file is gone rather than showing the defaults as though somebody had written them. Creating a file where there was none is picked up as well, and so is creating its `.config/low-talker/` directory itself: the watch is placed on the deepest directory of that path that exists, because a watch on a directory that is not there yet is deaf for the life of the process. Saves that change nothing — the file rewritten with the same bytes, or some other file in the same directory — are read and not reported, so what gets printed is the set of changes to what the app would run with, not the set of times the disk was touched.
 
 ## Dry-running a route
 
@@ -278,7 +278,7 @@ While it is the selected input source, macOS hands the input method every change
 
 Hold the chord while you speak, or tap it to start and again to stop.
 
-An installation from before the input method was the only way still holds its old answers in its defaults, under `inputMethod` and `hotkeySource`. Nothing reads them now, so it comes up on the input method with no question asked. Such an installation also still holds the keyboard helper it registered as a background item. Every launch unregisters that helper under each label it was ever registered by, so launchd drops its job, and logs one `retired keyboard helper` line per label with the registration it found. System Settings still lists LowTalker under Allow in the Background, keeping the approval, until the app is deleted.
+An installation from before the input method was the only way still holds its old answers in its defaults, under `inputMethod` and `hotkeySource`. Nothing reads them now, so it comes up on the input method with no question asked. Such an installation also still holds the keyboard helper it registered as a background item. v0.1.0-alpha.5 unregisters it at launch. A build under App Sandbox is not permitted to (`SMAppService` answers `Operation not permitted`), so an installation that goes straight from alpha.4 or earlier to a sandboxed build keeps a job whose program is gone; `sudo launchctl bootout system/ai.promptctl.low-talker.keyboardd` (and `com.lowtalker.keyboardd`, `.dev` for the development copy) drops it.
 
 ## Dictation
 
@@ -379,7 +379,11 @@ The `designated =>` line should name `certificate leaf = H"..."`, which is stabl
 
 Both installations, everything embedded in each, and the input method bundle each is packaged with are built with Hardened Runtime, which notarization requires: `project.yml` sets `ENABLE_HARDENED_RUNTIME`. `codesign -dv` on either app, on its `Contents/Helpers/lowtalker`, or on its input method bundle in `/Library/Input Methods` shows `flags=0x10000(runtime)`.
 
-The runtime holds a program to a set of restrictions, and each exception is an entitlement. The app carries one, `com.apple.security.device.audio-input`, declared under `entitlements` in `project.yml`; xcodegen writes the plist from there into `App/Generated/`, which is ignored. Built with the runtime on and no entitlements, tccd logged `Prompting policy for hardened runtime; service: kTCCServiceMicrophone requires entitlement com.apple.security.device.audio-input but it is missing`. A Mac that already granted the microphone kept hearing. A Mac that never granted it would never be asked, and the app would hear nothing. Nothing else failed. Measured on 2026-09-16 on this Mac, both installations were built that way, and each transcribed "Hello world, this is Low Talker." from a fixture played at the microphone during a held chord.
+The runtime holds a program to a set of restrictions, and each exception is an entitlement. Each app's are declared under `entitlements` in `project.yml`; xcodegen writes the plist from there into `App/Generated/`, which is ignored.
+
+Both apps run under App Sandbox (`com.apple.security.app-sandbox`), which is what makes "no network" something the build cannot do rather than something it promises: with no network entitlement, `connect` and `getaddrinfo` are refused as `network-outbound`. The sandbox makes the app's home its container, `~/Library/Containers/<bundle id>/Data`, which is why the config file lives there. A file from before the sandbox, `~/.config/low-talker/config.toml` (`config.dev.toml` for the development copy), is moved in when macOS creates the container at the first sandboxed launch, by the `container-migration.plist` the bundle carries. Two Mach names are excepted, each denied without it: the app registers its hotkey port (`<bundle id>.hotkey`) and looks up its input method's insert port.
+
+The microphone takes `com.apple.security.device.audio-input`. Built with the runtime on and no entitlements, tccd logged `Prompting policy for hardened runtime; service: kTCCServiceMicrophone requires entitlement com.apple.security.device.audio-input but it is missing`. A Mac that already granted the microphone kept hearing. A Mac that never granted it would never be asked, and the app would hear nothing. Nothing else failed. Measured on 2026-09-16 on this Mac, both installations were built that way, and each transcribed "Hello world, this is Low Talker." from a fixture played at the microphone during a held chord.
 
 An entitlement goes in only with the failure that needed it, written in the comment beside it in `project.yml`.
 

@@ -58,8 +58,8 @@ struct FlavorOption: ParsableArguments {
 /// own documentation names the hazard in holding them apart: "read a file as the wrong
 /// installation and every key it leaves out falls back to the other copy's defaults - for
 /// the hotkey, that is one copy coming up on the chord the other listens for." With
-/// `--flavor` defaulted, `config check --path ~/.config/low-talker/config.toml` - the
-/// release file, checked before installing, which is what `--path` is *for* - filled its
+/// `--flavor` defaulted, `config check --path` naming
+/// the release file, checked before installing, which is what `--path` is *for* - filled its
 /// gaps from development defaults and reported the development chord as the one the
 /// release app would use. Quietly, and in the one command whose entire job is to say what
 /// will run.

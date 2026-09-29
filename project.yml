@@ -129,10 +129,24 @@ targetTemplates:
     # A Mac that already granted the microphone keeps hearing; a Mac that has not is
     # never asked, and the app is deaf.
     #
+    # com.apple.security.app-sandbox: what makes "no network" a property of the build rather
+    # than a promise. Measured under it on 2026-09-28, the app launches, loads its carried
+    # model, captures the microphone and reads its input source with nothing more; with no
+    # network entitlement, connect() and getaddrinfo are refused as `network-outbound`.
+    #
+    # The two Mach names, each denied by the sandbox without its line: the app registers
+    # its hotkey port (`mach-register`, Sources/Insertion/NamedPort.swift) and looks up the
+    # input method's insert port (`mach-lookup`, Sources/Insertion/Inserter.swift).
+    # `AppEntitlementsTests` holds these, and nothing beside them, to `Flavor`'s names.
     entitlements:
-      path: App/Generated/LowTalker.entitlements
+      path: App/Generated/${displayName}.entitlements
       properties:
+        com.apple.security.app-sandbox: true
         com.apple.security.device.audio-input: true
+        com.apple.security.temporary-exception.mach-register.global-name:
+          - ${hotkeyPortName}
+        com.apple.security.temporary-exception.mach-lookup.global-name:
+          - ${inputMethodPortName}
     # A bundle carries what a first run would otherwise fetch: a store holding its model, so
     # a first launch loads it with the network off. Copied in after every other phase, so
     # the signature Xcode writes last seals it with the rest of the bundle. `make` passes
@@ -169,24 +183,20 @@ targetTemplates:
           set -euo pipefail
           "${SRCROOT}/scripts/notices" "${SRCROOT}/sbom/lowtalker.cdx.json" \
             "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/${NOTICES_RESOURCE}"
-      # The keyboard helper's old launchd plists, and only their label and program: builds
-      # before v0.1.0-alpha.5 registered the helper through SMAppService, an upgraded
-      # installation still holds those jobs, and SMAppService finds a job to unregister only
-      # by a plist in Contents/Library/LaunchDaemons. The app unregisters them at every
-      # launch; nothing registers them. Written here from the labels rather than checked in,
-      # so the one copy of the names outside `Flavor` is the attribute below.
-      - name: The retired keyboard helper's plists, to unregister it by
+      # The config a person wrote before the sandbox, in ~/.config/low-talker, which the
+      # sandboxed app cannot read. macOS reads Contents/Resources/container-migration.plist
+      # once, when it creates the container at the first sandboxed launch, and moves each
+      # listed file in; the development copy's file is renamed on the way, since the two
+      # copies no longer share a directory. Without it an upgrade runs on the defaults and
+      # says nothing. Measured 2026-09-29 with a throwaway sandboxed bundle: both files moved,
+      # the rename applied, and the originals left their old directory.
+      - name: Carry the config from before the sandbox
         basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
-          daemons="${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Library/LaunchDaemons"
-          mkdir -p "${daemons}"
-          for label in ${RETIRED_HELPER_LABELS}; do
-            plist="${daemons}/${label}.plist"
-            plutil -create xml1 "${plist}"
-            plutil -insert Label -string "${label}" "${plist}"
-            plutil -insert BundleProgram -string Contents/MacOS/lowtalker-keyboardd "${plist}"
-          done
+          printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Move</key><array><array><string>%s</string><string>%s</string></array></array></dict></plist>\n' \
+            '${Home}/.config/low-talker/'"${UNSANDBOXED_CONFIG_FILE}" "${CONFIG_IN_CONTAINER}" \
+            > "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/container-migration.plist"
       # [LAW:no-silent-failure] A bundle that ships without the version project.yml sets
       # fails the build rather than shipping quietly. Checked here, on the built plist,
       # because no test sees a shipped bundle: `make test` never builds the app. The input
@@ -240,8 +250,11 @@ targetTemplates:
         # The notices' file in the bundle's resources, as Carrier.noticesResource names it;
         # CarriedNoticesTests holds the two equal. [LAW:one-source-of-truth]
         NOTICES_RESOURCE: Acknowledgements.txt
-        # Read by the step that writes the retired keyboard helper's plists, split on spaces.
-        RETIRED_HELPER_LABELS: ${retiredHelperLabels}
+        # Where the container keeps the config, as Config.pathInContainer names it;
+        # ContainerMigrationTests holds the two equal. [LAW:one-source-of-truth]
+        CONFIG_IN_CONTAINER: .config/low-talker/config.toml
+        # The file's name in ~/.config/low-talker before the sandbox.
+        UNSANDBOXED_CONFIG_FILE: ${unsandboxedConfigFileName}
 
   # [LAW:one-type-per-behavior] One input method, built once per installation. What
   # separates the two copies is what separates the apps - the names macOS files them under
@@ -366,9 +379,11 @@ targets:
     templateAttributes:
       displayName: LowTalker
       bundleIdentifier: ai.promptctl.low-talker
+      hotkeyPortName: ai.promptctl.low-talker.hotkey
+      inputMethodPortName: ai.promptctl.low-talker.inputmethod.dictation.insert
       inputMethodTarget: LowTalkerInputMethod
       appIconName: AppIcon
-      retiredHelperLabels: com.lowtalker.keyboardd ai.promptctl.low-talker.keyboardd
+      unsandboxedConfigFileName: config.toml
 
   # The copy built from the working tree, installed and running beside the one above.
   LowTalkerDev:
@@ -376,9 +391,11 @@ targets:
     templateAttributes:
       displayName: LowTalker Dev
       bundleIdentifier: ai.promptctl.low-talker.dev
+      hotkeyPortName: ai.promptctl.low-talker.dev.hotkey
+      inputMethodPortName: ai.promptctl.low-talker.dev.inputmethod.dictation.insert
       inputMethodTarget: LowTalkerDevInputMethod
       appIconName: AppIconDev
-      retiredHelperLabels: com.lowtalker.keyboardd.dev ai.promptctl.low-talker.keyboardd.dev
+      unsandboxedConfigFileName: config.dev.toml
 
   # The input method each app above is packaged with, one bundle per installation.
   LowTalkerInputMethod:
@@ -404,8 +421,8 @@ targets:
   # The CLI, built here from the entry Package.swift builds `.build/debug/lowtalker` from,
   # over the library holding every command, so the copy an app carries is the program a
   # checkout runs. `make cli` signs that build with this identifier too, so both builds are
-  # one code identity - which is also the key the Neural Engine files its compiled model
-  # under, so either copy warms the other's cache.
+  # one code identity. They no longer share a Neural Engine cache: the sandboxed app keeps
+  # its own inside its container, so warming one leaves the other cold.
   #
   # Named apart from its product: Xcode keeps each target's intermediates in a folder named
   # for the target, and `lowtalker` and the release app's `LowTalker` are one folder on a

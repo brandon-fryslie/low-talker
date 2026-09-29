@@ -141,35 +141,6 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
 /// installation is covered by existing rather than by somebody remembering these.
 /// [LAW:behavior-not-structure]
 @Suite struct EveryInstallationsChordTests {
-    @Test func everyFlavoursChordIsInTheSet() {
-        let every = Config.everyInstallationsChord { flavor throws(ConfigError) in .noFile(at: URL(filePath: "/nonexistent"), flavor: flavor) }
-        for flavor in Flavor.allCases {
-            #expect(every.contains(Hotkey.defaultChord(for: flavor)), "\(flavor)'s chord is not in the set")
-        }
-    }
-
-    /// A chord an installation's file names is the chord it listens for, so it is in the set.
-    @Test func aChordAConfigNamesIsInTheSet() throws {
-        let edited = try Config(toml: """
-            [[modes]]
-            name = "dictation"
-            chord = { modifiers = ["leftControl"] }
-            """, flavor: .release)
-        let every = Config.everyInstallationsChord { flavor throws(ConfigError) in
-            flavor == .release ? .file(edited, at: URL(filePath: "/tmp/config.toml"), flavor: flavor) : .noFile(at: URL(filePath: "/nonexistent"), flavor: flavor)
-        }
-        #expect(every.contains(KeyChord(modifiers: .leftControl)))
-    }
-
-    /// A file that cannot be read stands as its installation's defaults: that copy comes
-    /// up on nothing until it can read it, and on its defaults once the file is gone.
-    @Test func anUnreadableFileStandsAsItsInstallationsDefaults() {
-        let every = Config.everyInstallationsChord { flavor throws(ConfigError) in throw .noModes }
-        for flavor in Flavor.allCases {
-            #expect(every.isSuperset(of: Config.default(for: flavor).chords))
-        }
-    }
-
     /// The chords in a person's words, spelled out in press order, because this is the order
     /// that once shipped wrong: the menu bar printed `hold rightOption+rightCommand to
     /// dictate`, and a reader following it literally completed the release chord first.

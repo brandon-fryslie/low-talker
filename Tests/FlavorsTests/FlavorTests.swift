@@ -14,7 +14,6 @@ struct FlavorTests {
     @Test(arguments: [
         ("bundle identifier", { @Sendable (f: Flavor) in f.bundleIdentifier }),
         ("display name", { @Sendable (f: Flavor) in f.displayName }),
-        ("config file", { @Sendable (f: Flavor) in f.configFileName }),
         ("app icon", { @Sendable (f: Flavor) in f.appIconName }),
         ("status mark", { @Sendable (f: Flavor) in f.statusMarkName }),
         ("input method bundle identifier", { @Sendable (f: Flavor) in f.inputMethodBundleIdentifier }),
