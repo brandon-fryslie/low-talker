@@ -11,12 +11,10 @@ import Testing
         focusedElementRole: AccessibilityRole(rawValue: "AXTextArea")
     )
 
-    static let slack = BundleID(rawValue: "com.tinyspeck.slackmacgap")
-
     @Test func dictationInsertsTheTranscriptAtFocus() {
         let actions = Router(routes: [.dictation])
             .actions(for: Transcript(typed: "Hello, world."), in: Self.context)
-        #expect(actions == [.insertText(text: "Hello, world.", target: .focus)])
+        #expect(actions == [.insertText(text: "Hello, world.")])
     }
 
     /// Nothing said, nothing to do: not even an insert of the empty string.
@@ -27,16 +25,6 @@ import Testing
         // The engine can hand back a lone whitespace word: text is " ", non-empty but
         // nothing said, which text.isEmpty would let through as an insert of a space.
         #expect(router.actions(for: Transcript(words: [.init(text: " ", time: 0...0, confidence: 1.0)]), in: Self.context) == [])
-    }
-
-    /// Routes are an ordered list; the first that claims the utterance decides.
-    @Test func firstMatchingRouteWins() {
-        let router = Router(routes: [
-            Route(when: .always, then: .insertTranscript(target: .app(bundleID: Self.slack))),
-            .dictation,
-        ])
-        let actions = router.actions(for: Transcript(typed: "hi"), in: Self.context)
-        #expect(actions == [.insertText(text: "hi", target: .app(bundleID: Self.slack))])
     }
 
     @Test func noRoutesProducesNoActions() {

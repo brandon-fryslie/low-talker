@@ -9,12 +9,9 @@ public struct ConfigReport: CustomStringConvertible {
     public let loaded: Config.Loaded
     public let gaps: [ConfigGap]
 
-    /// - Parameter appExists: whether this Mac has an app with that bundle id. Asked here,
-    ///   at the one boundary that touches the machine, so everything below is a pure
-    ///   function of the answer.
-    public init(_ loaded: Config.Loaded, appExists: (BundleID) -> Bool) {
+    public init(_ loaded: Config.Loaded) {
         self.loaded = loaded
-        self.gaps = loaded.config.gaps(appExists: appExists)
+        self.gaps = loaded.config.gaps
     }
 
     /// Every section is present every time, and an empty one shows as a heading with

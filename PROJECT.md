@@ -24,7 +24,7 @@ Every invocation flows through the same three types, whether it is plain dictati
 - **Transcript** is what the engine produced, with word timings and confidence attached. It is never a bare string.
 - **Actions** are a small closed set of primitives. `InsertText(target)`, `ActivateApp(bundleId)`, `OpenURL`, `RunShortcut`, and `Pipe`, which hands the transcript to an external program and reads a list of actions back as JSON. Only `InsertText` at the focus is performed today; the app refuses the others by name.
 
-A route maps a context and a transcript to actions. Dictation is the default route: any context, any transcript, insert the text at the focus. Everything in the power layer is another route in the config file, not code. Sending text to Slack is a route whose action targets Slack's bundle id. Switching apps by voice is command mode plus `ActivateApp` with fuzzy matching over the running apps. A voice-plus-keyboard combination is exactly a chord-selected mode.
+A route maps a context and a transcript to actions. Dictation is the default route: any context, any transcript, insert the text at the focus. Everything in the power layer is another route in the config file, not code. Switching apps by voice is command mode plus `ActivateApp` with fuzzy matching over the running apps. A voice-plus-keyboard combination is exactly a chord-selected mode.
 
 `Pipe` is the extensibility escape hatch. It lets a shell script or a local LLM rewrite a transcript or decide the actions, which covers most "I wish it could" requests without building a plugin system. A real plugin story waits until `Pipe` proves too small.
 

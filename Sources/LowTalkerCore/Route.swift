@@ -3,8 +3,8 @@
 /// config file rather than into code.
 ///
 /// [LAW:composability] A route is a match half and an emit half so that any way of
-/// claiming an utterance combines with any way of acting on it. "Send to Slack from
-/// anywhere" is the dictation emit with a different target, not a new kind of route.
+/// claiming an utterance combines with any way of acting on it. Command mode adds
+/// cases to each half, and every one it adds meets every one already here.
 ///
 /// [LAW:effects-at-boundaries] Routes are data, and routing is a pure function of the
 /// Context and Transcript. Nothing here posts events, types text, or
@@ -22,7 +22,7 @@ public struct Route: Hashable, Sendable, CustomStringConvertible {
     public var description: String { "\(when) → \(then)" }
 
     /// Any context, any transcript, the words go to whatever has focus.
-    public static let dictation = Route(when: .always, then: .insertTranscript(target: .focus))
+    public static let dictation = Route(when: .always, then: .insertTranscript)
 
     /// What a route claims. Command mode adds cases here: the chord that started
     /// listening, the frontmost app, a keyword at the start of the transcript.
@@ -47,33 +47,21 @@ public struct Route: Hashable, Sendable, CustomStringConvertible {
 
     /// What a claimed utterance becomes.
     public enum Emit: Hashable, Sendable, CustomStringConvertible {
-        /// The transcript's text, inserted as one action. A blank transcript — nothing
-        /// said — produces no action rather than an action that does nothing.
-        case insertTranscript(target: InsertTarget)
+        /// The transcript's text, inserted at the cursor as one action. A blank
+        /// transcript — nothing said — produces no action rather than an action that
+        /// does nothing.
+        case insertTranscript
 
         public func actions(for transcript: Transcript, in context: Context) -> [Action] {
             switch self {
-            case .insertTranscript(let target):
-                transcript.isBlank ? [] : [.insertText(text: transcript.text, target: target)]
+            case .insertTranscript:
+                transcript.isBlank ? [] : [.insertText(text: transcript.text)]
             }
         }
 
         public var description: String {
             switch self {
-            case .insertTranscript(let target): "insert into \(target)"
-            }
-        }
-
-        /// The apps this emit names, which is none for every emit that names none.
-        ///
-        /// A list rather than an optional, so an emit that grows a second target
-        /// contributes both without changing what asks. Whether such an app is
-        /// installed is not a question this module can answer - it is a fact about one
-        /// Mac - so `ConfigGap` asks it at the edge and this only says which ids were
-        /// named. [LAW:dataflow-not-control-flow]
-        public var appsNamed: [BundleID] {
-            switch self {
-            case .insertTranscript(let target): target.appsNamed
+            case .insertTranscript: "insert at the cursor"
             }
         }
     }

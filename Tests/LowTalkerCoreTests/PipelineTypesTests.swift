@@ -20,8 +20,7 @@ import Testing
 
     /// One of every Action case, so a payload the encoder cannot carry fails here.
     static let actions: [Action] = [
-        .insertText(text: "hi", target: .focus),
-        .insertText(text: "hi", target: .app(bundleID: BundleID(rawValue: "com.tinyspeck.slackmacgap"))),
+        .insertText(text: "hi"),
         .activateApp(bundleID: BundleID(rawValue: "com.apple.Safari")),
         .openURL(url: URL(string: "https://example.com/?q=low%20talker")!),
         .runShortcut(name: "Append to Journal", input: "hi"),
@@ -56,8 +55,7 @@ import Testing
     @Test func pipeProgramsWriteReadableJSON() throws {
         let json = """
         [
-          {"insertText": {"text": "hi", "target": {"focus": {}}}},
-          {"insertText": {"text": "hi", "target": {"app": {"bundleID": "com.tinyspeck.slackmacgap"}}}},
+          {"insertText": {"text": "hi"}},
           {"activateApp": {"bundleID": "com.apple.Safari"}},
           {"openURL": {"url": "https://example.com/"}},
           {"runShortcut": {"name": "Toggle Lights"}},
@@ -66,8 +64,7 @@ import Testing
         """
         let decoded = try JSONDecoder().decode([Action].self, from: Data(json.utf8))
         #expect(decoded == [
-            .insertText(text: "hi", target: .focus),
-            .insertText(text: "hi", target: .app(bundleID: BundleID(rawValue: "com.tinyspeck.slackmacgap"))),
+            .insertText(text: "hi"),
             .activateApp(bundleID: BundleID(rawValue: "com.apple.Safari")),
             .openURL(url: URL(string: "https://example.com/")!),
             .runShortcut(name: "Toggle Lights", input: nil),

@@ -69,13 +69,11 @@ public struct Executor {
     }
 
     /// [LAW:parse-dont-validate] The one place an action becomes something the input method
-    /// can do. Text for a named app is refused with the rest: the input method reaches the
-    /// cursor the text input system is holding, which belongs to whatever is in front, so an
-    /// action naming its own app is one it could only pretend to perform.
+    /// can do.
     private static func text(of action: Action) throws -> String {
         switch action {
-        case .insertText(let text, .focus): text
-        case .insertText(_, .app), .activateApp, .openURL, .runShortcut, .pipe: throw NotAnInsert(action: action)
+        case .insertText(let text): text
+        case .activateApp, .openURL, .runShortcut, .pipe: throw NotAnInsert(action: action)
         }
     }
 }
