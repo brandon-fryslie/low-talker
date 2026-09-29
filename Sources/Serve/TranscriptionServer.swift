@@ -184,6 +184,12 @@ private struct Answering: Sendable {
 
     private func transcription(_ head: RequestHead, _ connection: NWConnection, _ reader: inout Reader, _ event: inout ServedRequest) async throws -> HTTPResponse {
         let length = try head.bodyLength(limit: TranscriptionServer.bodyLimit)
+        // Asked before the body is asked for or read, so a server still loading refuses at once.
+        let transcriber: any Transcriber
+        switch engine() {
+        case .ready(let resident): transcriber = resident
+        case .notResident(let reason): throw APIError.notResident(reason)
+        }
         // A client that asked to hear the request is wanted before sending its body
         // (curl, for any large upload) waits for this, or for a timeout, before it sends.
         if head.headers["expect"]?.lowercased() == "100-continue" {
@@ -196,12 +202,6 @@ private struct Answering: Sendable {
         event.language = request.language?.rawValue
         event.format = request.format.rawValue
         event.vocabularyTerms = request.vocabulary.terms.count
-        // Asked before the upload is read, so a server still loading refuses at once.
-        let transcriber: any Transcriber
-        switch engine() {
-        case .ready(let resident): transcriber = resident
-        case .notResident(let reason): throw APIError.notResident(reason)
-        }
         let clip = try request.upload.clip()
         event.audioSeconds = clip.duration
         let transcript: Transcript
