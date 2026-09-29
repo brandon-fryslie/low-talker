@@ -3,11 +3,16 @@ import Foundation
 import TOMLKit
 
 public extension Config {
-    /// The one file, at the one path, per installation. One directory with two files in
-    /// it: a reader editing one copy's settings finds the other's beside it rather than
-    /// somewhere else entirely. [LAW:one-source-of-truth]
+    /// The one file, at the one path, per installation: inside that installation's
+    /// container, which App Sandbox makes the app's home and the only place it reads.
+    ///
+    /// [LAW:one-source-of-truth] Spelled from the account's own home rather than from
+    /// `homeDirectoryForCurrentUser`, which answers the container inside the sandbox and the
+    /// real home outside it. The app and a `lowtalker` run from a terminal would otherwise
+    /// name two files, and `config check` would report on one the app never reads.
     static func fileURL(for flavor: Flavor) -> URL {
-        FileManager.default.homeDirectoryForCurrentUser.appending(path: ".config/low-talker/\(flavor.configFileName)")
+        URL(filePath: String(cString: getpwuid(getuid()).pointee.pw_dir), directoryHint: .isDirectory)
+            .appending(path: "Library/Containers/\(flavor.bundleIdentifier)/Data/.config/low-talker/config.toml")
     }
 
     /// [LAW:parse-dont-validate] The one place config text becomes a Config. What comes
@@ -70,26 +75,6 @@ public extension Config {
             throw ConfigError.unreadable(path: url.path, why: error.localizedDescription)
         }
         return .file(try Config(toml: text, flavor: flavor), at: url, flavor: flavor)
-    }
-
-    /// Every chord an installation on this Mac listens for, as the config files say now: the
-    /// chords a press of one installation's must not complete on the way.
-    ///
-    /// Every flavor's, not every *installed* flavor's: whether the other copy is on this Mac
-    /// is a question with a different answer every minute, and an order of keys worked out on
-    /// the strength of it would start the other copy's dictation in the window where the
-    /// answer was stale. [LAW:dataflow-not-control-flow]
-    ///
-    /// A file that cannot be read stands as its installation's defaults. That installation
-    /// comes up on no chord while it cannot read it, and its own defaults are what it listens
-    /// for once it is gone. The error is that installation's to report, where its owner will
-    /// see it.
-    ///
-    /// - Parameter read: how an installation's file is read; a test hands in its own.
-    static func everyInstallationsChord(
-        read: (Flavor) throws(ConfigError) -> Loaded = { flavor throws(ConfigError) in try load(for: flavor) }
-    ) -> Set<KeyChord> {
-        Set(Flavor.allCases.flatMap { flavor in ((try? read(flavor))?.config ?? .default(for: flavor)).chords })
     }
 
     /// One reading: what it found, the file it read, and the installation that read it.

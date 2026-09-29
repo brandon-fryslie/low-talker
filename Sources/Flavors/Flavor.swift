@@ -177,16 +177,6 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
         }
     }
 
-    /// The config file's name inside `~/.config/low-talker`. One directory, two files:
-    /// the directory is the project's, and a reader editing one build's settings should
-    /// find the other's beside it rather than somewhere else entirely.
-    public var configFileName: String {
-        switch self {
-        case .release: "config.toml"
-        case .development: "config.dev.toml"
-        }
-    }
-
     /// [LAW:parse-dont-validate] The one place a bundle identifier becomes a flavor. The
     /// app knows which copy it is only by the identity macOS launched it under, and this
     /// is where that string stops being a string.

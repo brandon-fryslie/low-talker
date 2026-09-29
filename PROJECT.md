@@ -28,7 +28,7 @@ A route maps a context and a transcript to actions. Dictation is the default rou
 
 `Pipe` is the extensibility escape hatch. It lets a shell script or a local LLM rewrite a transcript or decide the actions, which covers most "I wish it could" requests without building a plugin system. A real plugin story waits until `Pipe` proves too small.
 
-Configuration is one TOML file at `~/.config/low-talker/config.toml`: chords to modes and modes to routes.
+Configuration is one TOML file, `.config/low-talker/config.toml` in the app's sandbox container: chords to modes and modes to routes.
 
 ## Decisions already made
 

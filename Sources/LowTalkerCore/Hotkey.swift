@@ -28,11 +28,11 @@ public final class Hotkey {
         }
     }
 
-    /// Every installation's chord, as their config files said the first time this process
-    /// asked: the chords `pressOrder` orders a press around. Read once, as the app reads its
-    /// own config once; see `Config.everyInstallationsChord(read:)` for why it is every
-    /// installation's.
-    nonisolated public static let everyInstallationsChord: Set<KeyChord> = Config.everyInstallationsChord()
+    /// Every installation's chord, as it stands with no config: the chords `pressOrder`
+    /// orders a press around. The defaults, because they are all an installation can know -
+    /// App Sandbox keeps each one's config file in its own container, where no other copy
+    /// may read it.
+    nonisolated public static let everyInstallationsChord = Set(Flavor.allCases.map(defaultChord(for:)))
 
     /// This chord's modifiers in the order a person must press them.
     ///

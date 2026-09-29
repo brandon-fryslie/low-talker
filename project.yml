@@ -129,10 +129,24 @@ targetTemplates:
     # A Mac that already granted the microphone keeps hearing; a Mac that has not is
     # never asked, and the app is deaf.
     #
+    # com.apple.security.app-sandbox: what makes "no network" a property of the build rather
+    # than a promise. Measured under it on 2026-09-28, the app launches, loads its carried
+    # model, captures the microphone and reads its input source with nothing more; with no
+    # network entitlement, connect() and getaddrinfo are refused as `network-outbound`.
+    #
+    # The two Mach names, each denied by the sandbox without its line: the app registers
+    # its hotkey port (`mach-register`, Sources/Insertion/NamedPort.swift) and looks up the
+    # input method's insert port (`mach-lookup`, Sources/Insertion/Inserter.swift).
+    # `AppEntitlementsTests` holds these, and nothing beside them, to `Flavor`'s names.
     entitlements:
-      path: App/Generated/LowTalker.entitlements
+      path: App/Generated/${displayName}.entitlements
       properties:
+        com.apple.security.app-sandbox: true
         com.apple.security.device.audio-input: true
+        com.apple.security.temporary-exception.mach-register.global-name:
+          - ${hotkeyPortName}
+        com.apple.security.temporary-exception.mach-lookup.global-name:
+          - ${inputMethodPortName}
     # A bundle carries what a first run would otherwise fetch: a store holding its model, so
     # a first launch loads it with the network off. Copied in after every other phase, so
     # the signature Xcode writes last seals it with the rest of the bundle. `make` passes
@@ -366,6 +380,8 @@ targets:
     templateAttributes:
       displayName: LowTalker
       bundleIdentifier: ai.promptctl.low-talker
+      hotkeyPortName: ai.promptctl.low-talker.hotkey
+      inputMethodPortName: ai.promptctl.low-talker.inputmethod.dictation.insert
       inputMethodTarget: LowTalkerInputMethod
       appIconName: AppIcon
       retiredHelperLabels: com.lowtalker.keyboardd ai.promptctl.low-talker.keyboardd
@@ -376,6 +392,8 @@ targets:
     templateAttributes:
       displayName: LowTalker Dev
       bundleIdentifier: ai.promptctl.low-talker.dev
+      hotkeyPortName: ai.promptctl.low-talker.dev.hotkey
+      inputMethodPortName: ai.promptctl.low-talker.dev.inputmethod.dictation.insert
       inputMethodTarget: LowTalkerDevInputMethod
       appIconName: AppIconDev
       retiredHelperLabels: com.lowtalker.keyboardd.dev ai.promptctl.low-talker.keyboardd.dev
