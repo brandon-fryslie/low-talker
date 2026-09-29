@@ -45,20 +45,6 @@ public extension Requirement {
         case microphone = "Microphone"
         case inputMethod = "Input method"
 
-        /// Whether only the app itself can read this row.
-        ///
-        /// macOS keys these grants to the app that holds them, so another process asking
-        /// about them is told about itself: a CLI run from a terminal reading the
-        /// microphone grant would report the terminal's. A reading of the wrong app is worse
-        /// than none, so these rows are read by the app and named, unread, everywhere else.
-        /// [LAW:no-silent-failure]
-        public var readOnlyByTheApp: Bool {
-            switch self {
-            case .microphone: true
-            case .inputMethod: false
-            }
-        }
-
         /// Whether pressing this row's ask button again asks macOS again. Most of these
         /// dialogs macOS shows once per app, so a second press does nothing and the step
         /// sends the person to System Settings instead. Switching on an input method is not
@@ -151,19 +137,6 @@ private func privacyPane(_ row: Requirement.Row) -> String {
 }
 
 public extension Requirement {
-    /// A grant's row from the app's reading, or a row saying the reading failed: a grant
-    /// that could not be read is unmet, and says why. [LAW:no-silent-failure]
-    static func privacy(
-        _ row: Row, _ reading: Result<PrivacyReading, PrivacyReadingFailure>, flavor: Flavor,
-        _ build: (PrivacyReading) -> Requirement
-    ) -> Requirement {
-        switch reading {
-        case .success(let reading): build(reading)
-        case .failure(let failure):
-            Requirement(row: row, reads: "could not be read: \(failure)", step: "Try again in a moment. If it stays, reinstall \(flavor.displayName).")
-        }
-    }
-
     /// The microphone, which every setup needs: nothing is heard without it.
     ///
     /// - Parameter withheld: why macOS withholds it, or nil when it is allowed.

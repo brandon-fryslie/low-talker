@@ -22,31 +22,21 @@ import Testing
 
     /// The app reads every row the CLI reads, plus its own grant, in the one order.
     @Test func theAppReadsItsOwnGrantWhereTheCLICannot() {
-        let asTheAppSeesIt = OnboardingProbe.readiness(flavor: .development, reader: .theApp(privacy: .success(Self.nothingGranted)))
+        let asTheAppSeesIt = OnboardingProbe.readiness(flavor: .development, reader: .theApp(microphone: .withheld(.notDetermined)))
         #expect(asTheAppSeesIt.requirements.map(\.row) == Requirement.Row.allCases)
         #expect(asTheAppSeesIt.notReadHere.isEmpty)
     }
 
-    /// The microphone row reads what the app's reading says, whatever this test process's
-    /// own grant is.
-    @Test func theAppsGrantRowReadsTheReadingItWasGiven() {
-        func grantRows(_ privacy: PrivacyReading) -> [Requirement] {
-            OnboardingProbe.readiness(flavor: .development, reader: .theApp(privacy: .success(privacy)))
-                .requirements.filter(\.row.readOnlyByTheApp)
+    /// The microphone row reads the authorization the app handed over.
+    @Test func theAppsMicrophoneRowReadsWhatItWasGiven() {
+        func microphoneRow(_ reason: MicrophoneAuthorization.Withheld) -> Requirement? {
+            OnboardingProbe.readiness(flavor: .development, reader: .theApp(microphone: .withheld(reason)))
+                .requirements.first { $0.row == .microphone }
         }
-        #expect(grantRows(PrivacyReading(microphone: .authorized)).map(\.met) == [true])
-        #expect(grantRows(Self.nothingGranted).map(\.met) == [false])
+        #expect(microphoneRow(.notDetermined)?.reads == "not asked yet")
+        #expect(microphoneRow(.denied)?.reads == "turned off")
+        #expect(microphoneRow(.restricted)?.met == false)
     }
-
-    /// A reading that failed leaves the grant unmet and says why, rather than guessing.
-    @Test func aFailedReadingLeavesTheGrantUnmetAndSaysWhy() {
-        let rows = OnboardingProbe.readiness(flavor: .development, reader: .theApp(privacy: .failure(PrivacyReadingFailure("no reader"))))
-            .requirements.filter(\.row.readOnlyByTheApp)
-        #expect(rows.map(\.row) == [.microphone])
-        #expect(rows.allSatisfy { !$0.met && $0.reads == "could not be read: no reader" })
-    }
-
-    static let nothingGranted = PrivacyReading(microphone: .notDetermined)
 
     static var asTheCLISeesIt: Readiness {
         OnboardingProbe.readiness(flavor: .development, reader: .elsewhere)

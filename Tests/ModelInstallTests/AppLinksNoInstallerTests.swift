@@ -4,11 +4,12 @@ import Testing
 private let repository = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
-/// Nothing the project builds, other than the CLI, has a way to fetch a model. Read off
-/// the two graphs the build resolves rather than off call sites: what Xcode links into
-/// each target, from the project xcodegen generated, and what each package target
-/// depends on, from SwiftPM's own dump of the manifest. The CLI reaches the installer by
-/// the same read, so the read is not blind. [LAW:one-way-deps]
+/// Nothing the Xcode project builds - every app and input method that ships - has a way to
+/// fetch a model. Read off the two graphs the build resolves rather than off call sites:
+/// what Xcode links into each target, from the project xcodegen generated, and what each
+/// package target depends on, from SwiftPM's own dump of the manifest. The CLI, which
+/// SwiftPM builds and nothing ships, reaches the installer by the same read, so the read
+/// is not blind. [LAW:one-way-deps]
 ///
 /// The tools' own graphs and not a parse of project.yml or Package.swift: a parser is a
 /// second map of the same territory, and the first draft of this test had two ways to
@@ -20,7 +21,8 @@ private let repository = URL(fileURLWithPath: #filePath)
 /// rewrote the project would do so under whatever build is running in the tree.
 @Suite struct AppLinksNoInstallerTests {
     static let installer = "ModelInstall"
-    static let cli = "lowtalker-cli"
+    static let cli = "lowtalker"
+    static let app = "LowTalker"
 
     /// Package.swift as SwiftPM reads it: each product to the targets it bundles, and each
     /// target to the package targets it depends on. Dumped into a scratch path of its own,
@@ -52,9 +54,7 @@ private let repository = URL(fileURLWithPath: #filePath)
     }
 
     /// What Xcode links into each target it builds, off the project xcodegen wrote: the
-    /// package products of every native target. An embedded target is copied into the
-    /// bundle and not linked, so it is not an edge: the CLI the app carries is a program
-    /// of its own, and which of them can write a store is exactly what this test asks.
+    /// package products of every native target.
     static func project() throws -> [String: Set<String>] {
         let pbxproj = repository.appending(path: "LowTalker.xcodeproj/project.pbxproj")
         try #require(FileManager.default.fileExists(atPath: pbxproj.path),
@@ -73,7 +73,7 @@ private let repository = URL(fileURLWithPath: #filePath)
             }
             return (try #require(target["name"] as? String), Set(products))
         }
-        try #require(targets.contains { $0.0 == cli }, "read no \(cli) target out of the project: \(targets.map(\.0))")
+        try #require(targets.contains { $0.0 == app }, "read no \(app) target out of the project: \(targets.map(\.0))")
         return Dictionary(uniqueKeysWithValues: targets)
     }
 
@@ -116,23 +116,20 @@ private let repository = URL(fileURLWithPath: #filePath)
         return data
     }
 
-    @Test func everyBuiltTargetButTheCLIReachesNoInstaller() throws {
+    @Test func nothingTheProjectBuildsReachesTheInstaller() throws {
         let package = try Self.package()
         try #require(package.targets[Self.installer] != nil, "Package.swift declares no \(Self.installer) target")
-        let built = try Self.project().filter { $0.key != Self.cli }
-        try #require(!built.isEmpty, "the project builds nothing but the CLI")
-        for (target, products) in built.sorted(by: { $0.key < $1.key }) {
+        for (target, products) in try Self.project().sorted(by: { $0.key < $1.key }) {
             let reached = Self.reach(try Self.roots(of: target, linking: products, in: package.products), in: package.targets)
             #expect(!reached.contains(Self.installer), "\(target) reaches \(Self.installer) through \(reached.sorted())")
         }
     }
 
-    /// The same two reads find the installer beneath the CLI, so the read above is not
+    /// The same package read finds the installer beneath the CLI, so the read above is not
     /// blind.
     @Test func theCLIReachesIt() throws {
         let package = try Self.package()
-        let project = try Self.project()
-        let products = try #require(project[Self.cli])
-        #expect(Self.reach(try Self.roots(of: Self.cli, linking: products, in: package.products), in: package.targets).contains(Self.installer))
+        let roots = try #require(package.products[Self.cli], "Package.swift exports no \(Self.cli) product")
+        #expect(Self.reach(roots, in: package.targets).contains(Self.installer))
     }
 }

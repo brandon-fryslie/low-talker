@@ -3,31 +3,14 @@ import Grants
 import InputSource
 
 /// Who is reading the list, which decides what can be read at all.
-public enum OnboardingReader: Sendable, Hashable {
+public enum OnboardingReader: Sendable {
     /// The app itself, which holds its own privacy grants, and so can read every row.
     ///
-    /// - Parameter privacy: the app's grants, read fresh; see `PrivacyReading`.
-    case theApp(privacy: Result<PrivacyReading, PrivacyReadingFailure>)
+    /// - Parameter microphone: the app's microphone, as its own process reads it.
+    case theApp(microphone: MicrophoneAuthorization)
     /// Any other process - the CLI. It reads what belongs to the Mac and names the rows
-    /// that belong to the app, unread. See `Requirement.Row.readOnlyByTheApp`.
+    /// that belong to the app, unread.
     case elsewhere
-
-    /// The grants, as far as this reader has them. `canRead` keeps the rows that need them
-    /// from any other reader, so the failure here is never shown; it is a failure rather
-    /// than a guess so that a row reaching it anyway says so. [LAW:no-silent-failure]
-    var privacy: Result<PrivacyReading, PrivacyReadingFailure> {
-        switch self {
-        case .theApp(let privacy): privacy
-        case .elsewhere: .failure(PrivacyReadingFailure("only the app reads its own grants"))
-        }
-    }
-
-    func canRead(_ row: Requirement.Row) -> Bool {
-        switch self {
-        case .theApp: true
-        case .elsewhere: !row.readOnlyByTheApp
-        }
-    }
 }
 
 /// Reading this Mac for the list.
@@ -52,20 +35,24 @@ public enum OnboardingProbe {
     /// - Parameter reader: who is asking, which decides the rows only the app can read.
     public static func readiness(flavor: Flavor, reader: OnboardingReader) -> Readiness {
         let rows = Requirement.Row.allCases
-        let requirements: [Requirement] = rows.filter(reader.canRead).map { row in
-            switch row {
-            case .microphone:
-                .privacy(.microphone, reader.privacy, flavor: flavor) { reading in
-                    let withheld: MicrophoneAuthorization.Withheld? = switch reading.microphoneAuthorization {
-                    case .granted: nil
-                    case .withheld(let reason): reason
-                    }
-                    return .microphone(withheld, flavor: flavor)
+        let requirements: [Requirement] = rows.compactMap { row in
+            switch (row, reader) {
+            case (.microphone, .theApp(let microphone)):
+                let withheld: MicrophoneAuthorization.Withheld? = switch microphone {
+                case .granted: nil
+                case .withheld(let reason): reason
                 }
-            case .inputMethod:
-                .inputMethod(switchedOn: InstalledInputMethod.isSwitchedOn(flavor), flavor: flavor)
+                return .microphone(withheld, flavor: flavor)
+            // macOS keys the grant to the app that holds it, so any other process asking is
+            // told about itself: a CLI run from a terminal would report the terminal's. A
+            // reading of the wrong app is worse than none, so the row is named, unread.
+            // [LAW:no-silent-failure]
+            case (.microphone, .elsewhere):
+                return nil
+            case (.inputMethod, _):
+                return .inputMethod(switchedOn: InstalledInputMethod.isSwitchedOn(flavor), flavor: flavor)
             }
         }
-        return Readiness(requirements, notReadHere: rows.filter { !reader.canRead($0) })
+        return Readiness(requirements, notReadHere: rows.filter { row in !requirements.contains { $0.row == row } })
     }
 }
