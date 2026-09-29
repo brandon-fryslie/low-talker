@@ -171,13 +171,15 @@ private final class Buffer {
     /// Samples delivered, at 16 kHz.
     private var samples = 0
 
-    static let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: Double(RealtimeAudio.rate), channels: 1, interleaved: true)!
+    /// What appends carry: PCM16 at 24 kHz.
+    private let format: AVAudioFormat
 
     init(transcriber: any Transcriber, vocabulary: Vocabulary, outbox: Outbox) {
         // [LAW:no-silent-failure] A fixed pair of formats AVFoundation converts between;
         // a throw here, or from converting or draining between them, is a programming
         // error, so it traps.
-        converter = try! AudioClip.Converter(from: Self.format)
+        format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: Double(RealtimeAudio.rate), channels: 1, interleaved: true)!
+        converter = try! AudioClip.Converter(from: format)
         let (stream, clips) = AsyncStream<AudioClip>.makeStream()
         self.clips = clips
         id = "item_\(ID.fresh())"
@@ -209,7 +211,7 @@ private final class Buffer {
 
     private func convert(_ pcm: Data) -> [Float] {
         let frames = pcm.count / 2
-        let buffer = AVAudioPCMBuffer(pcmFormat: Self.format, frameCapacity: AVAudioFrameCount(max(frames, 1)))!
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(max(frames, 1)))!
         buffer.frameLength = AVAudioFrameCount(frames)
         pcm.copyBytes(to: UnsafeMutableRawBufferPointer(start: buffer.int16ChannelData![0], count: frames * 2))
         return try! converter.convert(buffer)
