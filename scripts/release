@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# The whole release: the installer package, its app signed with the model inside, then the
-# package notarized and stapled.
+# The whole release: the installer packages, offline and network, each app signed with the
+# model inside, then each package notarized and stapled.
 #
 #   NOTARY_PROFILE=<profile> scripts/release <output directory> [model source]
-#     # prints <output directory>/LowTalker.pkg
+#     # prints <output directory>/LowTalker-offline.pkg and <output directory>/LowTalker-network.pkg
 #
-# One submission covers everything the package installs: the notary service checks every
+# One submission covers everything a package installs: the notary service checks every
 # signed bundle inside it and issues one ticket, which is stapled to the package. The model
 # source is scripts/sign-release's.
 #
@@ -35,5 +35,10 @@ if [ "$build" -le "$released" ]; then
   exit 1
 fi
 
-pkg=$("$scripts/sign-release" "$@")
-"$scripts/notarize" "$pkg"
+# Every package signed before any is sent, so a variant that fails to build stops the release
+# before the notary service has seen the other.
+pkgs=$("$scripts/sign-release" "$@")
+# Read on a descriptor of its own, so nothing notarize runs can read the list off stdin.
+while IFS= read -r pkg <&3; do
+  "$scripts/notarize" "$pkg"
+done 3<<<"$pkgs"

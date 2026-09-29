@@ -11,6 +11,20 @@ PRODUCTS := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)
 # a DerivedData of its own are all it changes. [LAW:one-type-per-behavior] A release and a
 # development build are one recipe run with two values, never two recipes.
 SIGNING_IDENTITY :=
+# Which of the two builds: `offline`, whose app holds exactly the sandbox's entitlements and
+# so cannot reach the network, or `network`, whose app may also accept connections, for the
+# server it hosts. That one entitlement is all that separates them, and they are one product
+# under one identifier, so installing either replaces the other; the package's name is how a
+# person tells them apart, and scripts/make-pkg reads it off the app it packs.
+# [LAW:one-type-per-behavior] Two builds are one recipe run with two values.
+# VARIANTS is every variant, in the order scripts/sign-release builds and notarizes them.
+# [LAW:one-source-of-truth]
+VARIANTS := offline network
+VARIANT := offline
+ACCEPTS_CONNECTIONS_offline := NO
+ACCEPTS_CONNECTIONS_network := YES
+ACCEPTS_CONNECTIONS := $(or $(and $(filter $(VARIANT),$(VARIANTS)),$(ACCEPTS_CONNECTIONS_$(VARIANT))),$(error VARIANT is '$(VARIANT)', and it is one of $(VARIANTS)))
+
 # A store holding the model, for the bundle to carry.
 #
 # Every bundle carries its model, the development copy included. It is not an optimisation:
@@ -48,7 +62,7 @@ RELEASE_APP := $(PRODUCTS)/LowTalker.app
 RELEASE_INPUT_METHOD := $(PRODUCTS)/LowTalker Input Method.app
 XCODE_RESOLVED_DIR := LowTalker.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
 
-.PHONY: app release package release-package install run test check-docs cli sbom check-sbom check-licenses clean signing-identity
+.PHONY: app release package release-package install run variants test check-docs cli sbom check-sbom check-licenses clean signing-identity
 
 # Regeneration is unconditional: xcodegen is idempotent and sub-second, and a
 # timestamp rule cannot see removed sources or in-place rewrites of the project.
@@ -68,6 +82,7 @@ define build_app
 	xcodebuild -project LowTalker.xcodeproj -scheme $(1) -configuration $(CONFIGURATION) \
 		-onlyUsePackageVersionsFromResolvedFile \
 		-derivedDataPath $(DERIVED_DATA) BUNDLED_MODEL_STORE="$(BUNDLED_MODEL_STORE)" \
+		ACCEPTS_CONNECTIONS=$(ACCEPTS_CONNECTIONS) \
 		$(if $(SIGNING_IDENTITY),CODE_SIGN_IDENTITY="$(SIGNING_IDENTITY)") build
 endef
 
@@ -108,19 +123,27 @@ release: $(BUNDLED_MODEL_STORE)
 # development copy included, since the text input system lists an input method only from
 # the standard folders and the app puts nothing there itself. scripts/sign-release builds
 # `release-package` under the Developer ID identity. [LAW:one-type-per-behavior]
+define make_pkg
+scripts/make-pkg "$(1)" "$(2)" "$(PRODUCTS)"
+endef
+
 package: app
-	scripts/make-pkg "$(DEV_APP)" "$(DEV_INPUT_METHOD)" "$(PRODUCTS)"
+	$(call make_pkg,$(DEV_APP),$(DEV_INPUT_METHOD))
 
 release-package: release
-	scripts/make-pkg "$(RELEASE_APP)" "$(RELEASE_INPUT_METHOD)" "$(PRODUCTS)"
+	$(call make_pkg,$(RELEASE_APP),$(RELEASE_INPUT_METHOD))
 
 # The development copy installed from its package, the way a person installs a release: the
-# package replaces what stood there, stops what ran from it, and starts the app again.
-install: package
-	sudo installer -pkg "$(PRODUCTS)/LowTalker Dev.pkg" -target /
+# package replaces what stood there, stops what ran from it, and starts the app again. The
+# package is the one make-pkg names, since it names it after what the app carries.
+install: app
+	pkg=$$($(call make_pkg,$(DEV_APP),$(DEV_INPUT_METHOD))) && sudo installer -pkg "$$pkg" -target /
 
 run: install
 	open "/Applications/LowTalker Dev.app"
+
+variants:
+	@echo $(VARIANTS)
 
 # The build comes first because `check-docs` reads the onboarding readings out of the CLI.
 # This is why `check-docs` is a recipe line here rather than a prerequisite: a

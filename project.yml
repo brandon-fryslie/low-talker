@@ -232,6 +232,13 @@ targetTemplates:
       base:
         PRODUCT_NAME: ${displayName}
         PRODUCT_BUNDLE_IDENTIFIER: ${bundleIdentifier}
+        # Adds com.apple.security.network.server to the entitlements written above when
+        # ACCEPTS_CONNECTIONS is YES, so the network build's server can listen; the Makefile's
+        # VARIANT sets it, and unset it is NO. Routed through a setting only this template
+        # reads, because set on the command line it would reach the input method and the CLI
+        # too, which are the same bytes in both builds.
+        # [LAW:one-type-per-behavior] The two builds are this one target with one value.
+        ENABLE_INCOMING_NETWORK_CONNECTIONS: $(ACCEPTS_CONNECTIONS)
         # No checked-in Info.plist: Xcode synthesises one from these keys.
         GENERATE_INFOPLIST_FILE: true
         INFOPLIST_KEY_LSUIElement: true
