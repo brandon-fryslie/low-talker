@@ -57,7 +57,7 @@ public enum Flavor: String, CaseIterable, Sendable, CustomStringConvertible {
     }
 
     /// What `CFBundleIdentifier` holds inside this flavor's input method bundle, the one
-    /// the app carries and installs into `~/Library/Input Methods`.
+    /// its installer package puts in `/Library/Input Methods` beside the app.
     ///
     /// The `.inputmethod` segment is load-bearing and its POSITION is load-bearing, which
     /// is not a convention but a rule macOS enforces silently. Measured on macOS Tahoe

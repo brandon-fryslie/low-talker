@@ -217,7 +217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // below comes after it has answered - nothing can say the loop works before it does,
         // or be overwritten by a later write about an earlier state.
         showHotkeyStatus("starting — setting up the input method")
-        let installed = await installInputMethod()
+        let installed = await selectInputMethod()
         // `comeUp` reads the config before it adopts and adopts nothing on a config it cannot
         // read, so a loop is only ever built over one that was read.
         guard case .success(let config) = config else { preconditionFailure("a loop is adopted only once the config has been read") }
@@ -249,20 +249,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// This installation's input method put where macOS looks for one, registered, and -
-    /// once a person has switched it on in setup - selected: what the words are committed
-    /// through and the hotkey is told the keys by. Run at every rebuild, which is what keeps
-    /// the input method selected.
+    /// This installation's input method, as its package installed it, registered and - once
+    /// a person has switched it on in setup - selected: what the words are committed through
+    /// and the hotkey is told the keys by. Run at every rebuild, which is what keeps the input
+    /// method selected.
     ///
     /// Nothing here puts a system dialog on screen, because a rebuild runs at launch. The
     /// input method is switched on from its own step in setup; see `ask(_:)`.
     ///
-    /// [LAW:no-silent-failure] An install that fails leaves a hotkey that would hear every
+    /// [LAW:no-silent-failure] A select that fails leaves a hotkey that would hear every
     /// press and insert nothing, so it comes back as a refusal for the status line.
-    private func installInputMethod() async -> Result<Void, LoopRefusal> {
+    private func selectInputMethod() async -> Result<Void, LoopRefusal> {
         do {
-            let state = try await InputSourceInstaller(flavor: Self.flavor).install()
-            log.notice("input method: \(state, privacy: .public)")
+            let inputMethod = InstalledInputMethod(flavor: Self.flavor)
+            let bundle = try inputMethod.bundle()
+            let state = try await inputMethod.select()
+            log.notice("input method: \(state, privacy: .public) from \(bundle.path, privacy: .public)")
             // Stopped short of selected only where a person has yet to switch it on,
             // which is a step in setup rather than something that went wrong.
             return state.ready ? .success(()) : .failure("""
@@ -271,7 +273,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 """)
         } catch {
             log.error("input method: \(String(describing: error), privacy: .public)")
-            return .failure("the input method could not be installed: \(error)")
+            return .failure("the input method could not be selected: \(error)")
         }
     }
 
@@ -329,7 +331,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 return "\(reading)"
             }
         case .inputMethod:
-            do { try await InputSourceInstaller(flavor: Self.flavor).switchOn() } catch {
+            do { try await InstalledInputMethod(flavor: Self.flavor).switchOn() } catch {
                 log.error("setup: input method: \(String(describing: error), privacy: .public)")
                 return "\(error)"
             }
@@ -626,7 +628,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// password field in front of them.
     private func unheardBecause() -> [String] {
         let reasons: [String?] = [
-            InputSourceInstaller.isSelected(Self.flavor) ? nil : "\(Self.flavor.displayName) is not the selected input source",
+            InstalledInputMethod.isSelected(Self.flavor) ? nil : "\(Self.flavor.displayName) is not the selected input source",
             IsSecureEventInputEnabled() ? "an app holds Secure Event Input, as a password field does" : nil,
         ]
         let found = reasons.compactMap { $0 }

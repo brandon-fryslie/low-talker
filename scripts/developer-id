@@ -1,0 +1,5 @@
+# Sourced, not run. The holder the Developer ID certificates are issued to, as each
+# certificate's name ends: "Developer ID Application: <holder>" signs the bundles and
+# "Developer ID Installer: <holder>" signs the package. [LAW:one-source-of-truth] The team in
+# the parentheses is what every signature is held to, so it is written here and nowhere else.
+developer_id="Brandon Fryslie (6R988MUU27)"
