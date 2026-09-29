@@ -344,6 +344,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setUp.show()
     }
 
+    /// The notices the licenses of everything the bundle ships require, which the build
+    /// writes into it from the SBOM. An agent app has no About window to hang them on, so
+    /// this is the one way a person reaches them.
+    @objc private func openNotices() {
+        let notices = Bundle.main.bundleURL.appending(path: Carrier.noticesInBundle)
+        if !NSWorkspace.shared.open(notices) { log.error("could not open \(notices.path, privacy: .public)") }
+    }
+
     // MARK: - launch and quit
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -631,6 +639,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let stepsLeft = left == 0 ? "" : " (\(left) left)"
         menu.addItem(withTitle: "\(GuidedSetup.title(for: Self.flavor))\(stepsLeft)", action: #selector(openSetUp), keyEquivalent: "")
         menu.addItem(.separator())
+        menu.addItem(withTitle: "Acknowledgements", action: #selector(openNotices), keyEquivalent: "")
         menu.addItem(withTitle: "Quit \(Self.flavor.displayName)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     }
 

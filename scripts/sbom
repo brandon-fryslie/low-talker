@@ -62,17 +62,24 @@ def sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def license_entry(component, checkout, rule):
-    """The license id, and the file in the checkout it was read from with that file's
-    digest, so the SBOM says which text the reading was of. Paths are relative to the
-    package checkout, like every other path property here."""
+def license_entry(component, root, rule):
+    """The license id and its text, and the file under `root` the text was read from with
+    that file's digest, so the SBOM says which text the reading was of. `root` is the package
+    checkout, as for every other path property here, or this repository for a model. The
+    text is what the notices the app carries are generated from. [LAW:one-source-of-truth]"""
     spdx = need(rule, "license", component)
     relative = need(rule, "licenseFile", component)
-    path = checkout / relative
+    path = root / relative
     if not path.is_file():
-        fail(f"{component}: license file {relative} is not in the checkout")
+        fail(f"{component}: license file {relative} is not in {root.name}")
+    text = path.read_text()
+    if "licenseMatch" in rule:
+        found = re.search(rule["licenseMatch"], text, re.MULTILINE | re.DOTALL)
+        if not found:
+            fail(f"{component}: {relative} does not match {rule['licenseMatch']!r}, so its license text cannot be read")
+        text = found.group(1)
     return (
-        [{"license": {"id": spdx}}],
+        [{"license": {"id": spdx, "text": {"contentType": "text/plain", "content": text.lstrip("\n").rstrip() + "\n"}}}],
         [
             {"name": "low-talker:license-file", "value": relative},
             {"name": "low-talker:license-file-sha256", "value": sha256(path)},
@@ -179,7 +186,7 @@ def model_components(cli, rules, store):
         repo = need(entry, "repo", component)
         if repo.count("/") != 1:
             fail(f"{component}: rules.json names the repo {repo!r}, not <owner>/<repo>")
-        spdx = need(entry, "license", component)
+        licenses, properties = license_entry(component, repository, entry)
         if store is not None and confirm_against_store(store, model, part, repo):
             confirmed.append(part)
         # The weights are one folder of a repo holding many models, so the repo is their
@@ -190,9 +197,9 @@ def model_components(cli, rules, store):
             "bom-ref": f"huggingface.co/{repo}" + (f"/{model}" if part == "weights" else ""),
             "group": group,
             "name": name,
-            "licenses": [{"license": {"id": spdx}}],
+            "licenses": licenses,
             "externalReferences": [{"type": "distribution", "url": f"https://huggingface.co/{repo}"}],
-            "properties": [{"name": "low-talker:model-part", "value": part}],
+            "properties": [{"name": "low-talker:model-part", "value": part}] + properties,
         }
         if part == "weights":
             entry["description"] = f"The folder of {repo} whose name ends in {model}, which is how WhisperKit picks it"

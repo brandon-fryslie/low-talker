@@ -158,6 +158,18 @@ targetTemplates:
           else
             rm -rf "${resources}/${MODEL_STORE_RESOURCE}"
           fi
+      # The notices the licenses of what the bundle ships require, written from the
+      # committed SBOM on every build, the development copy included, so no bundle is
+      # built without them. scripts/notices stops the build on a component it has no
+      # license text for. [LAW:one-source-of-truth]
+      - name: Carry the notices its licenses require
+        basedOnDependencyAnalysis: false
+        inputFiles:
+          - $(SRCROOT)/sbom/lowtalker.cdx.json
+        script: |
+          set -euo pipefail
+          "${SRCROOT}/scripts/notices" "${SRCROOT}/sbom/lowtalker.cdx.json" \
+            "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/${NOTICES_RESOURCE}"
       # [LAW:no-silent-failure] A bundle that ships without the version project.yml sets
       # fails the build rather than shipping quietly. Checked here, on the built plist,
       # because no test sees a shipped bundle: `make test` never builds the app. The input
@@ -208,6 +220,9 @@ targetTemplates:
         # Where the bundle's resources hold the carried store, as ModelStore.carriedResourceName
         # names it; CarriedModelStoreTests holds the two equal. [LAW:one-source-of-truth]
         MODEL_STORE_RESOURCE: model-store
+        # The notices' file in the bundle's resources, as Carrier.noticesInBundle names it;
+        # CarriedNoticesTests holds the two equal. [LAW:one-source-of-truth]
+        NOTICES_RESOURCE: Acknowledgements.txt
 
   # [LAW:one-type-per-behavior] One input method, built once per installation. What
   # separates the two copies is what separates the apps - the names macOS files them under
