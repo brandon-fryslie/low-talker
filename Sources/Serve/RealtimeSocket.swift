@@ -16,7 +16,8 @@ struct RealtimeSocket {
     /// Serves the socket until the client closes it, breaks the protocol, or is lost, and
     /// says what happened on it.
     func run(_ connection: NWConnection, _ reader: inout Reader) async -> (RealtimeActivity, lost: String?) {
-        let (outgoing, outbox) = AsyncStream<Outgoing>.makeStream()
+        let (outgoing, frames) = AsyncStream<Outgoing>.makeStream()
+        let outbox = Outbox(frames)
         // [LAW:single-enforcer] The one writer: every frame goes out in the order it was
         // put in the outbox, and is counted once it has gone.
         let writer = Task {
@@ -25,6 +26,9 @@ struct RealtimeSocket {
                 do {
                     try await connection.send(frame.bytes)
                 } catch {
+                    // Nothing more can reach the client, so the reader stops too: the
+                    // cancel fails its pending read.
+                    connection.cancel()
                     return (sent, "\(error)" as String?)
                 }
                 sent.count(frame)
@@ -32,49 +36,58 @@ struct RealtimeSocket {
             return (sent, nil as String?)
         }
         var activity = RealtimeActivity()
-        var lost: String?
-        var state = State(session: RealtimeSession(), outbox: Outbox(outbox))
-        state.outbox.emit(.sessionCreated(id: state.sessionID, state.session))
-        var assembler = WebSocket.Assembler()
-        reading: while true {
-            let message: WebSocket.Message
-            do {
-                message = try await reader.message(&assembler, limit: Self.messageLimit)
-            } catch let violation as WebSocket.Violation {
-                activity.violation = violation.description
-                activity.closeCode = Int(violation.code)
-                state.outbox.put(.control(WebSocket.close(violation.code, violation.description)))
-                break reading
-            } catch {
-                lost = "\(error)"
-                break reading
+        // [LAW:no-ambient-temporal-coupling] Every item is a child of `items`, so none
+        // outlives the socket, and each is gone from it once answered.
+        let lost = await withDiscardingTaskGroup { items in
+            var state = State(session: RealtimeSession(), outbox: outbox)
+            state.outbox.emit(.sessionCreated(id: state.sessionID, state.session))
+            var assembler = WebSocket.Assembler()
+            /// The frame the server ends with; none when the connection was lost.
+            var last: Data?
+            var lost: String?
+            reading: while true {
+                let message: WebSocket.Message
+                do {
+                    message = try await reader.message(&assembler, limit: Self.messageLimit)
+                } catch let violation as WebSocket.Violation {
+                    activity.violation = violation.description
+                    activity.closeCode = Int(violation.code)
+                    last = WebSocket.close(violation.code, violation.description)
+                    break reading
+                } catch {
+                    lost = "\(error)"
+                    break reading
+                }
+                switch message {
+                case .text(let text):
+                    state.receive(text, transcriber: transcriber, &activity, &items)
+                case .binary:
+                    let violation = WebSocket.Violation(code: 1003, "binary messages are not part of the Realtime API")
+                    activity.violation = violation.description
+                    activity.closeCode = Int(violation.code)
+                    last = WebSocket.close(violation.code, violation.description)
+                    break reading
+                case .ping(let payload):
+                    state.outbox.put(.control(WebSocket.frame(.pong, payload)))
+                case .pong:
+                    continue
+                case .close(let code):
+                    // Echoed, as RFC 6455 asks: the client's code is the one the close carries.
+                    activity.closeCode = code.map(Int.init)
+                    last = code.map { WebSocket.close($0) } ?? WebSocket.frame(.close, Data())
+                    break reading
+                }
             }
-            switch message {
-            case .text(let text):
-                state.receive(text, transcriber: transcriber, &activity)
-            case .binary:
-                let violation = WebSocket.Violation(code: 1003, "binary messages are not part of the Realtime API")
-                activity.violation = violation.description
-                activity.closeCode = Int(violation.code)
-                state.outbox.put(.control(WebSocket.close(violation.code, violation.description)))
-                break reading
-            case .ping(let payload):
-                state.outbox.put(.control(WebSocket.frame(.pong, payload)))
-            case .pong:
-                continue
-            case .close(let payload):
-                // Echoed, as RFC 6455 asks: the client's code is the one the close carries.
-                activity.closeCode = payload.count >= 2 ? Int(payload[payload.startIndex]) << 8 | Int(payload[payload.startIndex + 1]) : nil
-                state.outbox.put(.control(WebSocket.frame(.close, payload.prefix(2))))
-                break reading
-            }
+            // Closed first, so what items say while they stop is dropped rather than sent
+            // after the close. Items still being heard have no one left to hear them.
+            outbox.close(last)
+            state.abandon()
+            items.cancelAll()
+            return lost
         }
-        // Items still being heard have no one left to hear them.
-        state.abandon()
-        outbox.finish()
         let (sent, unsent) = await writer.value
         activity.sent = sent
-        return (activity, lost ?? unsent)
+        return (activity, unsent ?? lost)
     }
 
     /// The session as the reader holds it between messages.
@@ -86,10 +99,8 @@ struct RealtimeSocket {
         var buffer: Buffer?
         /// The last item committed, which the next one follows.
         var previous: String?
-        /// Cancels every item still being heard or answered, for when the socket ends first.
-        var inFlight: [@Sendable () -> Void] = []
 
-        mutating func receive(_ text: String, transcriber: any Transcriber, _ activity: inout RealtimeActivity) {
+        mutating func receive(_ text: String, transcriber: any Transcriber, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) {
             var clientEvent: String?
             do {
                 let object = try ClientEvent.object(text)
@@ -101,9 +112,9 @@ struct RealtimeSocket {
                     outbox.emit(.sessionUpdated(id: sessionID, session))
                 case .append(let bytes):
                     activity.appends += 1
-                    try append(bytes, transcriber: transcriber, &activity)
+                    append(bytes, transcriber: transcriber, &activity, &items)
                 case .commit:
-                    try commit(&activity)
+                    try commit(&activity, &items)
                 }
             } catch {
                 outbox.emit(.error(error, clientEvent: clientEvent))
@@ -111,21 +122,24 @@ struct RealtimeSocket {
         }
 
         /// `bytes` into the open item, which the first append after a commit opens.
-        private mutating func append(_ bytes: Data, transcriber: any Transcriber, _ activity: inout RealtimeActivity) throws(RealtimeError) {
+        private mutating func append(_ bytes: Data, transcriber: any Transcriber, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) {
             if buffer == nil {
                 let opened = Buffer(transcriber: transcriber, vocabulary: session.vocabulary, outbox: outbox)
                 activity.items += 1
-                inFlight.append(opened.transcript.cancel)
+                let transcript = opened.transcript
+                items.addTask {
+                    await withTaskCancellationHandler { _ = await transcript.result } onCancel: { transcript.cancel() }
+                }
                 buffer = opened
             }
-            try buffer!.append(bytes)
+            buffer!.append(bytes)
         }
 
-        /// The open item ends and is answered; with none open, the commit is refused.
-        private mutating func commit(_ activity: inout RealtimeActivity) throws(RealtimeError) {
-            guard let buffer else { throw .bufferEmpty }
+        /// The open item ends and is answered; with no audio in one, the commit is refused.
+        private mutating func commit(_ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) throws(RealtimeError) {
+            guard let buffer, buffer.hasAudio else { throw .bufferEmpty }
             self.buffer = nil
-            let heard = try buffer.end()
+            let heard = buffer.end()
             activity.audioSeconds += heard
             for event in [ServerEvent.committed(item: buffer.id, previous: previous), .itemAdded(item: buffer.id, previous: previous), .itemDone(item: buffer.id, previous: previous)] {
                 outbox.emit(event)
@@ -133,12 +147,11 @@ struct RealtimeSocket {
             previous = buffer.id
             let deltas = buffer.deltas
             let transcript = buffer.transcript
-            inFlight.append(Task { await deltas.settle(transcript, usage: Usage(heard: heard)) }.cancel)
+            items.addTask { await deltas.settle(transcript, usage: Usage(heard: heard)) }
         }
 
         func abandon() {
             buffer?.abandon()
-            for cancel in inFlight { cancel() }
         }
     }
 }
@@ -153,13 +166,17 @@ private final class Buffer {
     private let converter: AudioClip.Converter
     /// A byte of a sample whose other byte the next append carries.
     private var carry = Data()
+    /// Whole samples appended, at 24 kHz.
+    private var received = 0
+    /// Samples delivered, at 16 kHz.
     private var samples = 0
 
     static let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: Double(RealtimeAudio.rate), channels: 1, interleaved: true)!
 
     init(transcriber: any Transcriber, vocabulary: Vocabulary, outbox: Outbox) {
         // [LAW:no-silent-failure] A fixed pair of formats AVFoundation converts between;
-        // a throw here is a programming error, so it traps.
+        // a throw here, or from converting or draining between them, is a programming
+        // error, so it traps.
         converter = try! AudioClip.Converter(from: Self.format)
         let (stream, clips) = AsyncStream<AudioClip>.makeStream()
         self.clips = clips
@@ -169,17 +186,20 @@ private final class Buffer {
         transcript = Task { try await transcriber.transcribe(stream, expecting: vocabulary, partial: deltas.heard) }
     }
 
-    func append(_ bytes: Data) throws(RealtimeError) {
+    var hasAudio: Bool { received > 0 }
+
+    func append(_ bytes: Data) {
         let whole = carry + bytes
         let even = whole.count & ~1
         carry = whole.suffix(whole.count - even)
-        try deliver(convert(whole.prefix(even)))
+        received += even / 2
+        deliver(convert(whole.prefix(even)))
     }
 
     /// The item's audio ends; returns how many seconds of it there were.
-    func end() throws(RealtimeError) -> TimeInterval {
+    func end() -> TimeInterval {
         defer { clips.finish() }
-        try deliver(Result { try converter.drain() }.mapError { RealtimeError.engineFailed("the audio could not be resampled: \($0)") }.get())
+        deliver(try! converter.drain())
         return AudioClip.duration(for: samples)
     }
 
@@ -187,16 +207,12 @@ private final class Buffer {
         clips.finish()
     }
 
-    private func convert(_ pcm: Data) throws(RealtimeError) -> [Float] {
+    private func convert(_ pcm: Data) -> [Float] {
         let frames = pcm.count / 2
         let buffer = AVAudioPCMBuffer(pcmFormat: Self.format, frameCapacity: AVAudioFrameCount(max(frames, 1)))!
         buffer.frameLength = AVAudioFrameCount(frames)
         pcm.copyBytes(to: UnsafeMutableRawBufferPointer(start: buffer.int16ChannelData![0], count: frames * 2))
-        do {
-            return try converter.convert(buffer)
-        } catch {
-            throw .engineFailed("the audio could not be resampled: \(error)")
-        }
+        return try! converter.convert(buffer)
     }
 
     private func deliver(_ converted: [Float]) {
@@ -210,7 +226,8 @@ private final class Buffer {
 ///
 /// [LAW:types-are-the-program] Deltas are only ever the words after the ones already sent,
 /// taken from `Partial.confirmed`, which the transcript begins with word for word; so the
-/// deltas joined are the transcript, and a delta can never take back a word.
+/// deltas joined are the transcript's words, and a delta can never take back a word. Like
+/// OpenAI's, the first delta keeps the leading space the completed transcript trims.
 private final class Deltas: Sendable {
     let item: String
     private let outbox: Outbox
@@ -250,20 +267,30 @@ private final class Deltas: Sendable {
     }
 }
 
-/// Where every frame bound for the client is put, in order.
+/// Where every frame bound for the client is put, in order, until it is closed.
 final class Outbox: Sendable {
-    private let frames: AsyncStream<Outgoing>.Continuation
+    /// Held across each put and the close, so no frame can land after the last.
+    private let frames: Mutex<AsyncStream<Outgoing>.Continuation>
 
     init(_ frames: AsyncStream<Outgoing>.Continuation) {
-        self.frames = frames
+        self.frames = Mutex(frames)
     }
 
     func emit(_ event: ServerEvent) {
         put(.event(event))
     }
 
+    /// `frame` bound for the client, or dropped once the outbox is closed.
     func put(_ frame: Outgoing) {
-        frames.yield(frame)
+        frames.withLock { _ = $0.yield(frame) }
+    }
+
+    /// `last` is the final frame sent; nothing put after it is.
+    func close(_ last: Data?) {
+        frames.withLock { frames in
+            if let last { frames.yield(.control(last)) }
+            frames.finish()
+        }
     }
 }
 

@@ -153,6 +153,22 @@ private func update(_ input: [String: Any]) -> [String: Any] {
         #expect(realtime.sent.completed == 1 && realtime.sent.errors == 1 && realtime.sent.deltas >= 2)
     }
 
+    /// An append that holds no whole sample puts no audio in the buffer, so committing it
+    /// is refused as committing nothing is.
+    @Test func aCommitWithNoWholeSampleIsRefusedAsEmpty() async throws {
+        let running = try await Running.start(.ready(Stub()))
+        defer { running.server.stop() }
+        var client = Client(running)
+        for audio in ["", Data([0x01]).base64EncodedString()] {
+            try await client.send(["type": "input_audio_buffer.append", "audio": audio])
+        }
+        try await client.send(["type": "input_audio_buffer.commit"])
+        let refusal = try #require(try await client.until("error")["error"] as? [String: Any])
+        #expect(refusal["code"] as? String == "input_audio_buffer_commit_empty")
+        #expect(!client.types().contains("input_audio_buffer.committed"))
+        client.task.cancel(with: .normalClosure, reason: nil)
+    }
+
     /// Refused before the upgrade, with a status: a socket is never opened on an engine
     /// that is not there.
     @Test func anUpgradeBeforeTheModelIsResidentIs503() async throws {
@@ -197,6 +213,21 @@ private func update(_ input: [String: Any]) -> [String: Any] {
         } catch {
             #expect(error.code == code)
         }
+    }
+
+    /// A close frame's code is read off it; one a peer may not send, or a code cut to one
+    /// byte, breaks the protocol.
+    @Test(arguments: [
+        (Data(), Result<UInt16?, WebSocket.Violation>.success(nil)),
+        (Data([0x03, 0xE8]) + Data("bye".utf8), .success(1000)),
+        (Data([0x03]), .failure(WebSocket.Violation(code: 1002, "a close frame's code was one byte"))),
+        (Data([0x03, 0xED]), .failure(WebSocket.Violation(code: 1002, "close code 1005 is not one a peer may send"))),
+        (Data([0x03, 0xE8, 0xFF]), .failure(WebSocket.Violation(code: 1007, "a close frame's reason is not UTF-8"))),
+    ])
+    func aCloseFramesCodeIsParsed(payload: Data, expected: Result<UInt16?, WebSocket.Violation>) throws {
+        var assembler = WebSocket.Assembler()
+        let frame = try #require(try WebSocket.parse(masked(0x8, payload), limit: 100)).0
+        #expect(Result { () throws(WebSocket.Violation) in try assembler.take(frame, limit: 100) } == expected.map { .close($0) })
     }
 
     /// RFC 6455's own example key and answer.

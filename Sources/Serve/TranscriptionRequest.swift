@@ -118,11 +118,14 @@ enum ResponseFormat: String, Sendable, Codable {
 /// otherwise (`Constants.defaultLanguageCode`), and LowTalker never tells it otherwise, so
 /// a request for another language is refused rather than answered in English.
 /// [LAW:no-silent-failure]
-enum Language: String, Sendable {
+enum Language: String, Sendable, CaseIterable {
     case english = "en"
 
+    /// The names a request may give, as a refusal lists them.
+    static var accepted: String { allCases.map(\.rawValue).joined(separator: " or ") }
+
     static func parse(_ value: String) throws(APIError) -> Language {
-        guard let language = Language(rawValue: value) else { throw .unsupportedValue(field: "language", value: value, accepted: "en") }
+        guard let language = Language(rawValue: value) else { throw .unsupportedValue(field: "language", value: value, accepted: accepted) }
         return language
     }
 }

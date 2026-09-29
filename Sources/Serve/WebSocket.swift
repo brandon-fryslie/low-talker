@@ -99,8 +99,8 @@ enum WebSocket {
     enum Message: Equatable, Sendable {
         case text(String)
         case binary(Data)
-        /// The close frame's payload: its code and reason, or nothing.
-        case close(Data)
+        /// The close frame's code, or nil when it carried none.
+        case close(UInt16?)
         case ping(Data)
         case pong
     }
@@ -113,7 +113,7 @@ enum WebSocket {
         mutating func take(_ frame: Frame, limit: Int) throws(Violation) -> Message? {
             let (opcode, payload): (Opcode, Data)
             switch (frame.opcode, open) {
-            case (.close, _): return .close(frame.payload)
+            case (.close, _): return .close(try closeCode(frame.payload))
             case (.ping, _): return .ping(frame.payload)
             case (.pong, _): return .pong
             case (.continuation, nil): throw Violation(code: 1002, "a continuation frame came with no message to continue")
@@ -132,6 +132,22 @@ enum WebSocket {
             return .text(text)
         }
     }
+
+    /// The code a close frame's payload opens with, refused when it is not one a peer may
+    /// send (RFC 6455 7.4) or its reason is not UTF-8.
+    private static func closeCode(_ payload: Data) throws(Violation) -> UInt16? {
+        guard !payload.isEmpty else { return nil }
+        guard payload.count >= 2 else { throw Violation(code: 1002, "a close frame's code was one byte") }
+        let code = UInt16(payload[payload.startIndex]) << 8 | UInt16(payload[payload.startIndex + 1])
+        guard sendable.contains(where: { $0.contains(code) }) else { throw Violation(code: 1002, "close code \(code) is not one a peer may send") }
+        guard String(data: payload.dropFirst(2), encoding: .utf8) != nil else { throw Violation(code: 1007, "a close frame's reason is not UTF-8") }
+        return code
+    }
+
+    /// The close codes a peer may put on the wire: the registered ones other than those
+    /// that only ever describe a close (1004 to 1006, 1015), and those left to libraries
+    /// and applications.
+    private static let sendable: [ClosedRange<UInt16>] = [1000...1003, 1007...1014, 3000...4999]
 
     /// A client broke the protocol: the close code that says how, and why in words.
     struct Violation: Error, Equatable, CustomStringConvertible {

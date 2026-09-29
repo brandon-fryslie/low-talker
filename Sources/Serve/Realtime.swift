@@ -105,7 +105,7 @@ enum ClientEvent: Sendable {
         let model = try string(fields["model"], at: "\(path).model")
         let prompt = try string(fields["prompt"], at: "\(path).prompt")
         let language = try string(fields["language"], at: "\(path).language").map { name throws(RealtimeError) in
-            guard let language = Language(rawValue: name) else { throw .invalidValue("\(path).language", "\(name) is not supported; use en") }
+            guard let language = Language(rawValue: name) else { throw .invalidValue("\(path).language", "\(name) is not supported; use \(Language.accepted)") }
             return language
         }
         let vocabulary: Vocabulary
