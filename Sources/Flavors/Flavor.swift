@@ -14,8 +14,7 @@
 ///
 /// - the bundle identifier, which LaunchServices treats as the app's identity and TCC
 ///   keys the Microphone grant to;
-/// - the ports the app and its input method answer on, Mach and TCP, which exactly one
-///   process may own;
+/// - the ports its processes answer on, Mach and TCP, which exactly one process may own;
 /// - the input method's bundle identifier, input source identifier and connection name,
 ///   which the text input system keys a text input source by: two copies sharing any one
 ///   of them is the second failing to register beside the first.

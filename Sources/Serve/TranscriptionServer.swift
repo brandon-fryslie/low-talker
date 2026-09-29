@@ -20,8 +20,12 @@ public enum ServedEngine: Sendable {
 /// [LAW:no-ambient-temporal-coupling] A server in hand is listening: `listen` returns only
 /// once the port is bound, so there is no server to call too early and no start to forget.
 public final class TranscriptionServer: Sendable {
-    /// The port bound, which is the one asked for or, for port 0, the one the system chose.
-    public let port: NWEndpoint.Port
+    /// The address bound, the one every rendering of where this server is derives from.
+    /// [LAW:one-source-of-truth]
+    let address: ListenAddress
+    public var port: NWEndpoint.Port { address.port }
+    /// What a client is given: the root both OpenAI routes are served under.
+    public var baseURL: String { "http://\(address)/v1" }
     private let listener: NWListener
     private let ended: AsyncThrowingStream<Never, any Error>
 
@@ -31,8 +35,8 @@ public final class TranscriptionServer: Sendable {
     /// answered, before the connection is dropped.
     static let readDeadline: DispatchTimeInterval = .seconds(120)
 
-    private init(port: NWEndpoint.Port, listener: NWListener, ended: AsyncThrowingStream<Never, any Error>) {
-        self.port = port
+    private init(address: ListenAddress, listener: NWListener, ended: AsyncThrowingStream<Never, any Error>) {
+        self.address = address
         self.listener = listener
         self.ended = ended
     }
@@ -60,7 +64,7 @@ public final class TranscriptionServer: Sendable {
         } catch {
             throw ListenRefused(address: address, reason: error)
         }
-        ServedRequest.logger.notice("\(address.flavor, privacy: .public) serving on \("\(address.host):\(server.port)", privacy: .public)")
+        ServedRequest.logger.notice("\(address.flavor, privacy: .public) serving on \(server.address, privacy: .public)")
         return server
     }
 
@@ -102,7 +106,7 @@ public final class TranscriptionServer: Sendable {
             }
             listener.start(queue: queue)
         }
-        return TranscriptionServer(port: bound, listener: listener, ended: ended)
+        return TranscriptionServer(address: ListenAddress(flavor: address.flavor, host: address.host, port: bound), listener: listener, ended: ended)
     }
 
     /// Stops accepting connections. A request already being answered is answered.

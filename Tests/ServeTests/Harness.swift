@@ -50,7 +50,7 @@ struct Running {
         return Running(server: server, events: events)
     }
 
-    var base: String { "http://127.0.0.1:\(server.port.rawValue)/v1" }
+    var base: String { server.baseURL }
 
     func post(_ fields: [(name: String, filename: String?, value: Data)], path: String = "audio/transcriptions") async throws -> (HTTPURLResponse, Data) {
         let boundary = UUID().uuidString

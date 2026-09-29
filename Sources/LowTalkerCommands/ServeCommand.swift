@@ -8,7 +8,7 @@ import Synchronization
 /// stopped: how the endpoint is exercised on a developer's Mac, as `transcribe` exercises
 /// the engine, with `scripts/conformance check` pointed at the URL it prints.
 ///
-/// Stdout is the base URL, once listening, then one JSON line per request answered or socket closed.
+/// Stdout is the base URL, once it can transcribe, then one JSON line per request answered or socket closed.
 struct ServeCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "serve",
@@ -29,9 +29,11 @@ struct ServeCommand: AsyncParsableCommand {
             engine: { resident.withLock { $0 } },
             record: { line($0.json) }
         )
-        line("http://127.0.0.1:\(server.port.rawValue)/v1")
         let transcriber = try await WhisperKitTranscriber.load(options.model, in: options.store(), from: source.source, phase: PhaseReporter().report)
         resident.withLock { $0 = .ready(transcriber) }
+        // The URL is the readiness signal a client waits for; a Realtime client given it
+        // early would meet an error event, which Pipecat takes as fatal.
+        line(server.baseURL)
         try await server.finished()
     }
 }
