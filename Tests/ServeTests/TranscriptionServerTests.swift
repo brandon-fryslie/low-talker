@@ -139,6 +139,18 @@ private func error(_ body: Data) throws -> [String: Any] {
         #expect(try await running.nextEvent().vocabularyTerms == 1)
     }
 
+    /// A prompt with no word in it is ordinary speech: no vocabulary, and no refusal.
+    @Test func aWordlessPromptIsNoVocabulary() async throws {
+        let stub = Stub()
+        let running = try await Running.start(.ready(stub))
+        defer { running.server.stop() }
+        let (response, _) = try await running.post([
+            ("model", nil, Data("m".utf8)), ("prompt", nil, Data(" ... ".utf8)), ("file", "audio.mp3", fixture("hello-16k-mono.mp3")),
+        ])
+        #expect(response.statusCode == 200)
+        #expect(stub.heard.withLock { $0.first?.vocabulary } == Vocabulary([]))
+    }
+
     /// No words heard in real audio is an empty transcript, not a failure.
     @Test func realAudioWithNoWordsIsAnEmptyTranscript() async throws {
         let running = try await Running.start(.ready(Stub(.success(Transcript(words: [])))))

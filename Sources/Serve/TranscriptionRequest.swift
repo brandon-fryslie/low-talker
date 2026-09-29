@@ -32,7 +32,7 @@ struct TranscriptionRequest: Sendable {
         return TranscriptionRequest(
             upload: try Upload(bytes: file.value, filename: file.filename),
             format: format,
-            vocabulary: vocabulary(prompt: byName["prompt"]?.text),
+            vocabulary: try vocabulary(prompt: byName["prompt"]?.text),
             model: model.text,
             language: try byName["language"].map { field throws(APIError) in try Language.parse(field.text) }
         )
@@ -41,8 +41,15 @@ struct TranscriptionRequest: Sendable {
     /// The prompt as the vocabulary a dictation mode would give the engine: one term,
     /// spelled as the client wrote it. A prompt with no word in it expects nothing beyond
     /// ordinary speech, which is the empty vocabulary.
-    private static func vocabulary(prompt: String?) -> Vocabulary {
-        Vocabulary(prompt.flatMap { try? Vocabulary.Term($0) }.map { [$0] } ?? [])
+    private static func vocabulary(prompt: String?) throws(APIError) -> Vocabulary {
+        guard let prompt else { return Vocabulary([]) }
+        do {
+            return Vocabulary([try Vocabulary.Term(prompt)])
+        } catch .termSaysNothing {
+            return Vocabulary([])
+        } catch {
+            throw .promptRefused("\(error)")
+        }
     }
 }
 
