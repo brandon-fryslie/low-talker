@@ -199,6 +199,22 @@ private func error(_ body: Data) throws -> [String: Any] {
         #expect(event.status == nil && event.lost != nil)
     }
 
+    /// A client that expects to be told to go on hears 100 Continue before it sends a byte
+    /// of body, then the answer.
+    @Test func aClientExpectingContinueIsToldToSendTheBody() async throws {
+        let running = try await Running.start(.ready(Stub()))
+        defer { running.server.stop() }
+        let connection = NWConnection(host: .ipv4(.loopback), port: running.server.port, using: .tcp)
+        connection.start(queue: DispatchQueue(label: "test.client"))
+        defer { connection.cancel() }
+        let body = Data("--b\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nm\r\n--b--\r\n".utf8)
+        let head = "POST /v1/audio/transcriptions HTTP/1.1\r\ncontent-type: multipart/form-data; boundary=b\r\ncontent-length: \(body.count)\r\nexpect: 100-continue\r\n\r\n"
+        connection.send(content: Data(head.utf8), completion: .idempotent)
+        #expect(try await connection.received() == "HTTP/1.1 100 Continue\r\n\r\n")
+        connection.send(content: body, completion: .idempotent)
+        #expect(try await connection.received().hasPrefix("HTTP/1.1 400 "))
+    }
+
     @Test func stoppingEndsTheServer() async throws {
         let running = try await Running.start(.ready(Stub()))
         running.server.stop()
@@ -261,6 +277,17 @@ private func error(_ body: Data) throws -> [String: Any] {
         let body = Data("--b\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nm\r\n".utf8)
         #expect(throws: APIError.malformed("the multipart body has no closing boundary")) {
             try FormField.parse(body, contentType: "multipart/form-data; boundary=b")
+        }
+    }
+}
+
+extension NWConnection {
+    /// The next bytes the server sent, as text.
+    fileprivate func received() async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, _, error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume(returning: String(decoding: data ?? Data(), as: UTF8.self)) }
+            }
         }
     }
 }

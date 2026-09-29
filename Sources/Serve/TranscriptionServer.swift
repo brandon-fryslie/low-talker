@@ -141,7 +141,13 @@ private struct Answering: Sendable {
             guard head.method == "POST", head.path == "/v1/audio/transcriptions" else {
                 throw APIError.notFound(method: head.method, path: head.path)
             }
-            let body = try await reader.body(count: head.bodyLength(limit: TranscriptionServer.bodyLimit))
+            let length = try head.bodyLength(limit: TranscriptionServer.bodyLimit)
+            // A client that asked to hear the request is wanted before sending its body
+            // (curl, for any large upload) waits for this, or for a timeout, before it sends.
+            if head.headers["expect"]?.lowercased() == "100-continue" {
+                try await connection.send(Data("HTTP/1.1 100 Continue\r\n\r\n".utf8))
+            }
+            let body = try await reader.body(count: length)
             event.bytes = body.count
             let request = try TranscriptionRequest.parse(FormField.parse(body, contentType: head.headers["content-type"]))
             event.model = request.model
@@ -240,8 +246,13 @@ extension NWConnection {
 
     /// `data`, and then the end of the server's side of the stream.
     fileprivate func sendFinal(_ data: Data) async throws {
+        try await send(data, in: .finalMessage)
+    }
+
+    /// `data`, whole: a message sent incomplete is held back until it is completed.
+    fileprivate func send(_ data: Data, in context: ContentContext = .defaultMessage) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-            send(content: data, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { error in
+            send(content: data, contentContext: context, isComplete: true, completion: .contentProcessed { error in
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }
             })
         }
