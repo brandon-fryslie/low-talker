@@ -6,9 +6,13 @@
     "A package in Package.resolved with no entry here fails the build by name, and so",
     "does an entry here for a package Package.resolved no longer pins.",
     "`licenseFile` is read from the package's checkout and its digest recorded, so the",
-    "SBOM says which text the license id stands for. A vendored component's `version`",
-    "names the file to read it from and a regular expression whose first group is the",
-    "version (and second, if any, the revision), so a re-vendoring moves the SBOM."
+    "SBOM says which text the license id stands for, and the text itself is carried in it",
+    "for the notices the app ships. `licenseMatch`, where given, is a regular expression",
+    "whose first group is the license's part of a file that holds more than its license. A",
+    "model's `licenseFile` is in this repository, since Hugging Face repos ship none. A",
+    "vendored component's `version` names the file to read it from and a regular expression",
+    "whose first group is the version (and second, if any, the revision), so a re-vendoring",
+    "moves the SBOM."
   ],
   "packages": {
     "argmax-oss-swift": {
@@ -42,6 +46,7 @@
           "origin": "https://github.com/marzer/tomlplusplus",
           "license": "MIT",
           "licenseFile": "Sources/CTOML/Sources/toml.hpp",
+          "licenseMatch": "^(// MIT License\\n.*?)\\n//\\n//-{20,}",
           "version": {
             "file": "Sources/CTOML/Sources/toml.hpp",
             "match": "#define TOML_LIB_MAJOR (\\d+)\\s+#define TOML_LIB_MINOR (\\d+)\\s+#define TOML_LIB_PATCH (\\d+)",
@@ -55,11 +60,13 @@
     "large-v3-v20240930_turbo_632MB": {
       "weights": {
         "repo": "argmaxinc/whisperkit-coreml",
-        "license": "MIT"
+        "license": "MIT",
+        "licenseFile": "sbom/licenses/whisperkit-coreml.txt"
       },
       "tokenizer": {
         "repo": "openai/whisper-large-v3",
-        "license": "Apache-2.0"
+        "license": "Apache-2.0",
+        "licenseFile": "sbom/licenses/whisper-large-v3.txt"
       }
     }
   }

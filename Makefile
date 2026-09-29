@@ -209,9 +209,12 @@ check-sbom: sbom
 # one whose license nobody identified. It reads the committed SBOM, which `check-sbom` has
 # just held to the build, so a dependency cannot reach the tree without passing it. The
 # gate's own tests run first: a gate that passes everything looks exactly like a clean tree.
+# The notices are written as the app build writes them, so an SBOM they cannot be made from
+# fails here, on the pull request, and not in the next release's build.
 check-licenses: check-sbom
 	python3 -B -m unittest discover -s scripts/tests
 	scripts/check-licenses sbom/lowtalker.cdx.json
+	scripts/notices sbom/lowtalker.cdx.json .build/notices.txt
 
 # Once per Mac. Until it has run, `make app`, `make cli` and `make test` stop with "No
 # certificate matching".

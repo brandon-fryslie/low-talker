@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""Writes the notices a release carries: every component the SBOM lists, with the full
+license text and copyright notices it ships under.
+
+    scripts/notices <sbom.cdx.json> <output.txt>
+
+MIT asks for its copyright notice and permission text to travel with the binary, and
+Apache-2.0 section 4(d) for the attribution in a package's NOTICE file; the SBOM carries
+that text for each component, read off the license file scripts/sbom names, and this
+writes it out and nothing else. The notices are a view of the SBOM, never a list of their
+own. [LAW:one-source-of-truth]
+
+A component with no license text stops the run and is named, so the notices cannot leave
+out a component the SBOM lists. [LAW:no-silent-failure] Run by the app build, which puts
+the output in the bundle, and by `make check-licenses`, so a pull request that would break
+the build is refused before it is merged.
+"""
+import json
+import sys
+from pathlib import Path
+
+RULE = "=" * 80
+
+
+def fail(message):
+    print(f"notices: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def sections(components, within=""):
+    """One section per component, a vendored one after the package carrying it; and the
+    names of those carrying no license text."""
+    written, missing = [], []
+    for component in components:
+        who = "/".join(filter(None, (component.get("group"), component["name"])))
+        who += f" {component['version']}" if "version" in component else ""
+        where = next((r["url"] for r in component.get("externalReferences", [])), None)
+        licenses = [entry.get("license", {}) for entry in component.get("licenses", [])]
+        texts = [license["text"]["content"] for license in licenses if license.get("text", {}).get("content")]
+        if not licenses or len(texts) != len(licenses):
+            missing.append(within + who)
+        heading = [within + who] + ([where] if where else []) + [" AND ".join(license.get("id", "?") for license in licenses)]
+        written.append("\n".join([RULE, *heading, RULE, "", *texts]))
+        nested, absent = sections(component.get("components", []), f"{within}{who}, vendoring ")
+        written += nested
+        missing += absent
+    return written, missing
+
+
+def main():
+    if len(sys.argv) != 3:
+        fail("usage: scripts/notices <sbom.cdx.json> <output.txt>")
+    try:
+        bom = json.loads(Path(sys.argv[1]).read_text())
+    except (OSError, ValueError) as error:
+        fail(f"{sys.argv[1]} cannot be read as JSON ({error})")
+    if not bom.get("components"):
+        fail(f"{sys.argv[1]} lists no components, so there is nothing to give notice of")
+    written, missing = sections(bom["components"])
+    if missing:
+        fail(f"{sys.argv[1]} carries no license text for {'; '.join(missing)}; name a licenseFile in sbom/rules.json and run `make sbom`")
+    app = bom.get("metadata", {}).get("component", {})
+    title = " ".join(filter(None, (app.get("name"), app.get("version"))))
+    preface = (f"{title} includes the following software and model data from others. Each is "
+               "listed with the license it is distributed under, reproduced in full.\n")
+    Path(sys.argv[2]).write_text("\n\n".join([preface, *written]))
+    print(f"{sys.argv[2]}: notices for {len(written)} components")
+
+
+main()

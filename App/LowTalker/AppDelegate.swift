@@ -344,6 +344,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setUp.show()
     }
 
+    /// The notices the licenses of everything the bundle ships require, which the build
+    /// writes into it from the SBOM. An agent app has no About window to hang them on, so
+    /// this is the one way a person reaches them.
+    ///
+    /// A copy is what opens, never the file in the bundle: TextEdit opens a text file
+    /// editable and autosaves it, and one keystroke saved into the bundle breaks the seal
+    /// every grant is keyed to. A copy that cannot be made or opened is said in an alert,
+    /// since a click that shows nothing tells a person nothing. [LAW:no-silent-failure]
+    @objc private func openNotices() {
+        do {
+            guard let notices = Bundle.main.url(forResource: Carrier.noticesResource, withExtension: nil) else {
+                throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: Carrier.noticesResource])
+            }
+            let copy = FileManager.default.temporaryDirectory.appending(path: Carrier.noticesResource)
+            try? FileManager.default.removeItem(at: copy)
+            try FileManager.default.copyItem(at: notices, to: copy)
+            guard NSWorkspace.shared.open(copy) else { throw CocoaError(.fileReadUnknown, userInfo: [NSFilePathErrorKey: copy.path]) }
+        } catch {
+            log.error("could not open the notices: \(error, privacy: .public)")
+            NSAlert(error: error).runModal()
+        }
+    }
+
     // MARK: - launch and quit
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -631,6 +654,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let stepsLeft = left == 0 ? "" : " (\(left) left)"
         menu.addItem(withTitle: "\(GuidedSetup.title(for: Self.flavor))\(stepsLeft)", action: #selector(openSetUp), keyEquivalent: "")
         menu.addItem(.separator())
+        menu.addItem(withTitle: "Acknowledgements", action: #selector(openNotices), keyEquivalent: "")
         menu.addItem(withTitle: "Quit \(Self.flavor.displayName)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     }
 
