@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Builds LowTalker.app to hand to someone else, and proves its signature is one the notary
-# service accepts, on the app and on everything embedded in it: the CLI and the input method
-# bundle.
+# Builds the LowTalker installer package to hand to someone else, and proves the signature on
+# everything it installs is one the notary service accepts: the app, the CLI embedded in it,
+# and the input method bundle beside it.
 #
-#   scripts/sign-release <output directory> [model source]    # prints <output directory>/LowTalker.app
+#   scripts/sign-release <output directory> [model source]    # prints <output directory>/LowTalker.pkg
 #
 # The bundle carries the default model in Contents/Resources/model-store, so a first launch
 # loads it in place with the network off. The model source is what `lowtalker model download
@@ -11,7 +11,7 @@
 # or a base URL serving the archive `lowtalker model pack` writes. With none, the model comes
 # from Hugging Face.
 #
-# The build is `make release` signed with the Developer ID identity in place of the
+# The build is `make release-package` signed with the Developer ID identity in place of the
 # development one, and that identity is the only thing this script changes about the build:
 # the Hardened Runtime, the secure timestamp and the entitlements are project.yml's for every
 # build, so the bundle a person develops on is built exactly as this one is. It goes into a
@@ -54,12 +54,9 @@ fetched="$derived/fetched-store"
 # component in it held to the accepted licenses: this release is the distribution.
 make check-licenses MODEL_SOURCE="$fetched" >&2
 
-make release SIGNING_IDENTITY="$identity" DERIVED_DATA="$derived" MODEL_SOURCE="$fetched" >&2
-
-app="$out/LowTalker.app"
-# Removed first: ditto merges into a bundle already there. [LAW:no-silent-failure]
-rm -rf "$app"
-ditto "$derived/Build/Products/Release/LowTalker.app" "$app"
+built=$(make release-package SIGNING_IDENTITY="$identity" DERIVED_DATA="$derived" MODEL_SOURCE="$fetched" | tee /dev/stderr | tail -n 1)
+products="$derived/Build/Products/Release"
+app="$products/LowTalker.app"
 
 fail() {
   echo "sign-release: $1" >&2
@@ -90,10 +87,9 @@ store=$(jq -er '.MODEL_STORE_RESOURCE // error("project.yml names no MODEL_STORE
 check "$app"
 # The CLI the app carries, which it runs to read its own grants.
 check "$app/Contents/Helpers/lowtalker"
-# The input method bundle the app carries. Embedded content is signed on copy by Xcode
-# rather than by its own target's codesign step, and the notary service refuses the whole
-# upload for one nested bundle it dislikes, long after this script has printed the path as
-# success.
+# The input method bundle the package installs beside the app. The notary service refuses
+# the whole upload for one nested bundle it dislikes, long after this script has printed the
+# path as success.
 #
 # The bundle is asked, and its main executable is not, because they answer with one
 # signature: `codesign -dvv` on `X.app/Contents/MacOS/X` resolves the path back to the
@@ -104,12 +100,19 @@ check "$app/Contents/Helpers/lowtalker"
 # else here reads.
 #
 # Found by looking rather than by name: the bundle is called after PRODUCT_NAME, which is
-# project.yml's to decide, and a name spelled here is one more copy to keep in step. An app
-# carrying none is a release whose delivery does not exist, so it fails rather than
-# passing a loop that ran zero times. [LAW:no-silent-failure]
-methods=("$app"/Contents/Library/InputMethods/*.app)
-[ -e "${methods[0]}" ] || fail "$app carries no input method bundle"
+# project.yml's to decide, and a name spelled here is one more copy to keep in step. The
+# derived data is this run's own, so every bundle in it besides the app is an input method
+# built with it. A build with none is a release whose delivery does not exist, so it fails
+# rather than passing a loop that ran zero times. [LAW:no-silent-failure]
+methods=()
+for bundle in "$products"/*.app; do
+  [ "$bundle" = "$app" ] || methods+=("$bundle")
+done
+[ ${#methods[@]} -gt 0 ] || fail "$products holds no input method bundle beside $app"
 for method in "${methods[@]}"; do
   check "$method"
 done
-echo "$app"
+
+pkg="$out/$(basename "$built")"
+cp -f "$built" "$pkg"
+echo "$pkg"

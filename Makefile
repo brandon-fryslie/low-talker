@@ -37,14 +37,18 @@ MODEL_SOURCE := $(HOME)/Library/Application Support/low-talker/hub
 # the same reason `--flavor` defaults to it: this tree is the development copy. The
 # installed copy is the one that runs all day, and rebuilding it is a thing done on
 # purpose, by name.
+#
+# Each app is built beside its input method, which the scheme builds with it and the package
+# installs apart from it.
 DEV_SCHEME := LowTalkerDev
 DEV_APP := $(PRODUCTS)/LowTalker Dev.app
+DEV_INPUT_METHOD := $(PRODUCTS)/LowTalker Dev Input Method.app
 RELEASE_SCHEME := LowTalker
 RELEASE_APP := $(PRODUCTS)/LowTalker.app
+RELEASE_INPUT_METHOD := $(PRODUCTS)/LowTalker Input Method.app
 XCODE_RESOLVED_DIR := LowTalker.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
-INSTALLED := /Applications/LowTalker.app
 
-.PHONY: app release install run test check-docs cli sbom check-sbom check-licenses clean signing-identity
+.PHONY: app release package release-package install run test check-docs cli sbom check-sbom check-licenses clean signing-identity
 
 # Regeneration is unconditional: xcodegen is idempotent and sub-second, and a
 # timestamp rule cannot see removed sources or in-place rewrites of the project.
@@ -99,22 +103,24 @@ release: $(BUNDLED_MODEL_STORE)
 	$(call build_app,$(RELEASE_SCHEME))
 	@echo "$(RELEASE_APP)"
 
-# The release copy into /Applications, which is where it is launched from at login and so
-# the path its TCC grant is recorded against. Deleted
-# first rather than copied over: ditto merges into a bundle that is already there, and a
-# file from a previous build that nothing in the new one overwrites is a copy of the app
-# that is neither build. [LAW:no-silent-failure]
-#
-# The development copy is deliberately not installed. It runs from $(PRODUCTS) where
-# `make app` leaves it, which is a stable path across rebuilds - "beside the installed
-# one" is what it is for, not "installed twice".
-install: release
-	rm -rf "$(INSTALLED)"
-	ditto "$(RELEASE_APP)" "$(INSTALLED)"
-	@echo "$(INSTALLED)"
+# The installer package for each installation: its app into /Applications and its input
+# method into /Library/Input Methods. A package is the only way either is installed, the
+# development copy included, since the text input system lists an input method only from
+# the standard folders and the app puts nothing there itself. scripts/sign-release builds
+# `release-package` under the Developer ID identity. [LAW:one-type-per-behavior]
+package: app
+	scripts/make-pkg "$(DEV_APP)" "$(DEV_INPUT_METHOD)" "$(PRODUCTS)"
 
-run: app
-	open "$(DEV_APP)"
+release-package: release
+	scripts/make-pkg "$(RELEASE_APP)" "$(RELEASE_INPUT_METHOD)" "$(PRODUCTS)"
+
+# The development copy installed from its package, the way a person installs a release: the
+# package replaces what stood there, stops what ran from it, and starts the app again.
+install: package
+	sudo installer -pkg "$(PRODUCTS)/LowTalker Dev.pkg" -target /
+
+run: install
+	open "/Applications/LowTalker Dev.app"
 
 # The build comes first because `check-docs` reads the onboarding readings out of the CLI.
 # This is why `check-docs` is a recipe line here rather than a prerequisite: a

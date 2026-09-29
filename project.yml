@@ -64,7 +64,7 @@ packages:
 
 # [LAW:one-type-per-behavior] The two installations are not two apps. They are one app
 # built twice, and what separates them is a few strings: the identity macOS keys the TCC
-# grant to, the name a person reads in the menu bar, and which input method it carries. So
+# grant to, the name a person reads in the menu bar, and which input method it is packaged with. So
 # there is one template and two sets of attributes rather than two targets that must be
 # kept in step by hand.
 #
@@ -110,15 +110,14 @@ targetTemplates:
         copy:
           destination: wrapper
           subpath: Contents/Helpers
-      # The input method bundle, carried so a copy of the app has everything it delivers
-      # with. It is a bundle of its own with its own identifier, so there is one target per
-      # flavor rather than one tool embedded twice: macOS keys a registered input source by
-      # that identifier.
+      # The input method bundle, built beside the app and not inside it: the installer
+      # package puts it in /Library/Input Methods, the one place the text input system lists
+      # it from that an app under App Sandbox does not write to. It is a bundle of its own
+      # with its own identifier, so there is one target per flavor: macOS keys a registered
+      # input source by that identifier. A dependency so that building the app's scheme
+      # builds the input method its package carries.
       - target: ${inputMethodTarget}
-        embed: true
-        copy:
-          destination: wrapper
-          subpath: Contents/Library/InputMethods
+        embed: false
     # Every entitlement here is named with the failure that required it, read off a
     # Hardened Runtime build rather than guessed; one nobody can name is removed.
     # xcodegen writes the plist from these properties on every generate, so the file
@@ -381,7 +380,7 @@ targets:
       appIconName: AppIconDev
       retiredHelperLabels: com.lowtalker.keyboardd.dev ai.promptctl.low-talker.keyboardd.dev
 
-  # The input method each app above carries, one bundle per installation.
+  # The input method each app above is packaged with, one bundle per installation.
   LowTalkerInputMethod:
     templates: [InputMethod]
     templateAttributes:

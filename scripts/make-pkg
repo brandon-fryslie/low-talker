@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# Packs an app and the input method built with it into the signed installer package a person
+# installs: the app into /Applications and the input method into /Library/Input Methods.
+#
+#   scripts/make-pkg <path to .app> <path to input method .app> <output directory>
+#     # prints <output directory>/<app name>.pkg
+#
+# A package and not a disk image, and the package and not the app installs the input method,
+# both measured under App Sandbox on 2026-09-28: every file a sandboxed app writes carries a
+# quarantine it cannot remove, so the text input system refuses an input method the app copies
+# into place, and an app copied out of a quarantined disk image cannot start its nested
+# helper. Files an installer package writes carry no quarantine.
+#
+# Every package is signed with the Developer ID Installer certificate, the development one
+# included: an installer signature needs an installer identity, which the self-signed
+# development identity is not, and one identity for every package is one way a package is
+# made. [LAW:one-type-per-behavior] The team is scripts/sign-release's.
+set -euo pipefail
+
+usage="usage: scripts/make-pkg <path to .app> <path to input method .app> <output directory>"
+app=${1:?$usage}
+input_method=${2:?$usage}
+out=${3:?$usage}
+identity="Developer ID Installer: Brandon Fryslie (6R988MUU27)"
+
+fail() {
+  echo "make-pkg: $1" >&2
+  exit 1
+}
+
+# A bundle is a directory, so completion leaves a slash that would hide its name.
+app=${app%/}
+input_method=${input_method%/}
+mkdir -p "$out"
+out=$(cd "$out" && pwd)
+
+codesign --verify --deep --strict "$app" || fail "$app does not verify"
+codesign --verify --deep --strict "$input_method" || fail "$input_method does not verify"
+
+plist() { /usr/libexec/PlistBuddy -c "Print :$2" "$1/Contents/Info.plist"; }
+app_id=$(plist "$app" CFBundleIdentifier)
+version=$(plist "$app" CFBundleShortVersionString)
+input_method_id=$(plist "$input_method" CFBundleIdentifier)
+# Where the two land. InstalledInputMethod.systemDirectory is the app's reading of the second.
+app_path="/Applications/$(basename "$app")"
+input_method_path="/Library/Input Methods/$(basename "$input_method")"
+
+staging=$(mktemp -d "${TMPDIR:-/tmp}/lowtalker-pkg.XXXXXX")
+trap 'rm -rf "$staging"' EXIT
+root="$staging/root"
+mkdir -p "$root/Applications" "$root/Library/Input Methods" "$staging/scripts"
+ditto "$app" "$root$app_path"
+ditto "$input_method" "$root$input_method_path"
+
+# Each bundle installs where it is named and nowhere else, whatever the Mac already holds.
+# Relocatable - pkgbuild's default - sends a bundle to wherever LaunchServices last saw one
+# with its identifier, which on a Mac that builds LowTalker is a copy in DerivedData. Version
+# checked - also the default - skips a bundle whose version on disk is not older, which is
+# every rebuild of one version. The package is what decides what is installed.
+# [LAW:one-source-of-truth]
+#
+# Updated in place rather than upgraded, pkgbuild's default, which deletes the old bundle
+# before writing the new one. Measured on studious 2026-09-29: the text input system drops an
+# input method whose bundle disappears, switched-on state and all, and a bundle that appears
+# again is a new input method it will not run until the next login, so every upgrade cost
+# the enable alert and a logout. Updated in place, the input method stayed switched on and
+# selected and the next request ran the new code. A file a newer build no longer has stays
+# behind and breaks the bundle's seal, which the postinstall checks first.
+components="$staging/components.plist"
+pkgbuild --analyze --root "$root" "$components" >/dev/null
+count=0
+while /usr/libexec/PlistBuddy -c "Print :$count" "$components" >/dev/null 2>&1; do
+  /usr/libexec/PlistBuddy -c "Set :$count:BundleIsRelocatable false" \
+    -c "Set :$count:BundleIsVersionChecked false" \
+    -c "Set :$count:BundleOverwriteAction update" "$components"
+  count=$((count + 1))
+done
+[ "$count" -eq 2 ] || fail "pkgbuild found $count bundles in the package root, not the app and its input method"
+
+# The postinstall, with the names it acts on written in from the bundles themselves. %q
+# quotes each for bash, so a name with a space in it is one word.
+{
+  echo '#!/bin/bash'
+  printf 'input_method_id=%q\n' "$input_method_id"
+  printf 'input_method_name=%q\n' "$(basename "$input_method")"
+  printf 'input_method_executable=%q\n' "$(plist "$input_method" CFBundleExecutable)"
+  printf 'app=%q\n' "$app_path"
+  printf 'app_executable=%q\n' "$(plist "$app" CFBundleExecutable)"
+  cat "$(dirname "$0")/pkg/postinstall"
+} >"$staging/scripts/postinstall"
+chmod 755 "$staging/scripts/postinstall"
+
+component="$staging/component.pkg"
+pkgbuild --quiet --root "$root" --component-plist "$components" --scripts "$staging/scripts" \
+  --identifier "$app_id" --version "$version" --install-location / "$component"
+
+pkg="$out/$(basename "$app" .app).pkg"
+rm -f "$pkg"
+productbuild --quiet --package "$component" --sign "$identity" --timestamp "$pkg"
+
+# The package as an installer will read it: signed by the identity named above, and carrying
+# both bundles at the paths the postinstall and the app expect.
+pkgutil --check-signature "$pkg" | grep -qF "1. $identity" || fail "$pkg is not signed by $identity"
+payload=$(pkgutil --payload-files "$pkg")
+for path in "$app_path" "$input_method_path"; do
+  grep -qxF ".$path" <<<"$payload" || fail "$pkg does not install $path"
+done
+echo "$pkg"

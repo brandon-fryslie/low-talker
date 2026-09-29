@@ -1,0 +1,70 @@
+# The body of the package's postinstall. scripts/make-pkg writes the lines above this one,
+# naming what it acts on from the bundles it packed: input_method_id, input_method_name,
+# input_method_executable, app and app_executable. It runs as root once the payload stands, and everything it says
+# goes to /var/log/install.log.
+#
+# The package has just replaced the app and its input method on disk. What still runs is the
+# code that stood there before, so this retires it: the app first, since an app from before
+# the package copied its own input method into the home folder of whoever ran it, and would
+# copy it back; then those copies, which the text input system would go on launching; then
+# every input method process, which the text input system relaunches from the new bundle on
+# the next request for one (measured 84 ms after a kill). Last, the app is started again for
+# each person it was running for, and it registers and selects the input method that now
+# stands in /Library/Input Methods.
+set -euo pipefail
+
+say() { echo "postinstall: $*"; }
+lines() { if [ -n "$1" ]; then wc -l <<<"$1" | tr -d ' '; else echo 0; fi; }
+
+# The processes running this executable name from any bundle, as "pid uid" lines. By path
+# and not by process name, which macOS cuts to 16 characters.
+running() {
+  local found
+  found=$(pgrep -f "/Contents/MacOS/$1\$") || [ $? -eq 1 ] || { say "pgrep failed looking for $1"; exit 1; }
+  for pid in $found; do echo "$pid $(ps -o uid= -p "$pid" | tr -d ' ')"; done
+}
+
+# Ends each process and waits for it to go, forcing one that has not gone in five seconds.
+stop() {
+  local pid
+  for pid in "$@"; do
+    kill "$pid" 2>/dev/null || continue
+    for _ in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid"
+      say "forced $pid, which did not end within 5 s"
+    fi
+  done
+}
+
+# Written over in place (scripts/make-pkg says why), so a file an older build had and this
+# one does not is still there, and breaks the seal every grant and the text input system
+# check. Refused here, where the installer shows it, rather than at the next launch.
+for bundle in "$app" "/Library/Input Methods/$input_method_name"; do
+  codesign --verify --deep --strict "$bundle" || { say "$bundle does not verify; remove it and install again"; exit 1; }
+done
+
+apps=$(running "$app_executable")
+stop $(cut -d ' ' -f 1 <<<"$apps")
+say "stopped $(lines "$apps") running $app_executable"
+
+for home in /Users/*; do
+  for bundle in "$home/Library/Input Methods"/*.app; do
+    [ -e "$bundle" ] || continue
+    # A bundle with no readable identifier is someone else's, not a copy of this one.
+    identifier=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$bundle/Contents/Info.plist" 2>/dev/null) || continue
+    if [ "$identifier" = "$input_method_id" ]; then
+      rm -rf "$bundle"
+      say "removed $bundle, a copy an older build of the app made"
+    fi
+  done
+done
+
+methods=$(running "$input_method_executable")
+stop $(cut -d ' ' -f 1 <<<"$methods")
+say "stopped $(lines "$methods") running $input_method_executable"
+
+for uid in $(cut -s -d ' ' -f 2 <<<"$apps" | sort -u); do
+  launchctl asuser "$uid" sudo -u "#$uid" /usr/bin/open "$app"
+  say "started $app again for uid $uid"
+done

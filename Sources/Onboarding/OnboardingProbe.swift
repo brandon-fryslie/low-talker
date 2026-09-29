@@ -63,7 +63,7 @@ public enum OnboardingProbe {
                     return .microphone(withheld, flavor: flavor)
                 }
             case .inputMethod:
-                .inputMethod(switchedOn: InputSourceInstaller.isSwitchedOn(flavor), flavor: flavor)
+                .inputMethod(switchedOn: InstalledInputMethod.isSwitchedOn(flavor), flavor: flavor)
             }
         }
         return Readiness(requirements, notReadHere: rows.filter { !reader.canRead($0) })

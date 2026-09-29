@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
-# The whole release, in the order Gatekeeper needs it: the app signed with its model inside,
-# notarized and stapled, then put into a disk image that is signed, notarized and stapled
-# itself.
+# The whole release: the installer package, its app signed with the model inside, then the
+# package notarized and stapled.
 #
 #   NOTARY_PROFILE=<profile> scripts/release <output directory> [model source]
-#     # prints <output directory>/LowTalker.dmg; LowTalker.app is left beside it
+#     # prints <output directory>/LowTalker.pkg
 #
-# The app is stapled before it goes into the image because the ticket has to travel with the
-# app out of the image, and an image cannot be changed once it is signed. The model source is
-# scripts/sign-release's.
+# One submission covers everything the package installs: the notary service checks every
+# signed bundle inside it and issues one ticket, which is stapled to the package. The model
+# source is scripts/sign-release's.
 #
 # [LAW:composability] Each step is its own script, runnable alone; this one only orders them.
 set -euo pipefail
@@ -36,8 +35,5 @@ if [ "$build" -le "$released" ]; then
   exit 1
 fi
 
-app=$("$scripts/sign-release" "$@")
-"$scripts/notarize" "$app" >&2
-dmg=$("$scripts/make-dmg" "$app" "$out")
-"$scripts/notarize" "$dmg" >&2
-echo "$dmg"
+pkg=$("$scripts/sign-release" "$@")
+"$scripts/notarize" "$pkg"
