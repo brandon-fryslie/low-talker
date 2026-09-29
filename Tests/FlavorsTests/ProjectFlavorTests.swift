@@ -8,7 +8,8 @@ private let repository = URL(fileURLWithPath: #filePath)
 /// project.yml builds one app bundle per flavor, under that flavor's own names.
 ///
 /// xcodegen cannot read a Swift constant, so every name `Flavor` decides that a target
-/// needs - the bundle identifier, the product name, and the input method's three - is written again in project.yml, and this is what keeps those copies
+/// needs - the bundle identifier, the product name, the input method's three, and the
+/// retired keyboard helper's labels - is written again in project.yml, and this is what keeps those copies
 /// from drifting. [LAW:one-source-of-truth] The failure they would otherwise cause is
 /// silent in the worst way: two bundles that agree on an identifier are one installation
 /// as far as LaunchServices and TCC are concerned, so the second copy would
@@ -62,7 +63,7 @@ private let repository = URL(fileURLWithPath: #filePath)
         [
             flavor.bundleIdentifier, flavor.displayName,
             flavor.inputMethodBundleIdentifier, flavor.inputSourceIdentifier,
-            flavor.inputMethodConnectionName,
+            flavor.inputMethodConnectionName, flavor.retiredHelperLabels.joined(separator: " "),
         ]
     }
 
@@ -87,6 +88,10 @@ private let repository = URL(fileURLWithPath: #filePath)
         )
         #expect(mine.sets["displayName"] == flavor.displayName)
         #expect(mine.sets["appIconName"] == flavor.appIconName)
+        // Swapped, each bundle would carry the plists its app never asks SMAppService for, and
+        // every launch would fail to unregister the jobs the upgrade left behind. Space-separated,
+        // as the build step splits them.
+        #expect(mine.sets["retiredHelperLabels"] == flavor.retiredHelperLabels.joined(separator: " "))
     }
 
     /// Each app carries the target that builds its own flavor's input method.

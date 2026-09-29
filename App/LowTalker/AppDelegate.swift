@@ -375,13 +375,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ = engine
         showHotkeyStatus("starting…")
         Task { await listen() }
+        retireKeyboardHelpers()
+    }
+
+    /// Unregisters the keyboard helper every build before v0.1.0-alpha.5 registered, which an
+    /// upgraded installation still holds: launchd keeps the job loaded and Login Items keeps
+    /// listing it, though its program left the bundle with that release. One line per label,
+    /// saying what the launch found and did; `HelperRetirement` owns both.
+    ///
+    /// Measured on macOS 15 (low-input-method-s71.p3k): with the plist carried and the
+    /// program gone, an approved job unregisters with no prompt, launchd drops it, and its
+    /// Login Items row turns off.
+    private func retireKeyboardHelpers() {
+        let labels = Self.flavor.retiredHelperLabels
+        Task.detached { [log] in
+            for label in labels {
+                let retirement = await HelperRetirement.retire(label: label)
+                log.log(level: retirement.level, "\(retirement, privacy: .public)")
+            }
+        }
     }
 
     /// The loop as far as what is already granted allows, then the guided setup when
     /// something is left: every requirement stops dictation, so an app missing one can do
     /// nothing until the person has seen why.
     ///
-    /// A launch asks macOS for nothing. Every grant is asked for from its own step in setup,
+    /// A launch asks for no grant. Every grant is asked for from its own step in setup,
     /// after that step has said why; see `ask(_:)`.
     private func listen() async {
         await comeUp()
