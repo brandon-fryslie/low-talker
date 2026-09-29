@@ -100,16 +100,6 @@ targetTemplates:
         product: Insertion
       - package: low-talker
         product: InputSource
-      # The CLI, signed on copy with the app's identity, which the app runs to read its own
-      # grants afresh. One tool in both bundles: which installation it acts on is read from
-      # the bundle it sits in, never built into it. In Helpers and not beside the app's own
-      # binary, because `lowtalker` and the release app's `LowTalker` are one file name on a
-      # case-insensitive volume.
-      - target: lowtalker-cli
-        embed: true
-        copy:
-          destination: wrapper
-          subpath: Contents/Helpers
       # The input method bundle, built beside the app and not inside it: the installer
       # package puts it in /Library/Input Methods, the one place the text input system lists
       # it from that an app under App Sandbox does not write to. It is a bundle of its own
@@ -254,7 +244,7 @@ targetTemplates:
         # Where the bundle's resources hold the carried store, as ModelStore.carriedResourceName
         # names it; CarriedModelStoreTests holds the two equal. [LAW:one-source-of-truth]
         MODEL_STORE_RESOURCE: model-store
-        # The notices' file in the bundle's resources, as Carrier.noticesResource names it;
+        # The notices' file in the bundle's resources, as Notices.resource names it;
         # CarriedNoticesTests holds the two equal. [LAW:one-source-of-truth]
         NOTICES_RESOURCE: Acknowledgements.txt
         # Where the container keeps the config, as Config.pathInContainer names it;
@@ -424,39 +414,3 @@ targets:
       inputMethodConnectionName: ai.promptctl.low-talker.dev.inputmethod.dictation_Connection
       inputMethodPortName: ai.promptctl.low-talker.dev.inputmethod.dictation.insert
       hotkeyPortName: ai.promptctl.low-talker.dev.hotkey
-
-  # The CLI, built here from the entry Package.swift builds `.build/debug/lowtalker` from,
-  # over the library holding every command, so the copy an app carries is the program a
-  # checkout runs. `make cli` signs that build with this identifier too, so both builds are
-  # one code identity. They no longer share a Neural Engine cache: the sandboxed app keeps
-  # its own inside its container, so warming one leaves the other cold.
-  #
-  # Named apart from its product: Xcode keeps each target's intermediates in a folder named
-  # for the target, and `lowtalker` and the release app's `LowTalker` are one folder on a
-  # case-insensitive volume. Measured under that name, the release app linked the CLI's
-  # objects and carried no AppDelegate. The entitlements file is named apart for the same
-  # reason.
-  lowtalker-cli:
-    type: tool
-    platform: macOS
-    sources:
-      - Sources/lowtalker
-    dependencies:
-      - package: low-talker
-        product: LowTalkerCommands
-    # Hardened, as every target here is, and so refused the microphone without this:
-    # `record` and `mic` listen. The same entitlement the app carries, for the
-    # same measured reason written above it.
-    entitlements:
-      path: App/Generated/lowtalker-cli.entitlements
-      properties:
-        com.apple.security.device.audio-input: true
-    settings:
-      base:
-        PRODUCT_NAME: lowtalker
-        PRODUCT_BUNDLE_IDENTIFIER: ai.promptctl.low-talker.cli
-        # Xcode signs a tool under its product name and ignores the identifier above, so it
-        # is passed to codesign by hand; the copy into each bundle keeps it. `make cli` reads
-        # the same setting, so both builds of the CLI are one code identity. Inherited, so a
-        # Release build keeps the project's --timestamp, which notarization requires.
-        OTHER_CODE_SIGN_FLAGS: $(inherited) --identifier $(PRODUCT_BUNDLE_IDENTIFIER)

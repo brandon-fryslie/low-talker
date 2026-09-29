@@ -196,21 +196,18 @@ check-docs:
 	check_row "Microphone" '^So the microphone.s row reads one of'; \
 	check_row "Input method" '^So the input method.s row reads one of'
 
-# The CLI for engine work, as this tree builds it, signed with the dev identity rather than
-# ad hoc. The identifier is read from its target in project.yml, which signs the copy every
-# app bundle carries with it, so the two builds of one program are one code identity. That
-# identity is also what the Neural Engine keys its compiled model by, and `swift build` links
-# a fresh binary every time: unsigned, each rebuild pays the minutes-long specialization
-# again.
+# The CLI for engine work, as this tree builds it, signed with the dev identity under a
+# fixed identifier rather than ad hoc. That identity is what the Neural Engine keys its
+# compiled model by, and `swift build` links a fresh binary every time: unsigned, each
+# rebuild pays the minutes-long specialization again.
 # [LAW:one-source-of-truth] scripts/signing-identity reads the identity name off
-# project.yml; the lookups run in the recipe (not $(shell), which discards exit status) so a
+# project.yml; the lookup runs in the recipe (not $(shell), which discards exit status) so a
 # failing tool aborts loudly.
 CLI := .build/debug/lowtalker
+CLI_IDENTIFIER := ai.promptctl.low-talker.cli
 cli:
 	swift build --product lowtalker
-	# Read into a variable first: a failed lookup inside the codesign line would sign as "null".
-	identifier=$$(xcodegen dump --type json | jq -er '.targets["lowtalker-cli"].settings.base.PRODUCT_BUNDLE_IDENTIFIER // error("project.yml sets no PRODUCT_BUNDLE_IDENTIFIER for lowtalker-cli")') \
-		&& codesign --force --sign "$$(scripts/signing-identity)" --identifier "$$identifier" "$(CLI)"
+	codesign --force --sign "$$(scripts/signing-identity)" --identifier "$(CLI_IDENTIFIER)" "$(CLI)"
 	@echo "$(CLI)"
 
 # What a release ships and under what license, as CycloneDX, read off the resolved

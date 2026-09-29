@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the LowTalker installer packages to hand to someone else, one per variant, offline and
 # network, and proves the signature on everything each installs is one the notary service
-# accepts: the app, the CLI embedded in it, and the input method bundle beside it.
+# accepts: the app and the input method bundle beside it.
 #
 #   scripts/sign-release <output directory> [model source]
 #     # prints <output directory>/LowTalker-offline.pkg and <output directory>/LowTalker-network.pkg
@@ -16,10 +16,8 @@
 # development one, once per variant, and the identity and the variant are all this script
 # changes about the build: the Hardened Runtime, the secure timestamp and the entitlements are
 # project.yml's for every build, so the offline bundle a person develops on is built exactly
-# as the offline one here is. It goes into a
-# derived-data directory made for this run and removed after it: an incremental build keeps
-# embedding a tool whose only change is its signature (low-build-mmp), so a warm DerivedData
-# could hand over a bundle whose CLI is signed by the dev identity.
+# as the offline one here is. It goes into a derived-data directory made for this run and
+# removed after it, so a release is always a clean build.
 #
 # [LAW:one-source-of-truth] The recipe is the Makefile's; this script only names the
 # certificate and reads the result back. The certificate is named in full, team and all: the
@@ -93,8 +91,6 @@ release_package() {
   "$cli" model status --models-dir "$app/Contents/Resources/$store" >&2 \
     || fail "$app does not carry the default model whole"
   check "$app"
-  # The CLI the app carries, which it runs to read its own grants.
-  check "$app/Contents/Helpers/lowtalker"
   # The input method bundle the package installs beside the app. The notary service refuses
   # the whole upload for one nested bundle it dislikes, long after this script has printed the
   # path as success.
@@ -103,9 +99,7 @@ release_package() {
   # signature: `codesign -dvv` on `X.app/Contents/MacOS/X` resolves the path back to the
   # bundle and prints byte-for-byte what `codesign -dvv X.app` prints - measured. A second
   # `check` there is a second checkpoint for one rule that can never disagree with the first.
-  # [LAW:single-enforcer] `lowtalker` above is the opposite case and stays: it is a separate
-  # Mach-O in the app's bundle, with its own identifier and its own signature, which nothing
-  # else here reads.
+  # [LAW:single-enforcer]
   #
   # Found by looking rather than by name: the bundle is called after PRODUCT_NAME, which is
   # project.yml's to decide, and a name spelled here is one more copy to keep in step. The

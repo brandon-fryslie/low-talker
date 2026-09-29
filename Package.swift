@@ -14,7 +14,6 @@ let package = Package(
         .library(name: "InputMethod", targets: ["InputMethod"]),
         .library(name: "Insertion", targets: ["Insertion"]),
         .library(name: "InputSource", targets: ["InputSource"]),
-        .library(name: "LowTalkerCommands", targets: ["LowTalkerCommands"]),
         .executable(name: "lowtalker", targets: ["lowtalker"]),
         .executable(name: "lowtalker-inputmethod", targets: ["lowtalker-inputmethod"]),
     ],
@@ -108,10 +107,8 @@ let package = Package(
         // The process macOS launches out of the input method bundle. It holds the effects -
         // reading the bundle, opening the port, running the loop - and nothing else.
         .executableTarget(name: "lowtalker-inputmethod", dependencies: ["InputMethod", "Insertion", "Flavors"]),
-        // Every command the CLI has, as a library, so the one program has two builds of the
-        // same code: SwiftPM's `.build/debug/lowtalker` for this tree, and the copy Xcode
-        // embeds in each app bundle, which cannot embed a package's executable. Both are the
-        // entry below over this library, the shape the input method already takes, and this
+        // Every command the CLI has, as a library the tests import, with the entry below as
+        // the whole of the executable: the shape the input method already takes, and this
         // list is the one place the CLI's dependencies are declared. [LAW:one-source-of-truth]
         .target(
             name: "LowTalkerCommands",

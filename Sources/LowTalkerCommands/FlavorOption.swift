@@ -15,13 +15,9 @@ extension Flavor: ExpressibleByArgument {
 /// installation, so the flag is spelled, defaulted and described the same way everywhere
 /// rather than four times with three agreements.
 ///
-/// **The default is the installation this binary belongs to.** Each app carries its own
-/// copy of the CLI, signed as that app is, and a copy inside LowTalker.app acts on the
-/// installed copy while the one inside LowTalker Dev.app acts on the development one.
-/// `.build/debug/lowtalker` belongs to no bundle; it is built from the working tree beside
-/// the development app and signed with the same identity, so it defaults to the development
-/// copy, and having it reach into the installed copy's config or hotkey by default would be
-/// the surprising direction. `--flavor` says otherwise on purpose.
+/// **The default is the development copy.** The CLI is built from a checkout, beside the
+/// development app, and having it reach into the installed copy's config or hotkey by
+/// default would be the surprising direction. `--flavor` says otherwise on purpose.
 struct FlavorOption: ParsableArguments {
     /// What was actually typed, which is not the same question as which installation to
     /// act on. A command that reads *this installation's* file wants the default below; a
@@ -37,14 +33,7 @@ struct FlavorOption: ParsableArguments {
     /// The installation a command acts on when none is stated, for the reason above. Named
     /// once, because the help text, this option and `ConfigSource` all say it.
     /// [LAW:one-source-of-truth]
-    ///
-    /// The enclosing bundle's identifier is the one fact that says which installation this
-    /// is - the same one the app reads to learn which copy it is - so nothing per-flavor is
-    /// written into the binary, and one build serves both bundles. `Carrier` resolves links
-    /// first: `Bundle.main` answers for the path the process was started by, and a CLI
-    /// reached through a link would otherwise act on the development copy from inside the
-    /// release app.
-    static let defaultFlavor: Flavor = Bundle.main.executableURL.flatMap(Carrier.installation(of:)) ?? .development
+    static let defaultFlavor: Flavor = .development
 
     /// The installation this command acts on.
     var flavor: Flavor { stated ?? Self.defaultFlavor }

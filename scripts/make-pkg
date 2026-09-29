@@ -50,6 +50,9 @@ family="${input_method_id%%low-talker.*}low-talker."
 # package's name is what the app carries.
 variant=$(codesign -d --entitlements - --xml "$app" | "$(dirname "$0")/variant")
 echo "make-pkg: $app is the $variant build" >&2
+# The app carries no program but itself (low-builds-b4e.tvx). An incremental Xcode build never
+# deletes a file an earlier build embedded, so a warm DerivedData can still hold one.
+[[ ! -e $app/Contents/Helpers ]] || fail "$app carries Contents/Helpers from an earlier build; build it clean"
 # Where the two land. InstalledInputMethod.systemDirectory is the app's reading of the second.
 app_path="/Applications/$(basename "$app")"
 input_method_path="/Library/Input Methods/$(basename "$input_method")"

@@ -78,9 +78,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return flavor
     }()
 
-    /// The CLI this bundle carries, which reads the app's grants in a process of its own.
-    static let carriedCLI = Carrier.cli(in: Bundle.main.bundleURL)
-
     /// [LAW:one-source-of-truth] Every engine status passes through here, so the
     /// menu and the log never tell different stories.
     private func show(_ readiness: EngineReadiness) {
@@ -315,20 +312,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .microphone:
             // macOS asks about the microphone once. Past that, requesting answers at once and
             // shows nothing, so a decided "no" is said here and the pane opened instead.
-            switch readPrivacy().map(\.microphoneAuthorization) {
-            case .success(.withheld(.notDetermined)):
+            switch readMicrophone() {
+            case .withheld(.notDetermined):
                 // Asked here, as measured on studious 2026-09-24: one dialog, naming the app.
                 _ = await MicrophonePermission().request()
                 return nil
-            case .success(.withheld(.denied)):
+            case .withheld(.denied):
                 NSWorkspace.shared.open(row.settingsPane)
                 return "macOS asks only once. Turn on \(Self.flavor.displayName) in the \(row.rawValue) list in System Settings."
-            case .success(.withheld(.restricted)):
+            case .withheld(.restricted):
                 return "A policy on this Mac blocks the microphone."
-            case .success(.granted):
+            case .granted:
                 return nil
-            case .failure(let reading):
-                return "\(reading)"
             }
         case .inputMethod:
             do { try await InstalledInputMethod(flavor: Self.flavor).switchOn() } catch {
@@ -356,10 +351,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// since a click that shows nothing tells a person nothing. [LAW:no-silent-failure]
     @objc private func openNotices() {
         do {
-            guard let notices = Bundle.main.url(forResource: Carrier.noticesResource, withExtension: nil) else {
-                throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: Carrier.noticesResource])
+            guard let notices = Bundle.main.url(forResource: Notices.resource, withExtension: nil) else {
+                throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: Notices.resource])
             }
-            let copy = FileManager.default.temporaryDirectory.appending(path: Carrier.noticesResource)
+            let copy = FileManager.default.temporaryDirectory.appending(path: Notices.resource)
             try? FileManager.default.removeItem(at: copy)
             try FileManager.default.copyItem(at: notices, to: copy)
             guard NSWorkspace.shared.open(copy) else { throw CocoaError(.fileReadUnknown, userInfo: [NSFilePathErrorKey: copy.path]) }
@@ -420,7 +415,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // what came up short was the hotkey or the input method, which `rebuild` redoes.
             // Restarting it would close and reopen an engine the resting mode holds open.
             if capture.atRest == nil {
-                try capture.start(try readPrivacy().get().microphoneAuthorization.grant(), atRest: try config.get().microphone)
+                try capture.start(try readMicrophone().grant(), atRest: try config.get().microphone)
                 // Readied before the hotkey goes up, so the first press opens a microphone
                 // already reached rather than paying for reaching one.
                 capture.waitUntilReadied()
@@ -581,7 +576,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// exactly when it matters: right after the user gave the grant the menu was telling them
     /// to give. [LAW:no-ambient-temporal-coupling]
     private func readReadiness() -> Readiness {
-        let readiness = OnboardingProbe.readiness(flavor: Self.flavor, reader: .theApp(privacy: readPrivacy()))
+        let readiness = OnboardingProbe.readiness(flavor: Self.flavor, reader: .theApp(microphone: readMicrophone()))
         log.notice("onboarding: \(readiness.ready ? "ready" : "not ready", privacy: .public)")
         for requirement in readiness.requirements {
             log.notice("onboarding: \(requirement.name, privacy: .public): \(requirement.reads, privacy: .public)")
@@ -589,15 +584,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return readiness
     }
 
-    /// The app's privacy grants as they stand now, read by the carried CLI in a process of
-    /// its own, because this process keeps the answers it read first. See `PrivacyReading`.
-    private func readPrivacy() -> Result<PrivacyReading, PrivacyReadingFailure> {
-        let reading = Result { () throws(PrivacyReadingFailure) in try PrivacyReading.taken(by: Self.carriedCLI) }
-        switch reading {
-        case .success(let privacy): log.notice("privacy: \(privacy.line, privacy: .public)")
-        case .failure(let failure): log.error("privacy: \(failure.description, privacy: .public)")
-        }
-        return reading
+    /// The app's microphone authorization as it stands now.
+    private func readMicrophone() -> MicrophoneAuthorization {
+        let microphone = MicrophonePermission().current
+        log.notice("privacy: \(microphone, privacy: .public)")
+        return microphone
     }
 
     /// Why a press of the chord would not be heard right now, read at the moment the menu
