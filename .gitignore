@@ -11,5 +11,3 @@ App/Generated/
 .claude/worktrees/
 # What scripts/sign-release and scripts/notarize leave behind to hand out.
 dist/
-# What running scripts/tests leaves behind.
-__pycache__/

@@ -16,9 +16,10 @@ import json
 import sys
 
 # The permissive set the tree sits in, and the public-domain equivalents. GPL, LGPL, AGPL,
-# MPL, SSPL and source-available licenses stay out: their obligations attach on
-# distribution, and every release distributes.
+# MPL, SSPL and source-available licenses stay out: they ask for source, or restrict use,
+# on distribution, and every release distributes. SPDX ids match without regard to case.
 ACCEPTED = {"MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unlicense", "CC0-1.0", "0BSD"}
+ACCEPTED_IDS = {spdx.casefold() for spdx in ACCEPTED}
 
 REMEDY = ("Drop the component, replace it with one under an accepted license, or reimplement "
           "its behavior clean-room from a black-box specification written by someone who has "
@@ -49,11 +50,13 @@ def refusals(components, within=""):
     found = []
     read = 0
     for component in components:
-        who = f"{within}{component['name']} {component.get('version', '(no version)')}"
+        # A model has a group - its Hugging Face repo - and no version.
+        who = within + "/".join(filter(None, (component.get("group"), component["name"])))
+        who += f" {component['version']}" if "version" in component else ""
         licenses = component.get("licenses", [])
         if not licenses:
             found.append((who, "no license the generator identified"))
-        found += [(who, named(entry)) for entry in licenses if entry.get("license", {}).get("id") not in ACCEPTED]
+        found += [(who, named(entry)) for entry in licenses if entry.get("license", {}).get("id", "").casefold() not in ACCEPTED_IDS]
         nested, count = refusals(component.get("components", []), f"{who} vendors ")
         found += nested
         read += 1 + count

@@ -136,7 +136,6 @@ test:
 	swift build
 	$(MAKE) check-docs
 	swift test
-	$(MAKE) check-sbom
 	$(MAKE) check-licenses
 
 # [LAW:one-source-of-truth] The onboarding rows' readings are a vocabulary README.md keeps a
@@ -210,8 +209,8 @@ check-sbom: sbom
 # one whose license nobody identified. It reads the committed SBOM, which `check-sbom` has
 # just held to the build, so a dependency cannot reach the tree without passing it. The
 # gate's own tests run first: a gate that passes everything looks exactly like a clean tree.
-check-licenses:
-	python3 -m unittest discover -s scripts/tests
+check-licenses: check-sbom
+	python3 -B -m unittest discover -s scripts/tests
 	scripts/check-licenses sbom/lowtalker.cdx.json
 
 # Once per Mac. Until it has run, `make app`, `make cli` and `make test` stop with "No

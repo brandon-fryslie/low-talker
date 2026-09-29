@@ -58,6 +58,14 @@ class CheckLicensesTests(unittest.TestCase):
         self.assertRefused(self.check(library("either", "1.0", {"expression": "MIT OR GPL-3.0-only"})),
                            "check-licenses: either 1.0 is under the expression `MIT OR GPL-3.0-only`, which is not an accepted license")
 
+    def test_ids_match_without_regard_to_case(self):
+        self.assertEqual(self.check(library("a", "1.0", spdx("apache-2.0"))).returncode, 0)
+
+    def test_a_model_is_named_by_its_repo(self):
+        model = {"type": "data", "group": "openai", "name": "whisper", "licenses": [spdx("CC-BY-NC-4.0")]}
+        self.assertRefused(self.check(model),
+                           "check-licenses: openai/whisper is under CC-BY-NC-4.0, which is not an accepted license")
+
     def test_every_refusal_is_named(self):
         result = self.check(library("one", "1", spdx("GPL-2.0-only")), library("two", "2"))
         self.assertRefused(result, "check-licenses: one 1 is under GPL-2.0-only, which is not an accepted license")
