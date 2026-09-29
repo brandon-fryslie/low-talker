@@ -55,11 +55,16 @@ extension Vocabulary.Term: Decodable {
 public enum VocabularyError: Error, Equatable, CustomStringConvertible {
     /// A term with no word in it: blank, or punctuation alone.
     case termSaysNothing(String)
+    /// More prompt tokens than the engine keeps, refused by the engine that would
+    /// otherwise drop the first terms without a word said.
+    case tooLong(tokens: Int, limit: Int)
 
     public var description: String {
         switch self {
         case .termSaysNothing(let text):
             "vocabulary term \"\(text)\" has no word in it"
+        case .tooLong(let tokens, let limit):
+            "the vocabulary is \(tokens) prompt tokens and the engine keeps at most \(limit)"
         }
     }
 }

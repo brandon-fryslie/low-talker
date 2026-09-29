@@ -181,7 +181,7 @@ public final class WhisperKitTranscriber: Transcriber {
             let tokens = tokenizer.encode(text: vocabulary.whisperPrompt).filter { $0 < tokenizer.specialTokens.specialTokenBegin }
             let limit = PromptOffsetSegmentSeeker.promptTokenLimit
             guard tokens.count <= limit else {
-                throw WhisperKitTranscriberError.vocabularyTooLong(tokens: tokens.count, limit: limit)
+                throw VocabularyError.tooLong(tokens: tokens.count, limit: limit)
             }
             return tokens
         }
@@ -210,15 +210,11 @@ public enum WhisperKitTranscriberError: Error, CustomStringConvertible {
     case wordEndsBeforeStart(WordTiming)
     /// WhisperKit loaded the model but holds no tokenizer for it.
     case tokenizerNotLoaded(ModelName)
-    /// The vocabulary encodes to more prompt tokens than WhisperKit keeps.
-    case vocabularyTooLong(tokens: Int, limit: Int)
 
     public var description: String {
         switch self {
         case .tokenizerNotLoaded(let model):
             "WhisperKit loaded \(model) without its tokenizer"
-        case .vocabularyTooLong(let tokens, let limit):
-            "the vocabulary is \(tokens) prompt tokens and WhisperKit keeps at most \(limit)"
         case .speechWithoutWords(let text):
             "WhisperKit returned segment \"\(text)\" without word timings"
         case .probabilityOutsideUnitInterval(let word):

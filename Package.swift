@@ -14,6 +14,7 @@ let package = Package(
         .library(name: "InputMethod", targets: ["InputMethod"]),
         .library(name: "Insertion", targets: ["Insertion"]),
         .library(name: "InputSource", targets: ["InputSource"]),
+        .library(name: "Serve", targets: ["Serve"]),
         .executable(name: "lowtalker", targets: ["lowtalker"]),
         .executable(name: "lowtalker-inputmethod", targets: ["lowtalker-inputmethod"]),
     ],
@@ -55,6 +56,11 @@ let package = Package(
                 .product(name: "TOMLKit", package: "TOMLKit"),
             ]
         ),
+        // OpenAI's speech-to-text API over any Transcriber, for callers other than
+        // dictation (epic low-serve-axq). Above the core, so the core never links Network
+        // and the offline build's app need not link this at all. [LAW:one-way-deps]
+        .target(name: "Serve", dependencies: ["LowTalkerCore"]),
+        .testTarget(name: "ServeTests", dependencies: ["Serve", "LowTalkerCore"], resources: [.copy("Fixtures")]),
         // Answering a signal rather than obeying it, for every process here that has an
         // ending of its own to unwind through. It links nothing, so any process here can
         // watch through it. [LAW:one-source-of-truth]
@@ -122,6 +128,8 @@ let package = Package(
                 "Onboarding",
                 "InputSource",
                 "Signals",
+                // `serve`: the endpoint over the engine a terminal loads.
+                "Serve",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),

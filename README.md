@@ -41,6 +41,10 @@ prints the transcript, then one line per word with its start, end, and confidenc
 
 `make cli` is `swift build` plus a re-signing step; the section below says why it matters.
 
+    .build/debug/lowtalker serve --port 8765
+
+loads the same engine and answers OpenAI's `POST /v1/audio/transcriptions` on loopback, so a Pipecat `OpenAISTTService` pointed at the base URL it prints transcribes through it. It prints one JSON line per request. `scripts/conformance check <base URL>` judges it against the contract Pipecat holds OpenAI to.
+
 ### The model store
 
 The CLI keeps its models in `~/Library/Application Support/low-talker/hub`, the store `make app` copies each bundle's model out of, laid out the way the Hugging Face hub lays out its cache. A model is two parts: its weights, under `models/argmaxinc/whisperkit-coreml/<variant>`, and the tokenizer they decode with, under `models/openai/whisper-<size>` and shared by every model of that Whisper size. The first `transcribe` installs the default Whisper model (about 632 MB) into it and records a manifest of each part's files and their sizes, `installed/<model>.json` for the weights and `installed/tokenizer/<model>.json` for the tokenizer. Every run after that checks both manifests against the files and loads straight from disk, so the CLI works offline once the model is installed.
