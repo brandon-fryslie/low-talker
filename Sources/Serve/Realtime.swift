@@ -141,6 +141,7 @@ enum ClientEvent: Sendable {
 /// error shape. [LAW:one-source-of-truth] Each case's code, words and parameter are read
 /// off it, so an `error` event and a failed item say the same thing.
 enum RealtimeError: Error, Equatable, Sendable {
+    case invalidAPIKey
     case notJSON(String)
     case missing(String)
     case unknownEvent(String)
@@ -153,12 +154,13 @@ enum RealtimeError: Error, Equatable, Sendable {
     var type: String {
         switch self {
         case .engineFailed: "server_error"
-        case .notJSON, .missing, .unknownEvent, .unknownParameter, .invalidValue, .bufferEmpty, .promptRefused: "invalid_request_error"
+        case .invalidAPIKey, .notJSON, .missing, .unknownEvent, .unknownParameter, .invalidValue, .bufferEmpty, .promptRefused: "invalid_request_error"
         }
     }
 
     var code: String {
         switch self {
+        case .invalidAPIKey: "invalid_api_key"
         case .notJSON: "invalid_json"
         case .missing: "missing_required_parameter"
         case .unknownEvent: "unknown_event"
@@ -171,6 +173,7 @@ enum RealtimeError: Error, Equatable, Sendable {
 
     var message: String {
         switch self {
+        case .invalidAPIKey: "Incorrect API key provided."
         case .notJSON(let text): "The event is not a JSON object: \(text)"
         case .missing(let param): "The \(param) field is required."
         case .unknownEvent(let type): "The event type \(type) is not supported."
@@ -187,7 +190,7 @@ enum RealtimeError: Error, Equatable, Sendable {
         case .missing(let param), .unknownParameter(let param), .invalidValue(let param, _): param
         case .unknownEvent: "type"
         case .promptRefused: "session.audio.input.transcription.prompt"
-        case .notJSON, .bufferEmpty, .engineFailed: nil
+        case .invalidAPIKey, .notJSON, .bufferEmpty, .engineFailed: nil
         }
     }
 }

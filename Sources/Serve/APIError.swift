@@ -8,6 +8,7 @@ import Foundation
 /// case, so the answer a client gets and the event the server records cannot disagree.
 enum APIError: Error, Equatable, Sendable {
     case malformed(String)
+    case invalidAPIKey
     case lengthRequired
     case tooLarge(bytes: Int, limit: Int)
     case notFound(method: String, path: String)
@@ -26,6 +27,7 @@ enum APIError: Error, Equatable, Sendable {
     var status: Status {
         switch self {
         case .malformed, .missing, .repeated, .unsupportedParameter, .unsupportedValue, .promptRefused, .emptyFile, .unreadableAudio, .silentFile: .badRequest
+        case .invalidAPIKey: .unauthorized
         case .lengthRequired: .lengthRequired
         case .tooLarge: .contentTooLarge
         case .notFound: .notFound
@@ -37,6 +39,7 @@ enum APIError: Error, Equatable, Sendable {
     var message: String {
         switch self {
         case .malformed(let reason): "The request is malformed: \(reason)."
+        case .invalidAPIKey: "Incorrect API key provided."
         case .lengthRequired: "The request body must have a content-length; chunked bodies are not accepted."
         case .tooLarge(let bytes, let limit): "The request body is \(bytes) bytes; the limit is \(limit)."
         case .notFound(let method, let path): "No endpoint answers \(method) \(path)."
@@ -59,13 +62,14 @@ enum APIError: Error, Equatable, Sendable {
         case .missing(let field), .repeated(let field), .unsupportedParameter(let field), .unsupportedValue(let field, _, _): field
         case .promptRefused: "prompt"
         case .emptyFile, .unreadableAudio, .silentFile: "file"
-        case .malformed, .lengthRequired, .tooLarge, .notFound, .uploadNotStored, .notResident, .engineFailed: nil
+        case .malformed, .invalidAPIKey, .lengthRequired, .tooLarge, .notFound, .uploadNotStored, .notResident, .engineFailed: nil
         }
     }
 
     var code: String {
         switch self {
         case .malformed: "malformed_request"
+        case .invalidAPIKey: "invalid_api_key"
         case .lengthRequired: "length_required"
         case .tooLarge: "request_too_large"
         case .notFound: "unknown_url"

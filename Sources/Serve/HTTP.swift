@@ -87,6 +87,7 @@ struct HTTPResponse: Sendable, Equatable {
 enum Status: Int, Sendable, Codable {
     case ok = 200
     case badRequest = 400
+    case unauthorized = 401
     case notFound = 404
     case lengthRequired = 411
     case contentTooLarge = 413
@@ -97,6 +98,7 @@ enum Status: Int, Sendable, Codable {
         switch self {
         case .ok: "OK"
         case .badRequest: "Bad Request"
+        case .unauthorized: "Unauthorized"
         case .notFound: "Not Found"
         case .lengthRequired: "Length Required"
         case .contentTooLarge: "Content Too Large"

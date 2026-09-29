@@ -41,16 +41,18 @@ public final class TranscriptionServer: Sendable {
         self.ended = ended
     }
 
-    /// Listens on `flavor`'s port on loopback until `stop`, answering every request with what
-    /// `engine` says at that moment and handing one `ServedRequest` per connection to `record`.
-    /// Throws `ListenRefused` when the address cannot be had, which is most often another
-    /// process of the same installation already serving on it.
+    /// Listens on `flavor`'s port where `binding` says until `stop`, answering every request
+    /// `binding` admits with what `engine` says at that moment and handing one
+    /// `ServedRequest` per connection to `record`. Throws `ListenRefused` when the address
+    /// cannot be had, which is most often another process of the same installation already
+    /// serving on it.
     public static func listen(
         for flavor: Flavor,
+        on binding: ServeBinding,
         engine: @escaping @Sendable () -> ServedEngine,
         record: @escaping @Sendable (ServedRequest) -> Void = ServedRequest.log
     ) async throws(ListenRefused) -> TranscriptionServer {
-        try await listen(at: ListenAddress(flavor: flavor), engine: engine, record: record)
+        try await listen(at: ListenAddress(flavor: flavor, binding: binding), engine: engine, record: record)
     }
 
     static func listen(
@@ -64,7 +66,7 @@ public final class TranscriptionServer: Sendable {
         } catch {
             throw ListenRefused(address: address, reason: error)
         }
-        ServedRequest.logger.notice("\(address.flavor, privacy: .public) serving on \(server.address, privacy: .public)")
+        ServedRequest.logger.notice("\(address.flavor, privacy: .public) serving on \(server.address, privacy: .public), \(address.binding, privacy: .public)")
         return server
     }
 
@@ -77,7 +79,7 @@ public final class TranscriptionServer: Sendable {
         parameters.requiredLocalEndpoint = .hostPort(host: address.host, port: address.port)
         let listener = try NWListener(using: parameters)
         let queue = DispatchQueue(label: "lowtalker.serve")
-        let answering = Answering(engine: engine, record: record, queue: queue)
+        let answering = Answering(binding: address.binding, engine: engine, record: record, queue: queue)
         listener.newConnectionHandler = { connection in
             connection.start(queue: queue)
             Task { await answering.serve(connection) }
@@ -106,7 +108,7 @@ public final class TranscriptionServer: Sendable {
             }
             listener.start(queue: queue)
         }
-        return TranscriptionServer(address: ListenAddress(flavor: address.flavor, host: address.host, port: bound), listener: listener, ended: ended)
+        return TranscriptionServer(address: ListenAddress(flavor: address.flavor, binding: address.binding, port: bound), listener: listener, ended: ended)
     }
 
     /// Stops accepting connections. A request already being answered is answered.
@@ -126,16 +128,31 @@ public final class TranscriptionServer: Sendable {
 /// not say whose it is.
 struct ListenAddress: Sendable, CustomStringConvertible {
     let flavor: Flavor
-    let host: NWEndpoint.Host
+    /// [LAW:one-source-of-truth] The host is read off the binding, so the interface a server
+    /// listens on and the token it requires there cannot be two facts that disagree.
+    let binding: ServeBinding
     let port: NWEndpoint.Port
 
-    init(flavor: Flavor, host: NWEndpoint.Host = .ipv4(.loopback), port: NWEndpoint.Port? = nil) {
+    init(flavor: Flavor, binding: ServeBinding = .loopback, port: NWEndpoint.Port? = nil) {
         self.flavor = flavor
-        self.host = host
+        self.binding = binding
         self.port = port ?? NWEndpoint.Port(rawValue: flavor.serverPort)!
     }
 
-    var description: String { "\(host):\(port)" }
+    var host: NWEndpoint.Host {
+        switch binding {
+        case .loopback: .ipv4(.loopback)
+        case .interface(let address, _): NWEndpoint.Host(address.literal)
+        }
+    }
+
+    /// Host and port as a URL writes them, an IPv6 host in brackets.
+    var description: String {
+        switch binding {
+        case .interface(let address, _) where address.isIPv6: "[\(address)]:\(port)"
+        case .loopback, .interface: "\(host):\(port)"
+        }
+    }
 }
 
 /// A server that could not start listening, naming the installation and the address.
@@ -152,6 +169,7 @@ public struct ListenRefused: Error, CustomStringConvertible {
 
 /// One request's answer, from the first byte read to the connection's close.
 private struct Answering: Sendable {
+    let binding: ServeBinding
     let engine: @Sendable () -> ServedEngine
     let record: @Sendable (ServedRequest) -> Void
     let queue: DispatchQueue
@@ -171,6 +189,17 @@ private struct Answering: Sendable {
                 // client still sending its body then loses the answer as well. So the answer
                 // closes the server's side alone, and what the client sends until it closes
                 // its own is read and dropped.
+                let lingering = cutOff(connection)
+                event.unread = await connection.drain()
+                lingering.cancel()
+            case .refusedSocket(let handshake, let refusal):
+                // Upgraded, told why in an error event, and closed 3000, as OpenAI answers a
+                // socket opened with a key it does not know; what the client sends after is
+                // its close, read and dropped.
+                deadline.cancel()
+                event.status = 101
+                event.error = refusal.code
+                try await connection.sendFinal(handshake + WebSocket.frame(.text, ServerEvent.error(refusal, clientEvent: nil).json) + WebSocket.close(3000))
                 let lingering = cutOff(connection)
                 event.unread = await connection.drain()
                 lingering.cancel()
@@ -203,6 +232,8 @@ private struct Answering: Sendable {
     private enum Answer {
         case http(HTTPResponse)
         case realtime(handshake: Data, RealtimeSocket)
+        /// The upgrade, followed at once by the error that ends the socket.
+        case refusedSocket(handshake: Data, RealtimeError)
     }
 
     /// The answer to the request `reader` reads. Every refusal is an answer in OpenAI's
@@ -212,11 +243,14 @@ private struct Answering: Sendable {
             let head = try await reader.head()
             event.method = head.method
             event.path = head.path
+            // [LAW:single-enforcer] Asked once, before any route: a caller the binding does
+            // not admit reaches nothing, and learns only that its key is wrong.
+            guard binding.admits(authorization: head.headers["authorization"]) else { return try refusal(head) }
             switch head.path {
-            case "/v1/audio/transcriptions" where head.method == "POST":
-                return .http(try await transcription(head, connection, &reader, &event))
             case "/v1/realtime":
                 return try realtime(head)
+            case "/v1/audio/transcriptions" where head.method == "POST":
+                return .http(try await transcription(head, connection, &reader, &event))
             default:
                 throw APIError.notFound(method: head.method, path: head.path)
             }
@@ -224,6 +258,15 @@ private struct Answering: Sendable {
             event.error = refusal.code
             return .http(refusal.response)
         }
+    }
+
+    /// The answer to a caller without the token: a socket upgrade is upgraded and ended as
+    /// OpenAI ends a socket opened with a key it does not know, and anything else, a
+    /// handshake that is not one included, is a 401. What the request lacks besides the key
+    /// is not said, since that would describe the server to a caller it does not answer.
+    private func refusal(_ head: RequestHead) throws(APIError) -> Answer {
+        guard head.path == "/v1/realtime", let handshake = try? WebSocket.handshake(head) else { throw .invalidAPIKey }
+        return .refusedSocket(handshake: handshake, .invalidAPIKey)
     }
 
     /// The upgrade to a Realtime transcription socket over the engine resident now, which

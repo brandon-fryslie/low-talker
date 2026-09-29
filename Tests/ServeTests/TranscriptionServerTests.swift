@@ -34,29 +34,63 @@ import Testing
     @Test func passesTheConformanceSuite() async throws {
         let running = try await Running.start(.ready(Stub()))
         defer { running.server.stop() }
-        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let suite = Process()
-        suite.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        suite.arguments = ["python3", repository.appendingPathComponent("scripts/conformance").path, "check", running.base]
-        let output = Pipe()
-        suite.standardOutput = output
-        try suite.run()
-        // Read and waited on off the cooperative pool, which the server answering the
-        // suite runs on.
-        let printed = await withCheckedContinuation { continuation in
-            DispatchQueue.global().async {
-                let data = output.fileHandleForReading.readDataToEndOfFile()
-                suite.waitUntilExit()
-                continuation.resume(returning: String(decoding: data, as: UTF8.self))
-            }
-        }
-        let summary = try #require(printed.split(separator: "\n").last.map { Data($0.utf8) })
-        let results = try #require((JSONSerialization.jsonObject(with: summary) as? [String: Any])?["results"] as? [[String: Any]])
-        #expect(results.count == 10, "\(printed)")
+        let results = try await running.conformance()
+        #expect(results.count == 10, "\(results)")
         for result in results {
             #expect(["pass", "skip"].contains(result["outcome"] as? String), "\(result)")
         }
-        #expect(results.filter { $0["outcome"] as? String == "skip" }.count == 3, "\(printed)")
+        #expect(results.filter { $0["outcome"] as? String == "skip" }.count == 3, "\(results)")
+    }
+
+    /// Off loopback the token is required (low-serve-axq.4zr): bound to this Mac's LAN
+    /// address, every check passes with it, the token checks included, which is a 401
+    /// without it and, for a socket, an error event then close 3000. Each refusal is on its
+    /// connection's event.
+    @Test func onTheLANTheSuitePassesWithTheTokenAndIsRefusedWithout() async throws {
+        let running = try await Running.startOnTheLAN(.ready(Stub()), token: "sk-lan-token")
+        defer { running.server.stop() }
+        #expect(running.base == "http://\(try lanAddress()):\(running.server.port.rawValue)/v1")
+        let results = try await running.conformance(token: "sk-lan-token")
+        #expect(results.count == 10, "\(results)")
+        for result in results {
+            #expect(result["outcome"] as? String == "pass", "\(result)")
+        }
+        // The suite's three token checks are its only refusals; every one is recorded.
+        var refused: [String] = []
+        for await event in running.events where event.error == "invalid_api_key" {
+            refused.append("\(event.path ?? "") \(event.status ?? 0)")
+            if refused.count == 3 { break }
+        }
+        #expect(refused.sorted() == ["/v1/audio/transcriptions 401", "/v1/audio/transcriptions 401", "/v1/realtime 101"])
+    }
+
+    /// Refused before the upload is read or the engine asked: an unknown caller learns
+    /// nothing about the model, only that its key is wrong.
+    @Test func withoutTheTokenARequestIs401InTheSpecShape() async throws {
+        let running = try await Running.startOnTheLAN(.notResident("still loading"), token: "sk-lan-token")
+        defer { running.server.stop() }
+        let (response, body) = try await running.post([("model", nil, Data("m".utf8)), ("file", "audio.wav", Data("not audio".utf8))], authorization: "Bearer sk-wrong")
+        #expect(response.statusCode == 401)
+        #expect(try error(body) as NSDictionary == [
+            "message": "Incorrect API key provided.", "type": "invalid_request_error", "param": NSNull(), "code": "invalid_api_key",
+        ])
+        let event = try await running.nextEvent()
+        #expect(event.status == 401 && event.error == "invalid_api_key" && event.bytes == nil)
+    }
+
+    /// The socket's own route answers a caller without the token the same way when what it
+    /// sent is no upgrade: a 401, not the 404 or 400 that would describe the route to it.
+    @Test(arguments: ["POST", "GET"])
+    func withoutTheTokenTheRealtimeRouteIs401WhateverTheRequest(method: String) async throws {
+        let running = try await Running.startOnTheLAN(.ready(Stub()), token: "sk-lan-token")
+        defer { running.server.stop() }
+        var request = URLRequest(url: URL(string: "\(running.base)/realtime?intent=transcription")!)
+        request.httpMethod = method
+        let (body, response) = try await URLSession.shared.data(for: request)
+        #expect((response as! HTTPURLResponse).statusCode == 401)
+        #expect(try error(body)["code"] as? String == "invalid_api_key")
+        let event = try await running.nextEvent()
+        #expect(event.status == 401 && event.error == "invalid_api_key")
     }
 
     /// An mp3 is decoded as a wav is, and the engine hears all of it.

@@ -2,7 +2,8 @@ import Flavors
 import Foundation
 
 /// The settings the app runs on: the model the engine loads, what the microphone does
-/// between presses, and the modes a chord can start. Nothing here is read from disk;
+/// between presses, the modes a chord can start, and where the transcription server
+/// listens. Nothing here is read from disk;
 /// `Config(toml:)` is where a file becomes one.
 ///
 /// [LAW:parse-dont-validate] A Config in hand is one that holds together: it has at
@@ -19,8 +20,9 @@ public struct Config: Hashable, Sendable {
     /// In the order the file declared them, because that is the order `lowtalker
     /// config check` and any listing should speak of them in.
     public let modes: [Mode]
+    public let serve: ServeBinding
 
-    public init(model: ModelName, microphone: MicrophoneAtRest, modes: [Mode]) throws(ConfigError) {
+    public init(model: ModelName, microphone: MicrophoneAtRest, modes: [Mode], serve: ServeBinding) throws(ConfigError) {
         guard !modes.isEmpty else { throw ConfigError.noModes }
         var names: Set<String> = []
         var chords: Set<KeyChord> = []
@@ -32,21 +34,23 @@ public struct Config: Hashable, Sendable {
         self.model = model
         self.microphone = microphone
         self.modes = modes
+        self.serve = serve
     }
 
     /// What the app runs on when no file says otherwise: dictation, on this
-    /// installation's default chord, with the default model, and the microphone shut
-    /// between presses. Per installation, because the hotkey is - the two copies must
+    /// installation's default chord, with the default model, the microphone shut between
+    /// presses, and the server on loopback. Per installation, because the hotkey is - the two copies must
     /// not listen for one chord.
     ///
     /// [LAW:one-source-of-truth] The model and the modes are the values their own owners
     /// already name, so the no-file behaviour cannot drift from the behaviour those owners
-    /// describe. `shut` has no owner elsewhere to name, and is spelled here because here
-    /// is what it means: with no file to ask for anything, the microphone is closed. The
+    /// describe. `shut` and `loopback` have no owner elsewhere to name, and are spelled here
+    /// because here is what they mean: with no file to ask for anything, the microphone is
+    /// closed and nothing off this Mac reaches the server. The
     /// force-try says the author vouches for this one: a default that does not hold
     /// together is a bug in this file, and it traps where it is written.
     public static func `default`(for flavor: Flavor) -> Config {
-        try! Config(model: .default, microphone: .shut, modes: [.dictation(for: flavor)])
+        try! Config(model: .default, microphone: .shut, modes: [.dictation(for: flavor)], serve: .loopback)
     }
 
     /// The mode the chord that started listening selects, or none when no mode claims it.
@@ -116,6 +120,8 @@ public enum ConfigError: Error, Equatable, Sendable, CustomStringConvertible {
     case modeUnnamed
     case twoModesNamed(String)
     case twoModesOnOneChord(String)
+    /// A `[serve]` table that names no binding a server can listen on.
+    case serve(ServeBindingError)
     /// The file exists but could not be read at all, in the words the system used.
     case unreadable(path: String, why: String)
     /// A refusal the parser reported that this file has no better words for. Carried
@@ -138,6 +144,8 @@ public enum ConfigError: Error, Equatable, Sendable, CustomStringConvertible {
             "two modes are named \"\(name)\""
         case .twoModesOnOneChord(let name):
             "mode \"\(name)\" answers to a chord another mode already answers to"
+        case .serve(let error):
+            "\(error)"
         case .unreadable(let path, let why):
             "\(path) could not be read: \(why)"
         case .notUnderstood(let why):
