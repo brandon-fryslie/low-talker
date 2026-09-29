@@ -137,8 +137,15 @@ def control_seen(text):
                for line in text.splitlines())
 
 
+def executable(name):
+    """A pattern for the process running this bundle executable, wherever the bundle is. Matched
+    against the whole command line, since `-x` compares the kernel's name for the process,
+    which stops at 15 characters: "LowTalker Dev Input Method" is never found by it."""
+    return f"/Contents/MacOS/{name}( |$)"
+
+
 def running(name):
-    return subprocess.run(["/usr/bin/pgrep", "-x", name], capture_output=True).returncode == 0
+    return subprocess.run(["/usr/bin/pgrep", "-f", executable(name)], capture_output=True).returncode == 0
 
 
 def watch(app):
@@ -157,7 +164,7 @@ def watch(app):
     try:
         wait_for(capture, control_seen, f"log stream to show the {CONTROL} control", 30, poll=2)
         for process in (name, input_method):
-            subprocess.run(["/usr/bin/pkill", "-TERM", "-x", process])
+            subprocess.run(["/usr/bin/pkill", "-TERM", "-f", executable(process)])
         wait_for(capture, lambda _: not running(name) and not running(input_method), f"{name} and {input_method} to quit", 30)
         # LaunchServices refuses the open (-600) for a moment after the process is gone.
         wait_for(capture, lambda _: subprocess.run(["/usr/bin/open", "-g", str(app)], capture_output=True).returncode == 0,
