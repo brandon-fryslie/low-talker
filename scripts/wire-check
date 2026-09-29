@@ -41,12 +41,15 @@ CONTROL_URL = "https://example.com"
 # `log stream --style compact`: date, time, type, then Process[pid:tid] and [subsystem:category].
 LINE = re.compile(r"^\S+ \S+ \S+\s+(?P<process>.+?)\[\d+:[0-9a-f]+\] \[(?P<subsystem>[^:\]]*):?(?P<category>[^\]]*)\] (?P<message>.*)$")
 # The com.apple.network lines, by category, that an idle LowTalker Dev logged through a launch,
-# measured 2026-09-29: how each message begins. nscurl's uncategorised lines in the same
-# capture were flow and socket work (nw_path_evaluator_create_flow_inner, nw_fd_wrapper_create),
-# which is why these name whole functions rather than an nw_path_ prefix.
+# measured 2026-09-29 on macOS 26, and the release on macOS 15.0.1, which logs the path's agent
+# lookups uncategorised under the function's name: how each message begins. nscurl's
+# uncategorised lines in the same capture were flow and socket work
+# (nw_path_evaluator_create_flow_inner, nw_fd_wrapper_create), which is why these name whole
+# functions rather than an nw_path_ prefix.
 QUIET = {
     "": ("networkd_settings_read_from_file ", "nw_path_copy_interface_with_generation ",
-         "nw_path_necp_check_for_updates ", "-[NWConcrete_nw_path_evaluator dealloc] "),
+         "nw_path_necp_check_for_updates ", "-[NWConcrete_nw_path_evaluator dealloc] ",
+         "nw_path_copy_dictionary_for_agent_with_generation "),
     "path": ("nw_path_evaluator_start ", "nw_path_evaluator_call_update_handler ",
              "nw_path_evaluator_call_update_handler_block_invoke ", "nw_path_evaluator_cancel ",
              "nw_path_necp_update_evaluator_block_invoke ", "Agent for ", "Saved agent"),

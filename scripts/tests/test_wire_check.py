@@ -13,6 +13,9 @@ PATH = ("2026-09-29 06:21:25.386 Df LowTalker Dev[64449:7621767] [com.apple.netw
         "[E05285C4-726C-4125-9A50-4F115FB3B15C <NULL> generic, multipath service: handover, attribution: developer]")
 SETTINGS = "2026-09-29 06:21:25.385 Df LowTalker Dev[64449:7621767] [com.apple.network:] networkd_settings_read_from_file initialized networkd settings by reading plist directly"
 DEALLOC = "2026-09-29 06:21:25.387 Db LowTalker Dev[64449:7621766] [com.apple.network:] -[NWConcrete_nw_path_evaluator dealloc] E05285C4-726C-4125-9A50-4F115FB3B15C"
+# The release on macOS 15.0.1 logs the path's agent lookups uncategorised.
+AGENT = ("2026-09-29 14:22:32.354 Db LowTalker Dev[43072:5c902] [com.apple.network:] nw_path_copy_dictionary_for_agent_with_generation "
+         "Agent for DEEE13FF-7287-498D-9476-A1A539DDE268 cache miss")
 HEARD = "2026-09-28 22:42:43.012 Df LowTalker Dev[74593:65ec5d0] [ai.promptctl.low-talker.dev:dictation] heard 7 words 657 ms after key-up, 1 actions into com.googlecode.iterm2: <private>"
 SERVING = ("2026-09-29 00:44:55.277 Df LowTalker Dev Input Method[67215:6c34705] [ai.promptctl.low-talker.dev.inputmethod.dictation:inputmethod] "
            "development serving ai.promptctl.low-talker.dev.inputmethod.dictation_Connection, answering inserts on ai.promptctl.low-talker.dev.inputmethod.dictation.insert")
@@ -30,7 +33,7 @@ OTHER_APP_CONNECTION = "2026-09-29 06:21:26.000 I  Notes[73869:1] [com.apple.net
 # one's traffic for the other's.
 DEV_CONNECTION_UNDER_RELEASE = APP_CONNECTION.replace("LowTalker Dev[", "LowTalker Dev Nightly[")
 
-WATCHED = (CONTROL, SETTINGS, PATH, DEALLOC, READY, SERVING, HEARD, INSERT)
+WATCHED = (CONTROL, SETTINGS, PATH, DEALLOC, AGENT, READY, SERVING, HEARD, INSERT)
 
 
 class WireCheckJudgeTests(unittest.TestCase):
