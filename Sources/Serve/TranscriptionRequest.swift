@@ -32,24 +32,55 @@ struct TranscriptionRequest: Sendable {
         return TranscriptionRequest(
             upload: try Upload(bytes: file.value, filename: file.filename),
             format: format,
-            vocabulary: try vocabulary(prompt: byName["prompt"]?.text),
+            vocabulary: try prompted(byName["prompt"]?.text),
             model: model.text,
             language: try byName["language"].map { field throws(APIError) in try Language.parse(field.text) }
         )
     }
 
-    /// The prompt as the vocabulary a dictation mode would give the engine: one term,
-    /// spelled as the client wrote it. A prompt with no word in it expects nothing beyond
-    /// ordinary speech, which is the empty vocabulary.
-    private static func vocabulary(prompt: String?) throws(APIError) -> Vocabulary {
-        guard let prompt else { return Vocabulary([]) }
+    private static func prompted(_ prompt: String?) throws(APIError) -> Vocabulary {
         do {
-            return Vocabulary([try Vocabulary.Term(prompt)])
-        } catch .termSaysNothing {
-            return Vocabulary([])
+            return try Vocabulary(prompt: prompt)
         } catch {
             throw .promptRefused("\(error)")
         }
+    }
+}
+
+extension Vocabulary {
+    /// A transcription's prompt as the vocabulary a dictation mode would give the engine:
+    /// one term, spelled as the client wrote it. No prompt, or one with no word in it,
+    /// expects nothing beyond ordinary speech, which is the empty vocabulary.
+    /// [LAW:one-source-of-truth] REST's `prompt` and Realtime's are read by this one rule.
+    init(prompt: String?) throws(VocabularyError) {
+        guard let prompt else {
+            self.init([])
+            return
+        }
+        do {
+            self.init([try Vocabulary.Term(prompt)])
+        } catch .termSaysNothing {
+            self.init([])
+        }
+    }
+}
+
+/// What a transcription is billed as, whatever model was named: the audio's duration in
+/// whole seconds, rounded up as OpenAI counts it.
+struct Usage: Encodable, Sendable {
+    let type = "duration"
+    let seconds: Int
+
+    init(heard duration: TimeInterval) {
+        seconds = Int(duration.rounded(.up))
+    }
+}
+
+extension Transcript {
+    /// The transcript as OpenAI writes it. The engine's words carry their leading space,
+    /// which OpenAI's text does not.
+    var served: String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -64,14 +95,13 @@ enum ResponseFormat: String, Sendable, Codable {
         return format
     }
 
-    /// The answer as OpenAI gives it (epic low-serve-axq): json is the text and the audio's
-    /// duration in whole seconds, as OpenAI counts it; text is the transcript and a newline.
-    /// The engine's words carry their leading space, which OpenAI's text does not.
+    /// The answer as OpenAI gives it (epic low-serve-axq): json is the text and its usage;
+    /// text is the transcript and a newline.
     func response(_ transcript: Transcript, heard audio: AudioClip) -> HTTPResponse {
-        let text = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = transcript.served
         switch self {
         case .json:
-            let body = JSONBody(text: text, usage: .init(seconds: Int(audio.duration.rounded(.up))))
+            let body = JSONBody(text: text, usage: Usage(heard: audio.duration))
             return HTTPResponse(status: .ok, contentType: "application/json", body: JSONEncoder.served.encodeAlways(body))
         case .text:
             return HTTPResponse(status: .ok, contentType: "text/plain; charset=utf-8", body: Data((text + "\n").utf8))
@@ -81,11 +111,6 @@ enum ResponseFormat: String, Sendable, Codable {
     private struct JSONBody: Encodable {
         let text: String
         let usage: Usage
-
-        struct Usage: Encodable {
-            let type = "duration"
-            let seconds: Int
-        }
     }
 }
 

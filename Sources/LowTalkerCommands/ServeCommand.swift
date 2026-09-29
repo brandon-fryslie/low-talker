@@ -4,15 +4,15 @@ import LowTalkerCore
 import Network
 import Serve
 
-/// Serves OpenAI's transcription endpoint over the engine this command loads, until it is
+/// Serves OpenAI's transcription endpoint and Realtime socket over the engine this command loads, until it is
 /// stopped: how the endpoint is exercised on a developer's Mac, as `transcribe` exercises
 /// the engine, with `scripts/conformance check` pointed at the URL it prints.
 ///
-/// Stdout is the base URL, then one JSON line per request answered.
+/// Stdout is the base URL, then one JSON line per request answered or socket closed.
 struct ServeCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "serve",
-        abstract: "Serve OpenAI's POST /v1/audio/transcriptions on loopback over WhisperKit."
+        abstract: "Serve OpenAI's POST /v1/audio/transcriptions and /v1/realtime on loopback over WhisperKit."
     )
 
     @Option(help: "The loopback port to listen on; 0 lets the system choose.")
