@@ -53,31 +53,29 @@ mkdir -p "$root/Applications" "$root/Library/Input Methods" "$staging/scripts"
 ditto "$app" "$root$app_path"
 ditto "$input_method" "$root$input_method_path"
 
-# Each bundle installs where it is named and nowhere else, whatever the Mac already holds.
-# Relocatable - pkgbuild's default - sends a bundle to wherever LaunchServices last saw one
-# with its identifier, which on a Mac that builds LowTalker is a copy in DerivedData. Version
-# checked - also the default - skips a bundle whose version on disk is not older, which is
-# every rebuild of one version. The package is what decides what is installed.
-# [LAW:one-source-of-truth]
-#
-# Updated in place rather than upgraded, pkgbuild's default, which deletes the old bundle
-# before writing the new one. Measured on studious 2026-09-29: the text input system drops an
-# input method whose bundle disappears, switched-on state and all, and a bundle that appears
-# again is a new input method it will not run until the next login, so every upgrade cost
-# the enable alert and a logout. Updated in place, the input method stayed switched on and
-# selected and the next request ran the new code. A file a newer build no longer has stays
-# behind and would break the bundle's seal, so the postinstall removes every path in either
-# bundle that the payload list below does not name.
+# Neither bundle is a bundle component: the component list is empty, so the installer writes
+# both as the files they are, where they are named, whatever the Mac already holds. Every
+# rule a bundle component carries is one that broke an install [LAW:one-source-of-truth]:
+# - relocatable, the default, sends a bundle to wherever LaunchServices last saw one with its
+#   identifier, which on a Mac that builds LowTalker is a copy in DerivedData;
+# - version checked, the default, skips a bundle whose version on disk is not older, which is
+#   every rebuild of one version;
+# - upgraded, the default, deletes the old bundle before writing the new one. Measured on
+#   studious 2026-09-29: the text input system drops an input method whose bundle disappears,
+#   and one that appears again will not run in that login session;
+# - updated, the one action that writes in place, skips a bundle not already on disk
+#   ("Skipping update component ... because there is no version on-disk", install.log,
+#   2026-09-29), so a fresh Mac got neither bundle.
+# Written as files, the bundle directory stays where it is across an install (its inode is
+# kept) and the installer removes the files its previous receipt listed that this payload
+# does not. A file no receipt listed stays behind and would break the bundle's seal, so the
+# postinstall removes every path in either bundle that the payload list below does not name.
 components="$staging/components.plist"
-pkgbuild --analyze --root "$root" "$components" >/dev/null
-count=0
-while /usr/libexec/PlistBuddy -c "Print :$count" "$components" >/dev/null 2>&1; do
-  /usr/libexec/PlistBuddy -c "Set :$count:BundleIsRelocatable false" \
-    -c "Set :$count:BundleIsVersionChecked false" \
-    -c "Set :$count:BundleOverwriteAction update" "$components"
-  count=$((count + 1))
-done
-[ "$count" -eq 2 ] || fail "pkgbuild found $count bundles in the package root, not the app and its input method"
+cat >"$components" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><array/></plist>
+EOF
 
 # The postinstall, with the names it acts on written in from the bundles themselves. %q
 # quotes each for bash, so a name with a space in it is one word.

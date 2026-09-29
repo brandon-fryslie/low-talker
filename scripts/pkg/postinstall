@@ -53,19 +53,41 @@ for bundle in "$app" "/Library/Input Methods/$input_method_name"; do
   codesign --verify --deep --strict "$bundle" || { say "$bundle does not verify; remove it and install again"; exit 1; }
 done
 
+# Registered with LaunchServices by name, as the installer does for a bundle component and
+# does not for the plain files make-pkg writes: nothing watches /Library/Input Methods, and
+# the input method is launched by its identifier. Registered in each login session, since each
+# person's LaunchServices database is their own. Measured on studious 2026-09-29: without
+# this the app had a record and the input method none.
+lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+for uid in $(ps -axo uid=,comm= | awk '$2 ~ /\/loginwindow$/ { print $1 }' | sort -u); do
+  if launchctl asuser "$uid" sudo -u "#$uid" "$lsregister" -f "$app" "/Library/Input Methods/$input_method_name"; then
+    say "registered both bundles with LaunchServices for uid $uid"
+  else
+    say "could not register the bundles with LaunchServices for uid $uid"; exit 1
+  fi
+done
+
 apps=$(running "$app_executable")
 stop $(cut -d ' ' -f 1 <<<"$apps")
 say "stopped $(lines "$apps") running $app_executable"
 
+# No build installs into a home folder any more, so every LowTalker input method there is one
+# an older app put there, whichever installation or identifier it carried: this product's
+# identifiers all begin with the part of this one up to the product name. Older builds linked
+# rather than copied, so a link whose bundle is gone is one of them too, known by its name.
+family="${input_method_id%%low-talker.*}low-talker."
 for home in /Users/*; do
   for bundle in "$home/Library/Input Methods"/*.app; do
-    [ -e "$bundle" ] || continue
-    # A bundle with no readable identifier is someone else's, not a copy of this one.
-    identifier=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$bundle/Contents/Info.plist" 2>/dev/null) || continue
-    if [ "$identifier" = "$input_method_id" ]; then
-      rm -rf "$bundle"
-      say "removed $bundle, a copy an older build of the app made"
+    if [ -L "$bundle" ] && [ ! -e "$bundle" ]; then
+      case "$(basename "$bundle")" in LowTalker*) ;; *) continue ;; esac
+    else
+      [ -e "$bundle" ] || continue
+      # A bundle with no readable identifier is someone else's, not a copy of this one.
+      identifier=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$bundle/Contents/Info.plist" 2>/dev/null) || continue
+      [ "${identifier#"$family"}" != "$identifier" ] || continue
     fi
+    rm -rf "$bundle"
+    say "removed $bundle, which an older build of the app put there"
   done
 done
 
