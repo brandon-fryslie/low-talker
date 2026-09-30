@@ -128,7 +128,7 @@ import TestProbes
     /// one taken in waits out the hold and is answered; each event says how many were in.
     @Test func anUploadPastTheLimitIs429WhileTheOneTakenInIsAnswered() async throws {
         let turns = EngineTurns()
-        let running = try await Running.start(.ready(Turning(turns: turns)), limits: ServedLimits(uploads: 1, audio: 60))
+        let running = try await Running.start(.ready(Turning(turns: turns)), limits: ServedLimits(uploads: 1, sockets: 1, items: 1, audio: 60))
         defer { running.server.stop() }
         let hold = turns.hold()
         let upload = [("model", nil, Data("m".utf8)), ("file", "audio.mp3", try fixture("hello-16k-mono.mp3"))] as [(name: String, filename: String?, value: Data)]
@@ -151,7 +151,7 @@ import TestProbes
     /// it is decoded or the engine hears it.
     @Test func anUploadLongerThanTheLimitIs400() async throws {
         let stub = Stub()
-        let running = try await Running.start(.ready(stub), limits: ServedLimits(uploads: 4, audio: 1))
+        let running = try await Running.start(.ready(stub), limits: ServedLimits(uploads: 4, sockets: 1, items: 1, audio: 1))
         defer { running.server.stop() }
         let (response, body) = try await running.post([("model", nil, Data("m".utf8)), ("file", "audio.mp3", fixture("hello-16k-mono.mp3"))])
         #expect(response.statusCode == 400)

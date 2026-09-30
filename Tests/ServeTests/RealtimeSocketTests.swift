@@ -159,7 +159,7 @@ private func update(_ input: [String: Any]) -> [String: Any] {
     /// starts from nothing.
     @Test func anAppendPastTheAudioLimitIsRefusedAndTheItemKeepsWhatItHad() async throws {
         let stub = Stub()
-        let running = try await Running.start(.ready(stub), limits: ServedLimits(uploads: 1, audio: 1))
+        let running = try await Running.start(.ready(stub), limits: ServedLimits(uploads: 1, sockets: 1, items: 1, audio: 1))
         defer { running.server.stop() }
         var client = Client(running)
         try await client.append(seconds: 1.2)
@@ -178,6 +178,51 @@ private func update(_ input: [String: Any]) -> [String: Any] {
         #expect(realtime.appends == 17 && realtime.refusals == ["audio_too_long": 2] && realtime.items == 2)
         #expect(abs(try #require(realtime.refusedAudioSeconds) - 1.1) < 0.01)
         #expect(realtime.sent.errors == 2)
+    }
+
+    /// A socket opened while the server holds its limit of them is refused with the 429
+    /// Pipecat retries, before it upgrades; the place is given back when a socket closes.
+    @Test func aSocketPastTheLimitIsRefusedBeforeItUpgrades() async throws {
+        let running = try await Running.start(.ready(Stub()), limits: ServedLimits(uploads: 1, sockets: 1, items: 1, audio: 60))
+        defer { running.server.stop() }
+        var open = Client(running)
+        _ = try await open.until("session.created")
+        let refused = Client(running)
+        await #expect(throws: (any Error).self) { try await refused.task.receive() }
+        let refusal = try await running.nextEvent()
+        #expect(refusal.status == 429 && refusal.error == "rate_limit_exceeded" && refusal.sockets == 1 && refusal.realtime == nil)
+        open.task.cancel(with: .normalClosure, reason: nil)
+        let closed = try await running.nextEvent()
+        #expect(closed.status == 101 && closed.sockets == 1)
+        var next = Client(running)
+        _ = try await next.until("session.created")
+        next.task.cancel(with: .normalClosure, reason: nil)
+    }
+
+    /// A socket holding its limit of items opens no more until one is heard: the next item's
+    /// first append waits, and its transcribe starts only once the earlier item is answered.
+    @Test func anItemPastTheSocketsLimitWaitsForOneToBeHeard() async throws {
+        let gated = Gated()
+        let running = try await Running.start(.ready(gated), limits: ServedLimits(uploads: 1, sockets: 1, items: 1, audio: 60))
+        defer { running.server.stop() }
+        var client = Client(running)
+        try await client.append(seconds: 0.3)
+        try await client.send(["type": "input_audio_buffer.commit"])
+        _ = try await client.until("input_audio_buffer.committed")
+        // Answered only once everything before it is read, so the append after it is the
+        // next thing the server reads.
+        try await client.send(update([:]))
+        _ = try await client.until("session.updated")
+        try await client.append(seconds: 0.3)
+        try await Task.sleep(for: .seconds(1))
+        gated.gate.cancel()
+        try await client.send(["type": "input_audio_buffer.commit"])
+        _ = try await client.until("conversation.item.input_audio_transcription.completed")
+        _ = try await client.until("conversation.item.input_audio_transcription.completed")
+        client.task.cancel(with: .normalClosure, reason: nil)
+        #expect(gated.started.withLock { $0 } == [0, 1])
+        let realtime = try #require(try await running.nextEvent().realtime)
+        #expect(realtime.items == 2 && realtime.waits == 1 && realtime.sent.completed == 2 && realtime.sent.errors == 0)
     }
 
     /// An append that holds no whole sample puts no audio in the buffer, so committing it

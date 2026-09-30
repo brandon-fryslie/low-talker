@@ -86,7 +86,7 @@ public final class TranscriptionServer: Sendable {
         parameters.requiredLocalEndpoint = .hostPort(host: address.host, port: address.port)
         let listener = try NWListener(using: parameters)
         let queue = DispatchQueue(label: "lowtalker.serve")
-        let answering = Answering(binding: address.binding, audio: limits.audio, uploads: Uploads(limit: limits.uploads), engine: engine, record: record, queue: queue)
+        let answering = Answering(binding: address.binding, limits: limits, uploads: Places(.uploads, limit: limits.uploads), sockets: Places(.sockets, limit: limits.sockets), engine: engine, record: record, queue: queue)
         listener.newConnectionHandler = { connection in
             connection.start(queue: queue)
             Task { await answering.serve(connection) }
@@ -186,59 +186,105 @@ public struct ListenRefused: Error, CustomStringConvertible {
     }
 }
 
-/// How much served work a server takes in at once (low-serve-axq.h1n): each upload holds its
-/// body and then its decoded audio until it is answered, and waits in `EngineTurns` holding
-/// both while dictation has the engine.
+/// How much served work a server takes in at once (low-serve-axq.h1n, .q5k): each upload
+/// holds its body and then its decoded audio until it is answered, and waits in `EngineTurns`
+/// holding both while dictation has the engine; each Realtime item holds its audio from its
+/// first append until it is heard. So the audio held at worst is `uploads + sockets * items`
+/// clips of `audio` seconds each.
+///
+/// [LAW:types-are-the-program] Every count is at least one, so work that finds none of its
+/// kind in flight is always taken in: a hold alone, which only delays the work in flight,
+/// can never be why any is refused.
 struct ServedLimits: Sendable {
-    /// Uploads answered at once. [LAW:types-are-the-program] At least one, so an upload
-    /// that finds none in flight is always taken in: a hold alone, which only delays the
-    /// uploads in flight, can never be why one is refused.
+    /// Uploads answered at once.
     let uploads: Int
+    /// Realtime sockets open at once. Apart from uploads, since a socket is open as long as
+    /// its client keeps it: sharing one count, idle sockets would refuse every upload.
+    let sockets: Int
+    /// Items one socket holds at once: the one being appended and those committed and
+    /// still being heard. One more waits for the oldest to be heard.
+    let items: Int
     /// The most audio one upload, or one Realtime item, may hold, in seconds.
     let audio: TimeInterval
 
-    init(uploads: Int, audio: TimeInterval) {
-        precondition(uploads >= 1, "a server takes in at least one upload")
+    init(uploads: Int, sockets: Int, items: Int, audio: TimeInterval) {
+        precondition(uploads >= 1 && sockets >= 1 && items >= 1, "a server takes in at least one of each")
         self.uploads = uploads
+        self.sockets = sockets
+        self.items = items
         self.audio = audio
     }
 
-    /// Four uploads of up to fifteen minutes: at the body limit and 16 kHz Float32, under
-    /// 350 MB held at worst, and far past any utterance Pipecat sends.
-    static let standard = ServedLimits(uploads: 4, audio: 15 * 60)
+    /// Four uploads and four sockets of two items, each of up to fifteen minutes, far past
+    /// any utterance Pipecat sends: at 16 kHz Float32, about 700 MB of audio held at worst.
+    static let standard = ServedLimits(uploads: 4, sockets: 4, items: 2, audio: 15 * 60)
 }
 
-/// The uploads being answered, so that no more than the limit are taken in at once.
-/// [LAW:single-enforcer] The one count of them, asked before any upload's body is read.
-final class Uploads: Sendable {
+/// What a server holds a bounded number of at once.
+enum Held: String, Sendable {
+    case uploads, sockets
+}
+
+/// The places for one kind of served work, so that no more than the limit are taken in at
+/// once. [LAW:single-enforcer] The one count of them, asked before the work holds anything.
+final class Places: Sendable {
+    private let held: Held
     private let limit: Int
     private let open = Mutex(0)
 
-    init(limit: Int) {
+    init(_ held: Held, limit: Int) {
+        self.held = held
         self.limit = limit
     }
 
-    /// `answer`, run holding a place for one more upload and handed how many are answered
-    /// with it, itself included; the place is given back when `answer` ends, however it
-    /// ends. Refused with 429, which Pipecat retries, when the limit already hold one.
-    func admitted<Answer>(_ answer: (Int) async throws -> Answer) async throws -> Answer {
-        let held = open.withLock { open -> Int? in
+    /// A place for one more. Refused with 429 when the limit already hold one.
+    func take() throws(APIError) -> Place {
+        let taken = open.withLock { open -> Int? in
             guard open < limit else { return nil }
             open += 1
             return open
         }
-        guard let held else { throw APIError.busy(uploads: limit) }
-        defer { open.withLock { $0 -= 1 } }
-        return try await answer(held)
+        guard let taken else { throw .busy(held, limit: limit) }
+        return Place(held: taken, of: self)
+    }
+
+    fileprivate func giveBack() {
+        open.withLock { $0 -= 1 }
+    }
+
+    /// `answer`, run holding a place and handed how many are held with it; the place is
+    /// given back when `answer` ends, however it ends.
+    func admitted<Answer>(_ answer: (Int) async throws -> Answer) async throws -> Answer {
+        let place = try take()
+        defer { withExtendedLifetime(place) {} }
+        return try await answer(place.held)
+    }
+}
+
+/// One place taken from `Places`, given back when whatever holds it lets it go.
+/// [LAW:no-ambient-temporal-coupling] The place's holder owns its lifetime, so no path can
+/// keep one past its work or give one back twice.
+final class Place: Sendable {
+    /// How many were held when this one was taken, itself included.
+    let held: Int
+    private let places: Places
+
+    fileprivate init(held: Int, of places: Places) {
+        self.held = held
+        self.places = places
+    }
+
+    deinit {
+        places.giveBack()
     }
 }
 
 /// One request's answer, from the first byte read to the connection's close.
 private struct Answering: Sendable {
     let binding: ServeBinding
-    /// The most audio one upload, or one Realtime item, may hold, in seconds.
-    let audio: TimeInterval
-    let uploads: Uploads
+    let limits: ServedLimits
+    let uploads: Places
+    let sockets: Places
     let engine: @Sendable () -> ServedEngine
     let record: @Sendable (ServedRequest) -> Void
     let queue: DispatchQueue
@@ -321,7 +367,7 @@ private struct Answering: Sendable {
             guard binding.admits(authorization: head.headers["authorization"]) else { return try refusal(head) }
             switch head.path {
             case "/v1/realtime":
-                return try realtime(head)
+                return try realtime(head, &event)
             case "/v1/audio/transcriptions" where head.method == "POST":
                 return .http(try await transcription(head, connection, &reader, &event))
             default:
@@ -343,18 +389,24 @@ private struct Answering: Sendable {
     }
 
     /// The upgrade to a Realtime transcription socket over the engine resident now, which
-    /// the socket keeps. Asked before upgrading, so a server still loading refuses with a
-    /// status rather than opening a socket it cannot serve.
-    private func realtime(_ head: RequestHead) throws(APIError) -> Answer {
+    /// the socket keeps, holding one of the server's places for sockets. Asked before
+    /// upgrading, so a server still loading or already holding its limit of sockets refuses
+    /// with a status, never with an error event on an open socket, which Pipecat takes as fatal.
+    private func realtime(_ head: RequestHead, _ event: inout ServedRequest) throws(APIError) -> Answer {
         let handshake = try WebSocket.handshake(head)
         guard head.query["intent"] == "transcription" else {
             throw .unsupportedValue(field: "intent", value: head.query["intent"] ?? "(none)", accepted: "transcription")
         }
+        let transcriber: any Transcriber
         switch engine() {
-        case .ready(let transcriber): return .realtime(handshake: handshake, RealtimeSocket(transcriber: transcriber, audio: audio))
+        case .ready(let resident): transcriber = resident
         case .notResident(let reason): throw .notResident(reason)
         case .failed(let reason): throw .engineFailed(reason)
         }
+        // Taken last, so a socket refused for any other reason holds no place.
+        let place = try sockets.take()
+        event.sockets = place.held
+        return .realtime(handshake: handshake, RealtimeSocket(place: place, transcriber: transcriber, audio: limits.audio, items: limits.items))
     }
 
     private func transcription(_ head: RequestHead, _ connection: NWConnection, _ reader: inout Reader, _ event: inout ServedRequest) async throws -> HTTPResponse {
@@ -387,7 +439,7 @@ private struct Answering: Sendable {
         event.language = request.language?.rawValue
         event.format = request.format.rawValue
         event.vocabularyTerms = request.vocabulary.terms.count
-        let clip = try request.upload.clip(longest: audio)
+        let clip = try request.upload.clip(longest: limits.audio)
         event.audioSeconds = clip.duration
         let transcript: Transcript
         do {
@@ -495,7 +547,8 @@ extension ServedRequest {
     mutating func refused(_ refusal: APIError) {
         error = refusal.code
         switch refusal {
-        case .busy(let limit): uploads = limit
+        case .busy(.uploads, let limit): uploads = limit
+        case .busy(.sockets, let limit): sockets = limit
         case .audioTooLong(let seconds, _): audioSeconds = seconds
         default: break
         }
@@ -516,6 +569,8 @@ public struct ServedRequest: Sendable, Codable, Equatable {
     /// Uploads being answered when this one was taken in, itself included; on a 429, the
     /// limit that were.
     public internal(set) var uploads: Int?
+    /// Realtime sockets open when this one was, itself included; on a 429, the limit that were.
+    public internal(set) var sockets: Int?
     public internal(set) var bytes: Int?
     public internal(set) var model: String?
     public internal(set) var language: String?

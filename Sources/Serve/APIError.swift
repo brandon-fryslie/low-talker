@@ -21,7 +21,7 @@ enum APIError: Error, Equatable, Sendable {
     case unreadableAudio(String)
     case silentFile
     case audioTooLong(seconds: TimeInterval, limit: TimeInterval)
-    case busy(uploads: Int)
+    case busy(Held, limit: Int)
     case uploadNotStored(String)
     case notResident(String)
     case engineFailed(String)
@@ -55,7 +55,8 @@ enum APIError: Error, Equatable, Sendable {
         case .unreadableAudio(let reason): "The audio file could not be read: \(reason)."
         case .silentFile: "The audio file holds no audio."
         case .audioTooLong(let seconds, let limit): "The audio file holds \(Int(seconds.rounded(.up))) seconds of audio; the limit is \(Int(limit))."
-        case .busy(let uploads): "The server is already transcribing \(uploads) uploads, as many as it takes at once; retry shortly."
+        case .busy(.uploads, let limit): "The server is already transcribing \(limit) uploads, as many as it takes at once; retry shortly."
+        case .busy(.sockets, let limit): "The server already has \(limit) Realtime sockets open, as many as it takes at once; retry shortly."
         case .uploadNotStored(let reason): "The upload could not be stored for reading: \(reason)."
         case .notResident(let reason): "The model is not ready: \(reason)."
         case .engineFailed(let reason): "Transcription failed: \(reason)."

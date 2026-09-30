@@ -52,6 +52,25 @@ struct Turning: Transcriber {
     }
 }
 
+/// The stub, answering nothing until `gate` is cancelled, and recording for each transcribe
+/// how many had been answered when it started.
+final class Gated: Transcriber {
+    let gate = Task<Void, Never> { try? await Task.sleep(for: .seconds(3600)) }
+    let started = Mutex<[Int]>([])
+    private let answered = Mutex(0)
+
+    func transcribe(
+        _ audio: some AsyncSequence<AudioClip, Never> & Sendable,
+        expecting vocabulary: Vocabulary,
+        partial: @escaping @Sendable (Partial) -> Void
+    ) async throws -> Transcript {
+        started.withLock { $0.append(answered.withLock { $0 }) }
+        await gate.value
+        defer { answered.withLock { $0 += 1 } }
+        return try await Stub().transcribe(audio, expecting: vocabulary, partial: partial)
+    }
+}
+
 struct StubFailure: Error, CustomStringConvertible {
     var description: String { "the stub engine was told to fail" }
 }
