@@ -106,15 +106,20 @@ jobs:
       # [LAW:no-ambient-temporal-coupling] The tagged commit's push to master started
       # model-cache.yml, and the tag usually follows within seconds. Restoring before that run
       # saves would miss exactly when the model is new or its entry was evicted, so the release
-      # waits for it. A run that did not succeed leaves the fill below to fetch the whole model.
+      # waits for it. With no such run (the commit was not the tip of its push) or one that did
+      # not succeed, the fill below fetches the whole model. Polled every 30 s, since the watch
+      # spends the token's hourly request budget that publishing needs too.
       - name: Wait for this commit's model cache
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          run=$(gh run list --workflow model-cache.yml --event push --commit "$GITHUB_SHA" --limit 1 --json databaseId --jq '.[0].databaseId')
-          [ -n "$run" ] || { echo "model-cache.yml never ran for $GITHUB_SHA, so it never reached master" >&2; exit 1; }
-          gh run watch "$run" --exit-status >/dev/null || echo "::warning::model-cache.yml run $run did not succeed; the model comes from huggingface.co"
+          run=$(gh run list --workflow model-cache.yml --event push --commit "$GITHUB_SHA" --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          if [ -z "$run" ]; then
+            echo "::warning::model-cache.yml did not run for $GITHUB_SHA; the model comes from huggingface.co"
+          elif ! gh run watch "$run" --interval 30 --exit-status >/dev/null; then
+            echo "::warning::model-cache.yml run $run did not succeed; the model comes from huggingface.co"
+          fi
 
       # Saved by model-cache.yml on master; a run for a tag cannot restore another tag's save,
       # so this one saves nothing.
