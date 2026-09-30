@@ -41,8 +41,14 @@ public final class DictationInputController: IMKInputController {
     /// Told whatever the event, rather than after asking which kind it is: what is told is
     /// the state of the modifier keys read off the session, so an event that changed none of
     /// them tells the app nothing it does not already hold. [LAW:dataflow-not-control-flow]
-    override public func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
-        ModifierChanges.shared.moved(at: event.timestamp)
+    ///
+    /// IMK also calls this with no event at all (low-input-method-8vv: the call after an
+    /// activate trapped on the implicitly unwrapped event the inherited signature has). Such a
+    /// call changed no key, so it tells nothing: the next change carries the whole state, and
+    /// a stamp invented for it could only put a state at a time it was not held.
+    /// [LAW:types-are-the-program]
+    override public func handle(_ event: NSEvent?, client sender: Any!) -> Bool {
+        event.map { ModifierChanges.shared.moved(at: $0.timestamp) }
         return false
     }
 

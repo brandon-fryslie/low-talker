@@ -69,6 +69,13 @@ import Testing
         #expect(told != nil)
     }
 
+    /// A call carrying no event, which IMK makes, is handed back rather than trapping and
+    /// taking the input method down.
+    @Test func aCallWithNoEventIsHandedBack() throws {
+        let controller = try #require(DictationInputController(server: nil, delegate: nil, client: nil))
+        #expect(controller.handle(nil, client: nil) == false)
+    }
+
     @Test(arguments: presses)
     func everyKeyIsHandedBack(press: Press) throws {
         let controller = try #require(
