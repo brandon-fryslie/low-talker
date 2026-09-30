@@ -62,12 +62,13 @@ public final class TranscriptionServer: Sendable {
 
     static func listen(
         at address: ListenAddress,
+        limits: ServedLimits = .standard,
         engine: @escaping @Sendable () -> ServedEngine,
         record: @escaping @Sendable (ServedRequest) -> Void
     ) async throws(ListenRefused) -> TranscriptionServer {
         let server: TranscriptionServer
         do {
-            server = try await bind(address, engine: engine, record: record)
+            server = try await bind(address, limits: limits, engine: engine, record: record)
         } catch {
             throw ListenRefused(address: address, reason: error)
         }
@@ -77,6 +78,7 @@ public final class TranscriptionServer: Sendable {
 
     private static func bind(
         _ address: ListenAddress,
+        limits: ServedLimits,
         engine: @escaping @Sendable () -> ServedEngine,
         record: @escaping @Sendable (ServedRequest) -> Void
     ) async throws -> TranscriptionServer {
@@ -84,7 +86,7 @@ public final class TranscriptionServer: Sendable {
         parameters.requiredLocalEndpoint = .hostPort(host: address.host, port: address.port)
         let listener = try NWListener(using: parameters)
         let queue = DispatchQueue(label: "lowtalker.serve")
-        let answering = Answering(binding: address.binding, engine: engine, record: record, queue: queue)
+        let answering = Answering(binding: address.binding, limits: limits, uploads: Uploads(limit: limits.uploads), engine: engine, record: record, queue: queue)
         listener.newConnectionHandler = { connection in
             connection.start(queue: queue)
             Task { await answering.serve(connection) }
@@ -184,9 +186,72 @@ public struct ListenRefused: Error, CustomStringConvertible {
     }
 }
 
+/// How much served work a server takes in at once (low-serve-axq.h1n): each upload holds its
+/// body and then its decoded audio until it is answered, and waits in `EngineTurns` holding
+/// both while dictation has the engine.
+struct ServedLimits: Sendable {
+    /// Uploads answered at once. [LAW:types-are-the-program] At least one, so an upload
+    /// that finds none in flight is always taken in: a hold alone, which only delays the
+    /// uploads in flight, can never be why one is refused.
+    let uploads: Int
+    /// The most audio one upload may hold, in seconds.
+    let audio: TimeInterval
+
+    init(uploads: Int, audio: TimeInterval) {
+        precondition(uploads >= 1, "a server takes in at least one upload")
+        self.uploads = uploads
+        self.audio = audio
+    }
+
+    /// Four uploads of up to fifteen minutes: at the body limit and 16 kHz Float32, under
+    /// 350 MB held at worst, and far past any utterance Pipecat sends.
+    static let standard = ServedLimits(uploads: 4, audio: 15 * 60)
+}
+
+/// The uploads being answered, so that no more than the limit are taken in at once.
+/// [LAW:single-enforcer] The one count of them, asked before any upload's body is read.
+final class Uploads: Sendable {
+    let limit: Int
+    private let open = Mutex(0)
+
+    init(limit: Int) {
+        self.limit = limit
+    }
+
+    /// A place for one more upload, held until it is let go; refused with 429, which
+    /// Pipecat retries, when the limit already hold one.
+    func admit() throws(APIError) -> Slot {
+        let taken = open.withLock { open -> Int? in
+            guard open < limit else { return nil }
+            open += 1
+            return open
+        }
+        guard let taken else { throw .busy(uploads: limit) }
+        return Slot(uploads: self, held: taken)
+    }
+
+    /// One upload's place, given back when the upload is done with it, however it ends.
+    final class Slot: Sendable {
+        /// The uploads being answered as this one was taken in, itself included.
+        let held: Int
+        private let uploads: Uploads
+
+        fileprivate init(uploads: Uploads, held: Int) {
+            self.uploads = uploads
+            self.held = held
+        }
+
+        deinit {
+            uploads.open.withLock { $0 -= 1 }
+        }
+    }
+}
+
 /// One request's answer, from the first byte read to the connection's close.
 private struct Answering: Sendable {
     let binding: ServeBinding
+    let limits: ServedLimits
+    let uploads: Uploads
     let engine: @Sendable () -> ServedEngine
     let record: @Sendable (ServedRequest) -> Void
     let queue: DispatchQueue
@@ -314,6 +379,15 @@ private struct Answering: Sendable {
         case .notResident(let reason): throw APIError.notResident(reason)
         case .failed(let reason): throw APIError.engineFailed(reason)
         }
+        // Taken before the body is read, since reading it is the first thing an upload holds.
+        let slot: Uploads.Slot
+        do {
+            slot = try uploads.admit()
+        } catch {
+            event.uploads = uploads.limit
+            throw error
+        }
+        event.uploads = slot.held
         // A client that asked to hear the request is wanted before sending its body
         // (curl, for any large upload) waits for this, or for a timeout, before it sends.
         if head.headers["expect"]?.lowercased() == "100-continue" {
@@ -326,7 +400,7 @@ private struct Answering: Sendable {
         event.language = request.language?.rawValue
         event.format = request.format.rawValue
         event.vocabularyTerms = request.vocabulary.terms.count
-        let clip = try request.upload.clip()
+        let clip = try request.upload.clip(longest: limits.audio)
         event.audioSeconds = clip.duration
         let transcript: Transcript
         do {
@@ -337,6 +411,9 @@ private struct Answering: Sendable {
             throw APIError.engineFailed("\(error)")
         }
         event.words = transcript.words.count
+        // [LAW:no-ambient-temporal-coupling] Held until the transcript is in by name, not by
+        // wherever the compiler would end the slot's life.
+        withExtendedLifetime(slot) {}
         return request.format.response(transcript, heard: clip)
     }
 }
@@ -439,6 +516,9 @@ public struct ServedRequest: Sendable, Codable, Equatable {
     public internal(set) var lost: String?
     /// Bytes the client sent after it was answered, dropped: a refused request's body.
     public internal(set) var unread: Int?
+    /// Uploads being answered when this one was taken in, itself included; on a 429, the
+    /// limit that were.
+    public internal(set) var uploads: Int?
     public internal(set) var bytes: Int?
     public internal(set) var model: String?
     public internal(set) var language: String?

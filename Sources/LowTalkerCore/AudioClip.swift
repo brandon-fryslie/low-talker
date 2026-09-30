@@ -54,6 +54,10 @@ public enum AudioClipError: Error, CustomStringConvertible {
     case unwritable(URL, underlying: any Error)
     /// More frames than a single AVFoundation buffer can hold.
     case tooLong(frames: Int64)
+    /// The file ran out of audio before the length its header declares.
+    case truncated(URL, read: Int64, declared: Int64)
+    /// The file holds more audio than the reader was told to take.
+    case longerThan(TimeInterval, seconds: TimeInterval)
     /// AVFoundation has no conversion path from the source format to 16 kHz mono.
     case unconvertibleFormat(sampleRate: Double, channels: UInt32)
     /// The converter accepted the format pair but failed mid-stream; AVFoundation may
@@ -69,6 +73,10 @@ public enum AudioClipError: Error, CustomStringConvertible {
             "cannot write audio file \(url.path): \(underlying)"
         case .tooLong(let frames):
             "\(frames) frames; a single audio buffer holds at most \(AVAudioFrameCount.max)"
+        case .truncated(let url, let read, let declared):
+            "audio file \(url.path) ends after \(read) of the \(declared) frames it declares"
+        case .longerThan(let limit, let seconds):
+            "\(seconds.formatted(.number.precision(.fractionLength(1)))) seconds of audio; at most \(limit.formatted(.number.precision(.fractionLength(1)))) are taken"
         case .unconvertibleFormat(let sampleRate, let channels):
             "no conversion from \(sampleRate) Hz, \(channels) channel(s) to \(AudioClip.sampleRate) Hz mono"
         case .conversionFailed(let underlying):
@@ -86,12 +94,13 @@ extension AudioClip {
     /// Sendable, so Swift 6 rejects it as a static let there.
     static var format: AVAudioFormat { AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)! }
 
-    /// Load any file AVFoundation can read (wav, aiff, m4a, ...) as a clip.
+    /// Load any file AVFoundation can read (wav, aiff, m4a, ...) as a clip, refusing one
+    /// that holds more than `longest` seconds before any of its audio is read.
     ///
     /// [LAW:parse-dont-validate] This is the one boundary where file audio of any
     /// rate and channel count becomes a clip. Resampling and downmixing happen here,
     /// once; nothing downstream sees anything but 16 kHz mono.
-    public init(contentsOf url: URL) throws {
+    public init(contentsOf url: URL, longest: TimeInterval = .infinity) throws {
         let file: AVAudioFile
         do {
             file = try AVAudioFile(forReading: url)
@@ -99,24 +108,30 @@ extension AudioClip {
             throw AudioClipError.unreadable(url, underlying: error)
         }
         let source = file.processingFormat
-        guard let frameCount = AVAudioFrameCount(exactly: file.length) else {
-            throw AudioClipError.tooLong(frames: file.length)
-        }
-        guard let input = AVAudioPCMBuffer(pcmFormat: source, frameCapacity: frameCount) else {
+        // The length is read off the file's header, so a compressed file that would decode
+        // to hours is refused before any of it is.
+        let seconds = Double(file.length) / source.sampleRate
+        guard seconds <= longest else { throw AudioClipError.longerThan(longest, seconds: seconds) }
+        let converter = try Converter(from: source)
+        // A second at a time, so the file's audio is in memory once, as the clip, and never
+        // also whole in the source format.
+        guard let chunk = AVAudioPCMBuffer(pcmFormat: source, frameCapacity: AVAudioFrameCount(source.sampleRate.rounded(.up))) else {
             throw AudioClipError.bufferAllocationFailed
         }
-        // [LAW:dataflow-not-control-flow] exception: AVAudioFile refuses a zero-frame
-        // read (fails with no error attached), so the empty file is hemmed here at the
-        // foreign edge; an empty file is a legal empty clip, not a failure.
-        if file.length > 0 {
+        var samples: [Float] = []
+        samples.reserveCapacity(Self.sampleCount(for: seconds))
+        while file.framePosition < file.length {
             do {
-                try file.read(into: input)
+                try file.read(into: chunk)
             } catch {
                 throw AudioClipError.unreadable(url, underlying: error)
             }
+            // [LAW:no-silent-failure] A read that ends short of the header's length is a file
+            // that lies about itself, not the end of the loop.
+            guard chunk.frameLength > 0 else { throw AudioClipError.truncated(url, read: file.framePosition, declared: file.length) }
+            samples += try converter.convert(chunk)
         }
-        let converter = try Converter(from: source)
-        self.init(samples: try converter.convert(input) + converter.drain())
+        self.init(samples: samples + (try converter.drain()))
     }
 
     /// Write as a 16-bit PCM wav at the pipeline rate, the encoding every player and

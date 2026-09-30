@@ -91,6 +91,7 @@ enum Status: Int, Sendable, Codable {
     case notFound = 404
     case lengthRequired = 411
     case contentTooLarge = 413
+    case tooManyRequests = 429
     case internalServerError = 500
     case serviceUnavailable = 503
 
@@ -102,6 +103,7 @@ enum Status: Int, Sendable, Codable {
         case .notFound: "Not Found"
         case .lengthRequired: "Length Required"
         case .contentTooLarge: "Content Too Large"
+        case .tooManyRequests: "Too Many Requests"
         case .internalServerError: "Internal Server Error"
         case .serviceUnavailable: "Service Unavailable"
         }
