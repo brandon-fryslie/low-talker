@@ -93,7 +93,7 @@ jobs:
           rm "$key"
 
       # [LAW:one-source-of-truth] The model the release carries is the one the CLI built from
-      # this tag names as its default, at the Hugging Face commits a fetch of it brings now.
+      # this tag names as its default, at the Hugging Face commits `main` names for it now.
       - name: Name the default model
         id: model
         run: |
@@ -143,12 +143,12 @@ jobs:
       # [LAW:dataflow-not-control-flow] Run whether the cache hit or not: it fetches from
       # huggingface.co whatever the store's manifests find missing or of the wrong size, so a
       # hit fetches nothing and a miss fetches the whole model. Nothing here hashes contents.
-      # Either way the release stops unless every file came from the commits the key names.
+      # Either way it fetches at the commits the key names, so the store is the key's.
       - name: Fill the model store
         env:
           CLI: ${{ steps.model.outputs.cli }}
           REVISION: ${{ steps.model.outputs.revision }}
-        run: '"$CLI" model download --models-dir "$RUNNER_TEMP/model-store" --revision "$REVISION"'
+        run: '"$CLI" model download --models-dir "$RUNNER_TEMP/model-store" --from "$REVISION"'
 
       - name: Build, sign and notarize
         env:

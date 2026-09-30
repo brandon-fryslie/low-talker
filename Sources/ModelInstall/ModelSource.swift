@@ -11,8 +11,9 @@ import WhisperKit
 /// but Hugging Face needs a layout of its own.
 public enum ModelSource: Sendable, CustomStringConvertible {
     /// argmaxinc/whisperkit-coreml and the openai tokenizer repos on huggingface.co,
-    /// through WhisperKit's hub client.
-    case huggingFace
+    /// through WhisperKit's hub client, at a revision; with none, at the one `main`
+    /// names when the install starts.
+    case huggingFace(ModelRevision?)
     /// Another store holding the model installed: its manifests say which files to
     /// take, and that they are whole before anything is taken.
     case store(ModelStore)
@@ -22,7 +23,8 @@ public enum ModelSource: Sendable, CustomStringConvertible {
 
     public var description: String {
         switch self {
-        case .huggingFace: "huggingface.co"
+        case .huggingFace(nil): "huggingface.co"
+        case .huggingFace(let revision?): "huggingface.co at \(revision)"
         case .store(let store): store.directory.path
         case .published(let base): base.absoluteString
         }
@@ -40,7 +42,9 @@ public enum ModelSource: Sendable, CustomStringConvertible {
 /// [LAW:no-ambient-temporal-coupling] The unpacked copy lives exactly as long as the
 /// `with` body, so no caller can read a part out of an archive that was cleaned up.
 enum OpenSource {
-    case huggingFace
+    /// Both parts are fetched at this one revision, so the tokenizer is the one the
+    /// weights were named with even if `main` moves between them.
+    case huggingFace(ModelRevision)
     case store(ModelStore)
 
     static func with<T>(
@@ -51,8 +55,10 @@ enum OpenSource {
         _ body: (OpenSource) async throws -> T
     ) async throws -> T {
         switch source {
-        case .huggingFace:
-            return try await body(.huggingFace)
+        case .huggingFace(let revision?):
+            return try await body(.huggingFace(revision))
+        case .huggingFace(nil):
+            return try await body(.huggingFace(ModelRevision.upstream(of: model)))
         case .store(let store):
             return try await body(.store(store))
         case .published(let base):

@@ -32,15 +32,18 @@ struct ModelOptions: ParsableArguments {
 
 /// Where a command takes a model from when the store does not have it.
 struct SourceOptions: ParsableArguments {
-    @Option(name: .customLong("from"), help: "Where to take a model the store lacks: an http(s) base URL serving <model>.zip, as `model pack` writes them, or a directory holding another model store. Defaults to huggingface.co.")
-    var source: ModelSource = .huggingFace
+    @Option(name: .customLong("from"), help: "Where to take a model the store lacks: huggingface.co at a revision `model revision` printed, an http(s) base URL serving <model>.zip, as `model pack` writes them, or a directory holding another model store. Defaults to huggingface.co at the revision `main` names.")
+    var source: ModelSource = .huggingFace(nil)
 }
 
-/// [LAW:parse-dont-validate] A URL with an http or https scheme is a published base and
-/// anything else is a path to a store, so the one flag cannot be read two ways.
+/// [LAW:parse-dont-validate] Two commits are a revision on huggingface.co, a URL with an
+/// http or https scheme is a published base, and anything else is a path to a store, so
+/// the one flag cannot be read two ways and a revision cannot be asked of a copy.
 extension ModelSource: ExpressibleByArgument {
     public init?(argument: String) {
-        if let url = URL(string: argument), ["http", "https"].contains(url.scheme) {
+        if let revision = ModelRevision(argument) {
+            self = .huggingFace(revision)
+        } else if let url = URL(string: argument), ["http", "https"].contains(url.scheme) {
             self = .published(url)
         } else {
             self = .store(ModelStore(directory: URL(fileURLWithPath: argument)))
@@ -49,9 +52,6 @@ extension ModelSource: ExpressibleByArgument {
 
     public var defaultValueDescription: String { description }
 }
-
-/// [LAW:parse-dont-validate] `--revision` is parsed into two commits at the command line.
-extension ModelRevision: ExpressibleByArgument {}
 
 /// [LAW:parse-dont-validate] `--model` is parsed into a name at the command line, so a
 /// value that is not one path step is refused before any path is built from it.

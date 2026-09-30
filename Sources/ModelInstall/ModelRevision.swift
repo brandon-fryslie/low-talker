@@ -5,10 +5,9 @@ import WhisperKit
 /// Which Hugging Face commits a model's two parts come from: the whisperkit-coreml commit
 /// of its weights and the openai commit of the tokenizer they decode with.
 ///
-/// Two answers exist and must agree: `upstream(of:)`, what a fetch from huggingface.co
-/// would bring now, and `ModelStore.revision(of:)`, what a store's fetch brought. The
-/// hub client fetches `main` and takes no revision, so neither can be pinned; a release
-/// names its cached store by the first and holds the store to it with the second.
+/// An install from huggingface.co fetches both parts at one of these, so a store filled
+/// from the hub holds exactly the revision it was given. `upstream(of:)` names the one
+/// `main` points at now; a release keys its cached store by it and fetches at it.
 public struct ModelRevision: Hashable, Sendable, LosslessStringConvertible {
     public let weights: Commit
     public let tokenizer: Commit
@@ -32,17 +31,17 @@ public struct ModelRevision: Hashable, Sendable, LosslessStringConvertible {
         public let description: String
 
         public init?(_ description: String) {
-            guard description.count == 40, description.allSatisfy({ $0.isHexDigit && !$0.isUppercase }) else { return nil }
+            guard description.count == 40, description.allSatisfy({ "0123456789abcdef".contains($0) }) else { return nil }
             self.description = description
         }
     }
 
-    /// The repo whisperkit-coreml weights come from, which `install` fetches from too.
+    /// The repo whisperkit-coreml weights come from.
     static let weightsRepo = "argmaxinc/whisperkit-coreml"
 
-    /// The revision a fetch of `model` from huggingface.co would bring now: the commit
-    /// `main` names in the weights repo, and in the tokenizer repo those weights' config
-    /// picks. Asks the hub three small questions and downloads no weights.
+    /// The revision `main` names now: the commit it points at in the weights repo, and in
+    /// the tokenizer repo those weights' config picks. Asks the hub three small questions
+    /// and downloads no weights.
     public static func upstream(of model: ModelName) async throws -> ModelRevision {
         try await upstream(of: model, asking: Hub.get)
     }
@@ -57,67 +56,27 @@ public struct ModelRevision: Hashable, Sendable, LosslessStringConvertible {
         return ModelRevision(weights: weights.commit, tokenizer: tokenizer.commit)
     }
 
-    /// The repo folder a download of `model` takes, chosen from `files` as
-    /// `WhisperKit.download` chooses it: the one folder whose files match
-    /// `*<model>/*`, or failing that the one matching `*openai*<model>/*`.
+    /// The repo folder that holds `model`, chosen from `files` as `WhisperKit.download`
+    /// chooses it: the one folder whose files match `*<model>/*`, or failing that the
+    /// one matching `*openai*<model>/*`.
     ///
-    /// [LAW:one-source-of-truth] exception: WhisperKit makes this choice inside the
-    /// download and exposes no function for it. A mirror that drifts picks another
-    /// folder's config, names another tokenizer commit, and `download --revision` fails
-    /// on the store that disagrees.
+    /// [LAW:one-source-of-truth] exception: WhisperKit makes this choice inside a download
+    /// that fetches only `main`, and exposes no function for it. The globs are matched by
+    /// ArgmaxCore's own `matching(glob:)`, so only the fallback order is mirrored.
     static func variantFolder(of model: ModelName, among files: [String]) throws -> String {
-        let candidates = ["*\(model.rawValue)/*", "*openai*\(model.rawValue)/*"].map { (glob: String) in
-            Set(files.filter { fnmatch(glob, $0, 0) == 0 }.compactMap { $0.split(separator: "/").first.map(String.init) })
+        let candidates = ["*\(model.rawValue)/*", "*openai*\(model.rawValue)/*"].map { glob in
+            Set(files.matching(glob: glob).compactMap { $0.split(separator: "/").first.map(String.init) })
         }
-        guard let folders = candidates.first(where: { $0.count == 1 }) else {
-            throw ModelRevisionError.noVariantFolder(model: model, matches: candidates[0].sorted())
+        guard let folders = candidates.first(where: { $0.count == 1 }), let folder = folders.first else {
+            throw ModelInstallError.noVariantFolder(model: model, matches: candidates[0].sorted())
         }
-        return folders.first!
+        return folder
     }
 }
 
-extension ModelStore {
-    /// The revision the installed model was fetched at, read from the commit the hub
-    /// client recorded beside each file the manifests list. Throws when a part is not
-    /// installed whole, when a file has no such record (a store installed by copying
-    /// carries none), or when a part's files came from more than one commit.
-    public func revision(of model: ModelName) throws -> ModelRevision {
-        try ModelRevision(weights: commit(.weights, of: model), tokenizer: commit(.tokenizer, of: model))
-    }
-
-    /// Nothing, when the installed model is exactly `expected`; an error naming both
-    /// revisions otherwise.
-    public func require(_ expected: ModelRevision, of model: ModelName) throws {
-        let held = try revision(of: model)
-        guard held == expected else { throw ModelRevisionError.mismatch(model: model, expected: expected, held: held) }
-    }
-
-    /// The hub client keeps its record of `models/<org>/<repo>/<path>` at
-    /// `models/<org>/<repo>/.cache/huggingface/download/<path>.metadata`, the commit on
-    /// its first line.
-    private func commit(_ part: ModelPart, of model: ModelName) throws -> ModelRevision.Commit {
-        guard case .whole(let manifest) = try recording(part, of: model) else {
-            throw ModelRevisionError.notInstalled(model: model, part: part)
-        }
-        let steps = manifest.folder.split(separator: "/").map(String.init)
-        let sidecars = directory.appending(path: steps.prefix(3).joined(separator: "/")).appending(components: ".cache", "huggingface", "download")
-        let commits = try Set(manifest.files.map { file in
-            let sidecar = sidecars.appending(path: (steps.dropFirst(3) + [file.path]).joined(separator: "/") + ".metadata")
-            let record = try String(contentsOf: sidecar, encoding: .utf8)
-            guard let line = record.split(separator: "\n").first, let commit = ModelRevision.Commit(String(line)) else {
-                throw ModelRevisionError.unreadableSidecar(sidecar)
-            }
-            return commit
-        })
-        guard commits.count == 1, let commit = commits.first else {
-            throw ModelRevisionError.mixedCommits(model: model, part: part, commits: commits.map(\.description).sorted())
-        }
-        return commit
-    }
-}
-
-/// The two hub questions `upstream(of:)` asks, over the endpoint WhisperKit fetches from.
+/// The questions `upstream(of:)` asks, over the endpoint WhisperKit fetches from.
 enum Hub {
+    /// The commit a ref points at, and the files it holds.
     struct Revision: Decodable {
         let commit: ModelRevision.Commit
         let files: [String]
@@ -150,34 +109,7 @@ enum Hub {
     static func get(_ url: URL) async throws -> Data {
         let (data, response) = try await URLSession.shared.data(from: url)
         let status = (response as? HTTPURLResponse)?.statusCode
-        guard status == 200 else { throw ModelRevisionError.hubRefused(url: url, status: status) }
+        guard status == 200 else { throw ModelInstallError.downloadRefused(url: url, status: status) }
         return data
-    }
-}
-
-public enum ModelRevisionError: Error, Equatable, CustomStringConvertible {
-    case hubRefused(url: URL, status: Int?)
-    /// No single folder in the weights repo is the model's, so no download could take one.
-    case noVariantFolder(model: ModelName, matches: [String])
-    case notInstalled(model: ModelName, part: ModelPart)
-    case unreadableSidecar(URL)
-    case mixedCommits(model: ModelName, part: ModelPart, commits: [String])
-    case mismatch(model: ModelName, expected: ModelRevision, held: ModelRevision)
-
-    public var description: String {
-        switch self {
-        case .hubRefused(let url, let status):
-            "\(url.absoluteString) answered \(status.map { "HTTP \($0)" } ?? "with no HTTP status")"
-        case .noVariantFolder(let model, let matches):
-            "no single folder in \(ModelRevision.weightsRepo) holds \(model): \(matches.isEmpty ? "none match" : matches.joined(separator: ", "))"
-        case .notInstalled(let model, let part):
-            "the \(part) of \(model) is not installed whole"
-        case .unreadableSidecar(let url):
-            "\(url.path) records no commit"
-        case .mixedCommits(let model, let part, let commits):
-            "the \(part) of \(model) came from more than one commit: \(commits.joined(separator: ", "))"
-        case .mismatch(let model, let expected, let held):
-            "\(model) was fetched at \(held), not \(expected)"
-        }
     }
 }
