@@ -103,10 +103,9 @@ struct RealtimeSocket {
         let sessionID = "sess_\(ID.fresh())"
         /// The item appends are going to, from the first append after a commit.
         var buffer: Buffer?
-        /// The last item committed, which the next one follows.
-        var previous: String?
-        /// The last item committed, once it is answered.
-        var answered: Task<Void, Never>?
+        /// The last item committed: the one the next follows, and its answer, which the
+        /// next is heard after.
+        var last: (id: String, answered: Task<Void, Never>)?
 
         mutating func receive(_ text: String, transcriber: any Transcriber, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) {
             var clientEvent: String?
@@ -136,9 +135,11 @@ struct RealtimeSocket {
         /// still being heard goes on reading, pings included, so engine contention delays
         /// its transcripts and nothing else (low-serve-axq.32w).
         private mutating func append(_ bytes: Data, transcriber: any Transcriber, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) throws(RealtimeError) {
-            activity.heldAudioSeconds = max(activity.heldAudioSeconds, try held.take(bytes.count))
+            let holding = try held.take(bytes: bytes.count, items: buffer == nil ? 1 : 0)
+            activity.heldAudioSeconds = max(activity.heldAudioSeconds, holding.seconds)
+            activity.heldItems = max(activity.heldItems, holding.items)
             if buffer == nil {
-                let opened = Buffer(transcriber: transcriber, vocabulary: session.vocabulary, outbox: outbox, after: answered)
+                let opened = Buffer(transcriber: transcriber, vocabulary: session.vocabulary, outbox: outbox, after: last?.answered)
                 activity.items += 1
                 let transcript = opened.transcript
                 items.addTask {
@@ -155,10 +156,9 @@ struct RealtimeSocket {
             self.buffer = nil
             let heard = buffer.end()
             activity.audioSeconds += heard
-            for event in [ServerEvent.committed(item: buffer.id, previous: previous), .itemAdded(item: buffer.id, previous: previous), .itemDone(item: buffer.id, previous: previous)] {
+            for event in [ServerEvent.committed(item: buffer.id, previous: last?.id), .itemAdded(item: buffer.id, previous: last?.id), .itemDone(item: buffer.id, previous: last?.id)] {
                 outbox.emit(event)
             }
-            previous = buffer.id
             let deltas = buffer.deltas
             let transcript = buffer.transcript
             let (held, bytes) = (held, buffer.bytes)
@@ -166,10 +166,10 @@ struct RealtimeSocket {
             // client that appends on hearing it finds the room already there.
             let answered = Task {
                 let result = await transcript.result
-                held.giveBack(bytes)
+                held.giveBack(itemOf: bytes)
                 deltas.settle(result, usage: Usage(heard: heard))
             }
-            self.answered = answered
+            last = (buffer.id, answered)
             items.addTask { await answered.value }
         }
 
@@ -179,31 +179,35 @@ struct RealtimeSocket {
     }
 }
 
-/// The audio one socket holds, from each append until its item is heard, in the bytes
-/// appends carry. [LAW:single-enforcer] The one count of it, so the memory a socket holds is
-/// bounded however many items its client commits while the engine is busy.
+/// What one socket holds, from each append until its item is heard: the bytes appends
+/// carry, and a second more of them for each item, since holding an item costs more than
+/// its audio. [LAW:single-enforcer] The one count of it, so the memory a socket holds is
+/// bounded however many items, however short, its client commits while the engine is busy.
 private final class HeldAudio: Sendable {
+    /// What an item costs beyond its audio, in bytes of audio: a second of it.
+    private static let perItem = RealtimeAudio.rate * 2
     private let limit: TimeInterval
-    private let bytes = Mutex(0)
+    private let held = Mutex((bytes: 0, items: 0))
 
     init(limit: TimeInterval) {
         self.limit = limit
     }
 
-    /// `count` more bytes held, refused whole when they would take the socket past its
-    /// limit; returns the seconds held with them.
-    func take(_ count: Int) throws(RealtimeError) -> TimeInterval {
-        try bytes.withLock { bytes throws(RealtimeError) in
-            let seconds = RealtimeAudio.duration(bytes: bytes + count)
+    /// `bytes` more held in `items` more items, refused whole when they would take the
+    /// socket past its limit; returns what the socket holds with them.
+    func take(bytes: Int, items: Int) throws(RealtimeError) -> (seconds: TimeInterval, items: Int) {
+        try held.withLock { held throws(RealtimeError) in
+            let charged = held.bytes + bytes + items * Self.perItem
+            let seconds = RealtimeAudio.duration(bytes: charged)
             guard seconds <= limit else { throw .audioTooLong(seconds: seconds, limit: limit) }
-            bytes += count
-            return seconds
+            held = (charged, held.items + items)
+            return (seconds, held.items)
         }
     }
 
-    /// An item is heard, and the `count` bytes it held are free.
-    func giveBack(_ count: Int) {
-        bytes.withLock { $0 -= count }
+    /// An item is heard, and what it held, its `bytes` of audio among it, is free.
+    func giveBack(itemOf bytes: Int) {
+        held.withLock { $0 = ($0.bytes - bytes - Self.perItem, $0.items - 1) }
     }
 }
 
@@ -382,8 +386,11 @@ public struct RealtimeActivity: Sendable, Codable, Equatable {
     /// The most audio a refused append would have taken the socket's held audio to, in seconds.
     public internal(set) var refusedAudioSeconds: Double?
     public internal(set) var items = 0
-    /// The most audio the socket held at once, in seconds: appended to items not yet heard.
+    /// The most the socket held at once, in seconds: the audio of items not yet heard and a
+    /// second for each.
     public internal(set) var heldAudioSeconds: Double = 0
+    /// The most items the socket held at once, each heard only after the one before it.
+    public internal(set) var heldItems = 0
     /// Seconds of audio in the items committed.
     public internal(set) var audioSeconds: Double = 0
     /// The close code the socket ended with, the client's or the server's.

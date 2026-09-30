@@ -154,12 +154,12 @@ private func update(_ input: [String: Any]) -> [String: Any] {
         #expect(realtime.refusals == ["input_audio_buffer_commit_empty": 1] && realtime.refusedAudioSeconds == nil)
     }
 
-    /// An append that would take the socket's held audio past the limit is refused whole and
-    /// the item keeps what it had: committed, it is heard with exactly the limit, and once it
-    /// is heard the next item has the whole limit again.
+    /// An append that would take what the socket holds past the limit is refused whole and
+    /// the item keeps what it had: committed, it is heard with exactly the limit less the
+    /// second the item itself counts for, and once it is heard the next item has it again.
     @Test func anAppendPastTheAudioLimitIsRefusedAndTheItemKeepsWhatItHad() async throws {
         let stub = Stub()
-        let running = try await Running.start(.ready(stub), limits: ServedLimits(uploads: 1, sockets: 1, audio: 1))
+        let running = try await Running.start(.ready(stub), limits: ServedLimits(uploads: 1, sockets: 1, audio: 2))
         defer { running.server.stop() }
         var client = Client(running)
         try await client.append(seconds: 1.2)
@@ -176,7 +176,7 @@ private func update(_ input: [String: Any]) -> [String: Any] {
         #expect(heard.count == 2 && abs(heard[0] - 1) < 0.01 && abs(heard[1] - 0.5) < 0.01)
         let realtime = try #require(try await running.nextEvent().realtime)
         #expect(realtime.appends == 17 && realtime.refusals == ["audio_too_long": 2] && realtime.items == 2)
-        #expect(abs(try #require(realtime.refusedAudioSeconds) - 1.1) < 0.01)
+        #expect(abs(try #require(realtime.refusedAudioSeconds) - 2.1) < 0.01)
         #expect(realtime.sent.errors == 2)
     }
 
@@ -200,13 +200,13 @@ private func update(_ input: [String: Any]) -> [String: Any] {
     }
 
     /// A socket whose items wait on a held engine goes on reading: each commit is answered,
-    /// a ping is answered, and appends are taken until the audio the socket holds across its
-    /// items would pass the limit. Once the engine is free every item is heard, each only
+    /// a ping is answered, and appends are taken until what the socket holds across its
+    /// items, their audio and a second for each, would pass the limit. Once the engine is free every item is heard, each only
     /// after the one before it is answered, so they are answered in the order committed, and
     /// the audio they held is free again.
     @Test func aSocketWhoseItemsWaitOnTheEngineKeepsReading() async throws {
         let gated = Gated()
-        let running = try await Running.start(.ready(gated), limits: ServedLimits(uploads: 1, sockets: 1, audio: 2))
+        let running = try await Running.start(.ready(gated), limits: ServedLimits(uploads: 1, sockets: 1, audio: 6))
         defer { running.server.stop() }
         var client = Client(running)
         var committed: [String] = []
@@ -243,7 +243,7 @@ private func update(_ input: [String: Any]) -> [String: Any] {
         let realtime = try #require(try await running.nextEvent().realtime)
         #expect(realtime.items == 5 && realtime.sent.completed == 5 && realtime.refusals == ["audio_too_long": 1])
         let refused = try #require(realtime.refusedAudioSeconds)
-        #expect(abs(realtime.heldAudioSeconds - 2) < 0.01 && abs(refused - 2.1) < 0.01)
+        #expect(abs(realtime.heldAudioSeconds - 6) < 0.01 && abs(refused - 6.1) < 0.01 && realtime.heldItems == 4)
     }
 
     /// An append that holds no whole sample puts no audio in the buffer, so committing it
