@@ -209,59 +209,15 @@ private func update(_ input: [String: Any]) -> [String: Any] {
         #expect(realtime.refusals.isEmpty && realtime.itemsLetGo == 1 && realtime.sent.completed == 2)
     }
 
-    /// An item let go sends nothing more, and says when the last word it sent ends.
+    /// An item let go sends nothing more.
     @Test func anItemLetGoSendsNoMoreDeltas() async {
         let sent = await deltas { outbox in
-            let item = Deltas(item: "item_a", outbox: outbox, replayed: -.infinity)
+            let item = Deltas(item: "item_a", outbox: outbox)
             item.heard(Partial(confirmed: timed(2), tentative: Transcript(words: [])))
-            #expect(item.letGo() == 2)
+            item.letGo()
             item.heard(Partial(confirmed: timed(4), tentative: Transcript(words: [])))
         }
         #expect(sent == [" w1 w2"])
-    }
-
-    /// An item that started over sends only the words ending after the last one the item let
-    /// go sent, while it is heard and when it is answered, so between them each word is sent once.
-    @Test func anItemStartedOverSendsOnlyWordsNotSentBefore() async {
-        let sent = await deltas { outbox in
-            let item = Deltas(item: "item_b", outbox: outbox, replayed: 2)
-            item.heard(Partial(confirmed: timed(3), tentative: Transcript(words: [])))
-            item.settle(.success(timed(5)), usage: Usage(heard: 5))
-        }
-        #expect(sent == [" w3", " w4 w5"])
-    }
-
-    /// An item that started over and sent nothing of its own is let go as having sent what
-    /// the item before it did, so the item after holds those words back too.
-    @Test func anItemThatSentNothingOfItsOwnPassesOnWhatWasSentBefore() async {
-        let sent = await deltas { outbox in
-            let item = Deltas(item: "item_c", outbox: outbox, replayed: 2)
-            item.heard(Partial(confirmed: timed(2), tentative: Transcript(words: [])))
-            #expect(item.letGo() == 2)
-        }
-        #expect(sent.isEmpty)
-    }
-
-    /// The socket's event says how much of the audio items kept when they started over had
-    /// its words sent already. Limit 4 s: a share of 2 s, of which 1 s is kept. The stub's
-    /// words are half a second each; once the third has gone out of 1.7 s, 2.1 s starts the
-    /// item over with its words through 1.5 s sent, and 1 s cut, so at least 0.5 s kept was sent.
-    @Test(.timeLimit(.minutes(1))) func theSocketsEventSaysHowMuchKeptAudioWasSentAlready() async throws {
-        let words = (0..<10).map { Transcript.Word(text: " w\($0 + 1)", time: Double($0) / 2...Double($0 + 1) / 2, confidence: 1.0) }
-        let running = try await Running.start(.ready(Stub(.success(Transcript(words: words)))), limits: ServedLimits(uploads: 1, sockets: 1, audio: 4))
-        defer { running.server.stop() }
-        var client = Client(running)
-        try await client.append(seconds: 1.7)
-        var heard = ""
-        while !heard.contains("w3") {
-            heard += try #require(try await client.until("conversation.item.input_audio_transcription.delta")["delta"] as? String)
-        }
-        try await client.append(seconds: 0.4)
-        try await client.send(["type": "input_audio_buffer.commit"])
-        _ = try await client.until("conversation.item.input_audio_transcription.completed")
-        client.task.cancel(with: .normalClosure, reason: nil)
-        let realtime = try #require(try await running.nextEvent().realtime)
-        #expect(realtime.itemsLetGo == 1 && realtime.replayedSeconds >= 0.5 - 0.01 && realtime.replayedSeconds <= 1 + 0.01)
     }
 
     /// The newest bytes are kept oldest first, whether they arrive in one append or wrap
