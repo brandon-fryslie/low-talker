@@ -14,6 +14,8 @@ on:
 
 permissions:
   contents: write
+  # To find and wait for model-cache.yml's run on the tagged commit.
+  actions: read
 
 # A second run for the same tag waits instead of cancelling one partway through notarizing.
 concurrency:
@@ -101,8 +103,42 @@ jobs:
           echo "cli=$cli" >> "$GITHUB_OUTPUT"
           echo "default=$model" >> "$GITHUB_OUTPUT"
 
-      # No cache: a run for one tag cannot restore a cache saved by a run for another.
-      - name: Fetch the model
+      # [LAW:no-ambient-temporal-coupling] The tag usually follows its commit's push to master
+      # by seconds, and that push's model-cache.yml run may still be saving. What the restore
+      # needs is the entry, so the release waits until master holds it, or until no
+      # model-cache.yml run is left that could save it, or 40 minutes. Either of the last two,
+      # or a GitHub API that keeps failing, leaves the fill below to fetch the whole model.
+      - name: Wait for the model cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEY: model-store-${{ steps.model.outputs.default }}
+        run: |
+          set -uo pipefail
+          # shellcheck disable=SC2016 # $ENV is jq's, not the shell's
+          saved() { [ "$(gh cache list --ref refs/heads/master --key "$KEY" --json key --jq 'map(select(.key == $ENV.KEY)) | length')" = 1 ]; }
+          idle() { [ "$(gh run list --workflow model-cache.yml --json status --jq 'map(select(.status != "completed")) | length')" = 0 ]; }
+          deadline=$((SECONDS + 2400))
+          until saved; do
+            if idle || [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::warning::master's cache holds no $KEY; the model comes from huggingface.co"
+              exit 0
+            fi
+            sleep 30
+          done
+
+      # Saved by model-cache.yml on master; a run for a tag cannot restore another tag's save,
+      # so this one saves nothing.
+      - name: Restore the model store
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/model-store
+          key: model-store-${{ steps.model.outputs.default }}
+
+      # [LAW:dataflow-not-control-flow] Run whether the cache hit or not: it fetches from
+      # huggingface.co whatever the store's manifests find missing or of the wrong size, so a
+      # hit fetches nothing and a miss fetches the whole model. Nothing here hashes contents.
+      - name: Fill the model store
         env:
           CLI: ${{ steps.model.outputs.cli }}
         run: '"$CLI" model download --models-dir "$RUNNER_TEMP/model-store"'
@@ -123,6 +159,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           MODEL: ${{ steps.model.outputs.default }}
+          CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
         run: |
           set -euo pipefail
           git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
@@ -136,7 +173,7 @@ jobs:
           {
             echo "## $TAG"
             echo
-            echo "Model: \`$MODEL\`"
+            echo "Model: \`$MODEL\` (cache hit: ${CACHE_HIT:-false})"
             echo
             echo '```'
             shasum -a 256 "${pkgs[@]}"
