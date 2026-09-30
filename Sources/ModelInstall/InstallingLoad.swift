@@ -11,14 +11,15 @@ extension WhisperKitTranscriber {
         _ model: ModelName = .default,
         in store: ModelStore,
         from source: ModelSource,
+        turns: EngineTurns,
         phase: @escaping @Sendable (InstallingLoadPhase) -> Void
     ) async throws -> WhisperKitTranscriber {
         let installed = try await store.install(model, from: source) { phase(.installing($0)) }
         phase(.loading)
-        return try await WhisperKitTranscriber(installed)
+        return try await WhisperKitTranscriber(installed, turns: turns)
     }
 
-    /// What `load(_:in:from:phase:)` is doing now: the install's phases, then the load's
+    /// What `load(_:in:from:turns:phase:)` is doing now: the install's phases, then the load's
     /// one. There is no "ready" case: the returned transcriber is that state.
     public enum InstallingLoadPhase: Equatable, Sendable, CustomStringConvertible {
         case installing(ModelStore.InstallPhase)

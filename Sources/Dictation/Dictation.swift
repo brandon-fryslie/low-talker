@@ -39,6 +39,8 @@ public final class Dictation {
         public let transcript: Transcript
         /// From the key coming up to the transcript, the engine's share of the wait.
         public let keyUpToTranscript: Duration
+        /// What the press's hold put off of the engine's served callers.
+        public let displaced: EngineHold.Displaced
         public let performed: [Executor.Performed]
 
         /// The session in numbers, without the words: they are what the user
@@ -52,22 +54,23 @@ public final class Dictation {
         public var description: String {
             let into = Set(performed.map(\.into)).map(\.rawValue).sorted().joined(separator: ", ")
             let destination = into.isEmpty ? "" : " into \(into)"
-            return "heard \(transcript.words.count) words \(Int(keyUpToTranscript / .milliseconds(1))) ms after key-up, \(performed.count) actions\(destination)"
+            return "heard \(transcript.words.count) words \(Int(keyUpToTranscript / .milliseconds(1))) ms after key-up (\(displaced)), \(performed.count) actions\(destination)"
         }
     }
 
     /// What key-down left for key-up: the marks on the ring and the app in front, or
-    /// the reason there was nothing to insert into. [LAW:types-are-the-program] One
-    /// value rather than an optional session beside an optional app, so an end can
-    /// never find half a beginning.
+    /// the reason there was nothing to insert into, and either way the engine's hold.
+    /// [LAW:types-are-the-program] One value rather than an optional session beside an
+    /// optional app, so an end can never find half a beginning.
     private enum Press {
         case up
-        case down(AudioSession, into: BundleID)
-        case refused(any Error)
+        case down(AudioSession, into: BundleID, EngineHold)
+        case refused(any Error, EngineHold)
     }
 
     private let capture: AudioCapture
     private let transcriber: @Sendable @MainActor () async throws -> any Transcriber
+    private let turns: EngineTurns
     private let router: Router
     private let executor: Executor
     private let frontmost: @Sendable @MainActor () throws -> BundleID
@@ -77,11 +80,14 @@ public final class Dictation {
 
     /// `transcriber` is awaited per session, so a press that comes while the model is
     /// still loading waits for it and inserts when it lands: loading is not a state
-    /// this loop has. [LAW:dataflow-not-control-flow] `report` hears every session's
+    /// this loop has. `turns` is the engine's owner, which every press holds from key-down
+    /// until its transcript is out, so served callers wait for the speaker rather than the
+    /// speaker for them. [LAW:dataflow-not-control-flow] `report` hears every session's
     /// outcome on the main actor, in the order the presses came.
     public init(
         capture: AudioCapture,
         transcriber: @escaping @Sendable @MainActor () async throws -> any Transcriber,
+        turns: EngineTurns,
         router: Router,
         executor: Executor,
         frontmost: @escaping @Sendable @MainActor () throws -> BundleID = TargetApp.frontmost,
@@ -89,6 +95,7 @@ public final class Dictation {
     ) {
         self.capture = capture
         self.transcriber = transcriber
+        self.turns = turns
         self.router = router
         self.executor = executor
         self.frontmost = frontmost
@@ -102,6 +109,10 @@ public final class Dictation {
         switch transition {
         case .began(_, let moment):
             guard case .up = press else { preconditionFailure("a press began while one was open; the detector pairs every began with an ended") }
+            // First, so a served decode in flight is cancelled before the microphone opens,
+            // and taken by every press, refused or not: each press releases its hold by the
+            // one path its session ends on. [LAW:dataflow-not-control-flow]
+            let hold = turns.hold()
             do {
                 // The app in front before the microphone, so a reading that throws cannot
                 // leave a microphone open with no session to close it; it is one read of
@@ -111,9 +122,9 @@ public final class Dictation {
                 // marks the ring where the key went down. What it reaches
                 // back over is the resting mode's to say: nothing behind a microphone that
                 // opens here, and the look-back behind one held open since `start()`.
-                press = .down(try capture.beginSession(at: moment), into: into)
+                press = .down(try capture.beginSession(at: moment), into: into, hold)
             } catch {
-                press = .refused(error)
+                press = .refused(error, hold)
             }
         case .ended(let chord, let ending):
             let keyUp = ContinuousClock.now
@@ -125,12 +136,15 @@ public final class Dictation {
             // is what makes it wait its turn instead of overtaking a session still
             // being inserted. [LAW:dataflow-not-control-flow]
             let heard: Result<(AudioClip, Context), any Error>
+            let hold: EngineHold
             switch open {
             case .up:
                 preconditionFailure("a press ended that never began; the detector pairs every ended with a began")
-            case .refused(let error):
+            case .refused(let error, let held):
                 heard = .failure(error)
-            case .down(let session, let into):
+                hold = held
+            case .down(let session, let into, let held):
+                hold = held
                 // The marks are closed and the microphone with them, however the press
                 // ended, so a session left open cannot carry its beginning into the next
                 // press's clip and cannot leave the device held after the key came up.
@@ -161,8 +175,7 @@ public final class Dictation {
                 try sessions.submit { [report] in
                     let outcome: Result<Session, any Error>
                     do {
-                        let (clip, context) = try heard.get()
-                        outcome = .success(try await self.hear(clip, in: context, since: keyUp))
+                        outcome = .success(try await self.hear(heard, since: keyUp, releasing: hold))
                     } catch {
                         outcome = .failure(error)
                     }
@@ -186,13 +199,22 @@ public final class Dictation {
         try await sessions.drain()
     }
 
-    private func hear(_ clip: AudioClip, in context: Context, since keyUp: ContinuousClock.Instant) async throws -> Session {
-        let engine = try await transcriber()
-        let transcript = try await engine.transcribe(clip, expecting: .empty)
+    private func hear(_ heard: Result<(AudioClip, Context), any Error>, since keyUp: ContinuousClock.Instant, releasing hold: EngineHold) async throws -> Session {
+        let transcribed: Result<(Context, Transcript), any Error>
+        do {
+            let (clip, context) = try heard.get()
+            transcribed = .success((context, try await transcriber().transcribe(clip, expecting: .empty)))
+        } catch {
+            transcribed = .failure(error)
+        }
+        // The hold ends with its transcript, whatever became of it: the insert that follows
+        // is not the engine's, and served callers wait for this press and no longer.
+        let displaced = hold.release()
+        let (context, transcript) = try transcribed.get()
         let keyUpToTranscript = ContinuousClock.now - keyUp
         let actions = router.actions(for: transcript, in: context)
         let performed = try await executor.perform(actions, since: keyUp)
-        return Session(context: context, transcript: transcript, keyUpToTranscript: keyUpToTranscript, performed: performed)
+        return Session(context: context, transcript: transcript, keyUpToTranscript: keyUpToTranscript, displaced: displaced, performed: performed)
     }
 }
 

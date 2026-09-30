@@ -30,6 +30,7 @@ final class Rig {
     /// name the moment a key went down in the middle of speech already spoken.
     private(set) var now = Rig.origin
     let inputMethod = FakeInputMethod()
+    let turns = EngineTurns()
     let dictation: Dictation
     private let reports: AsyncStream<Result<Dictation.Session, any Error>>
     /// Raised by the first outcome to be reported. The stream says what the next report
@@ -54,6 +55,7 @@ final class Rig {
         dictation = Dictation(
             capture: capture,
             transcriber: transcriber,
+            turns: turns,
             router: router,
             executor: Executor(insertingThrough: inputMethod),
             frontmost: frontmost,
@@ -220,6 +222,32 @@ extension Result {
         gate.open()
         _ = try await rig.session()
         #expect(rig.inputMethod.inserted == ["a"])
+    }
+
+    /// A press holds the engine from key-down, before anything is heard, until its
+    /// transcript is out, and lets go of it before the insert: served callers wait for the
+    /// speaker and no longer. A refused press takes and lets go of it the same way.
+    @Test func aPressHoldsTheEngineFromKeyDownUntilItsTranscriptIsOut() async throws {
+        let gate = Gate()
+        let rig = try Rig(hearing: FakeTranscriber { _ in await gate.wait(); return Transcript(typed: "a") })
+        rig.inputMethod.hold()
+        rig.dictation.press(.began(Rig.rightOption, at: rig.now))
+        #expect(rig.turns.reading.holds == 1)
+        rig.speak([1, 2, 3])
+        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { gate.waiting == 1 })
+        #expect(rig.turns.reading.holds == 1)
+        gate.open()
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.inputMethod.holding == 1 })
+        #expect(rig.turns.reading.holds == 0)
+        rig.inputMethod.letGo()
+        let displaced = try await rig.session().displaced
+        #expect(!displaced.cancelled && displaced.waiting == 0)
+
+        rig.hardware.failingToLaunch = BadBuffer()
+        rig.refusedHold()
+        #expect(await rig.report().failure is NoMicrophone)
+        #expect(rig.turns.reading.holds == 0)
     }
 
     /// Two presses insert in the order they were spoken: the second is not heard until

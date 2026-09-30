@@ -28,7 +28,7 @@ struct TranscribeCommand: AsyncParsableCommand {
         let reporter = PhaseReporter()
 
         let loadStart = clock.now
-        let transcriber = try await WhisperKitTranscriber.load(options.model, in: options.store(), from: source.source, phase: reporter.report)
+        let transcriber = try await WhisperKitTranscriber.load(options.model, in: options.store(), from: source.source, turns: EngineTurns(), phase: reporter.report)
         let loaded = clock.now
 
         let transcript = try await transcriber.transcribe(clip, expecting: expected.vocabulary)

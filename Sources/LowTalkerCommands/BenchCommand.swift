@@ -33,6 +33,9 @@ struct BenchCommand: AsyncParsableCommand {
     @Option(name: .customLong("delivery"), help: "How a hold's audio reaches the engine: batch (the whole clip at key-up) or streamed (a microphone buffer at a time). Repeat for both.")
     var arrivals: [LatencyHarness.Arrival] = LatencyHarness.Arrival.allCases
 
+    @Option(name: .customLong("load"), help: "What else asks the engine during each hold: idle (nothing) or served (a 40 s upload decoding at key-down, another arriving mid-hold, and a stream throughout). Repeat for both.")
+    var loads: [LatencyHarness.Load] = [.idle]
+
     @Option(help: "How many times to hold each fixture, per delivery. The first hold after a load is reported apart from the median.")
     var runs: Int = 3
 
@@ -52,11 +55,13 @@ struct BenchCommand: AsyncParsableCommand {
         for model in models {
             let reporter = PhaseReporter()
             print("model \(model)", to: &stderr)
-            let report = try await LatencyHarness.measure(fixtures, arrivals: arrivals, reruns: UInt(runs - 1), expecting: expected.vocabulary) {
-                try await WhisperKitTranscriber.load(model, in: store, from: source.source, phase: reporter.report)
+            let report = try await LatencyHarness.measure(fixtures, arrivals: arrivals, loads: loads, reruns: UInt(runs - 1), expecting: expected.vocabulary) {
+                let turns = EngineTurns()
+                let engine = try await WhisperKitTranscriber.load(model, in: store, from: source.source, turns: turns, phase: reporter.report)
+                return LatencyHarness.Engine(dictation: engine, served: engine.served, turns: turns)
             }
             for result in report.fixtures {
-                print("  \(result.name) \(result.arrival.rawValue): heard \"\(result.transcript.text)\", \(result.wordErrorRate)", to: &stderr)
+                print("  \(result.name) \(result.arrival.rawValue) \(result.load.rawValue): heard \"\(result.transcript.text)\", \(result.wordErrorRate)", to: &stderr)
                 let row = Self.row(model: model, load: report.load, result: result)
                 // [LAW:one-source-of-truth] The header is the first row's names, so a
                 // column cannot be titled one thing and filled with another.
@@ -77,6 +82,7 @@ struct BenchCommand: AsyncParsableCommand {
             ("model", model.description),
             ("fixture", result.name),
             ("delivery", result.arrival.rawValue),
+            ("load", result.load.rawValue),
             ("audio_s", fixed(result.audio, places: 3)),
             ("load_s", load.seconds),
             ("first_s", result.first.keyUpToTranscript.seconds),
@@ -87,6 +93,9 @@ struct BenchCommand: AsyncParsableCommand {
             ("dropped", String(wer.deletions)),
             ("added", String(wer.insertions)),
             ("reference_words", String(wer.referenceCount)),
+            ("served_cancelled", String(result.served.cancelled)),
+            ("served_deferred", String(result.served.deferred)),
+            ("served_changed", String(result.served.changed)),
         ]
     }
 }
@@ -94,3 +103,4 @@ struct BenchCommand: AsyncParsableCommand {
 /// [LAW:parse-dont-validate] `--delivery` is parsed into a case at the command line,
 /// so a spelling that is neither is refused before any hold is simulated.
 extension LatencyHarness.Arrival: ExpressibleByArgument {}
+extension LatencyHarness.Load: ExpressibleByArgument {}

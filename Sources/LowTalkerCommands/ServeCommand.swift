@@ -49,8 +49,8 @@ struct ServeCommand: AsyncParsableCommand {
             engine: { resident.withLock { $0 } },
             record: { line($0.json) }
         )
-        let transcriber = try await WhisperKitTranscriber.load(options.model, in: options.store(), from: source.source, phase: PhaseReporter().report)
-        resident.withLock { $0 = .ready(transcriber) }
+        let transcriber = try await WhisperKitTranscriber.load(options.model, in: options.store(), from: source.source, turns: EngineTurns(), phase: PhaseReporter().report)
+        resident.withLock { $0 = .ready(transcriber.served) }
         // The URL is the readiness signal a client waits for; one given it early is refused
         // with 503 until the model is resident.
         line(server.baseURL)

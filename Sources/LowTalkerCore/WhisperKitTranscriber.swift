@@ -4,19 +4,34 @@ import WhisperKit
 /// Whisper on the Neural Engine through WhisperKit.
 ///
 /// [LAW:no-shared-mutable-globals] WhisperKit's pipeline is a mutable class that must
-/// not be re-entered mid-decode. Every decode goes through one SerialQueue, so calls
-/// queue rather than overlap, and nothing else can reach the pipeline.
-public final class WhisperKitTranscriber: Transcriber {
+/// not be re-entered mid-decode. Every decode goes through the `EngineTurns` it was loaded
+/// with, which runs them one at a time and decides whose goes next, and nothing else can
+/// reach the pipeline.
+///
+/// [LAW:one-type-per-behavior] Dictation and the server hear through the same engine; what
+/// differs is only who is asking, so `served` is this value with its caller changed.
+public struct WhisperKitTranscriber: Transcriber {
     public let model: ModelName
     private let pipeline: Pipeline
-    private let decodes = SerialQueue()
+    private let turns: EngineTurns
+    private var caller: EngineTurns.Caller
 
     /// Loads an installed model onto the compute units, its weights from disk alone.
     /// Returns only once the model is resident, so the first `transcribe` pays no
-    /// load cost.
-    public init(_ installed: InstalledModel) async throws {
+    /// load cost. It hears for dictation; `served` is the same engine for the server.
+    public init(_ installed: InstalledModel, turns: EngineTurns) async throws {
         model = installed.model
         pipeline = try await Pipeline(installed: installed)
+        self.turns = turns
+        caller = .dictation
+    }
+
+    /// The same engine, hearing for callers the server answers: its decodes give way to
+    /// every hold `turns` is given.
+    public var served: WhisperKitTranscriber {
+        var served = self
+        served.caller = .served
+        return served
     }
 
     /// Loads a model a store already holds, verified in place and never written to: the
@@ -27,11 +42,12 @@ public final class WhisperKitTranscriber: Transcriber {
     public static func loadInPlace(
         _ model: ModelName = .default,
         in store: ModelStore,
+        turns: EngineTurns,
         phase: @escaping @Sendable (LoadPhase) -> Void
     ) async throws -> WhisperKitTranscriber {
         let installed = try store.installedModel(model)
         phase(.loading)
-        return try await WhisperKitTranscriber(installed)
+        return try await WhisperKitTranscriber(installed, turns: turns)
     }
 
     /// What a load is doing right now. One step, because a store this module loads is
@@ -66,17 +82,17 @@ public final class WhisperKitTranscriber: Transcriber {
         // The vocabulary is encoded once and refused, if it must be, before any
         // audio is taken in, so a hold never gets as far as the gate with a prompt
         // the engine cannot carry.
-        let prompt = try await decodes.run { try pipeline.prompt(for: vocabulary) }
+        let prompt = try await turns.decode(as: caller) { try pipeline.prompt(for: vocabulary) }
         // [LAW:composability] The passes are Hearing's to run; this engine is one
         // decode of what a pass asks for, and its floor and prefix length are the
         // facts it hands over.
         return try await Hearing.transcribe(audio, margin: Pipeline.margin, context: Pipeline.contextWords, pass: { pass in
-            try await decodes.run { try await pipeline.hear(pass.samples, from: pass.cut, saying: pass.saying, told: prompt) }
+            try await turns.decode(as: caller) { try await pipeline.hear(pass.samples, from: pass.cut, saying: pass.saying, told: prompt) }
         }, partial: partial)
     }
 
     /// The loaded WhisperKit pipeline. `@unchecked Sendable` because WhisperKit is a
-    /// mutable class the compiler cannot vouch for; the SerialQueue is what keeps
+    /// mutable class the compiler cannot vouch for; `EngineTurns` is what keeps
     /// every decode alone with it. Internal, not private, so the tests can reach the
     /// windowing arithmetic without a model.
     struct Pipeline: @unchecked Sendable {
