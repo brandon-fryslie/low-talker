@@ -328,7 +328,7 @@ private struct Answering: Sendable {
                 throw APIError.notFound(method: head.method, path: head.path)
             }
         } catch let refusal as APIError {
-            event.error = refusal.code
+            event.refused(refusal)
             return .http(refusal.response)
         }
     }
@@ -368,14 +368,9 @@ private struct Answering: Sendable {
         }
         // Taken before the body is read, since reading it is the first thing an upload holds,
         // and held until the response holding its transcript is built.
-        do {
-            return try await uploads.admitted { held in
-                event.uploads = held
-                return try await upload(head, length, transcriber, connection, &reader, &event)
-            }
-        } catch APIError.busy(let limit) {
-            event.uploads = limit
-            throw APIError.busy(uploads: limit)
+        return try await uploads.admitted { held in
+            event.uploads = held
+            return try await upload(head, length, transcriber, connection, &reader, &event)
         }
     }
 
@@ -494,6 +489,19 @@ extension NWConnection {
 /// Everything known about one connection's request once it has been answered or lost: the
 /// server's one event per unit of work. [LAW:nothing-unseen] A field is nil when the request
 /// failed before it could be known, so how far a request got is read off which are set.
+extension ServedRequest {
+    /// A refusal's code, and what it measured on the way to refusing.
+    /// [LAW:single-enforcer] The one place a refusal's facts become the event's.
+    mutating func refused(_ refusal: APIError) {
+        error = refusal.code
+        switch refusal {
+        case .busy(let limit): uploads = limit
+        case .audioTooLong(let seconds, _): audioSeconds = seconds
+        default: break
+        }
+    }
+}
+
 public struct ServedRequest: Sendable, Codable, Equatable {
     public internal(set) var method: String?
     public internal(set) var path: String?

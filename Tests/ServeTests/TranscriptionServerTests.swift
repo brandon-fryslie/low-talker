@@ -159,7 +159,9 @@ import TestProbes
         #expect(try error(body)["param"] as? String == "file")
         #expect(stub.heard.withLock { $0.isEmpty })
         let event = try await running.nextEvent()
-        #expect(event.error == "audio_too_long" && event.audioSeconds == nil)
+        // The length its header gave, which is what refused it.
+        let claimed = try #require(event.audioSeconds)
+        #expect(event.error == "audio_too_long" && abs(claimed - 2.2585) < 0.01)
     }
 
     /// A header whose rate gives its audio no length (0 Hz, which AVAudioConverter takes) is
