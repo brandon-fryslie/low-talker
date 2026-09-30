@@ -15,7 +15,7 @@ on:
 permissions:
   contents: write
 
-# Never cancelled: a cancelled run can leave a submission with the notary service.
+# A second run for the same tag waits instead of cancelling one partway through notarizing.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -23,7 +23,8 @@ concurrency:
 jobs:
   release:
     name: Build, notarize and publish
-    runs-on: macos-15
+    # macos-26's default Xcode is the one a release made on a Mac builds with; macos-15's is not.
+    runs-on: macos-26
     timeout-minutes: 120
     env:
       NOTARY_PROFILE: release
@@ -32,21 +33,24 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # scripts/release checks the tagged commit is on master, which needs its history.
+          fetch-depth: 0
 
       - name: Install xcodegen
         run: brew install xcodegen
 
-      # One keychain for the run, with a password this job knows, as in ci.yml: it holds the
-      # dev identity, the Developer ID identities and the notary profile, and dies with the VM.
+      # scripts/notarize requires Gatekeeper to call each package notarized, which it cannot
+      # on a runner whose assessments are off; asked here rather than after notarizing.
+      - name: Check Gatekeeper assesses
+        run: |
+          status=$(spctl --status)
+          [ "$status" = "assessments enabled" ] || { echo "Gatekeeper: $status" >&2; exit 1; }
+
+      # One keychain for the run: it holds the dev identity, the Developer ID identities and
+      # the notary profile.
       - name: Create an unlocked default keychain
         run: |
-          set -euo pipefail
-          keychain="$RUNNER_TEMP/release.keychain-db"
-          security create-keychain -p release "$keychain"
-          security set-keychain-settings "$keychain"
-          security unlock-keychain -p release "$keychain"
-          security default-keychain -s "$keychain"
-          security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
+          keychain=$(scripts/runner-keychain release)
           echo "RELEASE_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
 
       # `make cli` signs the CLI with it, as on any Mac, and the release runs the CLI.
@@ -87,7 +91,7 @@ jobs:
           rm "$key"
 
       # [LAW:one-source-of-truth] The model the release carries is the one the CLI built from
-      # this tag names as its default; the cache is keyed by it and names none itself.
+      # this tag names as its default.
       - name: Name the default model
         id: model
         run: |
@@ -97,17 +101,8 @@ jobs:
           echo "cli=$cli" >> "$GITHUB_OUTPUT"
           echo "default=$model" >> "$GITHUB_OUTPUT"
 
-      - name: Restore the model store
-        id: cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/model-store
-          key: model-store-${{ steps.model.outputs.default }}
-
-      # [LAW:dataflow-not-control-flow] Run whether the cache hit or not: it verifies what the
-      # store holds and fetches from huggingface.co only what is missing or damaged, so a hit
-      # fetches nothing and a miss fetches the whole model.
-      - name: Fill the model store
+      # No cache: a run for one tag cannot restore a cache saved by a run for another.
+      - name: Fetch the model
         env:
           CLI: ${{ steps.model.outputs.cli }}
         run: '"$CLI" model download --models-dir "$RUNNER_TEMP/model-store"'
@@ -128,7 +123,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           MODEL: ${{ steps.model.outputs.default }}
-          CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
         run: |
           set -euo pipefail
           git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
@@ -142,7 +136,7 @@ jobs:
           {
             echo "## $TAG"
             echo
-            echo "Model: \`$MODEL\` (cache hit: ${CACHE_HIT:-false})"
+            echo "Model: \`$MODEL\`"
             echo
             echo '```'
             shasum -a 256 "${pkgs[@]}"

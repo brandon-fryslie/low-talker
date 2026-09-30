@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Makes an unlocked keychain the default on a GitHub runner, and prints its path.
+#
+#   scripts/runner-keychain <name>
+#
+# `make signing-identity` imports into the default keychain, and codesign finds identities
+# through the keychain search list. The runner's login keychain has a password no job knows,
+# so it cannot be unlocked or given a key partition list; a keychain made here, with its name
+# as its password, can. The password protects nothing: the keychain dies with the VM.
+# [LAW:dataflow-not-control-flow] The signing scripts are unchanged; only which keychain is
+# "default" differs between a developer's Mac and a runner.
+set -euo pipefail
+
+name=${1:?usage: scripts/runner-keychain <name>}
+keychain="${RUNNER_TEMP:?RUNNER_TEMP is set on a GitHub runner}/$name.keychain-db"
+security create-keychain -p "$name" "$keychain"
+security set-keychain-settings "$keychain"
+security unlock-keychain -p "$name" "$keychain"
+security default-keychain -s "$keychain"
+security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
+echo "$keychain"
