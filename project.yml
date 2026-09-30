@@ -100,6 +100,10 @@ targetTemplates:
         product: Insertion
       - package: low-talker
         product: InputSource
+      # The transcription server, which only the network build switches on: see
+      # ServerSwitch.ifEntitled.
+      - package: low-talker
+        product: Serve
       # The input method bundle, built beside the app and not inside it: the installer
       # package puts it in /Library/Input Methods, the one place the text input system lists
       # it from that an app under App Sandbox does not write to. It is a bundle of its own

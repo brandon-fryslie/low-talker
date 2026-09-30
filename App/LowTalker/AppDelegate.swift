@@ -7,6 +7,7 @@ import InputSource
 import Insertion
 import LowTalkerCore
 import Onboarding
+import Serve
 import Signals
 import os
 
@@ -121,6 +122,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// when the initializer has returned. Lazy so that it can name `loadEngine`, which
     /// reports to this delegate's menu; touching it is what starts the load.
     private lazy var engine: Task<WhisperKitTranscriber, any Error> = Task { try await loadEngine() }
+
+    /// The transcription server, answering with `engine` once it is resident, so a caller is
+    /// heard by the model dictation already holds and never a second copy of it. Nil in the
+    /// offline build, which cannot accept a connection and so shows nothing about serving.
+    private lazy var serving = ServerSwitch.ifEntitled(flavor: Self.flavor)
 
     // MARK: - the loop
 
@@ -337,6 +343,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// Only in the menu of a build that has a server to switch.
+    @objc private func toggleServing() {
+        serving.map { $0.choose(!$0.chosen, at: config.map(\.serve)) }
+    }
+
     @objc private func openSetUp() {
         setUp.show()
     }
@@ -370,6 +381,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         show(.preparing(nil, since: launched))
         statusItem.isVisible = true
         _ = engine
+        // Listening from launch when the person last chose to, answering 503 until the model
+        // is resident, so a client started beside the app is told to wait rather than refused.
+        serving?.resume(at: config.map(\.serve))
         showHotkeyStatus("starting…")
         Task { await listen() }
     }
@@ -537,12 +551,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let carried = ModelStore.carried(by: .main) else { throw BundleCarriesNoModel() }
             let transcriber = try await WhisperKitTranscriber.loadInPlace(in: carried, phase: report)
             show(.ready(transcriber.model, after: launched.duration(to: .now)))
+            serving?.answer(with: .ready(transcriber))
             return transcriber
         } catch {
             // [LAW:no-silent-failure] A model that failed to load is the one thing the
             // menu must say, since every session after this would otherwise fail
             // with no explanation on screen.
             show(.failed("\(error)"))
+            serving?.answer(with: .failed("the model failed to load: \(error)"))
             throw error
         }
     }
@@ -629,6 +645,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(readout("Whisper model: \(engineReadiness.readout(at: .now))"))
         // A press made during the wait is not lost, and nothing else on screen says so.
         if case .preparing = engineReadiness { menu.addItem(readout("A press now is heard once the model is ready")) }
+        // Beside the model it answers with. [LAW:dataflow-not-control-flow] The offline build
+        // has no switch, so no line.
+        serving.map { menu.addItem(readout("Server: \($0.state)")) }
         menu.addItem(readout("Microphone: \(microphone)"))
         menu.addItem(readout("Hotkey: \(hotkeyStatus)"))
         for reason in unheard { menu.addItem(readout("    Not heard now: \(reason)")) }
@@ -646,6 +665,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let left = readiness.unmet.count
         let stepsLeft = left == 0 ? "" : " (\(left) left)"
         menu.addItem(withTitle: "\(GuidedSetup.title(for: Self.flavor))\(stepsLeft)", action: #selector(openSetUp), keyEquivalent: "")
+        serving.map { serving in
+            let item = menu.addItem(withTitle: "Serve Transcription", action: #selector(toggleServing), keyEquivalent: "")
+            item.state = serving.chosen ? .on : .off
+        }
         menu.addItem(.separator())
         menu.addItem(withTitle: "Acknowledgements", action: #selector(openNotices), keyEquivalent: "")
         menu.addItem(withTitle: "Quit \(Self.flavor.displayName)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
