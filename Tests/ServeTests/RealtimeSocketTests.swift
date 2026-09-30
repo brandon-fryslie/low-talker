@@ -154,30 +154,29 @@ private func update(_ input: [String: Any]) -> [String: Any] {
         #expect(realtime.refusals == ["input_audio_buffer_commit_empty": 1] && realtime.refusedAudioSeconds == nil)
     }
 
-    /// An append that would take what the socket holds past the limit is refused whole and
-    /// the item keeps what it had: committed, it is heard with exactly the limit less the
-    /// second the item itself counts for, and once it is heard the next item has it again.
-    @Test func anAppendPastTheAudioLimitIsRefusedAndTheItemKeepsWhatItHad() async throws {
+    /// A client that appends for longer than the limit without a commit, as Pipecat does
+    /// through silence between turns, is never refused: the open item starts over from its
+    /// newest audio each time it outgrows its share, so the socket never holds more than the
+    /// limit, and the item committed at last is heard with no more than its share.
+    /// Limit 4 s: a share of 2 s, of which 1 s is kept, so 10 s uncommitted lets go 1 s eight times.
+    @Test func appendingPastTheLimitWithoutACommitStartsTheItemOverAndIsNeverRefused() async throws {
         let stub = Stub()
-        let running = try await Running.start(.ready(stub), limits: ServedLimits(uploads: 1, sockets: 1, audio: 2))
+        let running = try await Running.start(.ready(stub), limits: ServedLimits(uploads: 1, sockets: 1, audio: 4))
         defer { running.server.stop() }
         var client = Client(running)
-        try await client.append(seconds: 1.2)
-        let refusal = try #require(try await client.until("error")["error"] as? [String: Any])
-        #expect(refusal["code"] as? String == "audio_too_long")
-        #expect(refusal["param"] as? String == "audio")
+        try await client.append(seconds: 10)
         try await client.send(["type": "input_audio_buffer.commit"])
-        _ = try await client.until("conversation.item.input_audio_transcription.completed")
-        try await client.append(seconds: 0.5)
-        try await client.send(["type": "input_audio_buffer.commit"])
-        _ = try await client.until("conversation.item.input_audio_transcription.completed")
+        let committed = try #require(try await client.until("input_audio_buffer.committed")["item_id"] as? String)
+        let completed = try await client.until("conversation.item.input_audio_transcription.completed")
+        #expect(completed["item_id"] as? String == committed)
         client.task.cancel(with: .normalClosure, reason: nil)
         let heard = stub.heard.withLock { $0.map(\.seconds) }
-        #expect(heard.count == 2 && abs(heard[0] - 1) < 0.01 && abs(heard[1] - 0.5) < 0.01)
+        #expect(heard.count == 9 && heard.allSatisfy { abs($0 - 2) < 0.01 })
         let realtime = try #require(try await running.nextEvent().realtime)
-        #expect(realtime.appends == 17 && realtime.refusals == ["audio_too_long": 2] && realtime.items == 2)
-        #expect(abs(try #require(realtime.refusedAudioSeconds) - 2.1) < 0.01)
-        #expect(realtime.sent.errors == 2)
+        #expect(realtime.appends == 100 && realtime.refusals.isEmpty && realtime.sent.errors == 0)
+        #expect(realtime.items == 9 && realtime.itemsLetGo == 8 && abs(realtime.letGoAudioSeconds - 8) < 0.01)
+        #expect(realtime.sent.completed == 1 && abs(realtime.audioSeconds - 2) < 0.01)
+        #expect(realtime.heldAudioSeconds <= 4 && realtime.heldItems == 1)
     }
 
     /// A socket opened while the server holds its limit of them is refused with a 429 before
