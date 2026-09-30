@@ -54,6 +54,9 @@ public enum AudioClipError: Error, CustomStringConvertible {
     case unwritable(URL, underlying: any Error)
     /// More frames than a single AVFoundation buffer can hold.
     case tooLong(frames: Int64)
+    /// The header's length and rate give no count of pipeline samples: a rate of 0 Hz, which
+    /// AVAudioConverter takes, or a length past what a clip can count.
+    case unmeasurable(frames: Int64, sampleRate: Double)
     /// The file ran out of audio before the length its header declares.
     case truncated(URL, read: Int64, declared: Int64)
     /// The file holds more audio than the reader was told to take.
@@ -73,6 +76,8 @@ public enum AudioClipError: Error, CustomStringConvertible {
             "cannot write audio file \(url.path): \(underlying)"
         case .tooLong(let frames):
             "\(frames) frames; a single audio buffer holds at most \(AVAudioFrameCount.max)"
+        case .unmeasurable(let frames, let sampleRate):
+            "\(frames) frames at \(sampleRate) Hz is no length in samples"
         case .truncated(let url, let read, let declared):
             "audio file \(url.path) ends after \(read) of the \(declared) frames it declares"
         case .longerThan(let limit, let seconds):
@@ -109,8 +114,12 @@ extension AudioClip {
         }
         let source = file.processingFormat
         // The length is read off the file's header, so a compressed file that would decode
-        // to hours is refused before any of it is.
-        let seconds = Double(file.length) / source.sampleRate
+        // to hours is refused before any of it is. The rate is the header's say-so too, so the
+        // two become a count here or not at all, and every figure after is that count's.
+        guard let count = Int(exactly: (Double(file.length) * Self.sampleRate / source.sampleRate).rounded()) else {
+            throw AudioClipError.unmeasurable(frames: file.length, sampleRate: source.sampleRate)
+        }
+        let seconds = Self.duration(for: count)
         guard seconds <= longest else { throw AudioClipError.longerThan(longest, seconds: seconds) }
         let converter = try Converter(from: source)
         // A converter's piece at a time, so the file's audio is in memory once, as the clip, and
@@ -123,7 +132,7 @@ extension AudioClip {
         var samples: [Float] = []
         // A piece past the length, for the resampler's tail, so the drain never grows the clip
         // by copying it.
-        samples.reserveCapacity(Self.sampleCount(for: seconds) + Int(Converter.pieceFrames))
+        samples.reserveCapacity(count + Int(Converter.pieceFrames))
         while file.framePosition < file.length {
             do {
                 try file.read(into: chunk)

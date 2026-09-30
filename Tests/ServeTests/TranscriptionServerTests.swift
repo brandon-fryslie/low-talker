@@ -162,6 +162,18 @@ import TestProbes
         #expect(event.error == "audio_too_long" && event.audioSeconds == nil)
     }
 
+    /// A header whose rate gives its audio no length (0 Hz, which AVAudioConverter takes) is
+    /// a 400, not a length the server computes with.
+    @Test func anUploadWhoseRateGivesNoLengthIs400() async throws {
+        let stub = Stub()
+        let running = try await Running.start(.ready(stub))
+        defer { running.server.stop() }
+        let (response, body) = try await running.post([("model", nil, Data("m".utf8)), ("file", "audio.caf", fixture("zero-rate.caf"))])
+        #expect(response.statusCode == 400)
+        #expect(try error(body)["code"] as? String == "invalid_audio")
+        #expect(stub.heard.withLock { $0.isEmpty })
+    }
+
     /// The prompt is the vocabulary a dictation mode would give: one term, as written.
     @Test func promptIsTheVocabulary() async throws {
         let stub = Stub()
