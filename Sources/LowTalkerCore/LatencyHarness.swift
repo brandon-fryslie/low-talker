@@ -13,7 +13,7 @@ import Synchronization
 /// dictation of a session pays it. Every hold tells the engine the same
 /// vocabulary, so a run measures what a mode's vocabulary does to hearing, on
 /// the fixtures that say its terms and on the ones that do not. Every hold also
-/// holds the engine as the app's presses do, and under a served `Load` other callers
+/// holds the engine as the app's presses do, and while `Serving.served` other callers
 /// ask the same engine throughout, so a run measures what serving costs dictation.
 ///
 /// [LAW:effects-at-boundaries] The clock ticks here and nowhere below; scoring is
@@ -47,7 +47,7 @@ public enum LatencyHarness {
 
     /// What else the engine is asked while dictation holds it, which is what a bench run
     /// compares: the same hold with the server idle and with it busy.
-    public enum Load: String, CaseIterable, Sendable {
+    public enum Serving: String, CaseIterable, Sendable {
         /// Nothing but the hold.
         case idle
         /// A served upload of `servedSeconds` decoding when the key goes down, another
@@ -59,6 +59,14 @@ public enum LatencyHarness {
         public static let lead: TimeInterval = 0.5
         /// How long each served upload is.
         public static let servedSeconds: TimeInterval = 40
+
+        /// A served upload: `servedSeconds` of the fixtures' audio end to end, from the
+        /// first again once they run out, so every fixture set asks as much of the engine.
+        public static func upload(of fixtures: [Fixture]) -> AudioClip {
+            let spoken = fixtures.flatMap(\.clip.samples)
+            precondition(!spoken.isEmpty, "a served upload is made of the fixtures' audio, and they have none")
+            return AudioClip(samples: (0..<AudioClip.sampleCount(for: servedSeconds)).map { spoken[$0 % spoken.count] })
+        }
 
         /// The served requests around a hold of `hold` seconds, timed from key-down.
         func requests(_ audio: AudioClip, hold: TimeInterval) -> [ServedRequest] {
@@ -97,7 +105,7 @@ public enum LatencyHarness {
     public static func measure(
         _ fixtures: [Fixture],
         arrivals: [Arrival],
-        loads: [Load],
+        servings: [Serving],
         reruns: UInt,
         expecting vocabulary: Vocabulary,
         load: () async throws -> Engine
@@ -106,17 +114,16 @@ public enum LatencyHarness {
         let loading = clock.now
         let engine = try await load()
         let load = clock.now - loading
-        // Every fixture end to end, as many times over as makes an upload of `servedSeconds`,
-        // and what the served engine makes of it with nothing else asking: the reading every
-        // served upload during a hold must come back with.
-        let servedAudio = AudioClip(samples: Array(repeating: fixtures.flatMap(\.clip.samples), count: Int((Load.servedSeconds / fixtures.map(\.clip.duration).reduce(0, +)).rounded(.up))).flatMap { $0 })
-        let servedReading = loads.contains(.served) ? try await engine.served.transcribe(servedAudio, expecting: .empty).text : ""
+        // The upload, and what the served engine makes of it with nothing else asking: the
+        // reading every served upload during a hold must come back with.
+        let servedAudio = Serving.upload(of: fixtures)
+        let servedReading = servings.contains(.served) ? try await engine.served.transcribe(servedAudio, expecting: .empty).text : ""
         var results: [LatencyReport.FixtureResult] = []
         for fixture in fixtures {
             for arrival in arrivals {
-                for served in loads {
+                for serving in servings {
                     let chunks = fixture.clip.chunks(of: arrival.chunk(of: fixture.clip))
-                    let requests = served.requests(servedAudio, hold: fixture.clip.duration)
+                    let requests = serving.requests(servedAudio, hold: fixture.clip.duration)
                     let before = engine.turns.reading
                     var runs: [LatencyReport.Run] = []
                     var transcript = Transcript(words: [])
@@ -131,15 +138,15 @@ public enum LatencyHarness {
                     results.append(LatencyReport.FixtureResult(
                         name: fixture.name,
                         arrival: arrival,
-                        load: served,
+                        serving: serving,
                         audio: fixture.clip.duration,
                         first: runs[0],
                         later: Array(runs.dropFirst()),
                         transcript: transcript,
                         wordErrorRate: WordErrorRate(reference: fixture.reference, hypothesis: SpokenWords(transcript.text)),
                         served: LatencyReport.Served(
-                            cancelled: after.cancelled - before.cancelled,
-                            deferred: after.deferred - before.deferred,
+                            cancelled: after.tally.cancelled - before.tally.cancelled,
+                            deferred: after.tally.deferred - before.tally.deferred,
                             changed: changed
                         )
                     ))
@@ -171,6 +178,9 @@ public enum LatencyHarness {
                 return request.arrival == .batch ? text : nil
             }
         }
+        // A hold that ends by throwing takes its served callers with it, so none is left
+        // asking the engine behind the next hold; once they have been awaited this is moot.
+        defer { served.forEach { $0.cancel() } }
         try await clock.sleep(until: start)
         let hold = engine.turns.hold()
         let firstText = Mutex<ContinuousClock.Instant?>(nil)
@@ -269,7 +279,7 @@ public struct LatencyReport: Sendable {
     public struct FixtureResult: Sendable {
         public let name: String
         public let arrival: LatencyHarness.Arrival
-        public let load: LatencyHarness.Load
+        public let serving: LatencyHarness.Serving
         /// Seconds of speech in the clip.
         public let audio: Double
         /// The first hold is kept apart from the reruns that follow it.
@@ -280,10 +290,10 @@ public struct LatencyReport: Sendable {
         public let wordErrorRate: WordErrorRate
         public let served: Served
 
-        public init(name: String, arrival: LatencyHarness.Arrival, load: LatencyHarness.Load, audio: Double, first: Run, later: [Run], transcript: Transcript, wordErrorRate: WordErrorRate, served: Served) {
+        public init(name: String, arrival: LatencyHarness.Arrival, serving: LatencyHarness.Serving, audio: Double, first: Run, later: [Run], transcript: Transcript, wordErrorRate: WordErrorRate, served: Served) {
             self.name = name
             self.arrival = arrival
-            self.load = load
+            self.serving = serving
             self.audio = audio
             self.first = first
             self.later = later

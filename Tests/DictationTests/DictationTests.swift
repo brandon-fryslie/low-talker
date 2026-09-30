@@ -242,7 +242,7 @@ extension Result {
         #expect(rig.turns.reading.holds == 0)
         rig.inputMethod.letGo()
         let displaced = try await rig.session().displaced
-        #expect(!displaced.cancelled && displaced.waiting == 0)
+        #expect(!displaced.preempted && displaced.waiting == 0)
 
         rig.hardware.failingToLaunch = BadBuffer()
         rig.refusedHold()

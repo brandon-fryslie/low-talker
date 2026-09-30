@@ -32,11 +32,41 @@ public final class EngineTurns: Sendable {
         public var decoding: Caller?
         /// Decodes waiting their turn.
         public var waiting = 0
-        /// Served decodes cancelled because a hold began, each run again afterwards.
+        public var tally = Tally()
+    }
+
+    /// What served decodes went through because of holds.
+    public struct Tally: Equatable, Sendable, Codable {
+        /// Served decodes a hold cancelled, each run again afterwards.
         public var cancelled = 0
         /// Served decodes that asked while a hold was open and waited for it.
         public var deferred = 0
+
+        public init(cancelled: Int = 0, deferred: Int = 0) {
+            self.cancelled = cancelled
+            self.deferred = deferred
+        }
     }
+
+    /// The tally of one served request's decodes, so the event the server records about the
+    /// request carries what holds did to it. [LAW:nothing-unseen] Bound around a request
+    /// with `EngineTurns.$ledger.withValue`, the way a trace context rides one: this owner
+    /// counts where it decides, and the request reads the count when it is answered.
+    public final class Ledger: Sendable {
+        private let counted = Mutex(Tally())
+
+        public init() {}
+
+        public var tally: Tally { counted.withLock { $0 } }
+
+        fileprivate func count(_ fact: WritableKeyPath<Tally, Int>) {
+            counted.withLock { $0[keyPath: fact] += 1 }
+        }
+    }
+
+    /// The ledger of the request the current task is decoding for; nil for dictation, and
+    /// for any caller that did not ask for one.
+    @TaskLocal public static var ledger: Ledger?
 
     private struct Waiter {
         let id: Int
@@ -88,18 +118,17 @@ public final class EngineTurns: Sendable {
     }
 
     /// Takes the engine for a hold, from key-down until the hold's final transcript is out.
-    /// A served decode in flight is cancelled before this returns.
+    /// A served decode in flight is told to stop before this returns.
     public func hold() -> EngineHold {
-        let (cancel, cancelled) = state.withLock { state -> ((@Sendable () -> Void)?, Bool) in
+        let (cancel, preempted) = state.withLock { state -> ((@Sendable () -> Void)?, Bool) in
             state.reading.holds += 1
             guard var decoding = state.decoding, decoding.caller == .served, !decoding.preempted else { return (nil, false) }
             decoding.preempted = true
             state.decoding = decoding
-            state.reading.cancelled += 1
             return (decoding.cancel, true)
         }
         cancel?()
-        return EngineHold(turns: self, cancelled: cancelled)
+        return EngineHold(turns: self, preempted: preempted)
     }
 
     /// Closes one hold and hands the engine on; returns how many served decodes were waiting.
@@ -117,9 +146,10 @@ public final class EngineTurns: Sendable {
     /// hold cancelled it; its outcome is the last run's. Cancelling the caller cancels the
     /// decode, whether it is waiting or running.
     public func decode<T: Sendable>(as caller: Caller, _ decode: @escaping @Sendable () async throws -> T) async throws -> T {
+        let ledger = Self.ledger
         var rerun = false
         while true {
-            let id = try await turn(caller, rerun: rerun)
+            let id = try await turn(caller, rerun: rerun, ledger: ledger)
             // A task of its own, so that a hold can cancel the decode without cancelling the
             // caller, who is still owed its outcome.
             let task = Task { try await decode() }
@@ -138,15 +168,17 @@ public final class EngineTurns: Sendable {
             }
             next?.resume()
             // A decode a hold cancelled failed because of the hold, so it is owed another run;
-            // one that finished anyway keeps its result.
+            // one that finished anyway keeps its result, and was not cancelled.
             guard preempted, !Task.isCancelled, case .failure = result else { return try result.get() }
+            state.withLock { $0.reading.tally.cancelled += 1 }
+            ledger?.count(\.cancelled)
             rerun = true
         }
     }
 
     /// Waits until the engine is `caller`'s. A decode run again after a hold goes first among
     /// served decodes, since it has already had its turn once.
-    private func turn(_ caller: Caller, rerun: Bool) async throws -> Int {
+    private func turn(_ caller: Caller, rerun: Bool, ledger: Ledger?) async throws -> Int {
         let id = state.withLock { state in
             state.ids += 1
             return state.ids
@@ -159,7 +191,11 @@ public final class EngineTurns: Sendable {
                     guard !Task.isCancelled else { return (nil, true) }
                     let waiter = Waiter(id: id, caller: caller, go: go)
                     if rerun { state.waiting.insert(waiter, at: 0) } else { state.waiting.append(waiter) }
-                    if caller == .served, !rerun, state.reading.holds > 0 { state.reading.deferred += 1 }
+                    let deferred = caller == .served && !rerun && state.reading.holds > 0
+                    if deferred {
+                        state.reading.tally.deferred += 1
+                        ledger?.count(\.deferred)
+                    }
                     state.sync()
                     return (state.admit(), false)
                 }
@@ -180,24 +216,25 @@ public final class EngineTurns: Sendable {
 /// The engine taken for one hold. Released once, when the hold's final transcript is out,
 /// which is when served decodes may run again.
 public final class EngineHold: Sendable {
-    /// What a hold put off: whether it cancelled a served decode as it began, and how many
-    /// served decodes were waiting on it when it let go.
+    /// What a hold put off: whether it told a served decode in flight to stop as it began
+    /// (one that finished anyway kept its result), and how many served decodes were waiting
+    /// on it when it let go.
     public struct Displaced: Equatable, Sendable, CustomStringConvertible {
-        public let cancelled: Bool
+        public let preempted: Bool
         public let waiting: Int
 
         public var description: String {
-            "\(cancelled ? 1 : 0) served cancelled, \(waiting) served waiting"
+            "\(preempted ? 1 : 0) served preempted, \(waiting) served waiting"
         }
     }
 
     private let turns: EngineTurns
-    private let cancelled: Bool
+    private let preempted: Bool
     private let released = Atomic(false)
 
-    fileprivate init(turns: EngineTurns, cancelled: Bool) {
+    fileprivate init(turns: EngineTurns, preempted: Bool) {
         self.turns = turns
-        self.cancelled = cancelled
+        self.preempted = preempted
     }
 
     /// Lets the engine go. [LAW:no-silent-failure] A second release would count another
@@ -205,6 +242,6 @@ public final class EngineHold: Sendable {
     @discardableResult
     public func release() -> Displaced {
         precondition(!released.exchange(true, ordering: .relaxed), "a hold was released twice")
-        return Displaced(cancelled: cancelled, waiting: turns.release())
+        return Displaced(preempted: preempted, waiting: turns.release())
     }
 }

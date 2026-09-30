@@ -183,7 +183,9 @@ public final class Dictation {
                 }
             } catch {
                 // The operation reports its own outcome; only the queue's own refusal
-                // to accept it reaches here. [LAW:no-silent-failure]
+                // to accept it reaches here, and then the operation that would have let go
+                // of the hold never runs. [LAW:no-silent-failure]
+                hold.release()
                 report(.failure(error))
             }
         }

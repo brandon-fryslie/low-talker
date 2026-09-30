@@ -5,6 +5,7 @@ import Network
 @testable import Serve
 import Synchronization
 import Testing
+import TestProbes
 
 @Suite struct TranscriptionServerTests {
     /// A second server on an address already served is refused, naming the installation and
@@ -107,6 +108,20 @@ import Testing
         #expect(seconds > 2.2 && seconds < 2.6)
         let event = try await running.nextEvent()
         #expect(event.status == 200 && event.words == 5 && event.model == "gpt-transcribe" && event.error == nil)
+    }
+
+    /// A request that asks while the speaker holds the engine waits for the hold, and its
+    /// event says so.
+    @Test func aRequestThatWaitedForAHoldSaysSoInItsEvent() async throws {
+        let turns = EngineTurns()
+        let running = try await Running.start(.ready(Turning(turns: turns)))
+        defer { running.server.stop() }
+        let hold = turns.hold()
+        async let answered = running.post([("model", nil, Data("m".utf8)), ("file", "audio.mp3", fixture("hello-16k-mono.mp3"))])
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { turns.reading.waiting == 1 })
+        #expect(hold.release().waiting == 1)
+        #expect(try await answered.0.statusCode == 200)
+        #expect(try await running.nextEvent().turns == EngineTurns.Tally(deferred: 1))
     }
 
     /// The prompt is the vocabulary a dictation mode would give: one term, as written.

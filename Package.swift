@@ -60,7 +60,7 @@ let package = Package(
         // dictation (epic low-serve-axq). Above the core, so the core never links Network
         // and the offline build's app need not link this at all. [LAW:one-way-deps]
         .target(name: "Serve", dependencies: ["LowTalkerCore", "Flavors"]),
-        .testTarget(name: "ServeTests", dependencies: ["Serve", "LowTalkerCore", "Flavors"], resources: [.copy("Fixtures")]),
+        .testTarget(name: "ServeTests", dependencies: ["Serve", "LowTalkerCore", "Flavors", "TestProbes"], resources: [.copy("Fixtures")]),
         // Answering a signal rather than obeying it, for every process here that has an
         // ending of its own to unwind through. It links nothing, so any process here can
         // watch through it. [LAW:one-source-of-truth]

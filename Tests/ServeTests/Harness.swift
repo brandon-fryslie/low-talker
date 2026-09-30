@@ -35,6 +35,23 @@ final class Stub: Transcriber {
     }
 }
 
+/// The stub, heard as a served caller of `turns`, as the app's engine is.
+struct Turning: Transcriber {
+    let turns: EngineTurns
+
+    func transcribe(
+        _ audio: some AsyncSequence<AudioClip, Never> & Sendable,
+        expecting vocabulary: Vocabulary,
+        partial: @escaping @Sendable (Partial) -> Void
+    ) async throws -> Transcript {
+        var clip: [Float] = []
+        for await chunk in audio { clip += chunk.samples }
+        return try await turns.decode(as: .served) { [clip] in
+            try await Stub().transcribe(AudioClip(samples: clip), expecting: vocabulary)
+        }
+    }
+}
+
 struct StubFailure: Error, CustomStringConvertible {
     var description: String { "the stub engine was told to fail" }
 }

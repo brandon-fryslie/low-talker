@@ -27,10 +27,10 @@ import TestProbes
         #expect(try await Self.soon { turns.reading.decoding == nil && turns.reading.waiting == 1 })
         #expect(try await turns.decode(as: .dictation) { "spoken" } == "spoken")
         #expect(runs.now == 1)
-        #expect(hold.release() == EngineHold.Displaced(cancelled: true, waiting: 1))
+        #expect(hold.release() == EngineHold.Displaced(preempted: true, waiting: 1))
         #expect(try await served.value == "heard")
         #expect(runs.now == 2)
-        #expect(turns.reading == EngineTurns.Reading(cancelled: 1))
+        #expect(turns.reading == EngineTurns.Reading(tally: EngineTurns.Tally(cancelled: 1)))
     }
 
     @Test func aServedDecodeAskedForDuringAHoldWaitsForEveryHoldToLetGo() async throws {
@@ -41,9 +41,9 @@ import TestProbes
         #expect(try await Self.soon { turns.reading.waiting == 1 })
         first.release()
         #expect(turns.reading.waiting == 1 && turns.reading.decoding == nil)
-        #expect(second.release() == EngineHold.Displaced(cancelled: false, waiting: 1))
+        #expect(second.release() == EngineHold.Displaced(preempted: false, waiting: 1))
         #expect(try await served.value == "heard")
-        #expect(turns.reading == EngineTurns.Reading(deferred: 1))
+        #expect(turns.reading == EngineTurns.Reading(tally: EngineTurns.Tally(deferred: 1)))
     }
 
     @Test func aDictationDecodeInFlightIsNotCancelledByAHold() async throws {
@@ -54,8 +54,8 @@ import TestProbes
         let hold = turns.hold()
         gate.open()
         #expect(try await spoken.value == "spoken")
-        #expect(hold.release() == EngineHold.Displaced(cancelled: false, waiting: 0))
-        #expect(turns.reading.cancelled == 0)
+        #expect(hold.release() == EngineHold.Displaced(preempted: false, waiting: 0))
+        #expect(turns.reading.tally.cancelled == 0)
     }
 
     /// A hold is not the only thing that ends a served decode: a caller that goes away

@@ -10,7 +10,7 @@ import Testing
         let result = LatencyReport.FixtureResult(
             name: "say/greeting",
             arrival: .streamed,
-            load: .served,
+            serving: .served,
             audio: 2.0164,
             first: LatencyReport.Run(keyUpToTranscript: .milliseconds(900), holdToFirstText: .milliseconds(1_600)),
             later: [
@@ -26,7 +26,7 @@ import Testing
         )
         let row = BenchCommand.row(model: "base.en", load: .milliseconds(1_250), result: result)
         #expect(row.map(\.name) == [
-            "model", "fixture", "delivery", "load", "audio_s", "load_s", "first_s", "median_s", "partial_s",
+            "model", "fixture", "delivery", "serving", "audio_s", "load_s", "first_s", "median_s", "partial_s",
             "wer", "substituted", "dropped", "added", "reference_words",
             "served_cancelled", "served_deferred", "served_changed",
         ])

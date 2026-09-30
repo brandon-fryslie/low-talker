@@ -197,7 +197,10 @@ private struct Answering: Sendable {
         var event = ServedRequest()
         let deadline = cutOff(connection)
         var reader = Reader(connection: connection, cancelOnRead: deadline)
-        do {
+        // What holds did to this request's decodes, counted by the engine's owner as it
+        // decides them.
+        let ledger = EngineTurns.Ledger()
+        await EngineTurns.$ledger.withValue(ledger) { do {
             switch try await respond(connection, &reader, &event) {
             case .http(let response):
                 event.status = response.status.rawValue
@@ -230,7 +233,8 @@ private struct Answering: Sendable {
             }
         } catch {
             event.lost = "\(error)"
-        }
+        } }
+        event.turns = ledger.tally
         deadline.cancel()
         connection.cancel()
         event.durationMs = Int((clock.now - started) / .milliseconds(1))
@@ -444,6 +448,9 @@ public struct ServedRequest: Sendable, Codable, Equatable {
     public internal(set) var words: Int?
     /// What happened on a Realtime socket, for a request that upgraded to one.
     public internal(set) var realtime: RealtimeActivity?
+    /// What dictation did to the request: its decodes a hold cancelled and ran again, and
+    /// those that waited for a hold.
+    public internal(set) var turns = EngineTurns.Tally()
     public internal(set) var durationMs = 0
 
     static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "lowtalker", category: "serve")
