@@ -158,9 +158,8 @@ private func update(_ input: [String: Any]) -> [String: Any] {
     /// through silence between turns, is never refused: the open item starts over from its
     /// newest audio each time it outgrows its share, so the socket never holds more than the
     /// limit, and the item committed at last is heard with no more than its share. Each item
-    /// let go is cancelled, and no item sends a delta again for words in the audio it kept.
-    /// Limit 4 s: a share of 2 s, of which 1 s is kept, so 10 s uncommitted lets go 1 s eight
-    /// times; the stub's words end at 0 s, so only the first item, which kept nothing, sends any.
+    /// let go is cancelled. Limit 4 s: a share of 2 s, of which 1 s is kept, so 10 s
+    /// uncommitted lets go 1 s eight times.
     @Test func appendingPastTheLimitWithoutACommitStartsTheItemOverAndIsNeverRefused() async throws {
         let stub = Stub()
         let running = try await Running.start(.ready(stub), limits: ServedLimits(uploads: 1, sockets: 1, audio: 4))
@@ -178,7 +177,7 @@ private func update(_ input: [String: Any]) -> [String: Any] {
         let realtime = try #require(try await running.nextEvent().realtime)
         #expect(realtime.appends == 100 && realtime.refusals.isEmpty && realtime.sent.errors == 0)
         #expect(realtime.items == 9 && realtime.itemsLetGo == 8 && abs(realtime.letGoAudioSeconds - 8) < 0.01)
-        #expect(realtime.sent.completed == 1 && realtime.sent.deltas == 2 && abs(realtime.audioSeconds - 2) < 0.01)
+        #expect(realtime.sent.completed == 1 && abs(realtime.audioSeconds - 2) < 0.01)
         #expect(realtime.heldAudioSeconds <= 4 && realtime.heldItems == 1)
     }
 
@@ -207,6 +206,28 @@ private func update(_ input: [String: Any]) -> [String: Any] {
         client.task.cancel(with: .normalClosure, reason: nil)
         let realtime = try #require(try await running.nextEvent().realtime)
         #expect(realtime.refusals.isEmpty && realtime.itemsLetGo == 1 && realtime.sent.completed == 2)
+    }
+
+    /// An item let go sends nothing more, and says when the last word it sent ends.
+    @Test func anItemLetGoSendsNoMoreDeltas() async {
+        let sent = await deltas { outbox in
+            let item = Deltas(item: "item_a", outbox: outbox, replayed: -.infinity)
+            item.heard(Partial(confirmed: timed(2), tentative: Transcript(words: [])))
+            #expect(item.letGo() == 2)
+            item.heard(Partial(confirmed: timed(4), tentative: Transcript(words: [])))
+        }
+        #expect(sent == [" w1 w2"])
+    }
+
+    /// An item that started over sends only the words ending after the last one the item let
+    /// go sent, while it is heard and when it is answered, so between them each word is sent once.
+    @Test func anItemStartedOverSendsOnlyWordsNotSentBefore() async {
+        let sent = await deltas { outbox in
+            let item = Deltas(item: "item_b", outbox: outbox, replayed: 2)
+            item.heard(Partial(confirmed: timed(3), tentative: Transcript(words: [])))
+            item.settle(.success(timed(5)), usage: Usage(heard: 5))
+        }
+        #expect(sent == [" w3", " w4 w5"])
     }
 
     /// The newest bytes are kept oldest first, whether they arrive in one append or wrap
@@ -371,4 +392,19 @@ private func update(_ input: [String: Any]) -> [String: Any] {
     @Test func theAcceptKeyIsTheRFCs() {
         #expect(WebSocket.accept("dGhlIHNhbXBsZSBub25jZQ==") == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
     }
+}
+
+/// `count` words, `w1` onward, each a second long.
+private func timed(_ count: Int) -> Transcript {
+    Transcript(words: (0..<count).map { Transcript.Word(text: " w\($0 + 1)", time: Double($0)...Double($0 + 1), confidence: 1.0) })
+}
+
+/// The deltas `body` sends through an outbox, in order.
+private func deltas(_ body: (Outbox) -> Void) async -> [String] {
+    let (frames, continuation) = AsyncStream<Outgoing>.makeStream()
+    body(Outbox(continuation))
+    continuation.finish()
+    var sent: [String] = []
+    for await case .event(.delta(_, let text)) in frames { sent.append(text) }
+    return sent
 }

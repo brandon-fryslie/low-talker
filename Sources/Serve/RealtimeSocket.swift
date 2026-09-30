@@ -152,7 +152,7 @@ struct RealtimeSocket {
 
         /// A new item for appends to go to, heard once the last one committed is answered.
         /// Its first `replayed` seconds are audio another item already heard.
-        private func open(_ transcriber: any Transcriber, replayed: TimeInterval = 0, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) -> Buffer {
+        private func open(_ transcriber: any Transcriber, replayed: TimeInterval = -.infinity, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) -> Buffer {
             let opened = Buffer(transcriber: transcriber, vocabulary: session.vocabulary, outbox: outbox, keeping: held.kept, replayed: replayed, after: last?.answered)
             activity.items += 1
             let transcript = opened.transcript
@@ -168,8 +168,8 @@ struct RealtimeSocket {
         /// beyond that is free once its transcribe has ended, which cancelling it brings
         /// about at its next pass, or at once while it waits its turn.
         private func startOver(_ item: Buffer, transcriber: any Transcriber, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) -> Buffer {
-            let kept = item.letGo()
-            let reopened = open(transcriber, replayed: RealtimeAudio.duration(bytes: kept.count), &activity, &items)
+            let (kept, replayed) = item.letGo()
+            let reopened = open(transcriber, replayed: replayed, &activity, &items)
             reopened.append(kept)
             let (held, freed, transcript) = (held, item.bytes - reopened.bytes, item.transcript)
             activity.letGo(seconds: RealtimeAudio.duration(bytes: freed))
@@ -272,8 +272,8 @@ private final class Buffer {
     /// What appends carry: PCM16 at 24 kHz.
     private let format: AVAudioFormat
 
-    /// `after` is the item before this one, once it is answered; `replayed` is how many
-    /// seconds its audio begins with that an item let go already heard.
+    /// `after` is the item before this one, once it is answered; `replayed` is when, in its
+    /// audio, the last word an item let go sent as a delta ends.
     init(transcriber: any Transcriber, vocabulary: Vocabulary, outbox: Outbox, keeping: Int, replayed: TimeInterval, after previous: Task<Void, Never>?) {
         newest = Newest(capacity: keeping)
         // [LAW:no-silent-failure] A fixed pair of formats AVFoundation converts between;
@@ -323,13 +323,16 @@ private final class Buffer {
         clips.finish()
     }
 
-    /// The item ends unheard: its transcribe is cancelled. Returns its newest `keeping`
-    /// bytes, starting on a whole sample.
-    func letGo() -> Data {
+    /// The item ends unheard: its transcribe is cancelled and it sends no more deltas.
+    /// Returns its newest `keeping` bytes, starting on a whole sample, and when in them the
+    /// last word it sent ends.
+    func letGo() -> (kept: Data, replayed: TimeInterval) {
         clips.finish()
         transcript.cancel()
-        let kept = newest.bytes
-        return kept.suffix(kept.count - (bytes - kept.count) % 2)
+        let newest = newest.bytes
+        let kept = newest.suffix(newest.count - (bytes - newest.count) % 2)
+        let cut = RealtimeAudio.duration(bytes: bytes - kept.count)
+        return (kept, deltas.letGo() - cut)
     }
 
     private func convert(_ pcm: Data) -> [Float] {
@@ -425,18 +428,20 @@ private final class Waiting: Sendable {
 /// [LAW:types-are-the-program] Deltas are only ever the words after the ones already sent,
 /// taken from `Partial.confirmed`, which the transcript begins with word for word; so the
 /// deltas joined are the transcript's words, and a delta can never take back a word. Like
-/// OpenAI's, the first delta keeps the leading space the completed transcript trims. The
-/// words of an item that started over which end in the audio it kept were the let-go item's
-/// to send, so they are never sent twice: a client such as Pipecat, whose default takes any
-/// delta as its user beginning a turn, is not told of one again.
-private final class Deltas: Sendable {
+/// OpenAI's, the first delta keeps the leading space the completed transcript trims. An item
+/// that started over sends no delta for words the item let go already sent, so a client such
+/// as Pipecat, whose default takes any delta as its user beginning a turn, is not told of one
+/// twice; its deltas joined are the transcript's words after those.
+final class Deltas: Sendable {
     let item: String
     private let outbox: Outbox
-    /// Seconds of the item's audio an item let go already heard.
+    /// When, in the item's audio, the last word an item let go sent ends; `-infinity` when
+    /// it sent none.
     private let replayed: TimeInterval
-    /// How many words have gone out as deltas, or been passed over as replayed. Held across
-    /// the send, so deltas leave in the order their words were heard.
-    private let sent = Mutex(0)
+    /// How many words have gone out as deltas, or been passed over as sent already; when the
+    /// last of them ends; and whether the item was let go, after which it sends nothing.
+    /// Held across the send, so deltas leave in the order their words were heard.
+    private let sent = Mutex((words: 0, through: -TimeInterval.infinity, letGo: false))
 
     init(item: String, outbox: Outbox, replayed: TimeInterval) {
         self.item = item
@@ -446,6 +451,14 @@ private final class Deltas: Sendable {
 
     func heard(_ partial: Partial) {
         send(partial.confirmed.words)
+    }
+
+    /// The item is let go: it sends nothing more. Returns when the last word it sent ends.
+    func letGo() -> TimeInterval {
+        sent.withLock { sent in
+            sent.letGo = true
+            return sent.through
+        }
     }
 
     /// Answers the item with what it was heard as: the words not yet sent, then the
@@ -464,10 +477,10 @@ private final class Deltas: Sendable {
 
     private func send(_ words: [Transcript.Word]) {
         sent.withLock { sent in
-            sent = max(sent, words.prefix { $0.time.upperBound < replayed }.count)
-            guard words.count > sent else { return }
-            outbox.emit(.delta(item: item, Transcript(words: Array(words[sent...])).text))
-            sent = words.count
+            sent.words = max(sent.words, words.prefix { $0.time.upperBound <= replayed }.count)
+            guard !sent.letGo, let last = words.last, words.count > sent.words else { return }
+            outbox.emit(.delta(item: item, Transcript(words: Array(words[sent.words...])).text))
+            sent = (words.count, last.time.upperBound, false)
         }
     }
 }
