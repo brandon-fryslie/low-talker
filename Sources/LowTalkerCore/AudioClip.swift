@@ -113,13 +113,17 @@ extension AudioClip {
         let seconds = Double(file.length) / source.sampleRate
         guard seconds <= longest else { throw AudioClipError.longerThan(longest, seconds: seconds) }
         let converter = try Converter(from: source)
-        // A second at a time, so the file's audio is in memory once, as the clip, and never
-        // also whole in the source format.
-        guard let chunk = AVAudioPCMBuffer(pcmFormat: source, frameCapacity: AVAudioFrameCount(source.sampleRate.rounded(.up))) else {
+        // A converter's piece at a time, so the file's audio is in memory once, as the clip, and
+        // never also whole in the source format. Sized in frames, not seconds: the header's rate
+        // and channel count are the file's say-so, and a second of 768 kHz across 256 channels
+        // is 786 MB.
+        guard let chunk = AVAudioPCMBuffer(pcmFormat: source, frameCapacity: Converter.pieceFrames) else {
             throw AudioClipError.bufferAllocationFailed
         }
         var samples: [Float] = []
-        samples.reserveCapacity(Self.sampleCount(for: seconds))
+        // A piece past the length, for the resampler's tail, so the drain never grows the clip
+        // by copying it.
+        samples.reserveCapacity(Self.sampleCount(for: seconds) + Int(Converter.pieceFrames))
         while file.framePosition < file.length {
             do {
                 try file.read(into: chunk)
@@ -131,7 +135,8 @@ extension AudioClip {
             guard chunk.frameLength > 0 else { throw AudioClipError.truncated(url, read: file.framePosition, declared: file.length) }
             samples += try converter.convert(chunk)
         }
-        self.init(samples: samples + (try converter.drain()))
+        samples += try converter.drain()
+        self.init(samples: samples)
     }
 
     /// Write as a 16-bit PCM wav at the pipeline rate, the encoding every player and

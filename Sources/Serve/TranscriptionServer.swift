@@ -86,7 +86,7 @@ public final class TranscriptionServer: Sendable {
         parameters.requiredLocalEndpoint = .hostPort(host: address.host, port: address.port)
         let listener = try NWListener(using: parameters)
         let queue = DispatchQueue(label: "lowtalker.serve")
-        let answering = Answering(binding: address.binding, limits: limits, uploads: Uploads(limit: limits.uploads), engine: engine, record: record, queue: queue)
+        let answering = Answering(binding: address.binding, audio: limits.audio, uploads: Uploads(limit: limits.uploads), engine: engine, record: record, queue: queue)
         listener.newConnectionHandler = { connection in
             connection.start(queue: queue)
             Task { await answering.serve(connection) }
@@ -211,46 +211,33 @@ struct ServedLimits: Sendable {
 /// The uploads being answered, so that no more than the limit are taken in at once.
 /// [LAW:single-enforcer] The one count of them, asked before any upload's body is read.
 final class Uploads: Sendable {
-    let limit: Int
+    private let limit: Int
     private let open = Mutex(0)
 
     init(limit: Int) {
         self.limit = limit
     }
 
-    /// A place for one more upload, held until it is let go; refused with 429, which
-    /// Pipecat retries, when the limit already hold one.
-    func admit() throws(APIError) -> Slot {
-        let taken = open.withLock { open -> Int? in
+    /// `answer`, run holding a place for one more upload and handed how many are answered
+    /// with it, itself included; the place is given back when `answer` ends, however it
+    /// ends. Refused with 429, which Pipecat retries, when the limit already hold one.
+    func admitted<Answer>(_ answer: (Int) async throws -> Answer) async throws -> Answer {
+        let held = open.withLock { open -> Int? in
             guard open < limit else { return nil }
             open += 1
             return open
         }
-        guard let taken else { throw .busy(uploads: limit) }
-        return Slot(uploads: self, held: taken)
-    }
-
-    /// One upload's place, given back when the upload is done with it, however it ends.
-    final class Slot: Sendable {
-        /// The uploads being answered as this one was taken in, itself included.
-        let held: Int
-        private let uploads: Uploads
-
-        fileprivate init(uploads: Uploads, held: Int) {
-            self.uploads = uploads
-            self.held = held
-        }
-
-        deinit {
-            uploads.open.withLock { $0 -= 1 }
-        }
+        guard let held else { throw APIError.busy(uploads: limit) }
+        defer { open.withLock { $0 -= 1 } }
+        return try await answer(held)
     }
 }
 
 /// One request's answer, from the first byte read to the connection's close.
 private struct Answering: Sendable {
     let binding: ServeBinding
-    let limits: ServedLimits
+    /// The most audio one upload may hold, in seconds.
+    let audio: TimeInterval
     let uploads: Uploads
     let engine: @Sendable () -> ServedEngine
     let record: @Sendable (ServedRequest) -> Void
@@ -379,15 +366,20 @@ private struct Answering: Sendable {
         case .notResident(let reason): throw APIError.notResident(reason)
         case .failed(let reason): throw APIError.engineFailed(reason)
         }
-        // Taken before the body is read, since reading it is the first thing an upload holds.
-        let slot: Uploads.Slot
+        // Taken before the body is read, since reading it is the first thing an upload holds,
+        // and held until the response holding its transcript is built.
         do {
-            slot = try uploads.admit()
-        } catch {
-            event.uploads = uploads.limit
-            throw error
+            return try await uploads.admitted { held in
+                event.uploads = held
+                return try await upload(head, length, transcriber, connection, &reader, &event)
+            }
+        } catch APIError.busy(let limit) {
+            event.uploads = limit
+            throw APIError.busy(uploads: limit)
         }
-        event.uploads = slot.held
+    }
+
+    private func upload(_ head: RequestHead, _ length: Int, _ transcriber: any Transcriber, _ connection: NWConnection, _ reader: inout Reader, _ event: inout ServedRequest) async throws -> HTTPResponse {
         // A client that asked to hear the request is wanted before sending its body
         // (curl, for any large upload) waits for this, or for a timeout, before it sends.
         if head.headers["expect"]?.lowercased() == "100-continue" {
@@ -400,7 +392,7 @@ private struct Answering: Sendable {
         event.language = request.language?.rawValue
         event.format = request.format.rawValue
         event.vocabularyTerms = request.vocabulary.terms.count
-        let clip = try request.upload.clip(longest: limits.audio)
+        let clip = try request.upload.clip(longest: audio)
         event.audioSeconds = clip.duration
         let transcript: Transcript
         do {
@@ -411,9 +403,6 @@ private struct Answering: Sendable {
             throw APIError.engineFailed("\(error)")
         }
         event.words = transcript.words.count
-        // [LAW:no-ambient-temporal-coupling] Held until the transcript is in by name, not by
-        // wherever the compiler would end the slot's life.
-        withExtendedLifetime(slot) {}
         return request.format.response(transcript, heard: clip)
     }
 }

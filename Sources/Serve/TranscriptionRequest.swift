@@ -164,6 +164,8 @@ struct Upload: Sendable {
         } catch AudioClipError.unreadable(_, let underlying) {
             // The temporary file's path is the server's business, not the client's.
             throw .unreadableAudio("\(underlying)")
+        } catch AudioClipError.truncated(_, let read, let declared) {
+            throw .unreadableAudio("it ends after \(read) of the \(declared) frames it declares")
         } catch {
             throw .unreadableAudio("\(error)")
         }
