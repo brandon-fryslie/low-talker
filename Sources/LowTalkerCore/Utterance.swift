@@ -164,18 +164,28 @@ struct Timeline: Sendable {
     }
 
     mutating func letGo(_ count: Int, at sample: Int) {
-        gaps[sample, default: 0] += count
+        // Nothing let go moves nothing: a frame of speech records no gap, so the table
+        // holds only the quiet that went.
+        if count > 0 { gaps[sample, default: 0] += count }
     }
 
-    /// `seconds` into the kept samples, as seconds into the audio appended.
-    func place(_ seconds: TimeInterval) -> TimeInterval {
+    /// `seconds` into the kept samples, as seconds into the audio appended. A gap at a
+    /// kept sample lies before it: a word starting there starts after the gap, and a word
+    /// ending there, the last before quiet let go, ended before it.
+    func place(_ seconds: TimeInterval, ending: Bool = false) -> TimeInterval {
         let sample = AudioClip.sampleCount(for: seconds)
-        return seconds + AudioClip.duration(for: gaps.reduce(0) { $0 + ($1.key <= sample ? $1.value : 0) })
+        return seconds + AudioClip.duration(for: gaps.reduce(0) { $0 + ($1.key < sample || $1.key == sample && !ending ? $1.value : 0) })
+    }
+
+    private func place(_ word: Word) -> Word {
+        let start = place(word.time.lowerBound)
+        // An instant at a gap starts after it, so it ends there too.
+        return Word(text: word.text, time: start...max(start, place(word.time.upperBound, ending: true)), confidence: word.confidence)
     }
 
     /// The words, timed in the audio appended, and the quiet let go from it.
     func place(_ transcript: Transcript) -> Transcript {
-        Transcript(words: transcript.words.map { Word(text: $0.text, time: place($0.time.lowerBound)...place($0.time.upperBound), confidence: $0.confidence) }, quiet: quiet)
+        Transcript(words: transcript.words.map(place), quiet: quiet)
     }
 
     func place(_ partial: Partial) -> Partial {

@@ -79,14 +79,18 @@ import Testing
     }
 
     /// The timeline places a time in the kept samples back in the audio appended: past
-    /// every stretch let go before it, and none let go after it.
+    /// every stretch let go before it, and none let go after it. A word ending where quiet
+    /// was let go ended before it; one starting there, or an instant there, is after it.
     @Test func theTimelinePlacesKeptTimesInTheAudio() {
         var timeline = Timeline()
         timeline.letGo(16_000, at: 0)
         timeline.letGo(32_000, at: 8_000)
         #expect(timeline.place(0.25) == 1.25)
         #expect(timeline.place(0.5) == 3.5)
+        #expect(timeline.place(0.5, ending: true) == 1.5)
         #expect(timeline.quiet == 3)
+        let words = [Transcript.Word(text: " hello", time: 0.2...0.5, confidence: 1.0), Transcript.Word(text: " oh", time: 0.5...0.5, confidence: 1.0)]
+        #expect(timeline.place(Transcript(words: words)).words.map(\.time) == [1.2...1.5, 3.5...3.5])
     }
 
     /// The end wakes a wait that the speech never satisfied, with what there is.
