@@ -41,8 +41,15 @@ public final class DictationInputController: IMKInputController {
     /// Told whatever the event, rather than after asking which kind it is: what is told is
     /// the state of the modifier keys read off the session, so an event that changed none of
     /// them tells the app nothing it does not already hold. [LAW:dataflow-not-control-flow]
-    override public func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
-        ModifierChanges.shared.moved(at: event.timestamp)
+    ///
+    /// IMK sometimes calls this with no event at all (seen on this Mac, 2026-09-29, on the
+    /// call after an activate), so the event is optional and such a call is told at the
+    /// moment it was made, on the clock `NSEvent.timestamp` uses. Unwrapped implicitly, as
+    /// the inherited signature has it, that call trapped and took the input method down,
+    /// and with it every press until macOS happened to launch it again.
+    /// [LAW:types-are-the-program]
+    override public func handle(_ event: NSEvent?, client sender: Any!) -> Bool {
+        ModifierChanges.shared.moved(at: event?.timestamp ?? ProcessInfo.processInfo.systemUptime)
         return false
     }
 

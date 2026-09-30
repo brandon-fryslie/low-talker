@@ -69,6 +69,16 @@ import Testing
         #expect(told != nil)
     }
 
+    /// A call carrying no event, which IMK makes, is handed back and told at the moment it
+    /// was made, rather than trapping and taking the input method down.
+    @Test(.timeLimit(.minutes(1))) func aCallWithNoEventIsHandedBackAndTold() async throws {
+        let controller = try #require(DictationInputController(server: nil, delegate: nil, client: nil))
+        let before = UInt64(ProcessInfo.processInfo.systemUptime * 1_000_000_000)
+        #expect(controller.handle(nil, client: nil) == false)
+        let told = await ModifierChanges.shared.changes.first { @Sendable held in held.uptimeNanoseconds >= before }
+        #expect(told != nil)
+    }
+
     @Test(arguments: presses)
     func everyKeyIsHandedBack(press: Press) throws {
         let controller = try #require(
