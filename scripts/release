@@ -13,23 +13,32 @@
 set -euo pipefail
 
 out=${1:?usage: NOTARY_PROFILE=<profile> scripts/release <output directory> [model source]}
-profile=${NOTARY_PROFILE:?NOTARY_PROFILE names the notarytool keychain profile; make one with xcrun notarytool store-credentials}
+scripts=$(dirname "$0")
+source "$scripts/notary-credentials"
 # Asked before the build, which takes minutes, rather than after it.
-xcrun notarytool history --keychain-profile "$profile" >/dev/null \
+xcrun notarytool history "${notary_credentials[@]}" >/dev/null \
   || { echo "release: the notarytool profile '$profile' does not answer" >&2; exit 1; }
 
 # A release whose build number did not rise is one no updater or crash report can tell from
 # the last. project.yml's CURRENT_PROJECT_VERSION counts releases and is raised by hand, so
 # the Nth release is build N: it must exceed the number of release tags already on origin,
 # of every version. A tag's own suffix is no substitute, since alpha, beta and rc each count
-# again from 1. Read from origin, not local tags, which a fresh clone may not have. Read off
-# project.yml before the build, like the profile; the build fails a bundle that does not
-# carry it. [LAW:no-silent-failure]
-scripts=$(dirname "$0")
+# again from 1. Read from origin, not local tags, which a fresh clone may not have. A tag on
+# the commit being built is this release's own, already pushed when a tag starts the release
+# workflow, so it is not counted: each tag counts where its commit is, the peeled `^{}` line
+# of an annotated tag over the tag object's. Read off project.yml before the build, like the
+# profile; the build fails a bundle that does not carry it. [LAW:no-silent-failure]
 build=$(xcodegen dump --type json --spec "$scripts/../project.yml" | jq -er '.settings.base.CURRENT_PROJECT_VERSION')
 [[ "$build" =~ ^[1-9][0-9]*$ ]] \
   || { echo "release: project.yml's CURRENT_PROJECT_VERSION is '$build', not a whole number above zero" >&2; exit 1; }
-released=$(git -C "$scripts/.." ls-remote --tags --refs origin "v*" | wc -l | tr -d ' ')
+head=$(git -C "$scripts/.." rev-parse HEAD)
+tags=$(git -C "$scripts/.." ls-remote --tags origin "v*")
+released=$(awk -v head="$head" '
+  { tag = $2; sub(/^refs\/tags\//, "", tag) }
+  tag ~ /\^\{\}$/ { sub(/\^\{\}$/, "", tag); commit[tag] = $1; next }
+  !(tag in commit) { commit[tag] = $1 }
+  END { n = 0; for (tag in commit) if (commit[tag] != head) n++; print n }
+' <<<"$tags")
 if [ "$build" -le "$released" ]; then
   echo "release: this is build $build, but $released releases are already tagged; raise CURRENT_PROJECT_VERSION in project.yml" >&2
   exit 1

@@ -1,0 +1,150 @@
+# Turns a pushed version tag into a GitHub release carrying the installer packages
+# scripts/release builds from that tag: LowTalker-offline.pkg and LowTalker-network.pkg,
+# signed with Developer ID, notarized and stapled.
+#
+# [LAW:one-source-of-truth] The recipe is scripts/release's, the same one a release made on a
+# Mac runs. This file only provisions a runner with the credentials and the model, runs it,
+# and publishes what it prints. The credentials are repository secrets that
+# scripts/release-secrets checks and sets.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+# Never cancelled: a cancelled run can leave a submission with the notary service.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, notarize and publish
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      NOTARY_PROFILE: release
+    steps:
+      # SHA-pinned, as in ci.yml: third-party code in a job that holds the signing keys.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      # One keychain for the run, with a password this job knows, as in ci.yml: it holds the
+      # dev identity, the Developer ID identities and the notary profile, and dies with the VM.
+      - name: Create an unlocked default keychain
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          security create-keychain -p release "$keychain"
+          security set-keychain-settings "$keychain"
+          security unlock-keychain -p release "$keychain"
+          security default-keychain -s "$keychain"
+          security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
+          echo "RELEASE_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
+      # `make cli` signs the CLI with it, as on any Mac, and the release runs the CLI.
+      - name: Create the dev signing identity
+        run: make signing-identity
+
+      # The certificates were issued by Apple's first Developer ID intermediate, which the
+      # runner image does not carry, and a signature has to chain through it. Pinned by hash,
+      # since it is fetched on every run.
+      - name: Import the Developer ID identities
+        env:
+          DEVELOPER_ID_P12: ${{ secrets.DEVELOPER_ID_P12 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          intermediate="$RUNNER_TEMP/DeveloperIDCA.cer"
+          curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDCA.cer -o "$intermediate"
+          echo "7afc9d01a62f03a2de9637936d4afe68090d2de18d03f29c88cfb0b1ba63587f  $intermediate" | shasum -a 256 -c -
+          security import "$intermediate" -k "$RELEASE_KEYCHAIN"
+          p12="$RUNNER_TEMP/developer-id.p12"
+          base64 -D <<<"$DEVELOPER_ID_P12" > "$p12"
+          security import "$p12" -k "$RELEASE_KEYCHAIN" -P "$DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild
+          rm "$p12"
+          # Without it the first signature waits on a dialog nobody can answer.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k release "$RELEASE_KEYCHAIN" >/dev/null
+
+      # store-credentials asks the notary service before saving, so bad credentials stop here.
+      - name: Store the notary credentials
+        env:
+          NOTARY_API_KEY: ${{ secrets.NOTARY_API_KEY }}
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER: ${{ secrets.NOTARY_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/notary.p8"
+          printf '%s\n' "$NOTARY_API_KEY" > "$key"
+          xcrun notarytool store-credentials "$NOTARY_PROFILE" --key "$key" --key-id "$NOTARY_API_KEY_ID" --issuer "$NOTARY_API_ISSUER" --keychain "$RELEASE_KEYCHAIN"
+          rm "$key"
+
+      # [LAW:one-source-of-truth] The model the release carries is the one the CLI built from
+      # this tag names as its default; the cache is keyed by it and names none itself.
+      - name: Name the default model
+        id: model
+        run: |
+          set -euo pipefail
+          cli=$(make cli | tail -n 1)
+          model=$("$cli" model default)
+          echo "cli=$cli" >> "$GITHUB_OUTPUT"
+          echo "default=$model" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the model store
+        id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/model-store
+          key: model-store-${{ steps.model.outputs.default }}
+
+      # [LAW:dataflow-not-control-flow] Run whether the cache hit or not: it verifies what the
+      # store holds and fetches from huggingface.co only what is missing or damaged, so a hit
+      # fetches nothing and a miss fetches the whole model.
+      - name: Fill the model store
+        env:
+          CLI: ${{ steps.model.outputs.cli }}
+        run: '"$CLI" model download --models-dir "$RUNNER_TEMP/model-store"'
+
+      - name: Build, sign and notarize
+        env:
+          NOTARY_KEYCHAIN: ${{ env.RELEASE_KEYCHAIN }}
+        run: |
+          set -euo pipefail
+          scripts/release "$RUNNER_TEMP/packages" "$RUNNER_TEMP/model-store" > "$RUNNER_TEMP/packages.txt"
+          cat "$RUNNER_TEMP/packages.txt"
+
+      # The notes are the tag's annotation, or its commit's message for a lightweight tag. The
+      # checkout fetched the tag as a bare ref to the commit, so the tag itself is fetched to
+      # read its annotation. A version with a hyphen, v0.1.0-alpha.7, is a prerelease.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          MODEL: ${{ steps.model.outputs.default }}
+          CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          case "$TAG" in
+            *-*) kind=--prerelease ;;
+            *) kind=--latest ;;
+          esac
+          pkgs=()
+          while IFS= read -r pkg; do pkgs+=("$pkg"); done < "$RUNNER_TEMP/packages.txt"
+          gh release create "$TAG" --verify-tag --notes-from-tag --title "LowTalker ${TAG#v}" "$kind" "${pkgs[@]}"
+          {
+            echo "## $TAG"
+            echo
+            echo "Model: \`$MODEL\` (cache hit: ${CACHE_HIT:-false})"
+            echo
+            echo '```'
+            shasum -a 256 "${pkgs[@]}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
