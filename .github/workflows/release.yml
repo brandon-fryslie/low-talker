@@ -103,23 +103,28 @@ jobs:
           echo "cli=$cli" >> "$GITHUB_OUTPUT"
           echo "default=$model" >> "$GITHUB_OUTPUT"
 
-      # [LAW:no-ambient-temporal-coupling] The tagged commit's push to master started
-      # model-cache.yml, and the tag usually follows within seconds. Restoring before that run
-      # saves would miss exactly when the model is new or its entry was evicted, so the release
-      # waits for it. With no such run (the commit was not the tip of its push) or one that did
-      # not succeed, the fill below fetches the whole model. Polled every 30 s, since the watch
-      # spends the token's hourly request budget that publishing needs too.
-      - name: Wait for this commit's model cache
+      # [LAW:no-ambient-temporal-coupling] The tag usually follows its commit's push to master
+      # by seconds, and that push's model-cache.yml run may still be saving. What the restore
+      # needs is the entry, so the release waits until master holds it, or until no
+      # model-cache.yml run is left that could save it, or 40 minutes. Either of the last two,
+      # or a GitHub API that keeps failing, leaves the fill below to fetch the whole model.
+      - name: Wait for the model cache
         env:
           GH_TOKEN: ${{ github.token }}
+          KEY: model-store-${{ steps.model.outputs.default }}
         run: |
-          set -euo pipefail
-          run=$(gh run list --workflow model-cache.yml --event push --commit "$GITHUB_SHA" --limit 1 --json databaseId --jq '.[0].databaseId // empty')
-          if [ -z "$run" ]; then
-            echo "::warning::model-cache.yml did not run for $GITHUB_SHA; the model comes from huggingface.co"
-          elif ! gh run watch "$run" --interval 30 --exit-status >/dev/null; then
-            echo "::warning::model-cache.yml run $run did not succeed; the model comes from huggingface.co"
-          fi
+          set -uo pipefail
+          # shellcheck disable=SC2016 # $ENV is jq's, not the shell's
+          saved() { [ "$(gh cache list --ref refs/heads/master --key "$KEY" --json key --jq 'map(select(.key == $ENV.KEY)) | length')" = 1 ]; }
+          idle() { [ "$(gh run list --workflow model-cache.yml --json status --jq 'map(select(.status != "completed")) | length')" = 0 ]; }
+          deadline=$((SECONDS + 2400))
+          until saved; do
+            if idle || [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::warning::master's cache holds no $KEY; the model comes from huggingface.co"
+              exit 0
+            fi
+            sleep 30
+          done
 
       # Saved by model-cache.yml on master; a run for a tag cannot restore another tag's save,
       # so this one saves nothing.

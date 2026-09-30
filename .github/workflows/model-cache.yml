@@ -10,8 +10,11 @@ on:
 
 permissions:
   contents: read
+  # To check the save landed.
+  actions: read
 
-# A run partway through its download or save finishes; a later push queues behind it.
+# A run partway through its download or save finishes. A later push waits, replacing any
+# push already waiting, whose default is almost always the same.
 concurrency:
   group: model-cache
   cancel-in-progress: false
@@ -68,8 +71,16 @@ jobs:
           path: ${{ runner.temp }}/model-store
           key: model-store-${{ steps.model.outputs.default }}
 
-      - name: Report
+      # actions/cache/save only warns when it cannot reserve or upload, so the entry is looked
+      # for rather than assumed.
+      - name: Check master's cache holds the model
         env:
-          MODEL: ${{ steps.model.outputs.default }}
+          GH_TOKEN: ${{ github.token }}
+          KEY: model-store-${{ steps.model.outputs.default }}
           CACHED: ${{ steps.lookup.outputs.cache-hit }}
-        run: 'echo "Model: \`$MODEL\` (already cached: ${CACHED:-false})" >> "$GITHUB_STEP_SUMMARY"'
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2016 # $ENV is jq's, not the shell's
+          n=$(gh cache list --ref refs/heads/master --key "$KEY" --json key --jq 'map(select(.key == $ENV.KEY)) | length')
+          [ "$n" = 1 ] || { echo "master's cache holds no $KEY" >&2; exit 1; }
+          echo "Model cache: \`$KEY\` (already cached: ${CACHED:-false})" >> "$GITHUB_STEP_SUMMARY"
