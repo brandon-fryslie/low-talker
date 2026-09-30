@@ -11,9 +11,10 @@ on:
 permissions:
   contents: read
 
+# A run partway through its download or save finishes; a later push queues behind it.
 concurrency:
   group: model-cache
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   cache:
@@ -66,3 +67,9 @@ jobs:
         with:
           path: ${{ runner.temp }}/model-store
           key: model-store-${{ steps.model.outputs.default }}
+
+      - name: Report
+        env:
+          MODEL: ${{ steps.model.outputs.default }}
+          CACHED: ${{ steps.lookup.outputs.cache-hit }}
+        run: 'echo "Model: \`$MODEL\` (already cached: ${CACHED:-false})" >> "$GITHUB_STEP_SUMMARY"'
