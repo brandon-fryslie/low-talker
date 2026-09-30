@@ -32,6 +32,9 @@ fail() {
 # [LAW:no-silent-failure]
 root="$scripts/.."
 head=$(git -C "$root" rev-parse HEAD)
+# The build reads the working tree, so the commit is what is built only when the tree is clean.
+dirty=$(git -C "$root" status --porcelain)
+[ -z "$dirty" ] || fail "the working tree differs from $head, and the build would ship the difference: $dirty"
 git -C "$root" fetch --quiet origin master
 git -C "$root" merge-base --is-ancestor "$head" FETCH_HEAD \
   || fail "$head is not on origin/master, and releases are cut from master"
