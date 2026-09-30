@@ -9,6 +9,8 @@ import Synchronization
 /// server event sent through one outbox.
 struct RealtimeSocket {
     let transcriber: any Transcriber
+    /// The most audio one item may hold, in seconds.
+    let audio: TimeInterval
 
     /// The most one message may hold. Pipecat's appends are about 5 KB of base64 each.
     static let messageLimit = 1 << 20
@@ -39,7 +41,7 @@ struct RealtimeSocket {
         // [LAW:no-ambient-temporal-coupling] Every item is a child of `items`, so none
         // outlives the socket, and each is gone from it once answered.
         let lost = await withDiscardingTaskGroup { items in
-            var state = State(session: RealtimeSession(), outbox: outbox)
+            var state = State(session: RealtimeSession(), outbox: outbox, audio: audio)
             state.outbox.emit(.sessionCreated(id: state.sessionID, state.session))
             var assembler = WebSocket.Assembler()
             /// The frame the server ends with; none when the connection was lost.
@@ -94,6 +96,7 @@ struct RealtimeSocket {
     private struct State {
         var session: RealtimeSession
         let outbox: Outbox
+        let audio: TimeInterval
         let sessionID = "sess_\(ID.fresh())"
         /// The item appends are going to, from the first append after a commit.
         var buffer: Buffer?
@@ -102,7 +105,7 @@ struct RealtimeSocket {
 
         mutating func receive(_ text: String, transcriber: any Transcriber, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) {
             var clientEvent: String?
-            do {
+            do throws(RealtimeError) {
                 let object = try ClientEvent.object(text)
                 clientEvent = object["event_id"] as? String
                 switch try ClientEvent.parse(object, onto: session) {
@@ -112,17 +115,21 @@ struct RealtimeSocket {
                     outbox.emit(.sessionUpdated(id: sessionID, session))
                 case .append(let bytes):
                     activity.appends += 1
-                    append(bytes, transcriber: transcriber, &activity, &items)
+                    try append(bytes, transcriber: transcriber, &activity, &items)
                 case .commit:
                     try commit(&activity, &items)
                 }
             } catch {
+                activity.refused(error)
                 outbox.emit(.error(error, clientEvent: clientEvent))
             }
         }
 
-        /// `bytes` into the open item, which the first append after a commit opens.
-        private mutating func append(_ bytes: Data, transcriber: any Transcriber, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) {
+        /// `bytes` into the open item, which the first append after a commit opens; refused
+        /// whole, before any of it is taken in, when it would take the item past `audio`.
+        private mutating func append(_ bytes: Data, transcriber: any Transcriber, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) throws(RealtimeError) {
+            let seconds = RealtimeAudio.duration(bytes: (buffer?.bytes ?? 0) + bytes.count)
+            guard seconds <= audio else { throw .audioTooLong(seconds: seconds, limit: audio) }
             if buffer == nil {
                 let opened = Buffer(transcriber: transcriber, vocabulary: session.vocabulary, outbox: outbox)
                 activity.items += 1
@@ -189,6 +196,9 @@ private final class Buffer {
     }
 
     var hasAudio: Bool { received > 0 }
+
+    /// Bytes appended, the odd one waiting for its sample's other half included.
+    var bytes: Int { received * 2 + carry.count }
 
     func append(_ bytes: Data) {
         let whole = carry + bytes
@@ -315,6 +325,8 @@ enum Outgoing: Sendable {
 public struct RealtimeActivity: Sendable, Codable, Equatable {
     public internal(set) var updates = 0
     public internal(set) var appends = 0
+    /// Appends refused for taking their item past the audio limit.
+    public internal(set) var appendsTooLong = 0
     public internal(set) var items = 0
     /// Seconds of audio in the items committed.
     public internal(set) var audioSeconds: Double = 0
@@ -323,6 +335,14 @@ public struct RealtimeActivity: Sendable, Codable, Equatable {
     /// How the client broke the protocol, when it did.
     public internal(set) var violation: String?
     public internal(set) var sent = Sent()
+
+    /// [LAW:single-enforcer] The one place a refused client event's facts become the socket's.
+    mutating func refused(_ refusal: RealtimeError) {
+        switch refusal {
+        case .audioTooLong: appendsTooLong += 1
+        default: break
+        }
+    }
 
     /// The server events that reached the socket, by kind.
     public struct Sent: Sendable, Codable, Equatable {

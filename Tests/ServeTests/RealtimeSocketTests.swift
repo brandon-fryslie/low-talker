@@ -153,6 +153,31 @@ private func update(_ input: [String: Any]) -> [String: Any] {
         #expect(realtime.sent.completed == 1 && realtime.sent.errors == 1 && realtime.sent.deltas >= 2)
     }
 
+    /// An append that would take its item past the audio limit is refused whole and the item
+    /// keeps what it had: committed, it is heard with exactly the limit, and the next item
+    /// starts from nothing.
+    @Test func anAppendPastTheAudioLimitIsRefusedAndTheItemKeepsWhatItHad() async throws {
+        let stub = Stub()
+        let running = try await Running.start(.ready(stub), limits: ServedLimits(uploads: 1, audio: 1))
+        defer { running.server.stop() }
+        var client = Client(running)
+        try await client.append(seconds: 1.2)
+        let refusal = try #require(try await client.until("error")["error"] as? [String: Any])
+        #expect(refusal["code"] as? String == "audio_too_long")
+        #expect(refusal["param"] as? String == "audio")
+        try await client.send(["type": "input_audio_buffer.commit"])
+        _ = try await client.until("conversation.item.input_audio_transcription.completed")
+        try await client.append(seconds: 0.5)
+        try await client.send(["type": "input_audio_buffer.commit"])
+        _ = try await client.until("conversation.item.input_audio_transcription.completed")
+        client.task.cancel(with: .normalClosure, reason: nil)
+        let heard = stub.heard.withLock { $0.map(\.seconds) }
+        #expect(heard.count == 2 && abs(heard[0] - 1) < 0.01 && abs(heard[1] - 0.5) < 0.01)
+        let realtime = try #require(try await running.nextEvent().realtime)
+        #expect(realtime.appends == 17 && realtime.appendsTooLong == 2 && realtime.items == 2)
+        #expect(realtime.sent.errors == 2)
+    }
+
     /// An append that holds no whole sample puts no audio in the buffer, so committing it
     /// is refused as committing nothing is.
     @Test func aCommitWithNoWholeSampleIsRefusedAsEmpty() async throws {

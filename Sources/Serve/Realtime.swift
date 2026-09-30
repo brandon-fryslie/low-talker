@@ -37,6 +37,11 @@ struct RealtimeSession: Sendable, Equatable {
 enum RealtimeAudio {
     static let rate = 24_000
     static var format: [String: Any] { ["type": "audio/pcm", "rate": rate] }
+
+    /// Seconds in `bytes` of it, a trailing half sample counting for nothing.
+    static func duration(bytes: Int) -> TimeInterval {
+        Double(bytes / 2) / Double(rate)
+    }
 }
 
 /// What a client sends, parsed. [LAW:parse-dont-validate] An update in hand is the whole
@@ -148,13 +153,15 @@ enum RealtimeError: Error, Equatable, Sendable {
     case unknownParameter(String)
     case invalidValue(String, String)
     case bufferEmpty
+    /// An append that would take the open item to `seconds`, past the `limit` any item holds.
+    case audioTooLong(seconds: TimeInterval, limit: TimeInterval)
     case promptRefused(String)
     case engineFailed(String)
 
     var type: String {
         switch self {
         case .engineFailed: "server_error"
-        case .invalidAPIKey, .notJSON, .missing, .unknownEvent, .unknownParameter, .invalidValue, .bufferEmpty, .promptRefused: "invalid_request_error"
+        case .invalidAPIKey, .notJSON, .missing, .unknownEvent, .unknownParameter, .invalidValue, .bufferEmpty, .audioTooLong, .promptRefused: "invalid_request_error"
         }
     }
 
@@ -167,6 +174,7 @@ enum RealtimeError: Error, Equatable, Sendable {
         case .unknownParameter: "unknown_parameter"
         case .invalidValue, .promptRefused: "invalid_value"
         case .bufferEmpty: "input_audio_buffer_commit_empty"
+        case .audioTooLong: "audio_too_long"
         case .engineFailed: "transcription_failed"
         }
     }
@@ -180,6 +188,7 @@ enum RealtimeError: Error, Equatable, Sendable {
         case .unknownParameter(let param): "The \(param) parameter is not supported."
         case .invalidValue(let param, let reason): "The \(param) \(reason)."
         case .bufferEmpty: "The input audio buffer is empty; append audio before committing it."
+        case .audioTooLong(let seconds, let limit): "The append would take the input audio buffer to \(Int(seconds.rounded(.up))) seconds of audio; the limit is \(Int(limit)). Commit the buffer before appending more."
         case .promptRefused(let reason): "The prompt cannot be used: \(reason)."
         case .engineFailed(let reason): "Transcription failed: \(reason)."
         }
@@ -190,6 +199,7 @@ enum RealtimeError: Error, Equatable, Sendable {
         case .missing(let param), .unknownParameter(let param), .invalidValue(let param, _): param
         case .unknownEvent: "type"
         case .promptRefused: "session.audio.input.transcription.prompt"
+        case .audioTooLong: "audio"
         case .invalidAPIKey, .notJSON, .bufferEmpty, .engineFailed: nil
         }
     }

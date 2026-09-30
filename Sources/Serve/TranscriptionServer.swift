@@ -194,7 +194,7 @@ struct ServedLimits: Sendable {
     /// that finds none in flight is always taken in: a hold alone, which only delays the
     /// uploads in flight, can never be why one is refused.
     let uploads: Int
-    /// The most audio one upload may hold, in seconds.
+    /// The most audio one upload, or one Realtime item, may hold, in seconds.
     let audio: TimeInterval
 
     init(uploads: Int, audio: TimeInterval) {
@@ -236,7 +236,7 @@ final class Uploads: Sendable {
 /// One request's answer, from the first byte read to the connection's close.
 private struct Answering: Sendable {
     let binding: ServeBinding
-    /// The most audio one upload may hold, in seconds.
+    /// The most audio one upload, or one Realtime item, may hold, in seconds.
     let audio: TimeInterval
     let uploads: Uploads
     let engine: @Sendable () -> ServedEngine
@@ -351,7 +351,7 @@ private struct Answering: Sendable {
             throw .unsupportedValue(field: "intent", value: head.query["intent"] ?? "(none)", accepted: "transcription")
         }
         switch engine() {
-        case .ready(let transcriber): return .realtime(handshake: handshake, RealtimeSocket(transcriber: transcriber))
+        case .ready(let transcriber): return .realtime(handshake: handshake, RealtimeSocket(transcriber: transcriber, audio: audio))
         case .notResident(let reason): throw .notResident(reason)
         case .failed(let reason): throw .engineFailed(reason)
         }
