@@ -35,7 +35,9 @@ extension ModelStore {
                 try FileManager.default.removeItem(at: url)
             }
             return try await OpenSource.with(source, model, beside: self, phase: phase) { source in
-                let hub = HubApiWrapper(downloadBase: directory)
+                // [LAW:one-source-of-truth] The host `upstream(of:)` named the revision on,
+                // rather than HF_ENDPOINT, which the client would read otherwise.
+                let hub = HubApiWrapper(downloadBase: directory, endpoint: Hub.endpoint.absoluteString)
                 let weights = try await whole(.weights, of: model) {
                     switch source {
                     case .huggingFace(let revision):
