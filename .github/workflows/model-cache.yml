@@ -1,7 +1,7 @@
 # Keeps the model a release carries in the Actions cache, saved from master: a run for a tag
 # can restore a cache saved on the default branch, but never one saved for another tag. So
 # release.yml only restores, and this saves, under the name of the model master's CLI names
-# as its default, once per name.
+# as its default and the Hugging Face commits `main` names for it, once per pair.
 name: Model cache
 
 on:
@@ -39,44 +39,51 @@ jobs:
       - name: Create the dev signing identity
         run: make signing-identity
 
-      # [LAW:one-source-of-truth] The same question release.yml asks: the default is the source's.
+      # [LAW:one-source-of-truth] The same questions release.yml asks: the default is the
+      # source's, and the commits `main` names for it are the hub's, asked through the CLI.
       - name: Name the default model
         id: model
         run: |
           set -euo pipefail
           cli=$(make cli | tail -n 1)
           model=$("$cli" model default)
-          echo "cli=$cli" >> "$GITHUB_OUTPUT"
-          echo "default=$model" >> "$GITHUB_OUTPUT"
+          revision=$("$cli" model revision --model "$model")
+          {
+            echo "cli=$cli"
+            echo "revision=$revision"
+            echo "key=model-store-$model-$revision"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Look the model up
         id: lookup
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/model-store
-          key: model-store-${{ steps.model.outputs.default }}
+          key: ${{ steps.model.outputs.key }}
           lookup-only: true
 
-      # A cache entry is never overwritten, so a saved name is left as it is.
+      # A cache entry is never overwritten, so a saved key is left as it is. The fetch is
+      # at the commits the key names, so what is saved under it is what it says.
       - name: Fetch the model
         if: steps.lookup.outputs.cache-hit != 'true'
         env:
           CLI: ${{ steps.model.outputs.cli }}
-        run: '"$CLI" model download --models-dir "$RUNNER_TEMP/model-store"'
+          REVISION: ${{ steps.model.outputs.revision }}
+        run: '"$CLI" model download --models-dir "$RUNNER_TEMP/model-store" --from "$REVISION"'
 
       - name: Save the model
         if: steps.lookup.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/model-store
-          key: model-store-${{ steps.model.outputs.default }}
+          key: ${{ steps.model.outputs.key }}
 
       # actions/cache/save only warns when it cannot reserve or upload, so the entry is looked
       # for rather than assumed.
       - name: Check master's cache holds the model
         env:
           GH_TOKEN: ${{ github.token }}
-          KEY: model-store-${{ steps.model.outputs.default }}
+          KEY: ${{ steps.model.outputs.key }}
           CACHED: ${{ steps.lookup.outputs.cache-hit }}
         run: |
           set -euo pipefail

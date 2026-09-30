@@ -10,7 +10,7 @@ struct ModelCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "model",
         abstract: "Inspect and download the Whisper model the app loads at launch.",
-        subcommands: [Status.self, Download.self, Pack.self, Default.self]
+        subcommands: [Status.self, Download.self, Pack.self, Default.self, Revision.self]
     )
 
     /// The model a release carries and a launch loads where nothing names another, by
@@ -24,6 +24,23 @@ struct ModelCommand: AsyncParsableCommand {
 
         func run() {
             print(ModelName.default.rawValue)
+        }
+    }
+
+    /// The Hugging Face commits `main` names for the model now, for scripts: a release
+    /// keys its cached store by them and fetches at them with `download --from`, so a
+    /// moved upstream is a new entry rather than the old one kept until eviction.
+    /// [LAW:one-source-of-truth]
+    struct Revision: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Print the Hugging Face commits main names for the model now, as <weights>-<tokenizer>, which `download --from` takes."
+        )
+
+        @Option(help: "A model folder name in the whisperkit-coreml repo.")
+        var model: ModelName = .default
+
+        func run() async throws {
+            print(try await ModelRevision.upstream(of: model))
         }
     }
 

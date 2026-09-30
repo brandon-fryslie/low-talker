@@ -38,7 +38,7 @@ import Testing
         let scratch = try ScratchStore(files: ScratchStore.files)
         let url = try scratch.writeManifest("not json")
         await #expect {
-            try await ModelStore(directory: scratch.root).install("test", from: .huggingFace) { _ in }
+            try await ModelStore(directory: scratch.root).install("test", from: .huggingFace(nil)) { _ in }
         } throws: { error in
             guard case ModelStoreError.manifestUnreadable(let manifest, .weights, _) = error else { return false }
             return manifest == url
@@ -63,7 +63,7 @@ import Testing
         let store = ModelStore(directory: scratch.root)
         let installing = Task {
             defer { report.finish() }
-            return try await store.install("test", from: .huggingFace) { report.yield($0) }
+            return try await store.install("test", from: .huggingFace(nil)) { report.yield($0) }
         }
         var reported = phases.makeAsyncIterator()
         try #require(await reported.next() == .waitingForAnotherInstall, "the second installer reports the wait before anything else")
@@ -79,7 +79,7 @@ import Testing
         let scratch = try ScratchStore(files: ScratchStore.files)
         try scratch.record()
         let phases = Mutex<[ModelStore.InstallPhase]>([])
-        let installed = try await ModelStore(directory: scratch.root).install("test", from: .huggingFace) { phase in phases.withLock { $0.append(phase) } }
+        let installed = try await ModelStore(directory: scratch.root).install("test", from: .huggingFace(nil)) { phase in phases.withLock { $0.append(phase) } }
         #expect(installed.folder.standardizedFileURL == scratch.folder.standardizedFileURL)
         #expect(phases.withLock { $0 }.isEmpty)
     }
@@ -158,7 +158,7 @@ import Testing
         try scratch.record()
         try "not json".write(to: scratch.tokenizerManifestURL, atomically: true, encoding: .utf8)
         await #expect {
-            try await ModelStore(directory: scratch.root).install("test", from: .huggingFace) { _ in }
+            try await ModelStore(directory: scratch.root).install("test", from: .huggingFace(nil)) { _ in }
         } throws: { error in
             guard case ModelStoreError.manifestUnreadable(_, .tokenizer, _) = error else { return false }
             return "\(error)".contains("tokenizer's folder under models/openai")

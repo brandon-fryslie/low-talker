@@ -35,16 +35,21 @@ extension ModelStore {
                 try FileManager.default.removeItem(at: url)
             }
             return try await OpenSource.with(source, model, beside: self, phase: phase) { source in
+                // [LAW:one-source-of-truth] The host `upstream(of:)` named the revision on,
+                // rather than HF_ENDPOINT, which the client would read otherwise.
+                let hub = HubApiWrapper(downloadBase: directory, endpoint: Hub.endpoint.absoluteString)
                 let weights = try await whole(.weights, of: model) {
                     switch source {
-                    case .huggingFace:
+                    case .huggingFace(let revision):
                         phase(.downloading(fractionCompleted: 0))
-                        let folder = try await WhisperKit.download(variant: model.rawValue, downloadBase: directory) { phase(.downloading(fractionCompleted: $0.fractionCompleted)) }
+                        let repo = HubApiWrapper.Repo(id: ModelRevision.weightsRepo)
+                        let variant = try await ModelRevision.variantFolder(of: model, among: hub.getFilenames(from: repo, revision: revision.weights.description))
+                        let root = try await hub.snapshot(from: repo, revision: revision.weights.description, matching: ["\(variant)/*"]) { phase(.downloading(fractionCompleted: $0.fractionCompleted)) }
                         // [LAW:no-silent-failure] The hub client answers cancellation by
                         // returning the folder as far as it got, without throwing. A
                         // manifest over that folder would certify a partial model as whole.
                         try Task.checkCancellation()
-                        return try Manifest(recording: folder, relativeTo: directory)
+                        return try Manifest(recording: root.appending(path: variant), relativeTo: directory)
                     case .store(let store):
                         phase(.copying)
                         return try copy(.weights, of: model, from: store)
@@ -53,14 +58,18 @@ extension ModelStore {
                 let folder = directory.appending(path: weights.folder)
                 _ = try await whole(.tokenizer, of: model) {
                     switch source {
-                    case .huggingFace:
+                    case .huggingFace(let revision):
                         // WhisperKit fetches the tokenizer on first load, from the hub,
                         // when it is not already here; taking it now is what lets that
                         // load, and every one after, run with the network off.
-                        let variant = try ModelVariant(modelConfig: folder.appending(path: "config.json"))
-                        _ = try await ModelUtilities.loadTokenizer(for: variant, tokenizerFolder: directory)
+                        //
+                        // [LAW:one-source-of-truth] exception: the files are the ones that
+                        // load takes (`Hub.loadConfig` in ArgmaxCore, internal), fetched
+                        // here at the revision, which the load cannot be given.
+                        let variant = try ModelVariant(modelConfig: Data(contentsOf: folder.appending(path: "config.json")))
+                        let root = try await hub.snapshot(from: HubApiWrapper.Repo(id: variant.tokenizerRepo), revision: revision.tokenizer.description, matching: ["config.json", "tokenizer_config.json", "chat_template.jinja", "chat_template.json", "tokenizer.json"])
                         try Task.checkCancellation()
-                        return try Manifest(recording: directory.appending(components: "models", variant.tokenizerRepo), relativeTo: directory)
+                        return try Manifest(recording: root, relativeTo: directory)
                     case .store(let store):
                         phase(.copying)
                         return try copy(.tokenizer, of: model, from: store)
@@ -203,8 +212,10 @@ public enum ModelInstallError: Error, Equatable, CustomStringConvertible {
     case lockUnavailable(lock: URL, errno: Int32)
     /// A source store that does not hold the part whole, so there is nothing to take.
     case sourceLacks(source: URL, model: ModelName, part: ModelPart, reason: String)
-    /// A published base answered with something other than the archive.
+    /// A published base or huggingface.co answered with something other than what was asked.
     case downloadRefused(url: URL, status: Int?)
+    /// No single folder in the weights repo is the model's, so no download could take one.
+    case noVariantFolder(model: ModelName, matches: [String])
     case dittoFailed(arguments: [String], status: Int32, message: String)
     case renameFailed(from: URL, to: URL, errno: Int32)
 
@@ -215,7 +226,9 @@ public enum ModelInstallError: Error, Equatable, CustomStringConvertible {
         case .sourceLacks(let source, let model, let part, let reason):
             "\(source.path) cannot supply the \(part) of \(model): \(reason)"
         case .downloadRefused(let url, let status):
-            "\(url.absoluteString) answered \(status.map { "HTTP \($0)" } ?? "with no HTTP status"), not the model archive"
+            "\(url.absoluteString) answered \(status.map { "HTTP \($0)" } ?? "with no HTTP status")"
+        case .noVariantFolder(let model, let matches):
+            "no single folder in \(ModelRevision.weightsRepo) holds \(model): \(matches.isEmpty ? "none match" : matches.joined(separator: ", "))"
         case .dittoFailed(let arguments, let status, let message):
             "ditto \(arguments.joined(separator: " ")) exited \(status): \(message)"
         case .renameFailed(let from, let to, let errno):
