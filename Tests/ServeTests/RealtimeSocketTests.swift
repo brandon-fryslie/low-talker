@@ -157,8 +157,10 @@ private func update(_ input: [String: Any]) -> [String: Any] {
     /// A client that appends for longer than the limit without a commit, as Pipecat does
     /// through silence between turns, is never refused: the open item starts over from its
     /// newest audio each time it outgrows its share, so the socket never holds more than the
-    /// limit, and the item committed at last is heard with no more than its share.
-    /// Limit 4 s: a share of 2 s, of which 1 s is kept, so 10 s uncommitted lets go 1 s eight times.
+    /// limit, and the item committed at last is heard with no more than its share. Each item
+    /// let go is cancelled, and no item sends a delta again for words in the audio it kept.
+    /// Limit 4 s: a share of 2 s, of which 1 s is kept, so 10 s uncommitted lets go 1 s eight
+    /// times; the stub's words end at 0 s, so only the first item, which kept nothing, sends any.
     @Test func appendingPastTheLimitWithoutACommitStartsTheItemOverAndIsNeverRefused() async throws {
         let stub = Stub()
         let running = try await Running.start(.ready(stub), limits: ServedLimits(uploads: 1, sockets: 1, audio: 4))
@@ -170,13 +172,56 @@ private func update(_ input: [String: Any]) -> [String: Any] {
         let completed = try await client.until("conversation.item.input_audio_transcription.completed")
         #expect(completed["item_id"] as? String == committed)
         client.task.cancel(with: .normalClosure, reason: nil)
-        let heard = stub.heard.withLock { $0.map(\.seconds) }
-        #expect(heard.count == 9 && heard.allSatisfy { abs($0 - 2) < 0.01 })
+        let heard = stub.heard.withLock { $0 }
+        #expect(heard.count == 9 && heard.allSatisfy { abs($0.seconds - 2) < 0.01 })
+        #expect(heard.filter(\.cancelled).count == 8)
         let realtime = try #require(try await running.nextEvent().realtime)
         #expect(realtime.appends == 100 && realtime.refusals.isEmpty && realtime.sent.errors == 0)
         #expect(realtime.items == 9 && realtime.itemsLetGo == 8 && abs(realtime.letGoAudioSeconds - 8) < 0.01)
-        #expect(realtime.sent.completed == 1 && abs(realtime.audioSeconds - 2) < 0.01)
+        #expect(realtime.sent.completed == 1 && realtime.sent.deltas == 2 && abs(realtime.audioSeconds - 2) < 0.01)
         #expect(realtime.heldAudioSeconds <= 4 && realtime.heldItems == 1)
+    }
+
+    /// An item let go while it waits for the one committed before it is freed at once, not
+    /// once that one is answered, so a client appending through silence behind an engine
+    /// holding its committed turn is not refused for audio the socket let go. Limit 8 s: a
+    /// share of 4 s, of which 2 s is kept. With 1.5 s committed and waiting, 4.1 s starts the
+    /// open item over, and 1.9 s more takes the socket to 6.5 s, or 8.5 s had the 2 s let go
+    /// stayed held. The update's answer is a barrier past the start-over.
+    @Test func anItemLetGoWhileItWaitsItsTurnIsFreedAtOnce() async throws {
+        let gated = Gated()
+        let running = try await Running.start(.ready(gated), limits: ServedLimits(uploads: 1, sockets: 1, audio: 8))
+        defer { running.server.stop() }
+        var client = Client(running)
+        try await client.append(seconds: 0.5)
+        try await client.send(["type": "input_audio_buffer.commit"])
+        try await client.append(seconds: 4.1)
+        try await client.send(update([:]))
+        _ = try await client.until("session.updated")
+        try await client.append(seconds: 1.9)
+        try await client.send(["type": "input_audio_buffer.commit"])
+        _ = try await client.until("input_audio_buffer.committed")
+        gated.gate.cancel()
+        _ = try await client.until("conversation.item.input_audio_transcription.completed")
+        _ = try await client.until("conversation.item.input_audio_transcription.completed")
+        client.task.cancel(with: .normalClosure, reason: nil)
+        let realtime = try #require(try await running.nextEvent().realtime)
+        #expect(realtime.refusals.isEmpty && realtime.itemsLetGo == 1 && realtime.sent.completed == 2)
+    }
+
+    /// The newest bytes are kept oldest first, whether they arrive in one append or wrap
+    /// around the ring across many.
+    @Test func newestKeepsTheLastBytesInOrder() {
+        var newest = Newest(capacity: 5)
+        newest.append(Data([1, 2, 3]))
+        #expect(newest.bytes == Data([1, 2, 3]))
+        newest.append(Data([4, 5, 6, 7]))
+        #expect(newest.bytes == Data([3, 4, 5, 6, 7]))
+        newest.append(Data([8, 9, 10, 11, 12, 13, 14]))
+        #expect(newest.bytes == Data([10, 11, 12, 13, 14]))
+        var none = Newest(capacity: 0)
+        none.append(Data([1]))
+        #expect(none.bytes.isEmpty)
     }
 
     /// A socket opened while the server holds its limit of them is refused with a 429 before
