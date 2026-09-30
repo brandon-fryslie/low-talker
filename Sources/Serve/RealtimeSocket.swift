@@ -11,10 +11,9 @@ struct RealtimeSocket {
     /// One of the server's places for sockets, held for as long as this one is.
     let place: Place
     let transcriber: any Transcriber
-    /// The most audio one item may hold, in seconds.
+    /// The most audio the socket holds at once, in seconds, across every item from its
+    /// first append until it is heard.
     let audio: TimeInterval
-    /// The most items the socket holds at once, being appended or still being heard.
-    let items: Int
 
     /// The most one message may hold. Pipecat's appends are about 5 KB of base64 each.
     static let messageLimit = 1 << 20
@@ -45,7 +44,7 @@ struct RealtimeSocket {
         // [LAW:no-ambient-temporal-coupling] Every item is a child of `items`, so none
         // outlives the socket, and each is gone from it once answered.
         let lost = await withDiscardingTaskGroup { items in
-            var state = State(session: RealtimeSession(), outbox: outbox, audio: audio, holding: Holding(limit: self.items))
+            var state = State(session: RealtimeSession(), outbox: outbox, held: HeldAudio(limit: audio))
             state.outbox.emit(.sessionCreated(id: state.sessionID, state.session))
             var assembler = WebSocket.Assembler()
             /// The frame the server ends with; none when the connection was lost.
@@ -66,7 +65,7 @@ struct RealtimeSocket {
                 }
                 switch message {
                 case .text(let text):
-                    await state.receive(text, transcriber: transcriber, &activity, &items)
+                    state.receive(text, transcriber: transcriber, &activity, &items)
                 case .binary:
                     let violation = WebSocket.Violation(code: 1003, "binary messages are not part of the Realtime API")
                     activity.violation = violation.description
@@ -100,15 +99,14 @@ struct RealtimeSocket {
     private struct State {
         var session: RealtimeSession
         let outbox: Outbox
-        let audio: TimeInterval
-        let holding: Holding
+        let held: HeldAudio
         let sessionID = "sess_\(ID.fresh())"
         /// The item appends are going to, from the first append after a commit.
         var buffer: Buffer?
         /// The last item committed, which the next one follows.
         var previous: String?
 
-        mutating func receive(_ text: String, transcriber: any Transcriber, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) async {
+        mutating func receive(_ text: String, transcriber: any Transcriber, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) {
             var clientEvent: String?
             do throws(RealtimeError) {
                 let object = try ClientEvent.object(text)
@@ -120,7 +118,7 @@ struct RealtimeSocket {
                     outbox.emit(.sessionUpdated(id: sessionID, session))
                 case .append(let bytes):
                     activity.appends += 1
-                    try await append(bytes, transcriber: transcriber, &activity, &items)
+                    try append(bytes, transcriber: transcriber, &activity, &items)
                 case .commit:
                     try commit(&activity, &items)
                 }
@@ -131,23 +129,18 @@ struct RealtimeSocket {
         }
 
         /// `bytes` into the open item, which the first append after a commit opens; refused
-        /// whole, before any of it is taken in, when it would take the item past `audio`.
-        /// An item opened while the socket holds its limit waits for one to be heard, reading
-        /// nothing meanwhile, pings and a close included: the client is held back by its own
-        /// socket rather than sent an error event, which Pipecat takes as fatal, and a client
-        /// whose keepalive runs out first loses the socket.
-        private mutating func append(_ bytes: Data, transcriber: any Transcriber, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) async throws(RealtimeError) {
-            let seconds = RealtimeAudio.duration(bytes: (buffer?.bytes ?? 0) + bytes.count)
-            guard seconds <= audio else { throw .audioTooLong(seconds: seconds, limit: audio) }
+        /// whole, before any of it is taken in, when it would take the socket's held audio
+        /// past its limit. The reader never waits on the engine: a socket whose items are
+        /// still being heard goes on reading, pings included, so engine contention delays
+        /// its transcripts and nothing else (low-serve-axq.32w).
+        private mutating func append(_ bytes: Data, transcriber: any Transcriber, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) throws(RealtimeError) {
+            activity.heldAudioSeconds = max(activity.heldAudioSeconds, try held.take(bytes.count))
             if buffer == nil {
-                if await holding.take() { activity.waits += 1 }
                 let opened = Buffer(transcriber: transcriber, vocabulary: session.vocabulary, outbox: outbox)
                 activity.items += 1
                 let transcript = opened.transcript
-                let holding = holding
                 items.addTask {
                     await withTaskCancellationHandler { _ = await transcript.result } onCancel: { transcript.cancel() }
-                    holding.giveBack()
                 }
                 buffer = opened
             }
@@ -166,7 +159,14 @@ struct RealtimeSocket {
             previous = buffer.id
             let deltas = buffer.deltas
             let transcript = buffer.transcript
-            items.addTask { await deltas.settle(transcript, usage: Usage(heard: heard)) }
+            let (held, bytes) = (held, buffer.bytes)
+            // [LAW:no-ambient-temporal-coupling] Freed before the item is answered, so a
+            // client that appends on hearing it finds the room already there.
+            items.addTask {
+                let result = await transcript.result
+                held.giveBack(bytes)
+                deltas.settle(result, usage: Usage(heard: heard))
+            }
         }
 
         func abandon() {
@@ -175,40 +175,31 @@ struct RealtimeSocket {
     }
 }
 
-/// The items one socket holds, from an item's first append until it is heard, and the
-/// place one more waits for once the socket holds its limit. [LAW:single-enforcer] The one
-/// count of them, so the audio a socket holds is bounded however fast its client commits.
-private final class Holding: Sendable {
-    private let limit: Int
-    /// Items held, and the reader parked for a place, of which there is at most one: a
-    /// socket has one reader.
-    private let state = Mutex<(held: Int, waiting: CheckedContinuation<Bool, Never>?)>((0, nil))
+/// The audio one socket holds, from each append until its item is heard, in the bytes
+/// appends carry. [LAW:single-enforcer] The one count of it, so the memory a socket holds is
+/// bounded however many items its client commits while the engine is busy.
+private final class HeldAudio: Sendable {
+    private let limit: TimeInterval
+    private let bytes = Mutex(0)
 
-    init(limit: Int) {
+    init(limit: TimeInterval) {
         self.limit = limit
     }
 
-    /// A place for one more item, taken at once or, when the socket holds its limit, once
-    /// one is heard; true when it had to wait.
-    func take() async -> Bool {
-        await withCheckedContinuation { continuation in
-            state.withLock { state in
-                guard state.held == limit else {
-                    state.held += 1
-                    return continuation.resume(returning: false)
-                }
-                state.waiting = continuation
-            }
+    /// `count` more bytes held, refused whole when they would take the socket past its
+    /// limit; returns the seconds held with them.
+    func take(_ count: Int) throws(RealtimeError) -> TimeInterval {
+        try bytes.withLock { bytes throws(RealtimeError) in
+            let seconds = RealtimeAudio.duration(bytes: bytes + count)
+            guard seconds <= limit else { throw .audioTooLong(seconds: seconds, limit: limit) }
+            bytes += count
+            return seconds
         }
     }
 
-    /// An item is heard: its place goes to the reader waiting for one, or is free.
-    func giveBack() {
-        state.withLock { state in
-            guard let waiting = state.waiting else { return state.held -= 1 }
-            state.waiting = nil
-            waiting.resume(returning: true)
-        }
+    /// An item is heard, and the `count` bytes it held are free.
+    func giveBack(_ count: Int) {
+        bytes.withLock { $0 -= count }
     }
 }
 
@@ -305,10 +296,10 @@ private final class Deltas: Sendable {
         send(partial.confirmed.words)
     }
 
-    /// Answers the item once `transcript` has been heard: the words not yet sent, then the
+    /// Answers the item with what it was heard as: the words not yet sent, then the
     /// transcript, or the reason there is none.
-    func settle(_ transcript: Task<Transcript, any Error>, usage: Usage) async {
-        switch await transcript.result {
+    func settle(_ transcript: Result<Transcript, any Error>, usage: Usage) {
+        switch transcript {
         case .success(let heard):
             send(heard.words)
             outbox.emit(.completed(item: item, transcript: heard.served, usage: usage))
@@ -376,11 +367,11 @@ public struct RealtimeActivity: Sendable, Codable, Equatable {
     public internal(set) var appends = 0
     /// Client events refused, by their error's code.
     public internal(set) var refusals: [String: Int] = [:]
-    /// The most audio a refused append would have taken its item to, in seconds.
+    /// The most audio a refused append would have taken the socket's held audio to, in seconds.
     public internal(set) var refusedAudioSeconds: Double?
     public internal(set) var items = 0
-    /// Items that waited to open until an earlier one was heard.
-    public internal(set) var waits = 0
+    /// The most audio the socket held at once, in seconds: appended to items not yet heard.
+    public internal(set) var heldAudioSeconds: Double = 0
     /// Seconds of audio in the items committed.
     public internal(set) var audioSeconds: Double = 0
     /// The close code the socket ended with, the client's or the server's.

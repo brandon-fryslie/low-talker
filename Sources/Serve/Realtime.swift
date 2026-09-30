@@ -188,7 +188,7 @@ enum RealtimeError: Error, Equatable, Sendable {
         case .unknownParameter(let param): "The \(param) parameter is not supported."
         case .invalidValue(let param, let reason): "The \(param) \(reason)."
         case .bufferEmpty: "The input audio buffer is empty; append audio before committing it."
-        case .audioTooLong(let seconds, let limit): "The append would take the input audio buffer to \(Int(seconds.rounded(.up))) seconds of audio; the limit is \(Int(limit))."
+        case .audioTooLong(let seconds, let limit): "The append would take the audio this session holds, in the input audio buffer and in items not yet transcribed, to \(Int(seconds.rounded(.up))) seconds; the limit is \(Int(limit))."
         case .promptRefused(let reason): "The prompt cannot be used: \(reason)."
         case .engineFailed(let reason): "Transcription failed: \(reason)."
         }

@@ -186,11 +186,11 @@ public struct ListenRefused: Error, CustomStringConvertible {
     }
 }
 
-/// How much served work a server takes in at once (low-serve-axq.h1n, .q5k): each upload
-/// holds its body and then its decoded audio until it is answered, and waits in `EngineTurns`
-/// holding both while dictation has the engine; each Realtime item holds its audio from its
-/// first append until it is heard. So the audio held at worst is `uploads + sockets * items`
-/// clips of `audio` seconds each.
+/// How much served work a server takes in at once (low-serve-axq.h1n, .q5k, .32w): each
+/// upload holds its body and then its decoded audio until it is answered, and waits in
+/// `EngineTurns` holding both while dictation has the engine; each Realtime socket holds the
+/// audio of every item from its first append until it is heard. So the audio held at worst
+/// is `uploads + sockets` clips of `audio` seconds each.
 ///
 /// [LAW:types-are-the-program] Every count is at least one, so work that finds none of its
 /// kind in flight is always taken in: a hold alone, which only delays the work in flight,
@@ -201,23 +201,21 @@ struct ServedLimits: Sendable {
     /// Realtime sockets open at once. Apart from uploads, since a socket is open as long as
     /// its client keeps it: sharing one count, idle sockets would refuse every upload.
     let sockets: Int
-    /// Items one socket holds at once: the one being appended and those committed and
-    /// still being heard. One more waits for the oldest to be heard.
-    let items: Int
-    /// The most audio one upload, or one Realtime item, may hold, in seconds.
+    /// The most audio one upload, or one Realtime socket across its items, may hold, in
+    /// seconds.
     let audio: TimeInterval
 
-    init(uploads: Int, sockets: Int, items: Int, audio: TimeInterval) {
-        precondition(uploads >= 1 && sockets >= 1 && items >= 1, "a server takes in at least one of each")
+    init(uploads: Int, sockets: Int, audio: TimeInterval) {
+        precondition(uploads >= 1 && sockets >= 1, "a server takes in at least one of each")
         self.uploads = uploads
         self.sockets = sockets
-        self.items = items
         self.audio = audio
     }
 
-    /// Four uploads and four sockets of two items, each of up to fifteen minutes, far past
-    /// any utterance Pipecat sends: at 16 kHz Float32, about 700 MB of audio held at worst.
-    static let standard = ServedLimits(uploads: 4, sockets: 4, items: 2, audio: 15 * 60)
+    /// Four uploads and four sockets of up to fifteen minutes each, far past any utterance
+    /// Pipecat sends and past any dictation hold a socket's items wait behind: at 16 kHz
+    /// Float32, about 460 MB of audio held at worst.
+    static let standard = ServedLimits(uploads: 4, sockets: 4, audio: 15 * 60)
 }
 
 /// What a server holds a bounded number of at once.
@@ -406,7 +404,7 @@ private struct Answering: Sendable {
         // Taken last, so a socket refused for any other reason holds no place.
         let place = try sockets.take()
         event.sockets = place.held
-        return .realtime(handshake: handshake, RealtimeSocket(place: place, transcriber: transcriber, audio: limits.audio, items: limits.items))
+        return .realtime(handshake: handshake, RealtimeSocket(place: place, transcriber: transcriber, audio: limits.audio))
     }
 
     private func transcription(_ head: RequestHead, _ connection: NWConnection, _ reader: inout Reader, _ event: inout ServedRequest) async throws -> HTTPResponse {
