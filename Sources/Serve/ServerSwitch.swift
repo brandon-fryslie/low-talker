@@ -16,8 +16,8 @@ public final class ServerSwitch {
     /// What the server is doing now, in the words the menu says it.
     public enum State: CustomStringConvertible, Sendable {
         case off
-        /// Asked to listen; `attempt` tells a listen that answered after it was overtaken.
-        case starting(attempt: Int)
+        /// Asked to listen, and not listening yet.
+        case starting
         case listening(TranscriptionServer)
         /// Asked to listen and not listening, and why: the address refused, the config could
         /// not be read, or the listener failed after it was up.
@@ -100,7 +100,7 @@ public final class ServerSwitch {
         guard chosen else { return }
         attempts += 1
         let attempt = attempts
-        state = .starting(attempt: attempt)
+        state = .starting
         let before = running
         let resident = resident
         running = Task {
@@ -133,9 +133,11 @@ public final class ServerSwitch {
         return true
     }
 
-    /// Stops accepting connections. The attempt still binding, if any, finds it is no longer
-    /// the current one and lets its port go.
+    /// Stops accepting connections, and gives up the attempt still binding, if any, which lets
+    /// its port go: one waiting for an address no interface holds would otherwise never end,
+    /// and every attempt after it waits on it.
     private func stop() {
+        running?.cancel()
         if case .listening(let server) = state { server.stop() }
         attempts += 1
         state = .off

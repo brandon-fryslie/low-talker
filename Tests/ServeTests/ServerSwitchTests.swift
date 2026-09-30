@@ -3,16 +3,32 @@ import Foundation
 import LowTalkerCore
 import Network
 @testable import Serve
+import Synchronization
 import Testing
 
 /// The app's server as the person switches it (low-serve-axq.tom): off until chosen, the
 /// choice kept, the port held only while on, and every request answered with the engine the
 /// app hands it.
-@MainActor @Suite struct ServerSwitchTests {
-    /// A switch over a defaults domain of its own, listening on `port` of loopback.
-    func aSwitch(on port: NWEndpoint.Port = .any, defaults: UserDefaults = scratchDefaults()) -> ServerSwitch {
-        ServerSwitch(defaults: defaults) { binding, engine throws(ListenRefused) in
-            try await TranscriptionServer.listen(at: ListenAddress(flavor: .development, binding: binding, port: port), engine: engine, record: { _ in })
+@MainActor @Suite final class ServerSwitchTests {
+    /// A defaults domain no other test, and no installation, reads, gone once the test is.
+    /// Named by a path, so its plist is written there rather than into ~/Library/Preferences,
+    /// where removing the domain would leave the file behind.
+    let domain = FileManager.default.temporaryDirectory.appendingPathComponent("ServerSwitchTests-\(UUID().uuidString)")
+    lazy var defaults = UserDefaults(suiteName: domain.path)!
+    /// The port the switch's first listen was given, which every listen after it asks for
+    /// again, as the app's fixed port would be.
+    let held = HeldPort()
+
+    deinit {
+        try? FileManager.default.removeItem(at: domain.appendingPathExtension("plist"))
+    }
+
+    /// A switch over this test's defaults, listening on loopback.
+    func aSwitch() -> ServerSwitch {
+        ServerSwitch(defaults: defaults) { [held] binding, engine throws(ListenRefused) in
+            let server = try await TranscriptionServer.listen(at: ListenAddress(flavor: .development, binding: binding, port: held.port.withLock { $0 }), engine: engine, record: { _ in })
+            held.port.withLock { $0 = server.port }
+            return server
         }
     }
 
@@ -44,14 +60,13 @@ import Testing
 
     /// Switched off, the port is let go and the choice is remembered as off.
     @Test func switchedOffItLetsThePortGo() async throws {
-        let defaults = scratchDefaults()
-        let server = aSwitch(defaults: defaults)
+        let server = aSwitch()
         server.choose(true, at: .success(.loopback))
         let port = try await listening(server).server.port
         server.choose(false, at: .success(.loopback))
         await server.running?.value
         #expect("\(server.state)" == "off")
-        #expect(!aSwitch(defaults: defaults).chosen)
+        #expect(!aSwitch().chosen)
         let again = try await TranscriptionServer.listen(at: ListenAddress(flavor: .development, port: port), engine: { .ready(Stub()) }, record: { _ in })
         again.stop()
     }
@@ -59,9 +74,8 @@ import Testing
     /// The choice outlives the switch, as it outlives the app: another switch over the same
     /// defaults resumes listening.
     @Test func theChoiceIsKept() async throws {
-        let defaults = scratchDefaults()
-        aSwitch(defaults: defaults).choose(true, at: .failure(.noModes))
-        let resumed = aSwitch(defaults: defaults)
+        aSwitch().choose(true, at: .failure(.noModes))
+        let resumed = aSwitch()
         defer { resumed.choose(false, at: .success(.loopback)) }
         resumed.resume(at: .success(.loopback))
         _ = try await listening(resumed)
@@ -70,11 +84,10 @@ import Testing
     /// Asked again while listening, it listens again on its own port rather than being
     /// refused by the listener it is replacing.
     @Test func aRestartListensAgainOnTheSamePort() async throws {
-        let port = try await freePort()
-        let server = aSwitch(on: port)
+        let server = aSwitch()
         defer { server.choose(false, at: .success(.loopback)) }
         server.choose(true, at: .success(.loopback))
-        _ = try await listening(server)
+        let port = try await listening(server).server.port
         server.resume(at: .success(.loopback))
         #expect(try await listening(server).server.port == port)
     }
@@ -82,14 +95,30 @@ import Testing
     /// Switched off while it was still binding, the listen that answers late lets its port go
     /// rather than being left up behind a switch that reads off.
     @Test func switchedOffWhileStartingNothingIsLeftListening() async throws {
-        let port = try await freePort()
-        let server = aSwitch(on: port)
+        let server = aSwitch()
         server.choose(true, at: .success(.loopback))
         server.choose(false, at: .success(.loopback))
         await server.running?.value
         #expect("\(server.state)" == "off")
-        let again = try await TranscriptionServer.listen(at: ListenAddress(flavor: .development, port: port), engine: { .ready(Stub()) }, record: { _ in })
+        let again = try await TranscriptionServer.listen(at: ListenAddress(flavor: .development, port: held.port.withLock { $0 }), engine: { .ready(Stub()) }, record: { _ in })
         again.stop()
+    }
+
+    /// An address no interface holds keeps the listen waiting for one; switched off, it is
+    /// given up, and switched on again elsewhere, it listens there rather than waiting behind it.
+    @Test(.timeLimit(.minutes(1))) func aListenWaitingForItsAddressIsGivenUp() async throws {
+        // TEST-NET-1, which no interface of any Mac holds.
+        let unheld = ServeBinding.interface(try InterfaceAddress("192.0.2.1"), token: try BearerToken("sk-test-token"))
+        let server = aSwitch()
+        defer { server.choose(false, at: .success(.loopback)) }
+        server.choose(true, at: .success(unheld))
+        try await Task.sleep(for: .milliseconds(200))
+        #expect("\(server.state)" == "starting")
+        server.choose(false, at: .success(unheld))
+        await server.running?.value
+        #expect("\(server.state)" == "off")
+        server.choose(true, at: .success(.loopback))
+        _ = try await listening(server)
     }
 
     /// An address another process holds, and a config that names none, each leave the switch
@@ -97,7 +126,8 @@ import Testing
     @Test func whatKeepsItFromListeningIsSaid() async throws {
         let holder = try await TranscriptionServer.listen(at: ListenAddress(flavor: .development, port: .any), engine: { .ready(Stub()) }, record: { _ in })
         defer { holder.stop() }
-        let taken = aSwitch(on: holder.port)
+        held.port.withLock { $0 = holder.port }
+        let taken = aSwitch()
         taken.choose(true, at: .success(.loopback))
         await taken.running?.value
         #expect("\(taken.state)".hasPrefix("stopped — LowTalker Dev (development) cannot serve on 127.0.0.1:\(holder.port): "))
@@ -121,14 +151,6 @@ import Testing
         }
         throw ListenFailed(reason: "still \(server.state) after 30 s")
     }
-
-    /// A port nothing holds, found by binding one and letting it go.
-    func freePort() async throws -> NWEndpoint.Port {
-        let probe = try await TranscriptionServer.listen(at: ListenAddress(flavor: .development, port: .any), engine: { .ready(Stub()) }, record: { _ in })
-        probe.stop()
-        try await probe.finished()
-        return probe.port
-    }
 }
 
 struct ListenFailed: Error, CustomStringConvertible {
@@ -136,10 +158,6 @@ struct ListenFailed: Error, CustomStringConvertible {
     var description: String { "the switch did not listen: \(reason)" }
 }
 
-/// A defaults domain no other test, and no installation, reads.
-func scratchDefaults() -> UserDefaults {
-    let name = "ServerSwitchTests-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: name)!
-    defaults.removePersistentDomain(forName: name)
-    return defaults
+final class HeldPort: Sendable {
+    let port = Mutex(NWEndpoint.Port.any)
 }

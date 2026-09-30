@@ -558,7 +558,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // menu must say, since every session after this would otherwise fail
             // with no explanation on screen.
             show(.failed("\(error)"))
-            serving?.answer(with: .notResident("the model failed to load: \(error)"))
+            serving?.answer(with: .failed("the model failed to load: \(error)"))
             throw error
         }
     }

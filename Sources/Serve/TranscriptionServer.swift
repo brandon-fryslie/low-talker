@@ -5,12 +5,14 @@ import Network
 import os
 import Synchronization
 
-/// What answers a transcription when one is asked for: the resident engine, or the reason
-/// there is none yet. The server asks at each request, so a host whose model is still
+/// What answers a transcription when one is asked for: the resident engine, the reason
+/// there is none yet, or why there will be none. The server asks at each request, so a host whose model is still
 /// loading can listen from launch and answer 503 until it is ready.
 public enum ServedEngine: Sendable {
     case ready(any Transcriber)
     case notResident(String)
+    /// Will not be resident: the model could not be loaded, so waiting will not help.
+    case failed(String)
 }
 
 /// OpenAI's `POST /v1/audio/transcriptions` and its Realtime transcription socket,
@@ -27,7 +29,9 @@ public final class TranscriptionServer: Sendable {
     /// What a client is given: the root both OpenAI routes are served under.
     public var baseURL: String { "http://\(address)/v1" }
     private let listener: NWListener
-    private let ended: AsyncThrowingStream<Never, any Error>
+    /// A task of its own, so a caller cancelled while it waits still learns when the port is
+    /// let go rather than returning before it is.
+    private let ended: Task<Void, any Error>
 
     /// OpenAI's limit on an uploaded file is 25 MB; the rest is the form around it.
     static let bodyLimit = 26 * 1024 * 1024
@@ -35,7 +39,7 @@ public final class TranscriptionServer: Sendable {
     /// answered, before the connection is dropped.
     static let readDeadline: DispatchTimeInterval = .seconds(120)
 
-    private init(address: ListenAddress, listener: NWListener, ended: AsyncThrowingStream<Never, any Error>) {
+    private init(address: ListenAddress, listener: NWListener, ended: Task<Void, any Error>) {
         self.address = address
         self.listener = listener
         self.ended = ended
@@ -45,7 +49,8 @@ public final class TranscriptionServer: Sendable {
     /// `binding` admits with what `engine` says at that moment and handing one
     /// `ServedRequest` per connection to `record`. Throws `ListenRefused` when the address
     /// cannot be had, which is most often another process of the same installation already
-    /// serving on it.
+    /// serving on it. Cancelled while the address is not yet had, as while no interface holds
+    /// it, the listen lets it go and throws.
     public static func listen(
         for flavor: Flavor,
         on binding: ServeBinding,
@@ -85,30 +90,42 @@ public final class TranscriptionServer: Sendable {
             Task { await answering.serve(connection) }
         }
         let (ended, end) = AsyncThrowingStream<Never, any Error>.makeStream()
-        let bound = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<NWEndpoint.Port, any Error>) in
-            // The state handler runs for every change; the first ready or failure decides
-            // the listen, and a failure after it ends the server, which `finished` tells.
-            let waiting = Mutex<CheckedContinuation<NWEndpoint.Port, any Error>?>(continuation)
-            listener.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    waiting.withLock { $0.take() }?.resume(returning: listener.port!)
-                case .failed(let error):
-                    ServedRequest.logger.error("listener failed: \(error, privacy: .public)")
-                    listener.cancel()
-                    waiting.withLock { $0.take() }?.resume(throwing: error)
-                    end.finish(throwing: error)
-                case .cancelled:
-                    end.finish()
-                case .setup, .waiting:
-                    break
-                @unknown default:
-                    break
+        let bound = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<NWEndpoint.Port, any Error>) in
+                // The state handler runs for every change; the first ready, failure or cancel
+                // decides the listen, and one after it ends the server, which `finished` tells.
+                let waiting = Mutex<CheckedContinuation<NWEndpoint.Port, any Error>?>(continuation)
+                listener.stateUpdateHandler = { state in
+                    switch state {
+                    case .ready:
+                        waiting.withLock { $0.take() }?.resume(returning: listener.port!)
+                    case .failed(let error):
+                        ServedRequest.logger.error("listener failed: \(error, privacy: .public)")
+                        listener.cancel()
+                        waiting.withLock { $0.take() }?.resume(throwing: error)
+                        end.finish(throwing: error)
+                    case .cancelled:
+                        waiting.withLock { $0.take() }?.resume(throwing: CancellationError())
+                        end.finish()
+                    case .waiting(let error):
+                        // An address no interface holds yet waits for one to, and says so.
+                        ServedRequest.logger.notice("listener waiting: \(error, privacy: .public)")
+                    case .setup:
+                        break
+                    @unknown default:
+                        break
+                    }
                 }
+                listener.start(queue: queue)
             }
-            listener.start(queue: queue)
+        } onCancel: {
+            listener.cancel()
         }
-        return TranscriptionServer(address: ListenAddress(flavor: address.flavor, binding: address.binding, port: bound), listener: listener, ended: ended)
+        return TranscriptionServer(
+            address: ListenAddress(flavor: address.flavor, binding: address.binding, port: bound),
+            listener: listener,
+            ended: Task { for try await _ in ended {} }
+        )
     }
 
     /// Stops accepting connections. A request already being answered is answered.
@@ -117,9 +134,9 @@ public final class TranscriptionServer: Sendable {
     }
 
     /// Returns once the server has stopped, and throws the failure that stopped it if it
-    /// was not `stop`. One caller waits on it.
+    /// was not `stop`.
     public func finished() async throws {
-        for try await _ in ended {}
+        try await ended.value
     }
 }
 
@@ -280,6 +297,7 @@ private struct Answering: Sendable {
         switch engine() {
         case .ready(let transcriber): return .realtime(handshake: handshake, RealtimeSocket(transcriber: transcriber))
         case .notResident(let reason): throw .notResident(reason)
+        case .failed(let reason): throw .engineFailed(reason)
         }
     }
 
@@ -290,6 +308,7 @@ private struct Answering: Sendable {
         switch engine() {
         case .ready(let resident): transcriber = resident
         case .notResident(let reason): throw APIError.notResident(reason)
+        case .failed(let reason): throw APIError.engineFailed(reason)
         }
         // A client that asked to hear the request is wanted before sending its body
         // (curl, for any large upload) waits for this, or for a timeout, before it sends.

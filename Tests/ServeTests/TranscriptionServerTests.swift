@@ -157,6 +157,18 @@ import Testing
         #expect(event.error == "model_not_ready" && event.audioSeconds == nil)
     }
 
+    /// A model that could not be loaded is a 500, not the 503 that tells a client to wait.
+    @Test func aModelThatFailedToLoadIs500() async throws {
+        let running = try await Running.start(.failed("the model failed to load: no weights"))
+        defer { running.server.stop() }
+        let (response, body) = try await running.post([("model", nil, Data("m".utf8)), ("file", "audio.wav", Data("not audio".utf8))])
+        #expect(response.statusCode == 500)
+        #expect(try error(body)["code"] as? String == "transcription_failed")
+        #expect(try (error(body)["message"] as? String)?.contains("no weights") == true)
+        let event = try await running.nextEvent()
+        #expect(event.error == "transcription_failed")
+    }
+
     /// A prompt the engine cannot take is the client's to fix, so it is a 400 naming it.
     @Test func aPromptTheEngineRefusesIs400() async throws {
         let running = try await Running.start(.ready(Stub(.failure(VocabularyError.tooLong(tokens: 300, limit: 224)))))
