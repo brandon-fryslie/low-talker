@@ -39,6 +39,11 @@ public struct Transcript: Hashable, Codable, Sendable {
         !text.contains { !$0.isWhitespace }
     }
 
+    /// The same words, each `seconds` later.
+    func shifted(by seconds: TimeInterval) -> Transcript {
+        Transcript(words: words.map { Word(text: $0.text, time: $0.time.lowerBound + seconds...$0.time.upperBound + seconds, confidence: $0.confidence) })
+    }
+
     public struct Word: Hashable, Codable, Sendable {
         public let text: String
         /// Seconds from the start of the clip. A ClosedRange makes an end before a

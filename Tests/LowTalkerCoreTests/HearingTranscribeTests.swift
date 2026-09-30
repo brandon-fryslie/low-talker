@@ -59,6 +59,32 @@ import Testing
         #expect(passes.isEmpty)
     }
 
+    /// An utterance that opens on minutes of quiet, as a Realtime item does between a
+    /// client's turns, is heard as only what was said in it. The engine here reads words
+    /// into any second of quiet it is handed, as Whisper does ("Thank you."); no pass is
+    /// handed more of it than the lead-in, and the words are timed from the audio's
+    /// first sample, not from the quiet let go (low-serve-axq.ium).
+    @Test func quietOpeningAnUtteranceYieldsNoWords() async throws {
+        let (clips, feed) = AsyncStream<AudioClip>.makeStream()
+        for _ in 0..<300 {
+            feed.yield(Self.quiet(1))
+        }
+        feed.yield(Self.speech(0.4))
+        feed.finish()
+        var passes: [Hearing.Pass] = []
+        let transcript = try await Hearing.transcribe(clips, margin: Self.margin, context: 3, pass: { pass in
+            passes.append(pass)
+            let quiet = pass.samples.prefix { $0 < Utterance.audible }.count
+            let at = AudioClip.duration(for: quiet)
+            let heardInQuiet = quiet >= AudioClip.sampleCount(for: 1) ? [Self.word(" Thank", 0, 0.2), Self.word(" you.", 0.2, 0.4)] : []
+            return heardInQuiet + [Self.word(" see", at, at + 0.2), Self.word(" you", at + 0.2, at + 0.4)]
+        }, partial: { _ in })
+        #expect(!passes.isEmpty)
+        #expect(passes.allSatisfy { $0.samples.prefix { $0 < Utterance.audible }.count == Utterance.leadIn })
+        #expect(transcript.text == " see you")
+        #expect(abs(transcript.words[0].time.lowerBound - 300) < 1e-9)
+    }
+
     /// Speech under a second, well under what a pass waits for during the hold,
     /// gets exactly one pass once the utterance ends, over the speech and its
     /// hangover from the start, and the words it reads are the transcript.

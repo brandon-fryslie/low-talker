@@ -139,9 +139,10 @@ extension Hearing {
             let words = try await pass(Pass(samples: samples, cut: hearing.cut, saying: hearing.saying))
             hearing.hear(words, through: samples.count)
             if ended { break }
-            partial(hearing.partial)
+            partial(hearing.partial.shifted(by: AudioClip.duration(for: await utterance.origin)))
         }
         try await fed
-        return hearing.transcript
+        // Timed from the audio's first sample, not from the quiet the utterance let go.
+        return hearing.transcript.shifted(by: AudioClip.duration(for: await utterance.origin))
     }
 }

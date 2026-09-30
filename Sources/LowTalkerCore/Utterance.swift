@@ -3,8 +3,12 @@
 /// pass takes the speech so far, and the engine waits here between passes until
 /// more has been spoken or the utterance has ended.
 ///
-/// What a pass is handed is the speech: the audio through `hangover` past the last
-/// clip that held speech, silence where that much has not arrived yet. Trailing
+/// What a pass is handed is the speech: the audio from `leadIn` before the first clip
+/// that held speech through `hangover` past the last, silence where that much has not
+/// arrived yet. Leading quiet is let go as it arrives, however long it runs: Whisper
+/// reads words into silence it is handed ("Thank you."), so an utterance that opens on
+/// minutes of it, as a Realtime item does between a client's turns, would otherwise
+/// begin with words nobody said (low-serve-axq.ium). Trailing
 /// quiet is never worth a pass, during the hold or after it: a pass over the same
 /// speech and more silence reads the same words, and the encoder's cost does not
 /// shrink with the tail. So the pass in flight when the key comes up is the last
@@ -33,8 +37,13 @@ actor Utterance {
     /// Audio kept past the last clip with speech in it, so a word's soft tail rides
     /// with the word. Silence to the encoder either way, so it costs the pass nothing.
     static let hangover = AudioClip.sampleCount(for: 0.3)
+    /// Audio kept before the first clip with speech in it, so a word's soft onset rides
+    /// with the word, as its tail does with `hangover`.
+    static let leadIn = AudioClip.sampleCount(for: 0.3)
 
     private var samples: [Float] = []
+    /// Samples let go before the speech: where `samples` starts in the audio appended.
+    private(set) var origin = 0
     /// Samples through the end of the last clip that held speech, once one has.
     /// Each clip is judged as it arrives, against the loudest so far, and never
     /// again: a louder clip later may put an earlier one outside the range, but
@@ -50,6 +59,11 @@ actor Utterance {
     private var waiting: [CheckedContinuation<Void, Never>] = []
 
     func append(_ clip: AudioClip) {
+        // [LAW:dataflow-not-control-flow] Every clip lets go what lies more than the
+        // lead-in before it, which is nothing once speech has begun.
+        let letGo = spoken == nil ? max(0, samples.count - Self.leadIn) : 0
+        samples.removeFirst(letGo)
+        origin += letGo
         samples += clip.samples
         let peak = clip.peak
         loudest = max(loudest, peak)

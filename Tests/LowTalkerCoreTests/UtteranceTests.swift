@@ -58,6 +58,22 @@ import Testing
         #expect(samples[17_600..<18_400].allSatisfy { $0 == 0.5 })
     }
 
+    /// Quiet before speech is let go as it arrives but for the lead-in: however long the
+    /// quiet an utterance opens on, a pass reads the lead-in and then the speech, and
+    /// `origin` says where in the audio appended that starts.
+    @Test func quietBeforeSpeechIsLetGoButTheLeadIn() async {
+        let utterance = Utterance()
+        for _ in 0..<60 {
+            await utterance.append(Self.quiet(16_000))
+        }
+        await utterance.append(Self.speech(1_600))
+        let (samples, _) = await utterance.audio(beyond: 0)
+        #expect(samples.count == Utterance.leadIn + 1_600 + Utterance.hangover)
+        #expect(samples.prefix(Utterance.leadIn).allSatisfy { $0 == 0.001 })
+        #expect(samples[Utterance.leadIn..<Utterance.leadIn + 1_600].allSatisfy { $0 == 0.5 })
+        #expect(await utterance.origin == 60 * 16_000 - Utterance.leadIn)
+    }
+
     /// The end wakes a wait that the speech never satisfied, with what there is.
     @Test func theEndWakesAWaitWithWhatArrived() async {
         let utterance = Utterance()
