@@ -232,7 +232,7 @@ private final class FixedEar: Transcriber {
     /// While serving, every hold has three served callers around it: an upload begun
     /// before key-down, one arriving halfway through, and a stream running from before
     /// key-down to key-up. Each upload is checked against what the same upload reads with
-    /// nothing else asking, which is heard once, before any hold.
+    /// nothing else asking, which is heard once, after every hold.
     @Test func servingAsksTheServedEngineAroundEveryHold() async throws {
         let spoken = FixedEar(heard: "hi")
         let served = FixedEar(heard: "served")

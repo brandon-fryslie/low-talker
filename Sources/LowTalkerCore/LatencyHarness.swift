@@ -68,15 +68,18 @@ public enum LatencyHarness {
             return AudioClip(samples: (0..<AudioClip.sampleCount(for: servedSeconds)).map { spoken[$0 % spoken.count] })
         }
 
-        /// The served requests around a hold of `hold` seconds, timed from key-down.
-        func requests(_ audio: AudioClip, hold: TimeInterval) -> [ServedRequest] {
+        /// The served requests around a hold of `hold` seconds, timed from key-down, their
+        /// audio the upload of `fixtures`.
+        func requests(from fixtures: [Fixture], hold: TimeInterval) -> [ServedRequest] {
             switch self {
-            case .idle: []
-            case .served: [
-                ServedRequest(clip: audio, arrival: .batch, at: -Self.lead),
-                ServedRequest(clip: audio, arrival: .batch, at: hold / 2),
-                ServedRequest(clip: AudioClip(samples: Array(audio.samples.prefix(AudioClip.sampleCount(for: Self.lead + hold)))), arrival: .streamed, at: -Self.lead),
-            ]
+            case .idle: return []
+            case .served:
+                let audio = Self.upload(of: fixtures)
+                return [
+                    ServedRequest(clip: audio, arrival: .batch, at: -Self.lead),
+                    ServedRequest(clip: audio, arrival: .batch, at: hold / 2),
+                    ServedRequest(clip: AudioClip(samples: Array(audio.samples.prefix(AudioClip.sampleCount(for: Self.lead + hold)))), arrival: .streamed, at: -Self.lead),
+                ]
             }
         }
     }
@@ -114,28 +117,26 @@ public enum LatencyHarness {
         let loading = clock.now
         let engine = try await load()
         let load = clock.now - loading
-        // The upload, and what the served engine makes of it with nothing else asking: the
-        // reading every served upload during a hold must come back with.
-        let servedAudio = Serving.upload(of: fixtures)
-        let servedReading = servings.contains(.served) ? try await engine.served.transcribe(servedAudio, expecting: .empty).text : ""
-        var results: [LatencyReport.FixtureResult] = []
+        // Each row, and the uploads its holds' served callers read, which are judged once
+        // every hold is done.
+        var rows: [(uploads: [String], result: (_ changed: Int) -> LatencyReport.FixtureResult)] = []
         for fixture in fixtures {
             for arrival in arrivals {
                 for serving in servings {
                     let chunks = fixture.clip.chunks(of: arrival.chunk(of: fixture.clip))
-                    let requests = serving.requests(servedAudio, hold: fixture.clip.duration)
+                    let requests = serving.requests(from: fixtures, hold: fixture.clip.duration)
                     let before = engine.turns.reading
                     var runs: [LatencyReport.Run] = []
                     var transcript = Transcript(words: [])
-                    var changed = 0
+                    var uploads: [String] = []
                     for _ in 0...reruns {
                         let (run, heard, readings) = try await hold(chunks, amid: requests, with: engine, expecting: vocabulary, clock: clock)
                         runs.append(run)
                         transcript = heard
-                        changed += readings.count { $0 != servedReading }
+                        uploads += readings
                     }
                     let after = engine.turns.reading
-                    results.append(LatencyReport.FixtureResult(
+                    rows.append((uploads, { changed in LatencyReport.FixtureResult(
                         name: fixture.name,
                         arrival: arrival,
                         serving: serving,
@@ -149,11 +150,15 @@ public enum LatencyHarness {
                             deferred: after.tally.deferred - before.tally.deferred,
                             changed: changed
                         )
-                    ))
+                    ) }))
                 }
             }
         }
-        return LatencyReport(load: load, fixtures: results)
+        // What the served engine makes of the upload with nothing else asking, which every
+        // upload heard during a hold must match. Heard last, so the first hold after the load
+        // still finds the engine as the first press after launch does.
+        let servedReading = servings.contains(.served) ? try await engine.served.transcribe(Serving.upload(of: fixtures), expecting: .empty).text : ""
+        return LatencyReport(load: load, fixtures: rows.map { $0.result($0.uploads.count { $0 != servedReading }) })
     }
 
     /// One hold amid `requests`: each served request reaches the engine when it is due, the
