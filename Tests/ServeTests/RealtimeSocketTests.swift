@@ -151,6 +151,7 @@ private func update(_ input: [String: Any]) -> [String: Any] {
         #expect(realtime.appends == 10 && realtime.items == 1 && realtime.closeCode == 1000)
         #expect(abs(realtime.audioSeconds - 1) < 0.01)
         #expect(realtime.sent.completed == 1 && realtime.sent.errors == 1 && realtime.sent.deltas >= 2)
+        #expect(realtime.refusals == ["input_audio_buffer_commit_empty": 1] && realtime.refusedAudioSeconds == nil)
     }
 
     /// An append that would take its item past the audio limit is refused whole and the item
@@ -174,7 +175,8 @@ private func update(_ input: [String: Any]) -> [String: Any] {
         let heard = stub.heard.withLock { $0.map(\.seconds) }
         #expect(heard.count == 2 && abs(heard[0] - 1) < 0.01 && abs(heard[1] - 0.5) < 0.01)
         let realtime = try #require(try await running.nextEvent().realtime)
-        #expect(realtime.appends == 17 && realtime.appendsTooLong == 2 && realtime.items == 2)
+        #expect(realtime.appends == 17 && realtime.refusals == ["audio_too_long": 2] && realtime.items == 2)
+        #expect(abs(try #require(realtime.refusedAudioSeconds) - 1.1) < 0.01)
         #expect(realtime.sent.errors == 2)
     }
 

@@ -325,8 +325,10 @@ enum Outgoing: Sendable {
 public struct RealtimeActivity: Sendable, Codable, Equatable {
     public internal(set) var updates = 0
     public internal(set) var appends = 0
-    /// Appends refused for taking their item past the audio limit.
-    public internal(set) var appendsTooLong = 0
+    /// Client events refused, by their error's code.
+    public internal(set) var refusals: [String: Int] = [:]
+    /// The most audio a refused append would have taken its item to, in seconds.
+    public internal(set) var refusedAudioSeconds: Double?
     public internal(set) var items = 0
     /// Seconds of audio in the items committed.
     public internal(set) var audioSeconds: Double = 0
@@ -338,10 +340,8 @@ public struct RealtimeActivity: Sendable, Codable, Equatable {
 
     /// [LAW:single-enforcer] The one place a refused client event's facts become the socket's.
     mutating func refused(_ refusal: RealtimeError) {
-        switch refusal {
-        case .audioTooLong: appendsTooLong += 1
-        default: break
-        }
+        refusals[refusal.code, default: 0] += 1
+        if case .audioTooLong(let seconds, _) = refusal { refusedAudioSeconds = max(refusedAudioSeconds ?? 0, seconds) }
     }
 
     /// The server events that reached the socket, by kind.
