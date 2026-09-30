@@ -124,6 +124,58 @@ import TestProbes
         #expect(try await running.nextEvent().turns == EngineTurns.Tally(deferred: 1))
     }
 
+    /// Uploads past the limit at once are refused with the 429 Pipecat retries, while the
+    /// one taken in waits out the hold and is answered; each event says how many were in.
+    @Test func anUploadPastTheLimitIs429WhileTheOneTakenInIsAnswered() async throws {
+        let turns = EngineTurns()
+        let running = try await Running.start(.ready(Turning(turns: turns)), limits: ServedLimits(uploads: 1, audio: 60))
+        defer { running.server.stop() }
+        let hold = turns.hold()
+        let upload = [("model", nil, Data("m".utf8)), ("file", "audio.mp3", try fixture("hello-16k-mono.mp3"))] as [(name: String, filename: String?, value: Data)]
+        async let answered = running.post(upload)
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { turns.reading.waiting == 1 })
+        let (refused, body) = try await running.post(upload)
+        #expect(refused.statusCode == 429)
+        #expect(try error(body)["code"] as? String == "rate_limit_exceeded")
+        let refusal = try await running.nextEvent()
+        #expect(refusal.status == 429 && refusal.uploads == 1 && refusal.bytes == nil)
+        hold.release()
+        #expect(try await answered.0.statusCode == 200)
+        let taken = try await running.nextEvent()
+        #expect(taken.status == 200 && taken.uploads == 1)
+        // The refused upload's place was never taken, and the answered one's is given back.
+        #expect(try await running.post(upload).0.statusCode == 200)
+    }
+
+    /// An upload holding more audio than the limit is refused by its length, before any of
+    /// it is decoded or the engine hears it.
+    @Test func anUploadLongerThanTheLimitIs400() async throws {
+        let stub = Stub()
+        let running = try await Running.start(.ready(stub), limits: ServedLimits(uploads: 4, audio: 1))
+        defer { running.server.stop() }
+        let (response, body) = try await running.post([("model", nil, Data("m".utf8)), ("file", "audio.mp3", fixture("hello-16k-mono.mp3"))])
+        #expect(response.statusCode == 400)
+        #expect(try error(body)["code"] as? String == "audio_too_long")
+        #expect(try error(body)["param"] as? String == "file")
+        #expect(stub.heard.withLock { $0.isEmpty })
+        let event = try await running.nextEvent()
+        // The length its header gave, which is what refused it.
+        let claimed = try #require(event.audioSeconds)
+        #expect(event.error == "audio_too_long" && abs(claimed - 2.2585) < 0.01)
+    }
+
+    /// A header whose rate gives its audio no length (0 Hz, which AVAudioConverter takes) is
+    /// a 400, not a length the server computes with.
+    @Test func anUploadWhoseRateGivesNoLengthIs400() async throws {
+        let stub = Stub()
+        let running = try await Running.start(.ready(stub))
+        defer { running.server.stop() }
+        let (response, body) = try await running.post([("model", nil, Data("m".utf8)), ("file", "audio.caf", fixture("zero-rate.caf"))])
+        #expect(response.statusCode == 400)
+        #expect(try error(body)["code"] as? String == "invalid_audio")
+        #expect(stub.heard.withLock { $0.isEmpty })
+    }
+
     /// The prompt is the vocabulary a dictation mode would give: one term, as written.
     @Test func promptIsTheVocabulary() async throws {
         let stub = Stub()

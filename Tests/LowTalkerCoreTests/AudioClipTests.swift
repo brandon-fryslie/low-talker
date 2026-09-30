@@ -19,6 +19,19 @@ private func fixture(_ name: String) throws -> URL {
         #expect(clip.peak > 0.05, "fixture should contain speech, not silence")
     }
 
+    /// A file longer than the reader will take is refused by the length its header gives,
+    /// and one no longer loads whole.
+    @Test(arguments: ["hello-16k-mono", "hello-44k-stereo"])
+    func refusesAFileLongerThanItTakes(name: String) throws {
+        #expect {
+            try AudioClip(contentsOf: fixture(name), longest: 2)
+        } throws: { error in
+            guard case AudioClipError.longerThan(2, let seconds) = error else { return false }
+            return abs(seconds - Self.fixtureDuration) < 0.01
+        }
+        #expect(abs(try AudioClip(contentsOf: fixture(name), longest: 3).duration - Self.fixtureDuration) < 0.01)
+    }
+
     @Test func durationIsSampleCountAtSixteenKilohertz() {
         let clip = AudioClip(samples: Array(repeating: 0, count: 16_000))
         #expect(clip.duration == 1)

@@ -20,17 +20,20 @@ enum APIError: Error, Equatable, Sendable {
     case emptyFile
     case unreadableAudio(String)
     case silentFile
+    case audioTooLong(seconds: TimeInterval, limit: TimeInterval)
+    case busy(uploads: Int)
     case uploadNotStored(String)
     case notResident(String)
     case engineFailed(String)
 
     var status: Status {
         switch self {
-        case .malformed, .missing, .repeated, .unsupportedParameter, .unsupportedValue, .promptRefused, .emptyFile, .unreadableAudio, .silentFile: .badRequest
+        case .malformed, .missing, .repeated, .unsupportedParameter, .unsupportedValue, .promptRefused, .emptyFile, .unreadableAudio, .silentFile, .audioTooLong: .badRequest
         case .invalidAPIKey: .unauthorized
         case .lengthRequired: .lengthRequired
         case .tooLarge: .contentTooLarge
         case .notFound: .notFound
+        case .busy: .tooManyRequests
         case .notResident: .serviceUnavailable
         case .uploadNotStored, .engineFailed: .internalServerError
         }
@@ -51,6 +54,8 @@ enum APIError: Error, Equatable, Sendable {
         case .emptyFile: "The audio file is empty."
         case .unreadableAudio(let reason): "The audio file could not be read: \(reason)."
         case .silentFile: "The audio file holds no audio."
+        case .audioTooLong(let seconds, let limit): "The audio file holds \(Int(seconds.rounded(.up))) seconds of audio; the limit is \(Int(limit))."
+        case .busy(let uploads): "The server is already transcribing \(uploads) uploads, as many as it takes at once; retry shortly."
         case .uploadNotStored(let reason): "The upload could not be stored for reading: \(reason)."
         case .notResident(let reason): "The model is not ready: \(reason)."
         case .engineFailed(let reason): "Transcription failed: \(reason)."
@@ -61,8 +66,8 @@ enum APIError: Error, Equatable, Sendable {
         switch self {
         case .missing(let field), .repeated(let field), .unsupportedParameter(let field), .unsupportedValue(let field, _, _): field
         case .promptRefused: "prompt"
-        case .emptyFile, .unreadableAudio, .silentFile: "file"
-        case .malformed, .invalidAPIKey, .lengthRequired, .tooLarge, .notFound, .uploadNotStored, .notResident, .engineFailed: nil
+        case .emptyFile, .unreadableAudio, .silentFile, .audioTooLong: "file"
+        case .malformed, .invalidAPIKey, .lengthRequired, .tooLarge, .notFound, .uploadNotStored, .notResident, .engineFailed, .busy: nil
         }
     }
 
@@ -81,6 +86,8 @@ enum APIError: Error, Equatable, Sendable {
         case .emptyFile: "empty_file"
         case .unreadableAudio: "invalid_audio"
         case .silentFile: "audio_too_short"
+        case .audioTooLong: "audio_too_long"
+        case .busy: "rate_limit_exceeded"
         case .uploadNotStored: "upload_not_stored"
         case .notResident: "model_not_ready"
         case .engineFailed: "transcription_failed"

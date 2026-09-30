@@ -12,10 +12,11 @@ extension AudioClip {
     /// the macOS 15 SDK does not mark Sendable, so the tap captures it as
     /// `nonisolated(unsafe)` and is its only caller.
     public final class Converter {
-        private let converter: AVAudioConverter
-        /// What the converter is handed per ask, in the source format. Sized to the
-        /// most it has been seen to ask for at once (4096 frames), so a tap buffer
+        /// The most the converter has been seen to ask for at once, so a tap buffer
         /// takes one or two asks; a smaller size would only mean more asks.
+        public static let pieceFrames: AVAudioFrameCount = 4_096
+        private let converter: AVAudioConverter
+        /// What the converter is handed per ask, in the source format.
         private let piece: AVAudioPCMBuffer
         /// What the converter fills per call, in the pipeline format.
         private let scratch: AVAudioPCMBuffer
@@ -27,7 +28,7 @@ extension AudioClip {
             // Without this, extra source channels are discarded rather than mixed; the
             // right-only fixture loads as silence.
             converter.downmix = true
-            guard let piece = AVAudioPCMBuffer(pcmFormat: source, frameCapacity: 4_096),
+            guard let piece = AVAudioPCMBuffer(pcmFormat: source, frameCapacity: Self.pieceFrames),
                   let scratch = AVAudioPCMBuffer(pcmFormat: AudioClip.format, frameCapacity: 16_384)
             else {
                 throw AudioClipError.bufferAllocationFailed

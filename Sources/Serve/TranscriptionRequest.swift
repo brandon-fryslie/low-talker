@@ -141,11 +141,11 @@ struct Upload: Sendable {
         self.filename = filename
     }
 
-    /// The file as a clip, read by the one reader every audio file in LowTalker goes
-    /// through. AVFoundation reads files, not bytes, so the upload is written to a
+    /// The file as a clip of at most `longest` seconds, read by the one reader every audio
+    /// file in LowTalker goes through, which refuses a longer one before decoding it. AVFoundation reads files, not bytes, so the upload is written to a
     /// temporary file named with the upload's extension, which is AVFoundation's hint for
     /// the format, and removed once read.
-    func clip() throws(APIError) -> AudioClip {
+    func clip(longest: TimeInterval) throws(APIError) -> AudioClip {
         let pathExtension = filename.map { ($0 as NSString).pathExtension } ?? ""
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("lowtalker-upload-\(UUID().uuidString)")
@@ -158,10 +158,14 @@ struct Upload: Sendable {
         }
         let clip: AudioClip
         do {
-            clip = try AudioClip(contentsOf: url)
+            clip = try AudioClip(contentsOf: url, longest: longest)
+        } catch AudioClipError.longerThan(let limit, let seconds) {
+            throw .audioTooLong(seconds: seconds, limit: limit)
         } catch AudioClipError.unreadable(_, let underlying) {
             // The temporary file's path is the server's business, not the client's.
             throw .unreadableAudio("\(underlying)")
+        } catch AudioClipError.truncated(_, let read, let declared) {
+            throw .unreadableAudio("it ends after \(read) of the \(declared) frames it declares")
         } catch {
             throw .unreadableAudio("\(error)")
         }
