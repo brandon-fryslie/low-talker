@@ -135,13 +135,16 @@ extension Hearing {
         let utterance = Utterance()
         async let fed: Void = utterance.fill(from: audio)
         var hearing = Hearing(margin: margin, context: context)
-        while case let (samples, ended) = await utterance.audio(beyond: hearing.passable), samples.count > hearing.heard {
-            let words = try await pass(Pass(samples: samples, cut: hearing.cut, saying: hearing.saying))
-            hearing.hear(words, through: samples.count)
-            if ended { break }
-            partial(hearing.partial)
+        var heard = await utterance.audio(beyond: hearing.passable)
+        while heard.samples.count > hearing.heard {
+            let words = try await pass(Pass(samples: heard.samples, cut: hearing.cut, saying: hearing.saying))
+            hearing.hear(words, through: heard.samples.count)
+            if heard.ended { break }
+            partial(heard.timeline.place(hearing.partial))
+            heard = await utterance.audio(beyond: hearing.passable)
         }
         try await fed
-        return hearing.transcript
+        // Timed from the audio's first sample, not from the quiet the utterance let go.
+        return heard.timeline.place(hearing.transcript)
     }
 }

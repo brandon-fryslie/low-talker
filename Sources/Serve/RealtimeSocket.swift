@@ -453,7 +453,7 @@ final class Deltas: Sendable {
         switch transcript {
         case .success(let heard):
             send(heard.words)
-            outbox.emit(.completed(item: item, transcript: heard.served, usage: usage))
+            outbox.emit(.completed(item: item, transcript: heard.served, usage: usage, quiet: heard.quiet))
         case .failure(let refusal as VocabularyError):
             outbox.emit(.failed(item: item, .promptRefused("\(refusal)")))
         case .failure(let error):
@@ -556,12 +556,16 @@ public struct RealtimeActivity: Sendable, Codable, Equatable {
         public internal(set) var failed = 0
         public internal(set) var errors = 0
         public internal(set) var other = 0
+        /// Seconds of the completed items' quiet the engine was not handed.
+        public internal(set) var quietSeconds: Double = 0
 
         mutating func count(_ frame: Outgoing) {
             guard case .event(let event) = frame else { return }
             switch event {
             case .delta: deltas += 1
-            case .completed: completed += 1
+            case .completed(_, _, _, let quiet):
+                completed += 1
+                quietSeconds += quiet
             case .failed: failed += 1
             case .error: errors += 1
             case .sessionCreated, .sessionUpdated, .committed, .itemAdded, .itemDone: other += 1

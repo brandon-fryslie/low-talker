@@ -448,6 +448,7 @@ private struct Answering: Sendable {
             throw APIError.engineFailed("\(error)")
         }
         event.words = transcript.words.count
+        event.quietSeconds = transcript.quiet
         return request.format.response(transcript, heard: clip)
     }
 }
@@ -576,6 +577,8 @@ public struct ServedRequest: Sendable, Codable, Equatable {
     public internal(set) var vocabularyTerms: Int?
     public internal(set) var audioSeconds: Double?
     public internal(set) var words: Int?
+    /// Seconds of the upload's quiet the engine was not handed.
+    public internal(set) var quietSeconds: Double?
     /// What happened on a Realtime socket, for a request that upgraded to one.
     public internal(set) var realtime: RealtimeActivity?
     /// What dictation did to the request: its decodes a hold cancelled and ran again, and

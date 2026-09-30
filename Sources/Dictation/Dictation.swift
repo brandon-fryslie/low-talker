@@ -54,7 +54,7 @@ public final class Dictation {
         public var description: String {
             let into = Set(performed.map(\.into)).map(\.rawValue).sorted().joined(separator: ", ")
             let destination = into.isEmpty ? "" : " into \(into)"
-            return "heard \(transcript.words.count) words \(Int(keyUpToTranscript / .milliseconds(1))) ms after key-up (\(displaced)), \(performed.count) actions\(destination)"
+            return "heard \(transcript.words.count) words past \(String(format: "%.1f", transcript.quiet)) s of quiet \(Int(keyUpToTranscript / .milliseconds(1))) ms after key-up (\(displaced)), \(performed.count) actions\(destination)"
         }
     }
 

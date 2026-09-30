@@ -137,7 +137,7 @@ private func update(_ input: [String: Any]) -> [String: Any] {
 
     /// The socket's one event says what happened on it.
     @Test func theSocketsEventCountsWhatHappenedOnIt() async throws {
-        let running = try await Running.start(.ready(Stub()))
+        let running = try await Running.start(.ready(Stub(.success(Transcript(words: Transcript(typed: " Hello world, this is LowTalker.").words, quiet: 1.5)))))
         defer { running.server.stop() }
         var client = Client(running)
         try await client.append(seconds: 1)
@@ -153,6 +153,7 @@ private func update(_ input: [String: Any]) -> [String: Any] {
         #expect(abs(realtime.audioSeconds - 1) < 0.01)
         #expect(realtime.sent.completed == 1 && realtime.sent.errors == 1 && realtime.sent.deltas >= 2)
         #expect(realtime.refusals == ["input_audio_buffer_commit_empty": 1] && realtime.refusedAudioSeconds == nil)
+        #expect(realtime.sent.quietSeconds == 1.5)
     }
 
     /// A client that appends for longer than the limit without a commit, as Pipecat does

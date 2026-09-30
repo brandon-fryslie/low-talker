@@ -214,7 +214,8 @@ enum ServerEvent: Sendable {
     case committed(item: String, previous: String?)
     case itemAdded(item: String, previous: String?)
     case itemDone(item: String, previous: String?)
-    case completed(item: String, transcript: String, usage: Usage)
+    /// `quiet` is the server's own record of the item, never sent: OpenAI's event has no field for it.
+    case completed(item: String, transcript: String, usage: Usage, quiet: TimeInterval)
     case failed(item: String, RealtimeError)
     /// A refusal of the client event whose `event_id` is given, when it gave one.
     case error(RealtimeError, clientEvent: String?)
@@ -249,7 +250,7 @@ enum ServerEvent: Sendable {
                 "id": item, "type": "message", "status": "completed", "role": "user",
                 "content": [["type": "input_audio", "transcript": NSNull()]],
             ]
-        case .completed(let item, let transcript, let usage):
+        case .completed(let item, let transcript, let usage, _):
             fields.merge(["item_id": item, "content_index": 0, "transcript": transcript,
                           "usage": ["type": usage.type, "seconds": usage.seconds]]) { $1 }
         case .failed(let item, let error):
