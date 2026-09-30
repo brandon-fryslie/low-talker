@@ -13,27 +13,57 @@
 set -euo pipefail
 
 out=${1:?usage: NOTARY_PROFILE=<profile> scripts/release <output directory> [model source]}
-profile=${NOTARY_PROFILE:?NOTARY_PROFILE names the notarytool keychain profile; make one with xcrun notarytool store-credentials}
+scripts=$(dirname "$0")
+source "$scripts/notary-credentials"
 # Asked before the build, which takes minutes, rather than after it.
-xcrun notarytool history --keychain-profile "$profile" >/dev/null \
+xcrun notarytool history "${notary_credentials[@]}" >/dev/null \
   || { echo "release: the notarytool profile '$profile' does not answer" >&2; exit 1; }
 
-# A release whose build number did not rise is one no updater or crash report can tell from
-# the last. project.yml's CURRENT_PROJECT_VERSION counts releases and is raised by hand, so
-# the Nth release is build N: it must exceed the number of release tags already on origin,
-# of every version. A tag's own suffix is no substitute, since alpha, beta and rc each count
-# again from 1. Read from origin, not local tags, which a fresh clone may not have. Read off
-# project.yml before the build, like the profile; the build fails a bundle that does not
-# carry it. [LAW:no-silent-failure]
-scripts=$(dirname "$0")
-build=$(xcodegen dump --type json --spec "$scripts/../project.yml" | jq -er '.settings.base.CURRENT_PROJECT_VERSION')
-[[ "$build" =~ ^[1-9][0-9]*$ ]] \
-  || { echo "release: project.yml's CURRENT_PROJECT_VERSION is '$build', not a whole number above zero" >&2; exit 1; }
-released=$(git -C "$scripts/.." ls-remote --tags --refs origin "v*" | wc -l | tr -d ' ')
-if [ "$build" -le "$released" ]; then
-  echo "release: this is build $build, but $released releases are already tagged; raise CURRENT_PROJECT_VERSION in project.yml" >&2
+fail() {
+  echo "release: $1" >&2
   exit 1
-fi
+}
+
+# [LAW:types-are-the-program] A release is one v* tag on origin, on a commit of master, naming
+# the version project.yml gives the bundles. The tag is pushed first, and pushing it is what
+# starts the release workflow. Read from origin, not local tags, which a fresh clone may not
+# have; each tag counts where its commit is, the peeled `^{}` line of an annotated tag over
+# the tag object's. All of it is checked before the build, like the profile.
+# [LAW:no-silent-failure]
+root="$scripts/.."
+head=$(git -C "$root" rev-parse HEAD)
+# The build reads the working tree, so the commit is what is built only when the tree is clean.
+dirty=$(git -C "$root" status --porcelain)
+[ -z "$dirty" ] || fail "the working tree differs from $head, and the build would ship the difference: $dirty"
+git -C "$root" fetch --quiet origin master
+git -C "$root" merge-base --is-ancestor "$head" FETCH_HEAD \
+  || fail "$head is not on origin/master, and releases are cut from master"
+version=$(xcodegen dump --type json --spec "$root/project.yml" | jq -er '.settings.base | "\(.MARKETING_VERSION) \(.CURRENT_PROJECT_VERSION)"')
+read -r marketing build <<<"$version"
+tags=$(git -C "$root" ls-remote --tags origin "v*")
+read -r released own <<<"$(awk -v head="$head" '
+  { tag = $2; sub(/^refs\/tags\//, "", tag) }
+  tag ~ /\^\{\}$/ { sub(/\^\{\}$/, "", tag); commit[tag] = $1; next }
+  !(tag in commit) { commit[tag] = $1 }
+  END {
+    n = 0; own = ""
+    for (tag in commit) if (commit[tag] == head) own = own (own == "" ? "" : ",") tag; else n++
+    print n, own
+  }
+' <<<"$tags")"
+[[ -n "$own" && "$own" != *,* ]] \
+  || fail "$head carries release tags '${own}' on origin; a release is exactly one tag, pushed before this runs"
+[[ "$own" == "v$marketing" || "$own" == "v$marketing-"* ]] \
+  || fail "tag $own does not name project.yml's MARKETING_VERSION $marketing"
+# A release whose build number did not rise is one no updater or crash report can tell from
+# the last. CURRENT_PROJECT_VERSION counts releases and is raised by hand, so the Nth release
+# is build N: it must exceed the number of release tags on other commits, of every version.
+# A tag's own suffix is no substitute, since alpha, beta and rc each count again from 1. The
+# build fails a bundle that does not carry this number.
+[[ "$build" =~ ^[1-9][0-9]*$ ]] \
+  || fail "project.yml's CURRENT_PROJECT_VERSION is '$build', not a whole number above zero"
+[ "$build" -gt "$released" ] \
+  || fail "this is build $build, but $released releases are already tagged; raise CURRENT_PROJECT_VERSION in project.yml"
 
 # Every package signed before any is sent, so a variant that fails to build stops the release
 # before the notary service has seen the other.

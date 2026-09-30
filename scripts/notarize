@@ -4,15 +4,16 @@
 #
 #   NOTARY_PROFILE=<profile> scripts/notarize <path to .app or .pkg>
 #
-# The profile is a notarytool credential in the login keychain, made once per Mac with
+# The profile is a notarytool credential, made once per Mac with
 # `xcrun notarytool store-credentials <profile>`, from an Apple ID and an app-specific
-# password or from an App Store Connect API key.
+# password or from an App Store Connect API key. NOTARY_KEYCHAIN names the keychain file
+# holding it, when it is not where notarytool looks by default (scripts/notary-credentials).
 set -euo pipefail
 
 target=${1:?usage: NOTARY_PROFILE=<profile> scripts/notarize <path to .app or .pkg>}
 # A bundle is a directory, so completion leaves a slash that would hide its extension.
 target=${target%/}
-profile=${NOTARY_PROFILE:?NOTARY_PROFILE names the notarytool keychain profile; make one with xcrun notarytool store-credentials}
+source "$(dirname "$0")/notary-credentials"
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/lowtalker-notarize.XXXXXX")
 trap 'rm -rf "$scratch"' EXIT
@@ -38,7 +39,7 @@ esac
 # notarytool's exit status alone does not separate a refused submission from one that never
 # reached the service, and only the first has a log to fetch; the status field decides.
 set +e
-result=$(xcrun notarytool submit "$submission" --keychain-profile "$profile" --wait --output-format json)
+result=$(xcrun notarytool submit "$submission" "${notary_credentials[@]}" --wait --output-format json)
 submitted=$?
 set -e
 status=$(jq -r '.status // empty' <<<"$result" 2>/dev/null || true)
@@ -46,7 +47,7 @@ if [ "$status" != Accepted ]; then
   echo "notarize: notarytool exited $submitted with status '${status:-none}': $result" >&2
   id=$(jq -r '.id // empty' <<<"$result" 2>/dev/null || true)
   if [ -n "$id" ]; then
-    xcrun notarytool log "$id" --keychain-profile "$profile" >&2
+    xcrun notarytool log "$id" "${notary_credentials[@]}" >&2
   fi
   exit 1
 fi
