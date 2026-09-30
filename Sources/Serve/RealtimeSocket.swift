@@ -172,7 +172,7 @@ struct RealtimeSocket {
             let reopened = open(transcriber, replayed: replayed, &activity, &items)
             reopened.append(kept)
             let (held, freed, transcript) = (held, item.bytes - reopened.bytes, item.transcript)
-            activity.letGo(seconds: RealtimeAudio.duration(bytes: freed))
+            activity.letGo(seconds: RealtimeAudio.duration(bytes: freed), replayed: min(max(replayed, 0), RealtimeAudio.duration(bytes: kept.count)))
             items.addTask {
                 _ = await transcript.result
                 held.release(bytes: freed, items: 0)
@@ -327,8 +327,9 @@ private final class Buffer {
     /// Returns its newest `keeping` bytes, starting on a whole sample, and when in them the
     /// last word it sent ends.
     func letGo() -> (kept: Data, replayed: TimeInterval) {
-        clips.finish()
+        // Cancelled first, so ending its audio cannot start a last pass the engine admits.
         transcript.cancel()
+        clips.finish()
         let newest = newest.bytes
         let kept = newest.suffix(newest.count - (bytes - newest.count) % 2)
         let cut = RealtimeAudio.duration(bytes: bytes - kept.count)
@@ -441,12 +442,13 @@ final class Deltas: Sendable {
     /// How many words have gone out as deltas, or been passed over as sent already; when the
     /// last of them ends; and whether the item was let go, after which it sends nothing.
     /// Held across the send, so deltas leave in the order their words were heard.
-    private let sent = Mutex((words: 0, through: -TimeInterval.infinity, letGo: false))
+    private let sent: Mutex<(words: Int, through: TimeInterval, letGo: Bool)>
 
     init(item: String, outbox: Outbox, replayed: TimeInterval) {
         self.item = item
         self.outbox = outbox
         self.replayed = replayed
+        sent = Mutex((0, replayed, false))
     }
 
     func heard(_ partial: Partial) {
@@ -541,10 +543,12 @@ public struct RealtimeActivity: Sendable, Codable, Equatable {
     public internal(set) var heldAudioSeconds: Double = 0
     /// The most items the socket held at once, each heard only after the one before it.
     public internal(set) var heldItems = 0
-    /// Items that grew past their share of the socket uncommitted and started over, and the
-    /// seconds of their oldest audio they let go.
+    /// Items that grew past their share of the socket uncommitted and started over, the
+    /// seconds of their oldest audio they let go, and the seconds of the audio they kept whose
+    /// words had already gone out as deltas, which the items they started over send no delta for.
     public internal(set) var itemsLetGo = 0
     public internal(set) var letGoAudioSeconds: Double = 0
+    public internal(set) var replayedSeconds: Double = 0
     /// Seconds of audio in the items committed.
     public internal(set) var audioSeconds: Double = 0
     /// The close code the socket ended with, the client's or the server's.
@@ -553,9 +557,10 @@ public struct RealtimeActivity: Sendable, Codable, Equatable {
     public internal(set) var violation: String?
     public internal(set) var sent = Sent()
 
-    mutating func letGo(seconds: TimeInterval) {
+    mutating func letGo(seconds: TimeInterval, replayed: TimeInterval) {
         itemsLetGo += 1
         letGoAudioSeconds += seconds
+        replayedSeconds += replayed
     }
 
     /// [LAW:single-enforcer] The one place a refused client event's facts become the socket's.

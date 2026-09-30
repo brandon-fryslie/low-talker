@@ -1,6 +1,7 @@
 import Foundation
 import LowTalkerCore
 @testable import Serve
+import Synchronization
 import Testing
 
 /// A Realtime socket to a running server, speaking JSON events.
@@ -230,6 +231,39 @@ private func update(_ input: [String: Any]) -> [String: Any] {
         #expect(sent == [" w3", " w4 w5"])
     }
 
+    /// An item that started over and sent nothing of its own is let go as having sent what
+    /// the item before it did, so the item after holds those words back too.
+    @Test func anItemThatSentNothingOfItsOwnPassesOnWhatWasSentBefore() async {
+        let sent = await deltas { outbox in
+            let item = Deltas(item: "item_c", outbox: outbox, replayed: 2)
+            item.heard(Partial(confirmed: timed(2), tentative: Transcript(words: [])))
+            #expect(item.letGo() == 2)
+        }
+        #expect(sent.isEmpty)
+    }
+
+    /// The socket's event says how much of the audio items kept when they started over had
+    /// its words sent already. Limit 4 s: a share of 2 s, of which 1 s is kept. The stub's
+    /// words are half a second each; once the third has gone out of 1.7 s, 2.1 s starts the
+    /// item over with its words through 1.5 s sent, and 1 s cut, so at least 0.5 s kept was sent.
+    @Test(.timeLimit(.minutes(1))) func theSocketsEventSaysHowMuchKeptAudioWasSentAlready() async throws {
+        let words = (0..<10).map { Transcript.Word(text: " w\($0 + 1)", time: Double($0) / 2...Double($0 + 1) / 2, confidence: 1.0) }
+        let running = try await Running.start(.ready(Stub(.success(Transcript(words: words)))), limits: ServedLimits(uploads: 1, sockets: 1, audio: 4))
+        defer { running.server.stop() }
+        var client = Client(running)
+        try await client.append(seconds: 1.7)
+        var heard = ""
+        while !heard.contains("w3") {
+            heard += try #require(try await client.until("conversation.item.input_audio_transcription.delta")["delta"] as? String)
+        }
+        try await client.append(seconds: 0.4)
+        try await client.send(["type": "input_audio_buffer.commit"])
+        _ = try await client.until("conversation.item.input_audio_transcription.completed")
+        client.task.cancel(with: .normalClosure, reason: nil)
+        let realtime = try #require(try await running.nextEvent().realtime)
+        #expect(realtime.itemsLetGo == 1 && realtime.replayedSeconds >= 0.5 - 0.01 && realtime.replayedSeconds <= 1 + 0.01)
+    }
+
     /// The newest bytes are kept oldest first, whether they arrive in one append or wrap
     /// around the ring across many.
     @Test func newestKeepsTheLastBytesInOrder() {
@@ -280,15 +314,15 @@ private func update(_ input: [String: Any]) -> [String: Any] {
             try await client.send(["type": "input_audio_buffer.commit"])
             committed.append(try #require(try await client.until("input_audio_buffer.committed")["item_id"] as? String))
         }
-        // URLSession reads a pong only while a receive is pending, so the ping goes out
-        // beside an update whose answer is awaited.
-        let task = client.task
-        async let pong: Void = withCheckedThrowingContinuation { (pong: CheckedContinuation<Void, any Error>) in
-            task.sendPing { error in error.map { pong.resume(throwing: $0) } ?? pong.resume() }
+        // URLSession reads a pong only while a receive is pending, so updates are answered
+        // one after another until the pong has come in during one of them.
+        let pong = Mutex<Result<Void, any Error>?>(nil)
+        client.task.sendPing { error in pong.withLock { $0 = error.map { .failure($0) } ?? .success(()) } }
+        while pong.withLock({ $0 }) == nil {
+            try await client.send(update([:]))
+            _ = try await client.until("session.updated")
         }
-        try await client.send(update([:]))
-        _ = try await client.until("session.updated")
-        try await pong
+        try pong.withLock { $0 }!.get()
         try await client.append(seconds: 0.6)
         let refusal = try #require(try await client.until("error")["error"] as? [String: Any])
         #expect(refusal["code"] as? String == "audio_too_long")
