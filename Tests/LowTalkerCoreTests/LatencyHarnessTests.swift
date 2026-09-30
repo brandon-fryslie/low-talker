@@ -194,9 +194,9 @@ private final class FixedEar: Transcriber {
         var loads = 0
         let ear = FixedEar(heard: "See you at noon.")
         let vocabulary = Vocabulary([try Vocabulary.Term("noon")])
-        let report = try await LatencyHarness.measure(fixtures, arrivals: [.batch], reruns: 2, expecting: vocabulary) {
+        let report = try await LatencyHarness.measure(fixtures, arrivals: [.batch], servings: [.idle], reruns: 2, expecting: vocabulary) {
             loads += 1
-            return ear
+            return .alone(ear)
         }
         #expect(loads == 1)
         // Every hold is told the vocabulary, reruns included.
@@ -218,7 +218,7 @@ private final class FixedEar: Transcriber {
     @Test func streamedArrivalHandsOverABufferAtATime() async throws {
         let clip = AudioClip(samples: Array(repeating: 0.1, count: AudioClip.sampleCount(for: 0.35)))
         let ear = FixedEar(heard: "hi")
-        let report = try await LatencyHarness.measure([try Self.fixture("held", says: "hi", clip: clip)], arrivals: [.batch, .streamed], reruns: 0, expecting: .empty) { ear }
+        let report = try await LatencyHarness.measure([try Self.fixture("held", says: "hi", clip: clip)], arrivals: [.batch, .streamed], servings: [.idle], reruns: 0, expecting: .empty) { .alone(ear) }
         #expect(report.fixtures.map(\.arrival) == [.batch, .streamed])
         #expect(ear.holds.withLock { $0 } == [1, 4])
         let batch = report.fixtures[0].first
@@ -227,6 +227,36 @@ private final class FixedEar: Transcriber {
         #expect(streamed.holdToFirstText >= .seconds(0.2))
         #expect(streamed.holdToFirstText < .seconds(0.35))
         #expect(streamed.keyUpToTranscript < .seconds(0.1))
+    }
+
+    /// While serving, every hold has three served callers around it: an upload begun
+    /// before key-down, one arriving halfway through, and a stream running from before
+    /// key-down to key-up. Each upload is checked against what the same upload reads with
+    /// nothing else asking, which is heard once, after every hold.
+    @Test func servingAsksTheServedEngineAroundEveryHold() async throws {
+        let spoken = FixedEar(heard: "hi")
+        let served = FixedEar(heard: "served")
+        let report = try await LatencyHarness.measure([try Self.fixture("one", says: "hi")], arrivals: [.batch], servings: [.idle, .served], reruns: 1, expecting: .empty) {
+            LatencyHarness.Engine(dictation: spoken, served: served, turns: EngineTurns())
+        }
+        #expect(report.fixtures.map(\.serving) == [.idle, .served])
+        #expect(report.fixtures.map(\.served) == Array(repeating: LatencyReport.Served(cancelled: 0, deferred: 0, changed: 0), count: 2))
+        let streamed = AudioClip.sampleCount(for: LatencyHarness.Serving.lead + BenchDirectory.tone.duration)
+        let chunks = Int((Double(streamed) / Double(AudioClip.sampleCount(for: LatencyHarness.Arrival.streamedChunk))).rounded(.up))
+        #expect(served.holds.withLock { $0 }.sorted() == [1, 1, 1, 1, 1, chunks, chunks].sorted())
+        #expect(spoken.holds.withLock { $0 }.count == 4)
+    }
+
+    /// Every served upload is `servedSeconds` long whatever the fixtures add up to: their
+    /// audio end to end, from the first again once it runs out.
+    @Test func aServedUploadIsTheFixturesCycledToItsLength() throws {
+        let fixtures = [
+            try Fixture(name: "a", clip: AudioClip(samples: [1, 1, 1]), reference: "x"),
+            try Fixture(name: "b", clip: AudioClip(samples: [2, 2]), reference: "x"),
+        ]
+        let upload = LatencyHarness.Serving.upload(of: fixtures).samples
+        #expect(upload.count == AudioClip.sampleCount(for: LatencyHarness.Serving.servedSeconds))
+        #expect(upload.prefix(7) == [1, 1, 1, 2, 2, 1, 1])
     }
 
     /// The protocol's one-clip form is a batch hold.
@@ -238,8 +268,8 @@ private final class FixedEar: Transcriber {
     }
 
     @Test func aSingleRunIsItsOwnMedian() async throws {
-        let report = try await LatencyHarness.measure([try Self.fixture("one", says: "hi")], arrivals: [.batch], reruns: 0, expecting: .empty) {
-            FixedEar(heard: "hi")
+        let report = try await LatencyHarness.measure([try Self.fixture("one", says: "hi")], arrivals: [.batch], servings: [.idle], reruns: 0, expecting: .empty) {
+            .alone(FixedEar(heard: "hi"))
         }
         let result = report.fixtures[0]
         #expect(result.later.isEmpty)
@@ -250,7 +280,7 @@ private final class FixedEar: Transcriber {
     /// An even number of runs reports the lower middle, a wait that happened.
     @Test func medianIsTheLowerMiddleOfEveryRun() {
         let result = LatencyReport.FixtureResult(
-            name: "n", arrival: .batch, audio: 1,
+            name: "n", arrival: .batch, serving: .idle, audio: 1,
             first: LatencyReport.Run(keyUpToTranscript: .seconds(4), holdToFirstText: .seconds(9)),
             later: [
                 LatencyReport.Run(keyUpToTranscript: .seconds(1), holdToFirstText: .seconds(6)),
@@ -258,7 +288,8 @@ private final class FixedEar: Transcriber {
                 LatencyReport.Run(keyUpToTranscript: .seconds(2), holdToFirstText: .seconds(7)),
             ],
             transcript: Transcript(typed: "n"),
-            wordErrorRate: WordErrorRate(reference: SpokenWords("n"), hypothesis: SpokenWords("n"))
+            wordErrorRate: WordErrorRate(reference: SpokenWords("n"), hypothesis: SpokenWords("n")),
+            served: LatencyReport.Served(cancelled: 0, deferred: 0, changed: 0)
         )
         #expect(result.medianKeyUpToTranscript == .seconds(2))
         #expect(result.medianHoldToFirstText == .seconds(7))
@@ -274,5 +305,12 @@ private final class FixedEar: Transcriber {
 
     @Test func anEmptyClipIsNoChunks() {
         #expect(AudioClip(samples: []).chunks(of: 1).isEmpty)
+    }
+}
+
+extension LatencyHarness.Engine {
+    /// One fake heard by dictation and served callers alike.
+    static func alone(_ ear: any Transcriber) -> Self {
+        Self(dictation: ear, served: ear, turns: EngineTurns())
     }
 }

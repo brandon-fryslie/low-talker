@@ -123,6 +123,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// reports to this delegate's menu; touching it is what starts the load.
     private lazy var engine: Task<WhisperKitTranscriber, any Error> = Task { try await loadEngine() }
 
+    /// Whose decode the engine runs next: every press holds it from key-down, so a served
+    /// caller waits for the speaker. Made with the delegate rather than with the engine, so
+    /// a press that begins while the model still loads is already holding it when the
+    /// server's first caller arrives. [LAW:single-enforcer]
+    private let turns = EngineTurns()
+
     /// The transcription server, answering with `engine` once it is resident, so a caller is
     /// heard by the model dictation already holds and never a second copy of it. Nil in the
     /// offline build, which cannot accept a connection and so shows nothing about serving.
@@ -228,6 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let dictation = Dictation(
             capture: capture,
             transcriber: { [unowned self] in try await engine.value },
+            turns: turns,
             router: Router(routes: [.dictation]),
             // The words cross to this flavor's own input method, which commits them at the
             // cursor through the text input system.
@@ -549,9 +556,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             }
             guard let carried = ModelStore.carried(by: .main) else { throw BundleCarriesNoModel() }
-            let transcriber = try await WhisperKitTranscriber.loadInPlace(in: carried, phase: report)
+            let transcriber = try await WhisperKitTranscriber.loadInPlace(in: carried, turns: turns, phase: report)
             show(.ready(transcriber.model, after: launched.duration(to: .now)))
-            serving?.answer(with: .ready(transcriber))
+            serving?.answer(with: .ready(transcriber.served))
             return transcriber
         } catch {
             // [LAW:no-silent-failure] A model that failed to load is the one thing the

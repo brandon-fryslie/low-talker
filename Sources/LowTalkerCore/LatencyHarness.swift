@@ -12,7 +12,9 @@ import Synchronization
 /// while the first hold stays apart: after warm-load at launch, the first
 /// dictation of a session pays it. Every hold tells the engine the same
 /// vocabulary, so a run measures what a mode's vocabulary does to hearing, on
-/// the fixtures that say its terms and on the ones that do not.
+/// the fixtures that say its terms and on the ones that do not. Every hold also
+/// holds the engine as the app's presses do, and while `Serving.served` other callers
+/// ask the same engine throughout, so a run measures what serving costs dictation.
 ///
 /// [LAW:effects-at-boundaries] The clock ticks here and nowhere below; scoring is
 /// `WordErrorRate`, a pure function, and the engine arrives as a closure so this
@@ -43,55 +45,152 @@ public enum LatencyHarness {
         }
     }
 
+    /// What else the engine is asked while dictation holds it, which is what a bench run
+    /// compares: the same hold with the server idle and with it busy.
+    public enum Serving: String, CaseIterable, Sendable {
+        /// Nothing but the hold.
+        case idle
+        /// A served upload of `servedSeconds` decoding when the key goes down, another
+        /// arriving halfway through the hold, and a served stream running through it.
+        case served
+
+        /// How long before key-down the served work begins, so the upload is decoding when
+        /// the hold takes the engine.
+        public static let lead: TimeInterval = 0.5
+        /// How long each served upload is.
+        public static let servedSeconds: TimeInterval = 40
+
+        /// A served upload: `servedSeconds` of the fixtures' audio end to end, from the
+        /// first again once they run out, so every fixture set asks as much of the engine.
+        public static func upload(of fixtures: [Fixture]) -> AudioClip {
+            let spoken = fixtures.flatMap(\.clip.samples)
+            precondition(!spoken.isEmpty, "a served upload is made of the fixtures' audio, and they have none")
+            return AudioClip(samples: (0..<AudioClip.sampleCount(for: servedSeconds)).map { spoken[$0 % spoken.count] })
+        }
+
+        /// The served requests around a hold of `hold` seconds, timed from key-down, their
+        /// audio the upload of `fixtures`.
+        func requests(from fixtures: [Fixture], hold: TimeInterval) -> [ServedRequest] {
+            switch self {
+            case .idle: return []
+            case .served:
+                let audio = Self.upload(of: fixtures)
+                return [
+                    ServedRequest(clip: audio, arrival: .batch, at: -Self.lead),
+                    ServedRequest(clip: audio, arrival: .batch, at: hold / 2),
+                    ServedRequest(clip: AudioClip(samples: Array(audio.samples.prefix(AudioClip.sampleCount(for: Self.lead + hold)))), arrival: .streamed, at: -Self.lead),
+                ]
+            }
+        }
+    }
+
+    /// One served caller's request: its audio, how it arrives, and when, from key-down.
+    struct ServedRequest {
+        let clip: AudioClip
+        let arrival: Arrival
+        let at: TimeInterval
+    }
+
+    /// The engine as the app holds it: dictation and served callers hearing through one
+    /// owner of whose decode runs next.
+    public struct Engine: Sendable {
+        public let dictation: any Transcriber
+        public let served: any Transcriber
+        public let turns: EngineTurns
+
+        public init(dictation: any Transcriber, served: any Transcriber, turns: EngineTurns) {
+            self.dictation = dictation
+            self.served = served
+            self.turns = turns
+        }
+    }
+
     public static func measure(
         _ fixtures: [Fixture],
         arrivals: [Arrival],
+        servings: [Serving],
         reruns: UInt,
         expecting vocabulary: Vocabulary,
-        load: () async throws -> any Transcriber
+        load: () async throws -> Engine
     ) async throws -> LatencyReport {
         let clock = ContinuousClock()
         let loading = clock.now
-        let transcriber = try await load()
+        let engine = try await load()
         let load = clock.now - loading
-        var results: [LatencyReport.FixtureResult] = []
+        // Each row, and the uploads its holds' served callers read, which are judged once
+        // every hold is done.
+        var rows: [(uploads: [String], result: (_ changed: Int) -> LatencyReport.FixtureResult)] = []
         for fixture in fixtures {
             for arrival in arrivals {
-                let chunks = fixture.clip.chunks(of: arrival.chunk(of: fixture.clip))
-                let (first, firstTranscript) = try await hold(chunks, with: transcriber, expecting: vocabulary, clock: clock)
-                var transcript = firstTranscript
-                var later: [LatencyReport.Run] = []
-                for _ in 0..<reruns {
-                    let run: LatencyReport.Run
-                    (run, transcript) = try await hold(chunks, with: transcriber, expecting: vocabulary, clock: clock)
-                    later.append(run)
+                for serving in servings {
+                    let chunks = fixture.clip.chunks(of: arrival.chunk(of: fixture.clip))
+                    let requests = serving.requests(from: fixtures, hold: fixture.clip.duration)
+                    let before = engine.turns.reading
+                    var runs: [LatencyReport.Run] = []
+                    var transcript = Transcript(words: [])
+                    var uploads: [String] = []
+                    for _ in 0...reruns {
+                        let (run, heard, readings) = try await hold(chunks, amid: requests, with: engine, expecting: vocabulary, clock: clock)
+                        runs.append(run)
+                        transcript = heard
+                        uploads += readings
+                    }
+                    let after = engine.turns.reading
+                    rows.append((uploads, { changed in LatencyReport.FixtureResult(
+                        name: fixture.name,
+                        arrival: arrival,
+                        serving: serving,
+                        audio: fixture.clip.duration,
+                        first: runs[0],
+                        later: Array(runs.dropFirst()),
+                        transcript: transcript,
+                        wordErrorRate: WordErrorRate(reference: fixture.reference, hypothesis: SpokenWords(transcript.text)),
+                        served: LatencyReport.Served(
+                            cancelled: after.tally.cancelled - before.tally.cancelled,
+                            deferred: after.tally.deferred - before.tally.deferred,
+                            changed: changed
+                        )
+                    ) }))
                 }
-                results.append(LatencyReport.FixtureResult(
-                    name: fixture.name,
-                    arrival: arrival,
-                    audio: fixture.clip.duration,
-                    first: first,
-                    later: later,
-                    transcript: transcript,
-                    wordErrorRate: WordErrorRate(reference: fixture.reference, hypothesis: SpokenWords(transcript.text))
-                ))
             }
         }
-        return LatencyReport(load: load, fixtures: results)
+        // What the served engine makes of the upload with nothing else asking, which every
+        // upload heard during a hold must match. Heard last, so the first hold after the load
+        // still finds the engine as the first press after launch does.
+        let servedReading = servings.contains(.served) ? try await engine.served.transcribe(Serving.upload(of: fixtures), expecting: .empty).text : ""
+        return LatencyReport(load: load, fixtures: rows.map { $0.result($0.uploads.count { $0 != servedReading }) })
     }
 
-    /// One hold: each chunk reaches the engine when its audio would have been
-    /// captured, the key comes up with the last, and the transcript is awaited.
+    /// One hold amid `requests`: each served request reaches the engine when it is due, the
+    /// hold takes the engine at key-down, each chunk reaches it when its audio would have been
+    /// captured, the key comes up with the last, and the transcript is awaited; then the
+    /// served requests are awaited too, and the uploads' readings handed back.
     private static func hold(
         _ chunks: [AudioClip],
-        with transcriber: any Transcriber,
+        amid requests: [ServedRequest],
+        with engine: Engine,
         expecting vocabulary: Vocabulary,
         clock: ContinuousClock
-    ) async throws -> (LatencyReport.Run, Transcript) {
-        let (audio, feed) = AsyncStream<AudioClip>.makeStream()
+    ) async throws -> (LatencyReport.Run, Transcript, uploads: [String]) {
+        // [LAW:no-ambient-temporal-coupling] The timeline is the requests' own: key-down
+        // comes once the earliest of them has begun.
+        let start = clock.now + .seconds(requests.reduce(0) { max($0, -$1.at) })
+        let served = requests.map { request in
+            Task {
+                let text = try await Self.feed(request.clip.chunks(of: request.arrival.chunk(of: request.clip)), from: start + .seconds(request.at), arriving: request.arrival, clock: clock) { audio in
+                    try await engine.served.transcribe(audio, expecting: .empty) { _ in }
+                }.text
+                return request.arrival == .batch ? text : nil
+            }
+        }
+        // A hold that ends by throwing takes its served callers with it, so none is left
+        // asking the engine behind the next hold; once they have been awaited this is moot.
+        defer { served.forEach { $0.cancel() } }
+        try await clock.sleep(until: start)
+        let hold = engine.turns.hold()
         let firstText = Mutex<ContinuousClock.Instant?>(nil)
-        let start = clock.now
-        async let transcript = transcriber.transcribe(audio, expecting: vocabulary) { partial in
+        let (audio, feed) = AsyncStream<AudioClip>.makeStream()
+        async let transcript = engine.dictation.transcribe(audio, expecting: vocabulary) { partial in
             // A pass over leading quiet reads nothing; the text shown is the first
             // partial with words in it.
             let shown: ContinuousClock.Instant? = partial.text.isEmpty ? nil : clock.now
@@ -107,10 +206,43 @@ public enum LatencyHarness {
         }
         let keyUp = clock.now
         feed.finish()
-        let final = try await transcript
+        let heard: Result<Transcript, any Error>
+        do { heard = .success(try await transcript) } catch { heard = .failure(error) }
         let shown = clock.now
+        // Let go of whatever became of the transcript, so a failed hold leaves no served
+        // request waiting on it.
+        hold.release()
+        let final = try heard.get()
         let first = firstText.withLock { $0 } ?? shown
-        return (LatencyReport.Run(keyUpToTranscript: shown - keyUp, holdToFirstText: first - start), final)
+        var uploads: [String] = []
+        for request in served {
+            if let text = try await request.value { uploads.append(text) }
+        }
+        return (LatencyReport.Run(keyUpToTranscript: shown - keyUp, holdToFirstText: first - start), final, uploads)
+    }
+
+    /// Hands `chunks` to `hear` as a caller would: a batch whole at `start`, since an upload
+    /// was recorded before it was sent, and a stream a chunk at a time as it is captured.
+    private static func feed(
+        _ chunks: [AudioClip],
+        from start: ContinuousClock.Instant,
+        arriving arrival: Arrival,
+        clock: ContinuousClock,
+        hear: (AsyncStream<AudioClip>) async throws -> Transcript
+    ) async throws -> Transcript {
+        let (audio, feed) = AsyncStream<AudioClip>.makeStream()
+        async let fed: Void = {
+            defer { feed.finish() }
+            var captured: TimeInterval = 0
+            for chunk in chunks {
+                captured += arrival == .batch ? 0 : chunk.duration
+                try await clock.sleep(until: start + .seconds(captured))
+                feed.yield(chunk)
+            }
+        }()
+        let heard = try await hear(audio)
+        try await fed
+        return heard
     }
 }
 
@@ -132,9 +264,27 @@ public struct LatencyReport: Sendable {
         }
     }
 
+    /// What the served callers around a fixture's holds went through.
+    public struct Served: Equatable, Sendable {
+        /// Served decodes the holds cancelled, each run again after.
+        public let cancelled: Int
+        /// Served decodes that asked during a hold and waited for it.
+        public let deferred: Int
+        /// Uploads that came back reading otherwise than the same upload heard with
+        /// nothing else asking.
+        public let changed: Int
+
+        public init(cancelled: Int, deferred: Int, changed: Int) {
+            self.cancelled = cancelled
+            self.deferred = deferred
+            self.changed = changed
+        }
+    }
+
     public struct FixtureResult: Sendable {
         public let name: String
         public let arrival: LatencyHarness.Arrival
+        public let serving: LatencyHarness.Serving
         /// Seconds of speech in the clip.
         public let audio: Double
         /// The first hold is kept apart from the reruns that follow it.
@@ -143,15 +293,18 @@ public struct LatencyReport: Sendable {
         /// What the engine heard on the last hold.
         public let transcript: Transcript
         public let wordErrorRate: WordErrorRate
+        public let served: Served
 
-        public init(name: String, arrival: LatencyHarness.Arrival, audio: Double, first: Run, later: [Run], transcript: Transcript, wordErrorRate: WordErrorRate) {
+        public init(name: String, arrival: LatencyHarness.Arrival, serving: LatencyHarness.Serving, audio: Double, first: Run, later: [Run], transcript: Transcript, wordErrorRate: WordErrorRate, served: Served) {
             self.name = name
             self.arrival = arrival
+            self.serving = serving
             self.audio = audio
             self.first = first
             self.later = later
             self.transcript = transcript
             self.wordErrorRate = wordErrorRate
+            self.served = served
         }
 
         public var runs: [Run] { [first] + later }

@@ -10,6 +10,7 @@ import Testing
         let result = LatencyReport.FixtureResult(
             name: "say/greeting",
             arrival: .streamed,
+            serving: .served,
             audio: 2.0164,
             first: LatencyReport.Run(keyUpToTranscript: .milliseconds(900), holdToFirstText: .milliseconds(1_600)),
             later: [
@@ -20,16 +21,19 @@ import Testing
             wordErrorRate: WordErrorRate(
                 reference: SpokenWords("hello there world four"),
                 hypothesis: SpokenWords("hello here world four five")
-            )
+            ),
+            served: LatencyReport.Served(cancelled: 6, deferred: 3, changed: 2)
         )
         let row = BenchCommand.row(model: "base.en", load: .milliseconds(1_250), result: result)
         #expect(row.map(\.name) == [
-            "model", "fixture", "delivery", "audio_s", "load_s", "first_s", "median_s", "partial_s",
+            "model", "fixture", "delivery", "serving", "audio_s", "load_s", "first_s", "median_s", "partial_s",
             "wer", "substituted", "dropped", "added", "reference_words",
+            "served_cancelled", "served_deferred", "served_changed",
         ])
         #expect(row.map(\.value) == [
-            "base.en", "say/greeting", "streamed", "2.016", "1.250", "0.900", "0.700", "1.500",
+            "base.en", "say/greeting", "streamed", "served", "2.016", "1.250", "0.900", "0.700", "1.500",
             "0.500", "1", "0", "1", "4",
+            "6", "3", "2",
         ])
     }
 }
