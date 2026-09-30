@@ -11,7 +11,7 @@ import Testing
 /// to half the words, so a streamed utterance has words confirmed before it ends and
 /// words left for the final transcript.
 final class Stub: Transcriber {
-    let heard = Mutex<[(seconds: TimeInterval, vocabulary: Vocabulary)]>([])
+    let heard = Mutex<[(seconds: TimeInterval, vocabulary: Vocabulary, cancelled: Bool)]>([])
     let answer: Result<Transcript, any Error>
 
     init(_ answer: Result<Transcript, any Error> = .success(Transcript(typed: " Hello world, this is LowTalker."))) {
@@ -30,7 +30,7 @@ final class Stub: Transcriber {
             let confirmed = min(words.count / 2, Int(seconds / 0.5))
             partial(Partial(confirmed: Transcript(words: Array(words.prefix(confirmed))), tentative: Transcript(words: [])))
         }
-        heard.withLock { $0.append((seconds, vocabulary)) }
+        heard.withLock { $0.append((seconds, vocabulary, Task.isCancelled)) }
         return try answer.get()
     }
 }

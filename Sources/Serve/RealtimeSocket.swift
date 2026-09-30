@@ -129,25 +129,54 @@ struct RealtimeSocket {
             }
         }
 
-        /// `bytes` into the open item, which the first append after a commit opens; refused
-        /// whole, before any of it is taken in, when it would take the socket's held audio
-        /// past its limit. The reader never waits on the engine: a socket whose items are
-        /// still being heard goes on reading, pings included, so engine contention delays
-        /// its transcripts and nothing else (low-serve-axq.32w).
+        /// `bytes` into the open item, which the first append after a commit opens. An item
+        /// the append would grow past its share of the socket starts over first, from its
+        /// newest audio, so a client that appends through any length of silence without a
+        /// commit, as Pipecat does between turns, is never refused for it (low-serve-axq.f96).
+        /// Refused whole, before any of it is taken in, only when it would take the socket's
+        /// held audio past its limit, which is then held by items committed and not yet heard.
+        /// The reader never waits on the engine: a socket whose items are still being heard
+        /// goes on reading, pings included, so engine contention delays its transcripts and
+        /// nothing else (low-serve-axq.32w).
         private mutating func append(_ bytes: Data, transcriber: any Transcriber, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) throws(RealtimeError) {
             let holding = try held.take(bytes: bytes.count, items: buffer == nil ? 1 : 0)
             activity.heldAudioSeconds = max(activity.heldAudioSeconds, holding.seconds)
             activity.heldItems = max(activity.heldItems, holding.items)
-            if buffer == nil {
-                let opened = Buffer(transcriber: transcriber, vocabulary: session.vocabulary, outbox: outbox, after: last?.answered)
-                activity.items += 1
-                let transcript = opened.transcript
-                items.addTask {
-                    await withTaskCancellationHandler { _ = await transcript.result } onCancel: { transcript.cancel() }
-                }
-                buffer = opened
+            if let open = buffer, open.bytes + bytes.count > held.share {
+                buffer = startOver(open, transcriber: transcriber, &activity, &items)
             }
-            buffer!.append(bytes)
+            let open = buffer ?? self.open(transcriber, &activity, &items)
+            open.append(bytes)
+            buffer = open
+        }
+
+        /// A new item for appends to go to, heard once the last one committed is answered.
+        private func open(_ transcriber: any Transcriber, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) -> Buffer {
+            let opened = Buffer(transcriber: transcriber, vocabulary: session.vocabulary, outbox: outbox, keeping: held.kept, after: last?.answered)
+            activity.items += 1
+            let transcript = opened.transcript
+            items.addTask {
+                await withTaskCancellationHandler { _ = await transcript.result } onCancel: { transcript.cancel() }
+            }
+            return opened
+        }
+
+        /// `item` let go unheard, and a new item opened in its place holding its newest
+        /// audio. No turn the client heard ended in it, since it committed none of it, and a
+        /// speaker who began just before is in the audio kept. What the let-go item held
+        /// beyond that is free once its transcribe has ended, which cancelling it brings
+        /// about at its next pass, or at once while it waits its turn.
+        private func startOver(_ item: Buffer, transcriber: any Transcriber, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) -> Buffer {
+            let kept = item.letGo()
+            let reopened = open(transcriber, &activity, &items)
+            reopened.append(kept)
+            let (held, freed, transcript) = (held, item.bytes - reopened.bytes, item.transcript)
+            activity.letGo(seconds: RealtimeAudio.duration(bytes: freed))
+            items.addTask {
+                _ = await transcript.result
+                held.release(bytes: freed, items: 0)
+            }
+            return reopened
         }
 
         /// The open item ends and is answered; with no audio in one, the commit is refused.
@@ -166,7 +195,7 @@ struct RealtimeSocket {
             // client that appends on hearing it finds the room already there.
             let answered = Task {
                 let result = await transcript.result
-                held.giveBack(itemOf: bytes)
+                held.release(bytes: bytes, items: 1)
                 deltas.settle(result, usage: Usage(heard: heard))
             }
             last = (buffer.id, answered)
@@ -187,10 +216,20 @@ private final class HeldAudio: Sendable {
     /// What an item costs beyond its audio, in bytes of audio: a second of it.
     private static let perItem = RealtimeAudio.rate * 2
     private let limit: TimeInterval
+    /// The most audio, in bytes, the open item grows to before it starts over: half the
+    /// limit, so an item the client leaves open never holds the room its committed items
+    /// wait in.
+    let share: Int
+    /// What an item that starts over keeps of its newest audio, in bytes: half its share,
+    /// so it starts over again only after as much more, and a speaker who began before it
+    /// did keeps minutes of their words.
+    let kept: Int
     private let held = Mutex((bytes: 0, items: 0))
 
     init(limit: TimeInterval) {
         self.limit = limit
+        share = Int(limit / 2 * Double(RealtimeAudio.rate)) * 2
+        kept = share / 2
     }
 
     /// `bytes` more held in `items` more items, refused whole when they would take the
@@ -205,9 +244,9 @@ private final class HeldAudio: Sendable {
         }
     }
 
-    /// An item is heard, and what it held, its `bytes` of audio among it, is free.
-    func giveBack(itemOf bytes: Int) {
-        held.withLock { $0 = ($0.bytes - bytes - Self.perItem, $0.items - 1) }
+    /// `bytes` held in `items` items are free: an item heard, or audio an item let go.
+    func release(bytes: Int, items: Int) {
+        held.withLock { $0 = ($0.bytes - bytes - items * Self.perItem, $0.items - items) }
     }
 }
 
@@ -225,12 +264,16 @@ private final class Buffer {
     private var received = 0
     /// Samples delivered, at 16 kHz.
     private var samples = 0
+    /// What it starts over from: its newest `keeping` bytes, beside the audio `HeldAudio`
+    /// counts, so an open item holds up to that much more.
+    private var newest: Newest
 
     /// What appends carry: PCM16 at 24 kHz.
     private let format: AVAudioFormat
 
     /// `after` is the item before this one, once it is answered.
-    init(transcriber: any Transcriber, vocabulary: Vocabulary, outbox: Outbox, after previous: Task<Void, Never>?) {
+    init(transcriber: any Transcriber, vocabulary: Vocabulary, outbox: Outbox, keeping: Int, after previous: Task<Void, Never>?) {
+        newest = Newest(capacity: keeping)
         // [LAW:no-silent-failure] A fixed pair of formats AVFoundation converts between;
         // a throw here, or from converting or draining between them, is a programming
         // error, so it traps.
@@ -244,9 +287,11 @@ private final class Buffer {
         // [LAW:no-ambient-temporal-coupling] An item is heard only once the one before it
         // is answered, so a socket's items are answered in the order they were committed:
         // the engine takes decodes in turn, but an item's several passes are not one turn.
-        // Its audio waits in `stream` meanwhile, within the socket's held audio.
+        // Its audio waits in `stream` meanwhile, within the socket's held audio, until the
+        // item is heard or, let go while it waits, cancelled.
         transcript = Task {
-            await previous?.value
+            if let previous { await ended(previous) }
+            try Task.checkCancellation()
             return try await transcriber.transcribe(stream, expecting: vocabulary, partial: deltas.heard)
         }
     }
@@ -257,6 +302,7 @@ private final class Buffer {
     var bytes: Int { received * 2 + carry.count }
 
     func append(_ bytes: Data) {
+        newest.append(bytes)
         let whole = carry + bytes
         let even = whole.count & ~1
         carry = whole.suffix(whole.count - even)
@@ -275,6 +321,17 @@ private final class Buffer {
         clips.finish()
     }
 
+    /// The item ends unheard: its transcribe is cancelled and it sends no more deltas.
+    /// Returns its newest `keeping` bytes, starting on a whole sample.
+    func letGo() -> Data {
+        // Cancelled first, so ending its audio cannot start a last pass the engine admits.
+        transcript.cancel()
+        clips.finish()
+        let newest = newest.bytes
+        deltas.letGo()
+        return newest.suffix(newest.count - (bytes - newest.count) % 2)
+    }
+
     private func convert(_ pcm: Data) -> [Float] {
         let frames = pcm.count / 2
         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(max(frames, 1)))!
@@ -289,6 +346,79 @@ private final class Buffer {
     }
 }
 
+/// The newest `capacity` bytes appended, in a ring of that many, so keeping them costs
+/// each append only its own bytes.
+struct Newest {
+    let capacity: Int
+    private var ring = Data()
+    /// Where the oldest byte is, once the ring is full, and the next byte goes.
+    private var oldest = 0
+
+    init(capacity: Int) {
+        self.capacity = capacity
+    }
+
+    mutating func append(_ bytes: Data) {
+        var rest = bytes.suffix(capacity)
+        let filling = min(capacity - ring.count, rest.count)
+        ring.append(rest.prefix(filling))
+        rest = rest.dropFirst(filling)
+        while !rest.isEmpty {
+            let run = min(capacity - oldest, rest.count)
+            ring.replaceSubrange(oldest..<oldest + run, with: rest.prefix(run))
+            oldest = (oldest + run) % capacity
+            rest = rest.dropFirst(run)
+        }
+    }
+
+    /// Oldest first.
+    var bytes: Data {
+        ring.suffix(from: oldest) + ring.prefix(oldest)
+    }
+}
+
+/// Returns once `task` has ended, or at once when the waiting task is cancelled.
+private func ended(_ task: Task<Void, Never>) async {
+    let waiting = Waiting()
+    await withTaskCancellationHandler {
+        await withCheckedContinuation { waiter in
+            waiting.wait(waiter)
+            Task {
+                await task.value
+                waiting.end()
+            }
+        }
+    } onCancel: {
+        waiting.cancel()
+    }
+}
+
+/// The one waiter `ended` resumes, by whichever of its task and its cancellation comes first.
+private final class Waiting: Sendable {
+    private let state = Mutex<(cancelled: Bool, waiter: CheckedContinuation<Void, Never>?)>((false, nil))
+
+    func wait(_ waiter: CheckedContinuation<Void, Never>) {
+        // Under the lock `cancel` also takes, so a cancel either lands before this and is
+        // seen here, or after and finds the waiter.
+        let cancelled = state.withLock { state in
+            if !state.cancelled { state.waiter = waiter }
+            return state.cancelled
+        }
+        if cancelled { waiter.resume() }
+    }
+
+    func end() {
+        state.withLock { $0.waiter.take() }?.resume()
+    }
+
+    func cancel() {
+        state.withLock { state in
+            state.cancelled = true
+            return state.waiter.take()
+        }?.resume()
+    }
+}
+
 /// One item's text on its way out: confirmed words as deltas while it is heard, then the
 /// rest and the transcript once it is.
 ///
@@ -296,12 +426,12 @@ private final class Buffer {
 /// taken from `Partial.confirmed`, which the transcript begins with word for word; so the
 /// deltas joined are the transcript's words, and a delta can never take back a word. Like
 /// OpenAI's, the first delta keeps the leading space the completed transcript trims.
-private final class Deltas: Sendable {
+final class Deltas: Sendable {
     let item: String
     private let outbox: Outbox
-    /// How many words have gone out as deltas. Held across the send, so deltas leave in
-    /// the order their words were heard.
-    private let sent = Mutex(0)
+    /// How many words have gone out as deltas, and whether the item was let go, after which
+    /// it sends nothing. Held across the send, so deltas leave in the order their words were heard.
+    private let sent = Mutex((words: 0, letGo: false))
 
     init(item: String, outbox: Outbox) {
         self.item = item
@@ -310,6 +440,11 @@ private final class Deltas: Sendable {
 
     func heard(_ partial: Partial) {
         send(partial.confirmed.words)
+    }
+
+    /// The item is let go: it sends nothing more.
+    func letGo() {
+        sent.withLock { $0.letGo = true }
     }
 
     /// Answers the item with what it was heard as: the words not yet sent, then the
@@ -328,9 +463,9 @@ private final class Deltas: Sendable {
 
     private func send(_ words: [Transcript.Word]) {
         sent.withLock { sent in
-            guard words.count > sent else { return }
-            outbox.emit(.delta(item: item, Transcript(words: Array(words[sent...])).text))
-            sent = words.count
+            guard !sent.letGo, words.count > sent.words else { return }
+            outbox.emit(.delta(item: item, Transcript(words: Array(words[sent.words...])).text))
+            sent.words = words.count
         }
     }
 }
@@ -376,8 +511,8 @@ enum Outgoing: Sendable {
 }
 
 /// Everything known about one Realtime socket once it has ended: the Realtime half of
-/// its `ServedRequest`. [LAW:nothing-unseen] Items opened less those completed and failed
-/// are the items the socket ended before answering.
+/// its `ServedRequest`. [LAW:nothing-unseen] Items opened less those completed, failed and
+/// let go are the items the socket ended before answering.
 public struct RealtimeActivity: Sendable, Codable, Equatable {
     public internal(set) var updates = 0
     public internal(set) var appends = 0
@@ -391,6 +526,10 @@ public struct RealtimeActivity: Sendable, Codable, Equatable {
     public internal(set) var heldAudioSeconds: Double = 0
     /// The most items the socket held at once, each heard only after the one before it.
     public internal(set) var heldItems = 0
+    /// Items that grew past their share of the socket uncommitted and started over, and the
+    /// seconds of their oldest audio they let go.
+    public internal(set) var itemsLetGo = 0
+    public internal(set) var letGoAudioSeconds: Double = 0
     /// Seconds of audio in the items committed.
     public internal(set) var audioSeconds: Double = 0
     /// The close code the socket ended with, the client's or the server's.
@@ -398,6 +537,11 @@ public struct RealtimeActivity: Sendable, Codable, Equatable {
     /// How the client broke the protocol, when it did.
     public internal(set) var violation: String?
     public internal(set) var sent = Sent()
+
+    mutating func letGo(seconds: TimeInterval) {
+        itemsLetGo += 1
+        letGoAudioSeconds += seconds
+    }
 
     /// [LAW:single-enforcer] The one place a refused client event's facts become the socket's.
     mutating func refused(_ refusal: RealtimeError) {

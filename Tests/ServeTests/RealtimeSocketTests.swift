@@ -1,6 +1,7 @@
 import Foundation
 import LowTalkerCore
 @testable import Serve
+import Synchronization
 import Testing
 
 /// A Realtime socket to a running server, speaking JSON events.
@@ -154,30 +155,84 @@ private func update(_ input: [String: Any]) -> [String: Any] {
         #expect(realtime.refusals == ["input_audio_buffer_commit_empty": 1] && realtime.refusedAudioSeconds == nil)
     }
 
-    /// An append that would take what the socket holds past the limit is refused whole and
-    /// the item keeps what it had: committed, it is heard with exactly the limit less the
-    /// second the item itself counts for, and once it is heard the next item has it again.
-    @Test func anAppendPastTheAudioLimitIsRefusedAndTheItemKeepsWhatItHad() async throws {
+    /// A client that appends for longer than the limit without a commit, as Pipecat does
+    /// through silence between turns, is never refused: the open item starts over from its
+    /// newest audio each time it outgrows its share, so the socket never holds more than the
+    /// limit, and the item committed at last is heard with no more than its share. Each item
+    /// let go is cancelled. Limit 4 s: a share of 2 s, of which 1 s is kept, so 10 s
+    /// uncommitted lets go 1 s eight times.
+    @Test func appendingPastTheLimitWithoutACommitStartsTheItemOverAndIsNeverRefused() async throws {
         let stub = Stub()
-        let running = try await Running.start(.ready(stub), limits: ServedLimits(uploads: 1, sockets: 1, audio: 2))
+        let running = try await Running.start(.ready(stub), limits: ServedLimits(uploads: 1, sockets: 1, audio: 4))
         defer { running.server.stop() }
         var client = Client(running)
-        try await client.append(seconds: 1.2)
-        let refusal = try #require(try await client.until("error")["error"] as? [String: Any])
-        #expect(refusal["code"] as? String == "audio_too_long")
-        #expect(refusal["param"] as? String == "audio")
+        try await client.append(seconds: 10)
         try await client.send(["type": "input_audio_buffer.commit"])
-        _ = try await client.until("conversation.item.input_audio_transcription.completed")
+        let committed = try #require(try await client.until("input_audio_buffer.committed")["item_id"] as? String)
+        let completed = try await client.until("conversation.item.input_audio_transcription.completed")
+        #expect(completed["item_id"] as? String == committed)
+        client.task.cancel(with: .normalClosure, reason: nil)
+        let heard = stub.heard.withLock { $0 }
+        #expect(heard.count == 9 && heard.allSatisfy { abs($0.seconds - 2) < 0.01 })
+        #expect(heard.filter(\.cancelled).count == 8)
+        let realtime = try #require(try await running.nextEvent().realtime)
+        #expect(realtime.appends == 100 && realtime.refusals.isEmpty && realtime.sent.errors == 0)
+        #expect(realtime.items == 9 && realtime.itemsLetGo == 8 && abs(realtime.letGoAudioSeconds - 8) < 0.01)
+        #expect(realtime.sent.completed == 1 && abs(realtime.audioSeconds - 2) < 0.01)
+        #expect(realtime.heldAudioSeconds <= 4 && realtime.heldItems == 1)
+    }
+
+    /// An item let go while it waits for the one committed before it is freed at once, not
+    /// once that one is answered, so a client appending through silence behind an engine
+    /// holding its committed turn is not refused for audio the socket let go. Limit 8 s: a
+    /// share of 4 s, of which 2 s is kept. With 1.5 s committed and waiting, 4.1 s starts the
+    /// open item over, and 1.9 s more takes the socket to 6.5 s, or 8.5 s had the 2 s let go
+    /// stayed held. The update's answer is a barrier past the start-over.
+    @Test func anItemLetGoWhileItWaitsItsTurnIsFreedAtOnce() async throws {
+        let gated = Gated()
+        let running = try await Running.start(.ready(gated), limits: ServedLimits(uploads: 1, sockets: 1, audio: 8))
+        defer { running.server.stop() }
+        var client = Client(running)
         try await client.append(seconds: 0.5)
         try await client.send(["type": "input_audio_buffer.commit"])
+        try await client.append(seconds: 4.1)
+        try await client.send(update([:]))
+        _ = try await client.until("session.updated")
+        try await client.append(seconds: 1.9)
+        try await client.send(["type": "input_audio_buffer.commit"])
+        _ = try await client.until("input_audio_buffer.committed")
+        gated.gate.cancel()
+        _ = try await client.until("conversation.item.input_audio_transcription.completed")
         _ = try await client.until("conversation.item.input_audio_transcription.completed")
         client.task.cancel(with: .normalClosure, reason: nil)
-        let heard = stub.heard.withLock { $0.map(\.seconds) }
-        #expect(heard.count == 2 && abs(heard[0] - 1) < 0.01 && abs(heard[1] - 0.5) < 0.01)
         let realtime = try #require(try await running.nextEvent().realtime)
-        #expect(realtime.appends == 17 && realtime.refusals == ["audio_too_long": 2] && realtime.items == 2)
-        #expect(abs(try #require(realtime.refusedAudioSeconds) - 2.1) < 0.01)
-        #expect(realtime.sent.errors == 2)
+        #expect(realtime.refusals.isEmpty && realtime.itemsLetGo == 1 && realtime.sent.completed == 2)
+    }
+
+    /// An item let go sends nothing more.
+    @Test func anItemLetGoSendsNoMoreDeltas() async {
+        let sent = await deltas { outbox in
+            let item = Deltas(item: "item_a", outbox: outbox)
+            item.heard(Partial(confirmed: timed(2), tentative: Transcript(words: [])))
+            item.letGo()
+            item.heard(Partial(confirmed: timed(4), tentative: Transcript(words: [])))
+        }
+        #expect(sent == [" w1 w2"])
+    }
+
+    /// The newest bytes are kept oldest first, whether they arrive in one append or wrap
+    /// around the ring across many.
+    @Test func newestKeepsTheLastBytesInOrder() {
+        var newest = Newest(capacity: 5)
+        newest.append(Data([1, 2, 3]))
+        #expect(newest.bytes == Data([1, 2, 3]))
+        newest.append(Data([4, 5, 6, 7]))
+        #expect(newest.bytes == Data([3, 4, 5, 6, 7]))
+        newest.append(Data([8, 9, 10, 11, 12, 13, 14]))
+        #expect(newest.bytes == Data([10, 11, 12, 13, 14]))
+        var none = Newest(capacity: 0)
+        none.append(Data([1]))
+        #expect(none.bytes.isEmpty)
     }
 
     /// A socket opened while the server holds its limit of them is refused with a 429 before
@@ -215,15 +270,15 @@ private func update(_ input: [String: Any]) -> [String: Any] {
             try await client.send(["type": "input_audio_buffer.commit"])
             committed.append(try #require(try await client.until("input_audio_buffer.committed")["item_id"] as? String))
         }
-        // URLSession reads a pong only while a receive is pending, so the ping goes out
-        // beside an update whose answer is awaited.
-        let task = client.task
-        async let pong: Void = withCheckedThrowingContinuation { (pong: CheckedContinuation<Void, any Error>) in
-            task.sendPing { error in error.map { pong.resume(throwing: $0) } ?? pong.resume() }
+        // URLSession reads a pong only while a receive is pending, so updates are answered
+        // one after another until the pong has come in during one of them.
+        let pong = Mutex<Result<Void, any Error>?>(nil)
+        client.task.sendPing { error in pong.withLock { $0 = error.map { .failure($0) } ?? .success(()) } }
+        while pong.withLock({ $0 }) == nil {
+            try await client.send(update([:]))
+            _ = try await client.until("session.updated")
         }
-        try await client.send(update([:]))
-        _ = try await client.until("session.updated")
-        try await pong
+        try pong.withLock { $0 }!.get()
         try await client.append(seconds: 0.6)
         let refusal = try #require(try await client.until("error")["error"] as? [String: Any])
         #expect(refusal["code"] as? String == "audio_too_long")
@@ -327,4 +382,19 @@ private func update(_ input: [String: Any]) -> [String: Any] {
     @Test func theAcceptKeyIsTheRFCs() {
         #expect(WebSocket.accept("dGhlIHNhbXBsZSBub25jZQ==") == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
     }
+}
+
+/// `count` words, `w1` onward, each a second long.
+private func timed(_ count: Int) -> Transcript {
+    Transcript(words: (0..<count).map { Transcript.Word(text: " w\($0 + 1)", time: Double($0)...Double($0 + 1), confidence: 1.0) })
+}
+
+/// The deltas `body` sends through an outbox, in order.
+private func deltas(_ body: (Outbox) -> Void) async -> [String] {
+    let (frames, continuation) = AsyncStream<Outgoing>.makeStream()
+    body(Outbox(continuation))
+    continuation.finish()
+    var sent: [String] = []
+    for await case .event(.delta(_, let text)) in frames { sent.append(text) }
+    return sent
 }
