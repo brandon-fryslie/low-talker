@@ -237,29 +237,45 @@ final class Places: Sendable {
         self.limit = limit
     }
 
-    /// A place for one more, and how many are held with it, itself included. Refused with
-    /// 429, which Pipecat retries, when the limit already hold one. Every place taken is
-    /// given back once.
-    func take() throws(APIError) -> Int {
+    /// A place for one more. Refused with 429 when the limit already hold one.
+    func take() throws(APIError) -> Place {
         let taken = open.withLock { open -> Int? in
             guard open < limit else { return nil }
             open += 1
             return open
         }
         guard let taken else { throw .busy(held, limit: limit) }
-        return taken
+        return Place(held: taken, of: self)
     }
 
-    func giveBack() {
+    fileprivate func giveBack() {
         open.withLock { $0 -= 1 }
     }
 
     /// `answer`, run holding a place and handed how many are held with it; the place is
     /// given back when `answer` ends, however it ends.
     func admitted<Answer>(_ answer: (Int) async throws -> Answer) async throws -> Answer {
-        let taken = try take()
-        defer { giveBack() }
-        return try await answer(taken)
+        let place = try take()
+        defer { withExtendedLifetime(place) {} }
+        return try await answer(place.held)
+    }
+}
+
+/// One place taken from `Places`, given back when whatever holds it lets it go.
+/// [LAW:no-ambient-temporal-coupling] The place's holder owns its lifetime, so no path can
+/// keep one past its work or give one back twice.
+final class Place: Sendable {
+    /// How many were held when this one was taken, itself included.
+    let held: Int
+    private let places: Places
+
+    fileprivate init(held: Int, of places: Places) {
+        self.held = held
+        self.places = places
+    }
+
+    deinit {
+        places.giveBack()
     }
 }
 
@@ -306,8 +322,6 @@ private struct Answering: Sendable {
                 event.unread = await connection.drain()
                 lingering.cancel()
             case .realtime(let handshake, let socket):
-                // The place `realtime` took, held for as long as the socket is open.
-                defer { sockets.giveBack() }
                 // A socket is open as long as the client keeps it: the read deadline is the
                 // request's, and the request is whole.
                 deadline.cancel()
@@ -390,8 +404,9 @@ private struct Answering: Sendable {
         case .failed(let reason): throw .engineFailed(reason)
         }
         // Taken last, so a socket refused for any other reason holds no place.
-        event.sockets = try sockets.take()
-        return .realtime(handshake: handshake, RealtimeSocket(transcriber: transcriber, audio: limits.audio, items: limits.items))
+        let place = try sockets.take()
+        event.sockets = place.held
+        return .realtime(handshake: handshake, RealtimeSocket(place: place, transcriber: transcriber, audio: limits.audio, items: limits.items))
     }
 
     private func transcription(_ head: RequestHead, _ connection: NWConnection, _ reader: inout Reader, _ event: inout ServedRequest) async throws -> HTTPResponse {

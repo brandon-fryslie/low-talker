@@ -8,6 +8,8 @@ import Synchronization
 /// client's events read in order, each item heard by one streaming `transcribe`, and every
 /// server event sent through one outbox.
 struct RealtimeSocket {
+    /// One of the server's places for sockets, held for as long as this one is.
+    let place: Place
     let transcriber: any Transcriber
     /// The most audio one item may hold, in seconds.
     let audio: TimeInterval
@@ -131,8 +133,9 @@ struct RealtimeSocket {
         /// `bytes` into the open item, which the first append after a commit opens; refused
         /// whole, before any of it is taken in, when it would take the item past `audio`.
         /// An item opened while the socket holds its limit waits for one to be heard, reading
-        /// nothing meanwhile: the client is held back by its own socket, never refused, since
-        /// Pipecat takes any error event as fatal.
+        /// nothing meanwhile, pings and a close included: the client is held back by its own
+        /// socket rather than sent an error event, which Pipecat takes as fatal, and a client
+        /// whose keepalive runs out first loses the socket.
         private mutating func append(_ bytes: Data, transcriber: any Transcriber, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) async throws(RealtimeError) {
             let seconds = RealtimeAudio.duration(bytes: (buffer?.bytes ?? 0) + bytes.count)
             guard seconds <= audio else { throw .audioTooLong(seconds: seconds, limit: audio) }
