@@ -1,14 +1,19 @@
+import Foundation
+
+
 /// The audio of one utterance as it arrives, for an engine that hears it in passes
 /// while it is still being spoken. Clips are appended as they are captured; a
 /// pass takes the speech so far, and the engine waits here between passes until
 /// more has been spoken or the utterance has ended.
 ///
-/// What a pass is handed is the speech: the audio from `leadIn` before the first clip
-/// that held speech through `hangover` past the last, silence where that much has not
-/// arrived yet. Leading quiet is let go as it arrives, however long it runs: Whisper
-/// reads words into silence it is handed ("Thank you."), so an utterance that opens on
-/// minutes of it, as a Realtime item does between a client's turns, would otherwise
-/// begin with words nobody said (low-serve-axq.ium). Trailing
+/// What a pass is handed is the speech: the audio from `leadIn` before the first speech
+/// through `hangover` past the last clip that held speech, silence where that much has
+/// not arrived yet. Quiet longer than that is let go as it arrives, however long it runs,
+/// before the first speech and between speech alike: Whisper reads words into silence it
+/// is handed ("Thank you."), so an utterance that opens on minutes of it, as a Realtime
+/// item does between a client's turns, or holds minutes of it after a click, would
+/// otherwise carry words nobody said (low-serve-axq.ium). What was let go is kept as a
+/// `Timeline`, which times the words a pass reads in the audio appended. Trailing
 /// quiet is never worth a pass, during the hold or after it: a pass over the same
 /// speech and more silence reads the same words, and the encoder's cost does not
 /// shrink with the tail. So the pass in flight when the key comes up is the last
@@ -23,8 +28,10 @@ actor Utterance {
     /// microphone peaks at -49 to -54 dBFS per tenth of a second, and the bench
     /// fixtures attenuated by 20 dB peak at -33 or louder. Whisper normalizes each
     /// window's log-mel, so it reads audio this soft as it reads loud audio; what
-    /// the floor refuses is a hold with nothing in it, which Whisper would read
-    /// words into. Level is all a peak knows, so a click this loud is a speaker too.
+    /// the floor refuses is quiet, which Whisper would read words into: a hold with
+    /// nothing in it, and all but the lead-in of the quiet before the first speech,
+    /// however softly a word in it was said. Level is all a peak knows, so a click
+    /// this loud is a speaker too.
     static let audible: Float = 0.01
     /// A clip holds speech when its peak stands within this factor of the loudest
     /// clip so far: 16, 24 dB, one speaker's spread from a stressed vowel to a soft
@@ -37,13 +44,13 @@ actor Utterance {
     /// Audio kept past the last clip with speech in it, so a word's soft tail rides
     /// with the word. Silence to the encoder either way, so it costs the pass nothing.
     static let hangover = AudioClip.sampleCount(for: 0.3)
-    /// Audio kept before the first clip with speech in it, so a word's soft onset rides
-    /// with the word, as its tail does with `hangover`.
+    /// Audio kept before the first sample of speech, so a word's soft onset rides with
+    /// the word, as its tail does with `hangover`.
     static let leadIn = AudioClip.sampleCount(for: 0.3)
 
     private var samples: [Float] = []
-    /// Samples let go before the speech: where `samples` starts in the audio appended.
-    private(set) var origin = 0
+    /// Where `samples` lie in the audio appended: the quiet let go from between them.
+    private var timeline = Timeline()
     /// Samples through the end of the last clip that held speech, once one has.
     /// Each clip is judged as it arrives, against the loudest so far, and never
     /// again: a louder clip later may put an earlier one outside the range, but
@@ -58,20 +65,42 @@ actor Utterance {
     private var ended = false
     private var waiting: [CheckedContinuation<Void, Never>] = []
 
+    /// The span each clip is judged in: the tenth of a second the floor and the range
+    /// were measured over. [LAW:one-type-per-behavior] A clip of any length is judged
+    /// as the frames it holds, so an upload sent as one clip, or an item appended in
+    /// clips of seconds, is cut into speech and quiet as a stream of short clips is.
+    static let frame: TimeInterval = 0.1
+
     func append(_ clip: AudioClip) {
-        // [LAW:dataflow-not-control-flow] Every clip lets go what lies more than the
-        // lead-in before it, which is nothing once speech has begun.
-        let letGo = spoken == nil ? max(0, samples.count - Self.leadIn) : 0
-        samples.removeFirst(letGo)
-        origin += letGo
+        for frame in clip.chunks(of: Self.frame) {
+            take(frame)
+        }
+        wake()
+    }
+
+    private func take(_ clip: AudioClip) {
+        let start = samples.count
         samples += clip.samples
         let peak = clip.peak
         loudest = max(loudest, peak)
         // [LAW:dataflow-not-control-flow] One judgement for every clip, the loudest
         // included: it stands within range of itself, so the clip that lifts the
         // loudest past the floor is the first speech.
-        spoken = loudest >= Self.audible && peak * Self.dynamicRange > loudest ? samples.count : spoken
-        wake()
+        let speech = loudest >= Self.audible && peak * Self.dynamicRange > loudest
+        // Where the audio kept must resume: the lead-in before the clip's first sample
+        // within range of the loudest when the clip is speech, the lead-in before its end
+        // when it is not, since the next clip may open on speech.
+        let onset = speech ? clip.samples.firstIndex { abs($0) * Self.dynamicRange > loudest } : nil
+        let resume = start + (onset ?? clip.samples.count) - Self.leadIn
+        // [LAW:dataflow-not-control-flow] Every clip lets go the quiet between the speech's
+        // hangover and where the audio resumes, which is none while either is still
+        // arriving. No pass has been handed a sample past the hangover, so every sample
+        // a pass has read keeps its place.
+        let kept = min(speechCount, samples.count)
+        let letGo = max(0, resume - kept)
+        samples.removeSubrange(kept..<kept + letGo)
+        timeline.letGo(letGo, at: kept)
+        spoken = speech ? samples.count : spoken
     }
 
     /// The key came up: nothing more arrives.
@@ -100,13 +129,15 @@ actor Utterance {
     }
 
     /// The speech so far, once it runs to more than `count` samples or the
-    /// utterance has ended, whichever comes first.
-    func audio(beyond count: Int) async -> (samples: [Float], ended: Bool) {
+    /// utterance has ended, whichever comes first, and where it lies in the audio
+    /// appended. [LAW:one-source-of-truth] The timeline comes with the samples it
+    /// places, so words are never timed by a timeline other than their audio's.
+    func audio(beyond count: Int) async -> (samples: [Float], ended: Bool, timeline: Timeline) {
         while speechCount <= count && !ended {
             await withCheckedContinuation { waiting.append($0) }
         }
         let speech = Array(samples.prefix(speechCount)) + Array(repeating: 0, count: max(0, speechCount - samples.count))
-        return (speech, ended)
+        return (speech, ended, timeline)
     }
 
     private func wake() {
@@ -116,6 +147,42 @@ actor Utterance {
             continuation.resume()
         }
     }
+}
+
+/// Where an utterance's samples lie in the audio appended: each stretch of quiet let go,
+/// at the kept sample it was let go before. A pass reads kept samples, so the words it
+/// reads are timed from the first kept sample; placed here, they are timed from the
+/// audio's first sample, as a caller sent it.
+struct Timeline: Sendable {
+    /// Samples let go, by the kept sample they were let go before: quiet let go at one
+    /// place across many clips is one gap.
+    private var gaps: [Int: Int] = [:]
+
+    /// Seconds of the audio no pass is handed.
+    var quiet: TimeInterval {
+        AudioClip.duration(for: gaps.values.reduce(0, +))
+    }
+
+    mutating func letGo(_ count: Int, at sample: Int) {
+        gaps[sample, default: 0] += count
+    }
+
+    /// `seconds` into the kept samples, as seconds into the audio appended.
+    func place(_ seconds: TimeInterval) -> TimeInterval {
+        let sample = AudioClip.sampleCount(for: seconds)
+        return seconds + AudioClip.duration(for: gaps.reduce(0) { $0 + ($1.key <= sample ? $1.value : 0) })
+    }
+
+    /// The words, timed in the audio appended, and the quiet let go from it.
+    func place(_ transcript: Transcript) -> Transcript {
+        Transcript(words: transcript.words.map { Word(text: $0.text, time: place($0.time.lowerBound)...place($0.time.upperBound), confidence: $0.confidence) }, quiet: quiet)
+    }
+
+    func place(_ partial: Partial) -> Partial {
+        Partial(confirmed: place(partial.confirmed), tentative: place(partial.tentative))
+    }
+
+    private typealias Word = Transcript.Word
 }
 
 /// [LAW:no-silent-failure] The one way an utterance yields no transcript: named, with

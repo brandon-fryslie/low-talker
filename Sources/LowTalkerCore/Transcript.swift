@@ -7,9 +7,13 @@ import Foundation
 /// so the two can never disagree.
 public struct Transcript: Hashable, Codable, Sendable {
     public let words: [Word]
+    /// Seconds of quiet no pass was handed, before the speech and between it: heard as
+    /// nothing, while the words are still timed in the audio as it was sent.
+    public let quiet: TimeInterval
 
-    public init(words: [Word]) {
+    public init(words: [Word], quiet: TimeInterval = 0) {
         self.words = words
+        self.quiet = quiet
     }
 
     /// A transcript nobody spoke: text typed in for a dry run or a test. Whitespace
@@ -20,6 +24,7 @@ public struct Transcript: Hashable, Codable, Sendable {
         self.words = text.matches(of: /\s*\S+(?:\s+$)?/).map { match in
             Word(text: String(match.output), time: 0...0, confidence: 1.0)
         }
+        self.quiet = 0
     }
 
     /// The words concatenated as the engine emitted them. Each word carries its own
@@ -37,11 +42,6 @@ public struct Transcript: Hashable, Codable, Sendable {
     /// and the executor that inserts nothing agree on what nothing is.
     public var isBlank: Bool {
         !text.contains { !$0.isWhitespace }
-    }
-
-    /// The same words, each `seconds` later.
-    func shifted(by seconds: TimeInterval) -> Transcript {
-        Transcript(words: words.map { Word(text: $0.text, time: $0.time.lowerBound + seconds...$0.time.upperBound + seconds, confidence: $0.confidence) })
     }
 
     public struct Word: Hashable, Codable, Sendable {

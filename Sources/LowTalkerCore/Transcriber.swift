@@ -54,11 +54,6 @@ public struct Partial: Hashable, Sendable {
         self.tentative = tentative
     }
 
-    /// The same words, each `seconds` later.
-    func shifted(by seconds: Double) -> Partial {
-        Partial(confirmed: confirmed.shifted(by: seconds), tentative: tentative.shifted(by: seconds))
-    }
-
     /// Everything heard so far, confirmed then tentative, as one line of text.
     public var text: String {
         confirmed.text + tentative.text

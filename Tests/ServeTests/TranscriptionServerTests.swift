@@ -94,9 +94,10 @@ import TestProbes
         #expect(event.status == 401 && event.error == "invalid_api_key")
     }
 
-    /// An mp3 is decoded as a wav is, and the engine hears all of it.
+    /// An mp3 is decoded as a wav is, and the engine hears all of it. The event carries
+    /// the quiet the engine let go.
     @Test func hearsAnMP3() async throws {
-        let stub = Stub()
+        let stub = Stub(.success(Transcript(words: Transcript(typed: " Hello world, this is LowTalker.").words, quiet: 1.5)))
         let running = try await Running.start(.ready(stub))
         defer { running.server.stop() }
         let (response, body) = try await running.post([("model", nil, Data("gpt-transcribe".utf8)), ("file", "audio.mp3", fixture("hello-16k-mono.mp3"))])
@@ -108,6 +109,7 @@ import TestProbes
         #expect(seconds > 2.2 && seconds < 2.6)
         let event = try await running.nextEvent()
         #expect(event.status == 200 && event.words == 5 && event.model == "gpt-transcribe" && event.error == nil)
+        #expect(event.quietSeconds == 1.5)
     }
 
     /// A request that asks while the speaker holds the engine waits for the hold, and its

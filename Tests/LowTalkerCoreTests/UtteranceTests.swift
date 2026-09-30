@@ -19,7 +19,7 @@ import Testing
         async let heard = utterance.audio(beyond: 1_600 + Utterance.hangover)
         await utterance.append(Self.speech(1_600))
         await utterance.append(Self.speech(1))
-        let (samples, ended) = await heard
+        let (samples, ended, _) = await heard
         #expect(samples.count == 1_601 + Utterance.hangover)
         #expect(samples.prefix(1_601).allSatisfy { $0 == 0.5 })
         #expect(samples.dropFirst(1_601).allSatisfy { $0 == 0 })
@@ -33,45 +33,60 @@ import Testing
         let utterance = Utterance()
         await utterance.append(Self.speech(1_600))
         await utterance.append(Self.quiet(16_000))
-        let (samples, ended) = await utterance.audio(beyond: 0)
+        let (samples, ended, _) = await utterance.audio(beyond: 0)
         #expect(samples.count == 1_600 + Utterance.hangover)
         #expect(samples.dropFirst(1_600).allSatisfy { $0 == 0.001 })
         #expect(!ended)
         async let more = utterance.audio(beyond: 1_600 + Utterance.hangover)
         await utterance.append(Self.quiet(16_000))
         await utterance.end()
-        let (final, over) = await more
+        let (final, over, _) = await more
         #expect(final.count == 1_600 + Utterance.hangover)
         #expect(over)
     }
 
-    /// Speech after quiet takes the quiet with it: everything through the last
-    /// speech is handed on, however soft the middle was.
-    @Test func speechAfterQuietCarriesTheQuiet() async {
+    /// Speech after quiet takes the quiet with it, but for what is past the hangover of
+    /// the speech before and the lead-in of the speech after: a pause stays a pause,
+    /// however long it ran, and no pass is handed more quiet than that.
+    @Test func speechAfterQuietCarriesTheHangoverAndTheLeadIn() async {
         let utterance = Utterance()
         await utterance.append(Self.speech(1_600))
         await utterance.append(Self.quiet(16_000))
         await utterance.append(Self.speech(800))
-        let (samples, _) = await utterance.audio(beyond: 0)
-        #expect(samples.count == 18_400 + Utterance.hangover)
-        #expect(samples[1_600..<17_600].allSatisfy { $0 == 0.001 })
-        #expect(samples[17_600..<18_400].allSatisfy { $0 == 0.5 })
+        let (samples, _, timeline) = await utterance.audio(beyond: 0)
+        let pause = Utterance.hangover + Utterance.leadIn
+        #expect(samples.count == 1_600 + pause + 800 + Utterance.hangover)
+        #expect(samples[1_600..<1_600 + pause].allSatisfy { $0 == 0.001 })
+        #expect(samples[1_600 + pause..<2_400 + pause].allSatisfy { $0 == 0.5 })
+        #expect(timeline.quiet == AudioClip.duration(for: 16_000 - pause))
     }
 
-    /// Quiet before speech is let go as it arrives but for the lead-in: however long the
-    /// quiet an utterance opens on, a pass reads the lead-in and then the speech, and
-    /// `origin` says where in the audio appended that starts.
-    @Test func quietBeforeSpeechIsLetGoButTheLeadIn() async {
+    /// Quiet before speech is let go but for the lead-in, however long it ran and
+    /// however it was cut into clips: a minute of it and then speech, sent as one clip or
+    /// in clips of a second, is handed to a pass as the lead-in and then the speech, and
+    /// the timeline says how much went.
+    @Test(arguments: [1.0, 61.1]) func quietBeforeSpeechIsLetGoButTheLeadIn(clipSeconds: Double) async {
         let utterance = Utterance()
-        for _ in 0..<60 {
-            await utterance.append(Self.quiet(16_000))
+        let audio = AudioClip(samples: Self.quiet(60 * 16_000).samples + Self.speech(1_600).samples)
+        for clip in audio.chunks(of: clipSeconds) {
+            await utterance.append(clip)
         }
-        await utterance.append(Self.speech(1_600))
-        let (samples, _) = await utterance.audio(beyond: 0)
+        let (samples, _, timeline) = await utterance.audio(beyond: 0)
         #expect(samples.count == Utterance.leadIn + 1_600 + Utterance.hangover)
         #expect(samples.prefix(Utterance.leadIn).allSatisfy { $0 == 0.001 })
         #expect(samples[Utterance.leadIn..<Utterance.leadIn + 1_600].allSatisfy { $0 == 0.5 })
-        #expect(await utterance.origin == 60 * 16_000 - Utterance.leadIn)
+        #expect(timeline.quiet == AudioClip.duration(for: 60 * 16_000 - Utterance.leadIn))
+    }
+
+    /// The timeline places a time in the kept samples back in the audio appended: past
+    /// every stretch let go before it, and none let go after it.
+    @Test func theTimelinePlacesKeptTimesInTheAudio() {
+        var timeline = Timeline()
+        timeline.letGo(16_000, at: 0)
+        timeline.letGo(32_000, at: 8_000)
+        #expect(timeline.place(0.25) == 1.25)
+        #expect(timeline.place(0.5) == 3.5)
+        #expect(timeline.quiet == 3)
     }
 
     /// The end wakes a wait that the speech never satisfied, with what there is.
@@ -80,7 +95,7 @@ import Testing
         async let heard = utterance.audio(beyond: 100_000)
         await utterance.append(Self.speech(5))
         await utterance.end()
-        let (samples, ended) = await heard
+        let (samples, ended, _) = await heard
         #expect(samples.count == 5 + Utterance.hangover)
         #expect(ended)
     }
@@ -91,7 +106,7 @@ import Testing
         let utterance = Utterance()
         await utterance.append(Self.quiet(32_000))
         await utterance.end()
-        let (samples, ended) = await utterance.audio(beyond: 0)
+        let (samples, ended, _) = await utterance.audio(beyond: 0)
         #expect(samples.isEmpty)
         #expect(ended)
     }
@@ -104,7 +119,7 @@ import Testing
         await utterance.append(Self.speech(6_400))
         await utterance.append(Self.quiet(1_600))
         await utterance.end()
-        let (samples, ended) = await heard
+        let (samples, ended, _) = await heard
         #expect(samples.count == 6_400 + Utterance.hangover)
         #expect(samples.prefix(6_400).allSatisfy { $0 == 0.5 })
         #expect(ended)
@@ -119,7 +134,7 @@ import Testing
             continuation.finish()
         }
         try await utterance.fill(from: clips)
-        let (samples, ended) = await utterance.audio(beyond: 0)
+        let (samples, ended, _) = await utterance.audio(beyond: 0)
         #expect(Array(samples.prefix(3)) == [1, 2, 3])
         #expect(samples.count == 3 + Utterance.hangover)
         #expect(ended)
@@ -136,7 +151,7 @@ import Testing
         async let heard = utterance.audio(beyond: 100_000)
         try await Task.sleep(for: .milliseconds(20))
         filling.cancel()
-        let (samples, ended) = await heard
+        let (samples, ended, _) = await heard
         #expect(ended)
         #expect(samples.isEmpty)
         feed.finish()
@@ -165,7 +180,7 @@ import Testing
         await utterance.append(AudioClip(samples: Array(repeating: 0.5 * scale, count: 1_600)))
         await utterance.append(AudioClip(samples: Array(repeating: 0.04 * scale, count: 1_600)))
         await utterance.append(AudioClip(samples: Array(repeating: 0.03 * scale, count: 1_600)))
-        let (samples, _) = await utterance.audio(beyond: 0)
+        let (samples, _, _) = await utterance.audio(beyond: 0)
         #expect(samples.count == 3_200 + Utterance.hangover)
     }
 }
