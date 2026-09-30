@@ -105,6 +105,8 @@ struct RealtimeSocket {
         var buffer: Buffer?
         /// The last item committed, which the next one follows.
         var previous: String?
+        /// The last item committed, once it is answered.
+        var answered: Task<Void, Never>?
 
         mutating func receive(_ text: String, transcriber: any Transcriber, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) {
             var clientEvent: String?
@@ -136,7 +138,7 @@ struct RealtimeSocket {
         private mutating func append(_ bytes: Data, transcriber: any Transcriber, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) throws(RealtimeError) {
             activity.heldAudioSeconds = max(activity.heldAudioSeconds, try held.take(bytes.count))
             if buffer == nil {
-                let opened = Buffer(transcriber: transcriber, vocabulary: session.vocabulary, outbox: outbox)
+                let opened = Buffer(transcriber: transcriber, vocabulary: session.vocabulary, outbox: outbox, after: answered)
                 activity.items += 1
                 let transcript = opened.transcript
                 items.addTask {
@@ -162,11 +164,13 @@ struct RealtimeSocket {
             let (held, bytes) = (held, buffer.bytes)
             // [LAW:no-ambient-temporal-coupling] Freed before the item is answered, so a
             // client that appends on hearing it finds the room already there.
-            items.addTask {
+            let answered = Task {
                 let result = await transcript.result
                 held.giveBack(bytes)
                 deltas.settle(result, usage: Usage(heard: heard))
             }
+            self.answered = answered
+            items.addTask { await answered.value }
         }
 
         func abandon() {
@@ -221,7 +225,8 @@ private final class Buffer {
     /// What appends carry: PCM16 at 24 kHz.
     private let format: AVAudioFormat
 
-    init(transcriber: any Transcriber, vocabulary: Vocabulary, outbox: Outbox) {
+    /// `after` is the item before this one, once it is answered.
+    init(transcriber: any Transcriber, vocabulary: Vocabulary, outbox: Outbox, after previous: Task<Void, Never>?) {
         // [LAW:no-silent-failure] A fixed pair of formats AVFoundation converts between;
         // a throw here, or from converting or draining between them, is a programming
         // error, so it traps.
@@ -232,7 +237,14 @@ private final class Buffer {
         id = "item_\(ID.fresh())"
         let deltas = Deltas(item: id, outbox: outbox)
         self.deltas = deltas
-        transcript = Task { try await transcriber.transcribe(stream, expecting: vocabulary, partial: deltas.heard) }
+        // [LAW:no-ambient-temporal-coupling] An item is heard only once the one before it
+        // is answered, so a socket's items are answered in the order they were committed:
+        // the engine takes decodes in turn, but an item's several passes are not one turn.
+        // Its audio waits in `stream` meanwhile, within the socket's held audio.
+        transcript = Task {
+            await previous?.value
+            return try await transcriber.transcribe(stream, expecting: vocabulary, partial: deltas.heard)
+        }
     }
 
     var hasAudio: Bool { received > 0 }

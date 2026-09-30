@@ -201,17 +201,19 @@ private func update(_ input: [String: Any]) -> [String: Any] {
 
     /// A socket whose items wait on a held engine goes on reading: each commit is answered,
     /// a ping is answered, and appends are taken until the audio the socket holds across its
-    /// items would pass the limit. Once the engine is free every item is heard, and the
-    /// audio they held is free again.
+    /// items would pass the limit. Once the engine is free every item is heard, each only
+    /// after the one before it is answered, so they are answered in the order committed, and
+    /// the audio they held is free again.
     @Test func aSocketWhoseItemsWaitOnTheEngineKeepsReading() async throws {
         let gated = Gated()
         let running = try await Running.start(.ready(gated), limits: ServedLimits(uploads: 1, sockets: 1, audio: 2))
         defer { running.server.stop() }
         var client = Client(running)
+        var committed: [String] = []
         for _ in 0..<3 {
             try await client.append(seconds: 0.5)
             try await client.send(["type": "input_audio_buffer.commit"])
-            _ = try await client.until("input_audio_buffer.committed")
+            committed.append(try #require(try await client.until("input_audio_buffer.committed")["item_id"] as? String))
         }
         // URLSession reads a pong only while a receive is pending, so the ping goes out
         // beside an update whose answer is awaited.
@@ -225,14 +227,19 @@ private func update(_ input: [String: Any]) -> [String: Any] {
         try await client.append(seconds: 0.6)
         let refusal = try #require(try await client.until("error")["error"] as? [String: Any])
         #expect(refusal["code"] as? String == "audio_too_long")
-        gated.gate.cancel()
         try await client.send(["type": "input_audio_buffer.commit"])
-        for _ in 0..<4 { _ = try await client.until("conversation.item.input_audio_transcription.completed") }
+        committed.append(try #require(try await client.until("input_audio_buffer.committed")["item_id"] as? String))
+        gated.gate.cancel()
+        var completed: [String] = []
+        for _ in 0..<4 {
+            completed.append(try #require(try await client.until("conversation.item.input_audio_transcription.completed")["item_id"] as? String))
+        }
+        #expect(completed == committed)
         try await client.append(seconds: 1.5)
         try await client.send(["type": "input_audio_buffer.commit"])
         _ = try await client.until("conversation.item.input_audio_transcription.completed")
         client.task.cancel(with: .normalClosure, reason: nil)
-        #expect(gated.started.withLock { $0 } == [0, 0, 0, 0, 4])
+        #expect(gated.started.withLock { $0 } == [0, 1, 2, 3, 4])
         let realtime = try #require(try await running.nextEvent().realtime)
         #expect(realtime.items == 5 && realtime.sent.completed == 5 && realtime.refusals == ["audio_too_long": 1])
         let refused = try #require(realtime.refusedAudioSeconds)
