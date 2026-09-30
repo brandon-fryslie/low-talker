@@ -10,7 +10,7 @@ struct ModelCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "model",
         abstract: "Inspect and download the Whisper model the app loads at launch.",
-        subcommands: [Status.self, Download.self, Pack.self, Default.self]
+        subcommands: [Status.self, Download.self, Pack.self, Default.self, Revision.self]
     )
 
     /// The model a release carries and a launch loads where nothing names another, by
@@ -24,6 +24,22 @@ struct ModelCommand: AsyncParsableCommand {
 
         func run() {
             print(ModelName.default.rawValue)
+        }
+    }
+
+    /// The Hugging Face commits a download of the model would fetch now, for scripts: a
+    /// release caches its store under this, so a moved upstream is a new entry rather than
+    /// the old one kept until eviction. [LAW:one-source-of-truth]
+    struct Revision: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Print the Hugging Face commits a download of the model would fetch now, as <weights>-<tokenizer>."
+        )
+
+        @Option(help: "A model folder name in the whisperkit-coreml repo.")
+        var model: ModelName = .default
+
+        func run() async throws {
+            print(try await ModelRevision.upstream(of: model))
         }
     }
 
@@ -58,10 +74,18 @@ struct ModelCommand: AsyncParsableCommand {
         @OptionGroup var options: ModelOptions
         @OptionGroup var source: SourceOptions
 
+        @Option(help: "Fail unless the installed model came from these commits, as `model revision` prints them. Only a store filled from huggingface.co records its commits.")
+        var revision: ModelRevision?
+
         func run() async throws {
             let reporter = PhaseReporter()
-            let installed = try await options.store().install(options.model, from: source.source) { reporter.report(.installing($0)) }
+            let store = try options.store()
+            let installed = try await store.install(options.model, from: source.source) { reporter.report(.installing($0)) }
             print("installed: \(installed.folder.path)")
+            if let revision {
+                try store.require(revision, of: options.model)
+                print("revision: \(revision)")
+            }
         }
     }
 

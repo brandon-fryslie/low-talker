@@ -91,12 +91,12 @@ extension ModelVariant {
         }
     }
 
-    init(modelConfig url: URL) throws {
+    init(modelConfig data: Data) throws {
         struct Config: Decodable {
             let vocab_size: Int
             let d_model: Int
         }
-        let config = try JSONDecoder().decode(Config.self, from: Data(contentsOf: url))
+        let config = try JSONDecoder().decode(Config.self, from: data)
         self.init(logitsDim: config.vocab_size, encoderDim: config.d_model)
     }
 

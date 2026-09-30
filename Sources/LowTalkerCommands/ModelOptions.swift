@@ -50,6 +50,9 @@ extension ModelSource: ExpressibleByArgument {
     public var defaultValueDescription: String { description }
 }
 
+/// [LAW:parse-dont-validate] `--revision` is parsed into two commits at the command line.
+extension ModelRevision: ExpressibleByArgument {}
+
 /// [LAW:parse-dont-validate] `--model` is parsed into a name at the command line, so a
 /// value that is not one path step is refused before any path is built from it.
 extension ModelName: ExpressibleByArgument {}

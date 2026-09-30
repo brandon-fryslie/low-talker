@@ -93,15 +93,20 @@ jobs:
           rm "$key"
 
       # [LAW:one-source-of-truth] The model the release carries is the one the CLI built from
-      # this tag names as its default.
+      # this tag names as its default, at the Hugging Face commits a fetch of it brings now.
       - name: Name the default model
         id: model
         run: |
           set -euo pipefail
           cli=$(make cli | tail -n 1)
           model=$("$cli" model default)
-          echo "cli=$cli" >> "$GITHUB_OUTPUT"
-          echo "default=$model" >> "$GITHUB_OUTPUT"
+          revision=$("$cli" model revision --model "$model")
+          {
+            echo "cli=$cli"
+            echo "default=$model"
+            echo "revision=$revision"
+            echo "key=model-store-$model-$revision"
+          } >> "$GITHUB_OUTPUT"
 
       # [LAW:no-ambient-temporal-coupling] The tag usually follows its commit's push to master
       # by seconds, and that push's model-cache.yml run may still be saving. What the restore
@@ -111,7 +116,7 @@ jobs:
       - name: Wait for the model cache
         env:
           GH_TOKEN: ${{ github.token }}
-          KEY: model-store-${{ steps.model.outputs.default }}
+          KEY: ${{ steps.model.outputs.key }}
         run: |
           set -uo pipefail
           # shellcheck disable=SC2016 # $ENV is jq's, not the shell's
@@ -133,15 +138,17 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/model-store
-          key: model-store-${{ steps.model.outputs.default }}
+          key: ${{ steps.model.outputs.key }}
 
       # [LAW:dataflow-not-control-flow] Run whether the cache hit or not: it fetches from
       # huggingface.co whatever the store's manifests find missing or of the wrong size, so a
       # hit fetches nothing and a miss fetches the whole model. Nothing here hashes contents.
+      # Either way the release stops unless every file came from the commits the key names.
       - name: Fill the model store
         env:
           CLI: ${{ steps.model.outputs.cli }}
-        run: '"$CLI" model download --models-dir "$RUNNER_TEMP/model-store"'
+          REVISION: ${{ steps.model.outputs.revision }}
+        run: '"$CLI" model download --models-dir "$RUNNER_TEMP/model-store" --revision "$REVISION"'
 
       - name: Build, sign and notarize
         env:
@@ -159,6 +166,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           MODEL: ${{ steps.model.outputs.default }}
+          REVISION: ${{ steps.model.outputs.revision }}
           CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
         run: |
           set -euo pipefail
@@ -173,7 +181,7 @@ jobs:
           {
             echo "## $TAG"
             echo
-            echo "Model: \`$MODEL\` (cache hit: ${CACHE_HIT:-false})"
+            echo "Model: \`$MODEL\` at \`$REVISION\` (cache hit: ${CACHE_HIT:-false})"
             echo
             echo '```'
             shasum -a 256 "${pkgs[@]}"

@@ -39,7 +39,7 @@ extension ModelStore {
                     switch source {
                     case .huggingFace:
                         phase(.downloading(fractionCompleted: 0))
-                        let folder = try await WhisperKit.download(variant: model.rawValue, downloadBase: directory) { phase(.downloading(fractionCompleted: $0.fractionCompleted)) }
+                        let folder = try await WhisperKit.download(variant: model.rawValue, downloadBase: directory, from: ModelRevision.weightsRepo) { phase(.downloading(fractionCompleted: $0.fractionCompleted)) }
                         // [LAW:no-silent-failure] The hub client answers cancellation by
                         // returning the folder as far as it got, without throwing. A
                         // manifest over that folder would certify a partial model as whole.
@@ -57,7 +57,7 @@ extension ModelStore {
                         // WhisperKit fetches the tokenizer on first load, from the hub,
                         // when it is not already here; taking it now is what lets that
                         // load, and every one after, run with the network off.
-                        let variant = try ModelVariant(modelConfig: folder.appending(path: "config.json"))
+                        let variant = try ModelVariant(modelConfig: Data(contentsOf: folder.appending(path: "config.json")))
                         _ = try await ModelUtilities.loadTokenizer(for: variant, tokenizerFolder: directory)
                         try Task.checkCancellation()
                         return try Manifest(recording: directory.appending(components: "models", variant.tokenizerRepo), relativeTo: directory)
