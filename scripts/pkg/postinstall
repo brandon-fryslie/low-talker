@@ -6,11 +6,11 @@
 # The package has just replaced the app and its input method on disk. What still runs is the
 # code that stood there before, so this retires it: the app first, since an app from before
 # the package copied its own input method into the home folder of whoever ran it, and would
-# copy it back; then those copies, which the text input system would go on launching; then
-# every person's input source caches, which predate the new bundles; then, for each person
-# logged in, the new bundles are registered and the input methods whose bundles are gone are
-# switched off; then every input method process, which the text input system relaunches from
-# the new bundle on the next request for one (measured 84 ms after a kill). Last, the app is started again for each person it was running for.
+# copy it back; then those copies, which the text input system would go on launching; then,
+# for each person logged in, the new bundles are registered and the input methods whose
+# bundles are gone are switched off; then every person's input source caches, which predate
+# the new bundles; then every input method process, which the text input system relaunches
+# from the new bundle on the next request for one (measured 84 ms after a kill). Last, the app is started again for each person it was running for.
 set -euo pipefail
 # Bytewise, the order make-pkg sorted the payload list in, for every sort and comm below.
 export LC_ALL=C
@@ -86,23 +86,6 @@ done
 # step has run, so no one else is left with the app stopped and the old input method running.
 failed=0
 
-# Every sandboxed process reads input sources from its own cache in its person's cache folder,
-# and a bundle written into an Input Methods folder invalidates none of them, while
-# TISRegisterInputSource refreshes only its caller's. System Settings' Keyboard pane is one:
-# measured on studious 2026-10-01, it answers the app's switch-on with "Invalid value on
-# inputSourceToBeEnabled" and shows nothing until its cache is gone, when it rebuilds the list
-# from disk and asks the person. So every cache goes, for every person, logged in or not, since
-# the folder outlives a session, and each process rebuilds its own on its next read. Deleted as
-# that person, with their rights and not root's, in a folder they own.
-for uid in $(dscl . -list /Users UniqueID | awk '$2 >= 501 { print $2 }'); do
-  if cache=$(sudo -u "#$uid" getconf DARWIN_USER_CACHE_DIR) &&
-    caches=$(sudo -u "#$uid" find "$cache" -maxdepth 2 -type f -name 'com.apple.IntlDataCache.le*' -delete -print); then
-    say "removed $(lines "$caches") input source caches for uid $uid"
-  else
-    say "could not remove the input source caches for uid $uid"; failed=1
-  fi
-done
-
 # Each person with a login session now, by the uid their loginwindow runs as (root's is the
 # login screen's, and no one's), gets the two bundles registered with LaunchServices and their
 # switched-on list cut back.
@@ -152,6 +135,24 @@ for uid in $(ps -axo uid=,comm= | awk '$1 != 0 && $2 ~ /\/loginwindow$/ { print 
   rm -f "$list"
 done
 
+# Every sandboxed process reads input sources from its own cache in its person's cache folder,
+# and a bundle written into an Input Methods folder invalidates none of them, while
+# TISRegisterInputSource refreshes only its caller's. System Settings' Keyboard pane is one:
+# measured on studious 2026-10-01, it answers the app's switch-on with "Invalid value on
+# inputSourceToBeEnabled" and shows nothing until its cache is gone, when it rebuilds the list
+# from disk and asks the person. So every cache goes, for every person, logged in or not, since
+# the folder outlives a session, and each process rebuilds its own on its next read. After the
+# bundles are registered and the switched-on lists cut back, so no rebuild predates either.
+# Deleted as that person, with their rights and not root's, in a folder they own.
+for uid in $(dscl . -list /Users UniqueID | awk '$2 >= 501 { print $2 }'); do
+  if cache=$(sudo -u "#$uid" getconf DARWIN_USER_CACHE_DIR) &&
+    caches=$(sudo -u "#$uid" find "$cache" -maxdepth 2 -type f -name 'com.apple.IntlDataCache.le*' -delete -print); then
+    say "removed $(lines "$caches") input source caches for uid $uid"
+  else
+    say "could not remove the input source caches for uid $uid"; failed=1
+  fi
+done
+
 methods=$(running "$input_method_executable")
 stop $(cut -d ' ' -f 1 <<<"$methods")
 say "stopped $(lines "$methods") running $input_method_executable"
@@ -167,4 +168,4 @@ for uid in $(cut -s -d ' ' -f 2 <<<"$apps" | sort -u); do
   fi
 done
 
-[ "$failed" -eq 0 ] || { say "the install is in place, but a step above failed for someone logged in"; exit 1; }
+[ "$failed" -eq 0 ] || { say "the install is in place, but a step above failed for someone"; exit 1; }
