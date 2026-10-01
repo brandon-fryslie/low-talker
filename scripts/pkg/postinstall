@@ -7,8 +7,8 @@
 # code that stood there before, so this retires it: the app first, since an app from before
 # the package copied its own input method into the home folder of whoever ran it, and would
 # copy it back; then those copies, which the text input system would go on launching; then,
-# for each person logged in, the new bundles are registered and the input methods whose
-# bundles are gone are switched off; then every input method process, which the text input
+# for each person logged in, the new bundles are registered, the input source caches that
+# predate them are dropped, and the input methods whose bundles are gone are switched off; then every input method process, which the text input
 # system relaunches from the new bundle on the next request for one (measured 84 ms after a
 # kill). Last, the app is started again for each person it was running for.
 set -euo pipefail
@@ -83,8 +83,8 @@ for home in /Users/*; do
 done
 
 # Each person with a login session now, by the uid their loginwindow runs as (root's is the
-# login screen's, and no one's), gets the two
-# bundles registered with LaunchServices and their switched-on list cut back.
+# login screen's, and no one's), gets the two bundles registered with LaunchServices, their
+# input source caches dropped, and their switched-on list cut back.
 #
 # Registered by name, as the installer does for a bundle component and does not for the plain
 # files make-pkg writes: nothing watches /Library/Input Methods, and the input method is
@@ -109,6 +109,20 @@ for uid in $(ps -axo uid=,comm= | awk '$1 != 0 && $2 ~ /\/loginwindow$/ { print 
     say "registered both bundles with LaunchServices for uid $uid"
   else
     say "could not register the bundles with LaunchServices for uid $uid"; failed=1
+  fi
+
+  # Every sandboxed process reads input sources from its own cache in the person's cache
+  # folder, and a bundle written into an Input Methods folder invalidates none of them, while
+  # TISRegisterInputSource refreshes only its caller's. System Settings' Keyboard pane is one:
+  # measured on studious 2026-10-01, it answers the app's switch-on with "Invalid value on
+  # inputSourceToBeEnabled" and shows nothing until its cache is gone, when it rebuilds the
+  # list from disk and asks the person. So every cache goes, whose ever it is, and each
+  # process rebuilds its own whole on its next read.
+  if cache=$(as_user "$uid" getconf DARWIN_USER_CACHE_DIR) &&
+    caches=$(find "$cache" -maxdepth 2 -type f -name 'com.apple.IntlDataCache.le*' -print -delete); then
+    say "removed $(lines "$caches") input source caches for uid $uid"
+  else
+    say "could not remove the input source caches for uid $uid"; failed=1
   fi
 
   # A person who never switched an input method on has no such list, and nothing to cut.
