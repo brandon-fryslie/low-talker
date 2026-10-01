@@ -31,27 +31,28 @@ jobs:
     env:
       NOTARY_PROFILE: release
     steps:
+      # [LAW:no-silent-failure] An unset secret reaches a step as an empty string, and the
+      # import below then fails on its parameters without saying which. Named here, first.
+      # The secrets checked are the SECRET_ variables this step is given.
+      - name: Check the release secrets are set
+        env:
+          SECRET_DEVELOPER_ID_P12: ${{ secrets.DEVELOPER_ID_P12 }}
+          SECRET_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          SECRET_NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          SECRET_NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          missing=()
+          for variable in "${!SECRET_@}"; do
+            [ -n "${!variable}" ] || missing+=("${variable#SECRET_}")
+          done
+          [ "${#missing[@]}" -eq 0 ] || { echo "::error::repository secrets not set: ${missing[*]}; scripts/release-secrets sets them" >&2; exit 1; }
+
       # SHA-pinned, as in ci.yml: third-party code in a job that holds the signing keys.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           # scripts/release checks the tagged commit is on master, which needs its history.
           fetch-depth: 0
-
-      # [LAW:no-silent-failure] An unset secret reaches a step as an empty string, and the
-      # import below then fails on its parameters without saying which. Named here, first.
-      - name: Check the release secrets are set
-        env:
-          DEVELOPER_ID_P12: ${{ secrets.DEVELOPER_ID_P12 }}
-          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
-          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
-          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
-        run: |
-          missing=()
-          for secret in DEVELOPER_ID_P12 DEVELOPER_ID_P12_PASSWORD NOTARY_APPLE_ID NOTARY_PASSWORD; do
-            [ -n "${!secret}" ] || missing+=("$secret")
-          done
-          [ "${#missing[@]}" -eq 0 ] || { echo "::error::repository secrets not set: ${missing[*]}; scripts/release-secrets sets them" >&2; exit 1; }
 
       - name: Install xcodegen
         run: brew install xcodegen

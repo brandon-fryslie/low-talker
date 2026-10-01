@@ -2,7 +2,6 @@
 # certificate's name ends: "Developer ID Application: <holder>" signs the bundles and
 # "Developer ID Installer: <holder>" signs the package. [LAW:one-source-of-truth] The team in
 # the parentheses is what every signature is held to, so it is written here and nowhere else.
-developer_id="Brandon Fryslie (6R988MUU27)"
-# The team alone, as notarytool takes it beside an Apple ID.
-developer_team=${developer_id##*(}
-developer_team=${developer_team%)}
+# notarytool takes the team alone, beside an Apple ID.
+developer_team=6R988MUU27
+developer_id="Brandon Fryslie ($developer_team)"
