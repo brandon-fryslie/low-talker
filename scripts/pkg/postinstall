@@ -8,9 +8,9 @@
 # the package copied its own input method into the home folder of whoever ran it, and would
 # copy it back; then those copies, which the text input system would go on launching; then,
 # for each person logged in, the new bundles are registered and the input methods whose
-# bundles are gone are switched off; then every input method process, which the text input
-# system relaunches from the new bundle on the next request for one (measured 84 ms after a
-# kill). Last, the app is started again for each person it was running for.
+# bundles are gone are switched off; then every person's input source caches, which predate
+# the new bundles; then every input method process, which the text input system relaunches
+# from the new bundle on the next request for one (measured 84 ms after a kill). Last, the app is started again for each person it was running for.
 set -euo pipefail
 # Bytewise, the order make-pkg sorted the payload list in, for every sort and comm below.
 export LC_ALL=C
@@ -82,9 +82,13 @@ for home in /Users/*; do
   done
 done
 
+# A step that fails for one person is said and fails the install at the end, once every other
+# step has run, so no one else is left with the app stopped and the old input method running.
+failed=0
+
 # Each person with a login session now, by the uid their loginwindow runs as (root's is the
-# login screen's, and no one's), gets the two
-# bundles registered with LaunchServices and their switched-on list cut back.
+# login screen's, and no one's), gets the two bundles registered with LaunchServices and their
+# switched-on list cut back.
 #
 # Registered by name, as the installer does for a bundle component and does not for the plain
 # files make-pkg writes: nothing watches /Library/Input Methods, and the input method is
@@ -97,10 +101,7 @@ done
 # preferences daemon (measured 2026-09-29: a write there takes effect at once), and only that
 # key is written, so nothing else in the domain is put back to what it was when it was read.
 # Entries of other products are left as they are. After the old app and its home-folder
-# copies are gone, since that app would switch its copy on again. A step that fails for one
-# person is said and fails the install at the end, once every other step has run, so no one
-# else is left with the app stopped and the old input method running.
-failed=0
+# copies are gone, since that app would switch its copy on again.
 lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 key=AppleEnabledThirdPartyInputSources
 installed=$(for bundle in "/Library/Input Methods"/*.app; do identifier "$bundle" || true; done)
@@ -134,6 +135,24 @@ for uid in $(ps -axo uid=,comm= | awk '$1 != 0 && $2 ~ /\/loginwindow$/ { print 
   rm -f "$list"
 done
 
+# Every sandboxed process reads input sources from its own cache in its person's cache folder,
+# and a bundle written into an Input Methods folder invalidates none of them, while
+# TISRegisterInputSource refreshes only its caller's. System Settings' Keyboard pane is one:
+# measured on studious 2026-10-01, it answers the app's switch-on with "Invalid value on
+# inputSourceToBeEnabled" and shows nothing until its cache is gone, when it rebuilds the list
+# from disk and asks the person. So every cache goes, for every person, logged in or not, since
+# the folder outlives a session, and each process rebuilds its own on its next read. After the
+# bundles are registered and the switched-on lists cut back, so no rebuild predates either.
+# Deleted as that person, with their rights and not root's, in a folder they own.
+for uid in $(dscl . -list /Users UniqueID | awk '$2 >= 501 { print $2 }'); do
+  if cache=$(sudo -u "#$uid" getconf DARWIN_USER_CACHE_DIR) &&
+    caches=$(sudo -u "#$uid" find "$cache" -maxdepth 2 -type f -name 'com.apple.IntlDataCache.le*' -delete -print); then
+    say "removed $(lines "$caches") input source caches for uid $uid"
+  else
+    say "could not remove the input source caches for uid $uid"; failed=1
+  fi
+done
+
 methods=$(running "$input_method_executable")
 stop $(cut -d ' ' -f 1 <<<"$methods")
 say "stopped $(lines "$methods") running $input_method_executable"
@@ -149,4 +168,4 @@ for uid in $(cut -s -d ' ' -f 2 <<<"$apps" | sort -u); do
   fi
 done
 
-[ "$failed" -eq 0 ] || { say "the install is in place, but a step above failed for someone logged in"; exit 1; }
+[ "$failed" -eq 0 ] || { say "the install is in place, but a step above failed for someone"; exit 1; }
