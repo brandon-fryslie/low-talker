@@ -62,7 +62,7 @@ public enum EngineReadiness: Sendable, Equatable {
     }
 
     /// What the icon says to VoiceOver, and to an agent reading the menu bar over
-    /// Accessibility, for the installation named `name`.
+    /// Accessibility, for the app named `name`.
     public func iconDescription(for name: String) -> String {
         switch self {
         case .preparing: "\(name): preparing the model"
