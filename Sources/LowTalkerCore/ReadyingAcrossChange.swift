@@ -38,7 +38,7 @@ public struct ReadyingAcrossChange: Sendable, CustomStringConvertible {
         public var description: String {
             switch self {
             case .whole(let beginning): "a press made as it landed had begun \(Self.milliseconds(beginning)) later and came back whole"
-            case .partial(let beginning, let lost): "a press made as it landed had begun \(Self.milliseconds(beginning)) later and came back \(lost)"
+            case .partial(let beginning, let lost): "a press made as it landed had begun \(Self.milliseconds(beginning)) later and came back partial: \(lost)"
             case .refused(let reason): "a press made as it landed was refused: \(reason)"
             case .never: "it never landed, so no press was begun"
             }

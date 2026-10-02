@@ -91,7 +91,7 @@ public struct RouteStopped: StoppedPartWay, CustomStringConvertible {
     }
 
     public var description: String {
-        let before = performed.isEmpty ? "" : ". Performed before it: " + performed.map(\.description).joined(separator: "; ")
+        let before = performed.isEmpty ? "" : " Performed before it: " + performed.map(\.description).joined(separator: "; ") + "."
         return "\(cause)\(before)"
     }
 }
@@ -102,5 +102,5 @@ public struct RouteStopped: StoppedPartWay, CustomStringConvertible {
 public struct NotAnInsert: Error, CustomStringConvertible {
     public let action: Action
 
-    public var description: String { "\(action) is not text at the cursor, which is all the input method puts anywhere; nothing was done" }
+    public var description: String { "WARNING: \(action) is not text at the cursor, and text at the cursor is all the input method puts anywhere. Nothing was done." }
 }

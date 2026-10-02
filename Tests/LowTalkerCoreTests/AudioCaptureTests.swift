@@ -1045,17 +1045,17 @@ private struct Authorized: MicrophoneAuthority {
     }
 
     /// The microphone opened long after the key went down - the key-down reached the
-    /// handler late, or this is the first press in the process and the engine paid the
-    /// 240-280 ms the first launch costs. Either way the speaker was talking to a shut
+    /// handler late, or this is the first press in the process and the engine paid what the
+    /// first launch costs. Either way the speaker was talking to a shut
     /// microphone, and the clip that comes back is their sentence with the front of it
     /// gone. Nothing in those samples says so, which is why the session does.
     @Test func aSessionWhoseMicrophoneOpenedLongAfterTheKeyWentDownSaysSo() throws {
         let hardware = FakeHardware()
         let capture = AudioCapture(hardware: hardware, startingAt: origin)
         let session = try opened(capture)
-        // The first sample this engine captured was taken 0.4 s after the key went down,
-        // so that much of what was said was never captured at all.
-        hardware.engines[0].appending([1, 2], after(AudioClip.sampleCount(for: 0.4)))
+        // The first sample this engine captured was taken past the allowance after the key
+        // went down, so that much of what was said was never captured at all.
+        hardware.engines[0].appending([1, 2], after(AudioClip.sampleCount(for: AudioCapture.warmUpAllowance + 0.4)))
         #expect(try capture.endSession(session) == .partial(AudioClip(samples: [1, 2]), lost: loss(unopened: true)))
     }
 
@@ -1083,7 +1083,10 @@ private struct Authorized: MicrophoneAuthority {
         hardware.engines[0].appending([1, 2], origin)
         hardware.engines[0].input.onStale()
         #expect(failure(of: capture, as: NoDevice.self) == NoDevice())
-        #expect(try capture.endSession(session) == .partial(AudioClip(samples: [1, 2]), lost: loss(unopened: true)))
+        let ended = try capture.endSession(session)
+        #expect(try ended == .partial(AudioClip(samples: [1, 2]), lost: loss(unopened: true)))
+        // It answered at once and died later, so what the person reads must not say it did not answer.
+        if case .partial(_, let lost) = ended { #expect("\(lost)" == "Your microphone was not open for the whole of your dictation") }
         #expect(isListening(capture))
     }
 

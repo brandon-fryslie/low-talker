@@ -581,11 +581,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // [LAW:no-silent-failure] The words went nowhere, so the menu says why, in full:
             // only the person who dictated them reads it. A stopped route is named by what
             // stopped it; what it did first is the log's.
-            lastFailure = "\((error as? RouteStopped)?.cause ?? error)"
-            // The kind of failure is public and its account is not: a refusal can carry
-            // words the user dictated. [LAW:no-silent-failure] The type alone still says
-            // what broke.
-            sessions.error("session failed: \(String(describing: type(of: error)), privacy: .public) — \(String(describing: error), privacy: .private)")
+            let stated = "\((error as? RouteStopped)?.cause ?? error)"
+            // A failure written as fact then consequence opens with WARNING and carries its own
+            // framing; any other is a bare technical line, so it is told what it is.
+            lastFailure = stated.hasPrefix("WARNING:") ? stated : "Your last dictation was not placed: \(stated)"
+            // A failure that only states facts is logged in full, so a dictation that did
+            // not happen is as readable here as one that did. One that can carry the words
+            // the user dictated is withheld, and the log says it was. [LAW:nothing-unseen]
+            let account = (((error as? RouteStopped)?.cause ?? error) as? any WordFree).map { "\($0)" } ?? "withheld, it can carry words you dictated"
+            sessions.error("session failed: \(String(describing: type(of: error)), privacy: .public) — \(account, privacy: .public)")
         }
     }
 
@@ -658,7 +662,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(readout("Microphone: \(microphone)"))
         menu.addItem(readout("Hotkey: \(hotkeyStatus)"))
         for reason in unheard { menu.addItem(readout("    Not heard now: \(reason)")) }
-        lastFailure.map { menu.addItem(readout("Your last dictation was not placed: \($0)")) }
+        lastFailure.map { menu.addItem(readout($0)) }
         // Every requirement, met or not, and its step under it as the lines it was
         // written in - one item per line, so nothing here wraps text the requirement
         // already broke. A list that showed only what was missing would leave a reader

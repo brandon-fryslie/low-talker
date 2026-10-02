@@ -38,7 +38,7 @@ public struct NotYetTaken: Error, Equatable, Sendable, CustomStringConvertible {
     }
 
     public var description: String {
-        "\(into) did not take the \(characters) characters handed to it in time; they land if it recovers, so do not dictate them again"
+        "WARNING: \(into) did not take the \(characters) characters in time. They land if it recovers; do not dictate them again."
     }
 }
 
@@ -90,14 +90,14 @@ public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, 
 
     public var description: String {
         switch self {
-        case .noClientHasFocus: "no client has focus"
-        case .cursorIsInAnotherApp: "the cursor is in an app that is not in front"
-        case .requestWasNotText: "the request was not text"
-        case .secureInputIsOn: "an app has secure keyboard entry on, and macOS switches input methods off while it does"
+        case .noClientHasFocus: "WARNING: No text field has focus. Your dictation was not inserted."
+        case .cursorIsInAnotherApp: "WARNING: The cursor is in an app that is not in front. Your dictation was not inserted."
+        case .requestWasNotText: "WARNING: The input method was asked to insert something that is not text. Nothing was inserted."
+        case .secureInputIsOn: "WARNING: An app has secure keyboard entry on, and macOS turns input methods off while it does. Your dictation was not inserted."
         case .senderIsNotThisInstallationsApp:
-            "the input method takes words only from this installation's app, signed by the certificate that signed it, and this process is not that app"
+            "WARNING: The input method takes words only from this installation's app, signed by the certificate that signed it, and this process is not that app. Your dictation was not inserted."
         case .inputMethodIsBusy:
-            "the input method was held up by an app that is not answering and did not look for the cursor in time; nothing was inserted"
+            "WARNING: An app is not answering, and it held the input method up past its time limit. Your dictation was not inserted."
         }
     }
 }
@@ -116,8 +116,8 @@ public enum Words: Equatable, Sendable, CustomStringConvertible {
 
     public var description: String {
         switch self {
-        case .notSent: "the words were not sent"
-        case .mayHaveLanded: "the words may have landed"
+        case .notSent: "Your dictation was not sent."
+        case .mayHaveLanded: "Your dictation may have been inserted."
         }
     }
 }
@@ -148,21 +148,21 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
     public var description: String {
         switch self {
         case let .nothingIsListening(port):
-            "no input method is answering on \(port); it is not installed, or not selected"
+            "WARNING: No input method is answering on \(port); it is not installed or not selected. Your dictation was not inserted."
         case let .requestWasNotTaken(port, after):
-            "the input method on \(port) did not take the request within \(after), so the words did not land"
+            "WARNING: The input method on \(port) did not take the request within \(after). Your dictation was not inserted."
         case let .answerDidNotArrive(port, after):
-            "the input method on \(port) took the request but did not answer within \(after), so the words may have landed"
+            "WARNING: The input method on \(port) took the request but did not answer within \(after). Your dictation may have been inserted; do not dictate it again."
         case let .didNotSayWhoItIs(port, after):
-            "the input method on \(port) did not say who it is within \(after), so the words were not sent"
+            "WARNING: The input method on \(port) did not say who it is within \(after). Your dictation was not sent."
         case let .answerWasAbandoned(port):
-            "the input method on \(port) took the request and went away without answering, so the words may have landed"
+            "WARNING: The input method on \(port) took the request and went away without answering. Your dictation may have been inserted; do not dictate it again."
         case let .answeredByAStranger(port, pid, because, required, words):
-            "pid \(pid) answered on \(port) and is not this installation's input method, \(required) - \(because) - so \(words)"
+            "WARNING: pid \(pid) answered on \(port) and is not this installation's input method, \(required) - \(because). \(words)"
         case let .failed(port, status, words):
-            "the request to \(port) failed: \(Mach.describe(status)), so \(words)"
+            "WARNING: The request to \(port) failed: \(Mach.describe(status)). \(words)"
         case let .answerWasNotReadable(port, bytes, words):
-            "the input method on \(port) answered \(bytes) bytes that are not an answer, so \(words)"
+            "WARNING: The input method on \(port) answered \(bytes) bytes that are not an answer. \(words)"
         }
     }
 }

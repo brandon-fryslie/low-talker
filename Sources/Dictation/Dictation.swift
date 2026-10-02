@@ -232,11 +232,11 @@ public final class Dictation {
 /// which ones were missing - the user may not notice at all, and may send it. A press
 /// that says it was cut off is a thing they can act on by saying it again, which is the
 /// same thing they would have to do anyway.
-public struct PressLapsed: Error, CustomStringConvertible {
+public struct PressLapsed: WordFree {
     /// The chord that was down when the hotkey stopped.
     public let chord: KeyChord
 
-    public var description: String { "the hotkey stopped listening during a press of \(chord); what was said was not inserted" }
+    public var description: String { "WARNING: The hotkey stopped listening during your dictation. Your dictation was ignored." }
 }
 
 /// A press whose audio the capture could not hand over whole, reported instead of inserted.
@@ -250,10 +250,10 @@ public struct PressLapsed: Error, CustomStringConvertible {
 /// that was said, and it arrives in the user's editor unmarked as a fragment where
 /// nothing here can mark it. A press that says what it lost is something the speaker can
 /// act on by saying it again.
-public struct SpeechLost: Error, CustomStringConvertible {
+public struct SpeechLost: WordFree {
     /// The chord that was down while the audio went missing.
     public let chord: KeyChord
     public let lost: CapturedAudio.Loss
 
-    public var description: String { "the audio of a press of \(chord) is \(lost); what was said was not inserted" }
+    public var description: String { "WARNING: \(lost). Your dictation was ignored." }
 }

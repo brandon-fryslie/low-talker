@@ -64,13 +64,14 @@ public enum CapturedAudio: Sendable, Equatable {
 }
 
 extension CapturedAudio.Loss: CustomStringConvertible {
-    /// What is missing, in the words a surface can hand the user: every door that was
-    /// taken, joined, since one press can lose audio through more than one of them.
+    /// What happened, one sentence per door that was taken, since one press can lose audio
+    /// through more than one of them. Each is a fact about the microphone or the speech,
+    /// with no consequence attached: what the loss means for the press is the caller's.
     public var description: String {
         [
-            scrolledOff > 0 ? String(format: "missing its first %.1f s", AudioClip.duration(for: scrolledOff)) : nil,
-            interrupted ? "spliced where capture restarted" : nil,
-            unopened ? "cut where the microphone was not open" : nil,
-        ].compactMap { $0 }.joined(separator: " and ")
+            scrolledOff > 0 ? String(format: "The first %.1f s of your speech was lost", AudioClip.duration(for: scrolledOff)) : nil,
+            interrupted ? "Your microphone restarted while you were dictating" : nil,
+            unopened ? "Your microphone was not open for the whole of your dictation" : nil,
+        ].compactMap { $0 }.joined(separator: ". ")
     }
 }

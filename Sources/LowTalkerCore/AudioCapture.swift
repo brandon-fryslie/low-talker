@@ -209,18 +209,11 @@ public final class AudioCapture {
     /// was once measured on the wrong side of, when a figure taken from after the engine
     /// was built was read as what a press pays.
     ///
-    /// The allowance is 100 ms: two and a half times what a prepared press pays on this
-    /// Mac, and well under the two ways a microphone actually opens late - one that was
-    /// never readied, which costs 213 ms, and a key-down the tap delivered late, which
-    /// costs whatever the handler ahead of it was doing (the epic measured a 43-character
-    /// insert at about 1.2 s). Ordinary presses and missed speech are two populations that
-    /// far apart, so the allowance never has to be retuned to keep an ordinary press whole.
-    ///
-    /// It is also what says the microphone may not be reached through AVAudioEngine, which
-    /// cannot open one inside this. What a press pays, what the readying it skipped costs
-    /// and what AVAudioEngine cost instead are measured in `HALInput`.
+    /// Generous, so a microphone that is slow to open on a loaded Mac still yields a press
+    /// rather than a refusal. Past it the press is refused and says so, since a clip
+    /// missing its head transcribes to a fluent sentence with the first word gone.
     /// [LAW:no-silent-failure]
-    nonisolated public static let warmUpAllowance: TimeInterval = 0.1
+    nonisolated public static let warmUpAllowance: TimeInterval = 2
 
     /// `origin` is when the first sample is expected: nothing has been captured yet,
     /// so the timeline starts on that prediction and the first buffer corrects it.
@@ -765,8 +758,8 @@ public enum NoMicrophone: Error, CustomStringConvertible {
 
     public var description: String {
         switch self {
-        case .stopped: "the microphone is not being captured; nothing was heard"
-        case .failed(let error): "the microphone could not be opened: \(error); nothing was heard"
+        case .stopped: "WARNING: The microphone is not being captured. Your dictation was ignored."
+        case .failed(let error): "WARNING: The microphone could not be opened: \(error). Your dictation was ignored."
         }
     }
 }
