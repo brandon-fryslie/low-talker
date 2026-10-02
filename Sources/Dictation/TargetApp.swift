@@ -14,7 +14,7 @@ public enum TargetApp {
     }
 }
 
-public enum FrontmostUnknown: Error, CustomStringConvertible {
+public enum FrontmostUnknown: WordFree {
     case noFrontmostApp
     /// Something is in front that macOS gives no bundle id, so there is no name to aim at.
     case withoutBundleID(pid: pid_t)

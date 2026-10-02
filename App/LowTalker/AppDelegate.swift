@@ -582,10 +582,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // only the person who dictated them reads it. A stopped route is named by what
             // stopped it; what it did first is the log's.
             lastFailure = "\((error as? RouteStopped)?.cause ?? error)"
-            // The kind of failure is public and its account is not: a refusal can carry
-            // words the user dictated. [LAW:no-silent-failure] The type alone still says
-            // what broke.
-            sessions.error("session failed: \(String(describing: type(of: error)), privacy: .public) — \(String(describing: error), privacy: .private)")
+            // A failure that only states facts is logged in full, so a dictation that did
+            // not happen is as readable here as one that did. One that can carry the words
+            // the user dictated is withheld, and the log says it was. [LAW:nothing-unseen]
+            let account = (error as? any WordFree).map { "\($0)" } ?? "withheld, it can carry words you dictated"
+            sessions.error("session failed: \(String(describing: type(of: error)), privacy: .public) — \(account, privacy: .public)")
         }
     }
 
