@@ -1,3 +1,4 @@
+import Insertion
 import LowTalkerCore
 
 /// A failure whose description is facts about the press - counts, names, durations - and
@@ -7,3 +8,6 @@ import LowTalkerCore
 public protocol WordFree: Error, CustomStringConvertible {}
 
 extension NoMicrophone: WordFree {}
+extension Refusal: WordFree {}
+extension Unreachable: WordFree {}
+extension NotYetTaken: WordFree {}
