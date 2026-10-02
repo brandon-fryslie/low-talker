@@ -1083,7 +1083,10 @@ private struct Authorized: MicrophoneAuthority {
         hardware.engines[0].appending([1, 2], origin)
         hardware.engines[0].input.onStale()
         #expect(failure(of: capture, as: NoDevice.self) == NoDevice())
-        #expect(try capture.endSession(session) == .partial(AudioClip(samples: [1, 2]), lost: loss(unopened: true)))
+        let ended = try capture.endSession(session)
+        #expect(try ended == .partial(AudioClip(samples: [1, 2]), lost: loss(unopened: true)))
+        // It answered at once and died later, so what the person reads must not say it did not answer.
+        if case .partial(_, let lost) = ended { #expect("\(lost)" == "Your microphone was not open for the whole of your dictation") }
         #expect(isListening(capture))
     }
 

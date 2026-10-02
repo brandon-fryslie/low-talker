@@ -298,7 +298,7 @@ extension Result {
         let press = try #require(await rig.report().failure as? SpeechLost)
         #expect(press.chord == Rig.rightOption)
         #expect(press.lost.unopened)
-        #expect("\(press)" == "WARNING: Your microphone did not respond within \(Int(AudioCapture.warmUpAllowance * 1000)) ms. Your dictation was ignored.")
+        #expect("\(press)" == "WARNING: Your microphone was not open for the whole of your dictation. Your dictation was ignored.")
         #expect(!press.lost.interrupted)
         #expect(press.lost.scrolledOff == 0)
         #expect(engine.clips.isEmpty)

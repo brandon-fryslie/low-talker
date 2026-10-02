@@ -581,11 +581,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // [LAW:no-silent-failure] The words went nowhere, so the menu says why, in full:
             // only the person who dictated them reads it. A stopped route is named by what
             // stopped it; what it did first is the log's.
-            lastFailure = "\((error as? RouteStopped)?.cause ?? error)"
+            let stated = "\((error as? RouteStopped)?.cause ?? error)"
+            // A failure written as fact then consequence opens with WARNING and carries its own
+            // framing; any other is a bare technical line, so it is told what it is.
+            lastFailure = stated.hasPrefix("WARNING:") ? stated : "Your last dictation was not placed: \(stated)"
             // A failure that only states facts is logged in full, so a dictation that did
             // not happen is as readable here as one that did. One that can carry the words
             // the user dictated is withheld, and the log says it was. [LAW:nothing-unseen]
-            let account = (error as? any WordFree).map { "\($0)" } ?? "withheld, it can carry words you dictated"
+            let account = (((error as? RouteStopped)?.cause ?? error) as? any WordFree).map { "\($0)" } ?? "withheld, it can carry words you dictated"
             sessions.error("session failed: \(String(describing: type(of: error)), privacy: .public) — \(account, privacy: .public)")
         }
     }

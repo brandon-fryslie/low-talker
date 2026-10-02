@@ -71,7 +71,7 @@ extension CapturedAudio.Loss: CustomStringConvertible {
         [
             scrolledOff > 0 ? String(format: "The first %.1f s of your speech was lost", AudioClip.duration(for: scrolledOff)) : nil,
             interrupted ? "Your microphone restarted while you were dictating" : nil,
-            unopened ? "Your microphone did not respond within \(Int(AudioCapture.warmUpAllowance * 1000)) ms" : nil,
+            unopened ? "Your microphone was not open for the whole of your dictation" : nil,
         ].compactMap { $0 }.joined(separator: ". ")
     }
 }

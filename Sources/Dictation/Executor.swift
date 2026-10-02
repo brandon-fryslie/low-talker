@@ -81,7 +81,7 @@ public struct Executor {
 /// A list that stopped part way: the insert that stopped is the cause, and the ones before it
 /// are done and cannot be taken back, so they travel with it. Text is in the document either
 /// way; what this adds is which of it, so a retry does not insert it twice.
-public struct RouteStopped: StoppedPartWay, WordFree {
+public struct RouteStopped: StoppedPartWay, CustomStringConvertible {
     public let performed: [Executor.Performed]
     public let cause: any Error
 
@@ -99,7 +99,7 @@ public struct RouteStopped: StoppedPartWay, WordFree {
 /// An action that is not text at the cursor, which is the one thing the input method puts
 /// anywhere. [LAW:no-silent-failure] Refused by name, so a route is never half-performed
 /// without a word.
-public struct NotAnInsert: WordFree {
+public struct NotAnInsert: Error, CustomStringConvertible {
     public let action: Action
 
     public var description: String { "WARNING: \(action) is not text at the cursor, and text at the cursor is all the input method puts anywhere. Nothing was done." }

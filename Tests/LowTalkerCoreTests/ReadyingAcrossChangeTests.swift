@@ -30,9 +30,9 @@ import Testing
 
     /// Partial, refused and never are all a press the speaker lost, and each says which.
     @Test func everyPressThatIsNotWholeIsAFault() {
-        let partial = reading(press: .partial(beginning: .milliseconds(212), lost: "the microphone did not respond"))
+        let partial = reading(press: .partial(beginning: .milliseconds(212), lost: "Your microphone restarted while you were dictating"))
         #expect(partial.faults == [.pressNotWhole])
-        #expect("\(partial)".contains("had begun 212 ms later and came back the microphone did not respond"))
+        #expect("\(partial)".contains("had begun 212 ms later and came back partial: Your microphone restarted while you were dictating"))
         #expect(reading(press: .refused("no microphone")).faults == [.pressNotWhole])
         #expect(reading(press: .never).faults == [.pressNotWhole])
     }
