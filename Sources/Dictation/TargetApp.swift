@@ -21,8 +21,8 @@ public enum FrontmostUnknown: Error, CustomStringConvertible {
 
     public var description: String {
         switch self {
-        case .noFrontmostApp: "no app is frontmost, so there is nowhere for the words to go"
-        case .withoutBundleID(let pid): "the app in front (pid \(pid)) has no bundle id, so there is no name to aim at"
+        case .noFrontmostApp: "WARNING: No app is in front. Your dictation was ignored."
+        case .withoutBundleID(let pid): "WARNING: The app in front (pid \(pid)) has no bundle id. Your dictation was ignored."
         }
     }
 }

@@ -236,7 +236,7 @@ public struct PressLapsed: Error, CustomStringConvertible {
     /// The chord that was down when the hotkey stopped.
     public let chord: KeyChord
 
-    public var description: String { "the hotkey stopped listening during a press of \(chord); what was said was not inserted" }
+    public var description: String { "WARNING: The hotkey stopped listening during your dictation. Your dictation was ignored." }
 }
 
 /// A press whose audio the capture could not hand over whole, reported instead of inserted.

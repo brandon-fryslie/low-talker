@@ -758,8 +758,8 @@ public enum NoMicrophone: Error, CustomStringConvertible {
 
     public var description: String {
         switch self {
-        case .stopped: "the microphone is not being captured; nothing was heard"
-        case .failed(let error): "the microphone could not be opened: \(error); nothing was heard"
+        case .stopped: "WARNING: The microphone is not being captured. Your dictation was ignored."
+        case .failed(let error): "WARNING: The microphone could not be opened: \(error). Your dictation was ignored."
         }
     }
 }
