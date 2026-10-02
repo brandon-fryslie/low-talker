@@ -1,5 +1,4 @@
 import ArgumentParser
-import Flavors
 import Foundation
 import LowTalkerCore
 
@@ -27,12 +26,7 @@ extension ConfigCommand {
                 """
         )
 
-        @OptionGroup var installation: FlavorOption
-
-        /// Absent means this installation's own file, which is what `ConfigSource` reads
-        /// this and `--flavor` into: present, it obliges the caller to say which
-        /// installation the file belongs to rather than inheriting a default that decides
-        /// every key the file leaves out.
+        /// Absent means the app's own file.
         @Option(
             help: "The file to read, for checking one before it is installed.",
             transform: URL.init(fileURLWithPath:)
@@ -40,8 +34,7 @@ extension ConfigCommand {
         var path: URL?
 
         func run() throws {
-            let source = try ConfigSource(path: path, stated: installation.stated)
-            let report = ConfigReport(try Config.load(source.path, for: source.flavor))
+            let report = ConfigReport(try Config.load(path))
             print(report)
             // The code is a value computed the one way every time, rather than an exit
             // taken on some runs and not others. [LAW:dataflow-not-control-flow]
@@ -65,9 +58,7 @@ extension ConfigCommand {
                 """
         )
 
-        @OptionGroup var installation: FlavorOption
-
-        /// Absent means this installation's own file, resolved as in `check`.
+        /// Absent means the app's own file.
         @Option(
             help: "The file to watch, for trying one out before it is installed.",
             transform: URL.init(fileURLWithPath:)
@@ -79,8 +70,7 @@ extension ConfigCommand {
             // A config that cannot be read now has no previous config to keep, so it is
             // the same refusal `check` makes and exits the same way. Only what happens
             // after the first reading is a reload.
-            let source = try ConfigSource(path: path, stated: installation.stated)
-            let loaded = try Config.load(source.path, for: source.flavor)
+            let loaded = try Config.load(path)
             print(ConfigReport(loaded))
             for await reload in Config.reloads(after: loaded) {
                 print(Self.narration(of: reload))

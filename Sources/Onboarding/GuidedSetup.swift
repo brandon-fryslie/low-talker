@@ -1,4 +1,4 @@
-import Flavors
+import Identity
 import Foundation
 
 /// The app's guided setup: the onboarding list walked one requirement at a time, each one
@@ -15,9 +15,7 @@ public struct GuidedSetup: Sendable, Equatable {
     public init() {}
 
     /// What the menu item and every step that points at the setup call it.
-    public static func title(for flavor: Flavor) -> String {
-        "Set Up \(flavor.displayName)…"
-    }
+    public static let title = "Set Up \(AppIdentity.displayName)…"
 
     /// The step to show: the first requirement with something left to do that the person
     /// has not set aside, or nil when there is none and the walk shows where things stand.
@@ -45,12 +43,12 @@ public struct Explanation: Sendable, Hashable {
 }
 
 public extension Requirement.Row {
-    /// This step's explanation, naming the installation it is shown in.
+    /// This step's explanation.
     ///
     /// [LAW:types-are-the-program] An exhaustive switch, so a row added to the list cannot
     /// compile without the answers a person needs before being asked for it.
-    func explanation(for flavor: Flavor) -> Explanation {
-        let app = flavor.displayName
+    var explanation: Explanation {
+        let app = AppIdentity.displayName
         return switch self {
         case .microphone:
             Explanation(
@@ -91,15 +89,15 @@ public extension Requirement.Row {
     /// (low-input-method-s71.ssn); [LAW:no-silent-failure] neither is left for the person to
     /// discover. Keyed on what they can see - a dialog, or nothing - because the app cannot
     /// tell the two apart from the source alone.
-    func switchOnNote(for flavor: Flavor) -> String? {
+    var switchOnNote: String? {
         switch self {
         case .inputMethod:
             """
-            macOS asks whether to allow \(flavor.displayName) to switch it on: click Allow. \
+            macOS asks whether to allow \(AppIdentity.displayName) to switch it on: click Allow. \
             You can press this again if you decline. If pressing it changes nothing, \
-            \(flavor.displayName) was installed during this login session, and macOS switches \
+            \(AppIdentity.displayName) was installed during this login session, and macOS switches \
             on a new input method only after the next one: log out and back in, then open \
-            \(flavor.displayName) and press this again.
+            \(AppIdentity.displayName) and press this again.
             """
         case .microphone:
             nil

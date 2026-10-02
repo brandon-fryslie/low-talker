@@ -95,7 +95,7 @@ public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, 
         case .requestWasNotText: "WARNING: The input method was asked to insert something that is not text. Nothing was inserted."
         case .secureInputIsOn: "WARNING: An app has secure keyboard entry on, and macOS turns input methods off while it does. Your dictation was not inserted."
         case .senderIsNotThisInstallationsApp:
-            "WARNING: The input method takes words only from this installation's app, signed by the certificate that signed it, and this process is not that app. Your dictation was not inserted."
+            "WARNING: The input method takes words only from the app, signed by the certificate that signed it, and this process is not that app. Your dictation was not inserted."
         case .inputMethodIsBusy:
             "WARNING: An app is not answering, and it held the input method up past its time limit. Your dictation was not inserted."
         }
@@ -158,7 +158,7 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
         case let .answerWasAbandoned(port):
             "WARNING: The input method on \(port) took the request and went away without answering. Your dictation may have been inserted; do not dictate it again."
         case let .answeredByAStranger(port, pid, because, required, words):
-            "WARNING: pid \(pid) answered on \(port) and is not this installation's input method, \(required) - \(because). \(words)"
+            "WARNING: pid \(pid) answered on \(port) and is not the input method, \(required) - \(because). \(words)"
         case let .failed(port, status, words):
             "WARNING: The request to \(port) failed: \(Mach.describe(status)). \(words)"
         case let .answerWasNotReadable(port, bytes, words):

@@ -1,9 +1,9 @@
 import Carbon
-import Flavors
+import Identity
 import Foundation
 import TextInputSources
 
-/// Where this flavor's input method stands once the app has done what it can: switched on and
+/// Where the input method stands once the app has done what it can: switched on and
 /// selected, or registered and waiting for a person to switch it on.
 public enum InputMethodReadiness: Equatable, Sendable, CustomStringConvertible {
     /// Registered, and switched off: it is not in the Input menu and cannot be selected.
@@ -30,7 +30,7 @@ public enum InputMethodReadiness: Equatable, Sendable, CustomStringConvertible {
     }
 }
 
-/// This flavor's input method as the installer package left it in `/Library/Input Methods`:
+/// The input method as the installer package left it in `/Library/Input Methods`:
 /// registered with the text input system, switched on when a person allows it, and selected.
 ///
 /// [LAW:one-source-of-truth] The package is the one writer of the input method's files; the
@@ -39,16 +39,13 @@ public enum InputMethodReadiness: Equatable, Sendable, CustomStringConvertible {
 /// remove, and the text input system refuses an input method written that way.
 ///
 /// [LAW:decomposition] The Text Input Sources framework as this program uses it, and nothing
-/// about dictation: what it is handed is a flavor, and what it answers is where that flavor's
-/// source stands.
+/// about dictation: what it answers is where the input source stands.
 public struct InstalledInputMethod: Sendable {
-    public let flavor: Flavor
     /// The folder the package installs into, which is `/Library/Input Methods` unless a test
     /// says otherwise.
     public let directory: URL
 
-    public init(flavor: Flavor, directory: URL = Self.systemDirectory) {
-        self.flavor = flavor
+    public init(directory: URL = Self.systemDirectory) {
         self.directory = directory
     }
 
@@ -61,10 +58,10 @@ public struct InstalledInputMethod: Sendable {
     /// its file name.
     ///
     /// [LAW:one-source-of-truth] The identifier is the fact both halves already agree on -
-    /// `Flavor.inputMethodBundleIdentifier` names it and project.yml writes it into the
+    /// `AppIdentity.inputMethodBundleIdentifier` names it and project.yml writes it into the
     /// bundle - while the file name is a display name that a rename would silently change.
     public func bundle() throws -> URL {
-        let wanted = flavor.inputMethodBundleIdentifier
+        let wanted = AppIdentity.inputMethodBundleIdentifier
         // A folder that is not there holds no input method; one that cannot be read says why.
         // [LAW:no-silent-failure]
         let contents: [URL]
@@ -85,7 +82,7 @@ public struct InstalledInputMethod: Sendable {
     /// [LAW:no-silent-failure] Every step that can refuse says which step it was by name,
     /// and the register step is checked against the source list rather than against its own
     /// status: `TISRegisterInputSource` answers `noErr` for bundles it does not take, which
-    /// `Flavor.inputMethodBundleIdentifier` records being measured. A status believed here
+    /// `AppIdentity.inputMethodBundleIdentifier` records being measured. A status believed here
     /// would leave an input method that reads as registered and never answers.
     ///
     /// Async and on the main actor because the answer arrives there. Measured on 2026-09-22:
@@ -104,23 +101,23 @@ public struct InstalledInputMethod: Sendable {
         // launch: a launch must put no system dialog on screen. `switchOn` is the one call
         // that does, and it is made only from the step a person starts. Not a failure: it
         // stops where a person has yet to allow it, and says so.
-        guard Self.isSwitchedOn(flavor) else { return .switchedOff }
+        guard Self.isSwitchedOn() else { return .switchedOff }
         if !Self.isSelected(source) {
             let selected = TextInputSources.withLock { TISSelectInputSource(source) }
             guard selected == noErr else {
-                throw InputMethodFailure.selectRefused(identifier: flavor.inputSourceIdentifier, status: selected)
+                throw InputMethodFailure.selectRefused(identifier: AppIdentity.inputSourceIdentifier, status: selected)
             }
         }
         // Read back rather than believed, for the reason the lookup above is: the select is
         // answered `noErr` before this process's list says so, and it can be answered
         // `noErr` and not take, as it does while an app holds Secure Event Input.
-        guard try await Self.source(named: flavor.inputSourceIdentifier, within: settling, where: Self.isSelected) != nil else {
-            throw InputMethodFailure.notSelectedAfterSelecting(identifier: flavor.inputSourceIdentifier)
+        guard try await Self.source(named: AppIdentity.inputSourceIdentifier, within: settling, where: Self.isSelected) != nil else {
+            throw InputMethodFailure.notSelectedAfterSelecting(identifier: AppIdentity.inputSourceIdentifier)
         }
         return .selected
     }
 
-    /// Switches this flavor's input method on, which makes macOS ask the person whether this
+    /// Switches the input method on, which makes macOS ask the person whether this
     /// app may - the one call in this type that can put a dialog on screen, so it is made only
     /// when a person has asked for it. Registers first, since a source the text input system
     /// does not list cannot be switched on; `select` selects it afterwards.
@@ -133,15 +130,15 @@ public struct InstalledInputMethod: Sendable {
         // The input method's own source, looked for the way the mode's was: this process's
         // list may not hold it yet, and a list read before the refresh arrives is not an
         // answer. [LAW:no-ambient-temporal-coupling]
-        guard let inputMethod = try await Self.source(named: flavor.inputMethodBundleIdentifier, within: settling) else {
+        guard let inputMethod = try await Self.source(named: AppIdentity.inputMethodBundleIdentifier, within: settling) else {
             throw InputMethodFailure.notInSourceListAfterRegistering(
-                identifier: flavor.inputMethodBundleIdentifier, bundle: try bundle())
+                identifier: AppIdentity.inputMethodBundleIdentifier, bundle: try bundle())
         }
         // The input method first, which is what macOS asks the person about, then its one
         // mode, which a person who removed it under Input Sources switched off: both must
         // be on before the mode can be selected. [LAW:dataflow-not-control-flow] Each is
         // switched on only where it reads off, so a source already on is left alone.
-        for (source, identifier) in [(inputMethod, flavor.inputMethodBundleIdentifier), (mode, flavor.inputSourceIdentifier)]
+        for (source, identifier) in [(inputMethod, AppIdentity.inputMethodBundleIdentifier), (mode, AppIdentity.inputSourceIdentifier)]
         where !Self.isEnabled(source) {
             let enabled = TextInputSources.withLock { TISEnableInputSource(source) }
             guard enabled == noErr else {
@@ -164,13 +161,13 @@ public struct InstalledInputMethod: Sendable {
         guard status == noErr else {
             throw InputMethodFailure.registrationRefused(bundle: installed, status: status)
         }
-        guard let source = try await Self.source(named: flavor.inputSourceIdentifier, within: settling) else {
-            throw InputMethodFailure.notInSourceListAfterRegistering(identifier: flavor.inputSourceIdentifier, bundle: installed)
+        guard let source = try await Self.source(named: AppIdentity.inputSourceIdentifier, within: settling) else {
+            throw InputMethodFailure.notInSourceListAfterRegistering(identifier: AppIdentity.inputSourceIdentifier, bundle: installed)
         }
         return source
     }
 
-    /// Whether this flavor's input method is switched on, read from the text input system
+    /// Whether the input method is switched on, read from the text input system
     /// alone. What the switch-on step asks of a person, and nothing about the bundle on disk,
     /// so it reads the same from the app and from a CLI that carries no input method.
     ///
@@ -182,15 +179,15 @@ public struct InstalledInputMethod: Sendable {
     /// person allowed the input method. Both are read: the input method's own flag is the
     /// grant, and a mode switched off - as removing the input method under Input Sources
     /// leaves it - is one that cannot be selected either, and is switched on the same way.
-    public static func isSwitchedOn(_ flavor: Flavor) -> Bool {
-        [flavor.inputMethodBundleIdentifier, flavor.inputSourceIdentifier]
+    public static func isSwitchedOn() -> Bool {
+        [AppIdentity.inputMethodBundleIdentifier, AppIdentity.inputSourceIdentifier]
             .allSatisfy { source(named: $0).map(isEnabled) ?? false }
     }
 
-    /// Whether this flavor's source is the one in use now: the only state in which the input
+    /// Whether the input source is the one in use now: the only state in which the input
     /// method is handed keys, and so the only one in which the hotkey is heard.
-    public static func isSelected(_ flavor: Flavor) -> Bool {
-        source(named: flavor.inputSourceIdentifier).map(isSelected) ?? false
+    public static func isSelected() -> Bool {
+        source(named: AppIdentity.inputSourceIdentifier).map(isSelected) ?? false
     }
 
     /// The one source with this identifier, including sources that are switched off.
@@ -242,7 +239,7 @@ public struct InstalledInputMethod: Sendable {
 /// [LAW:no-silent-failure] One case per step rather than one message, because what a person
 /// does about each is different: an input method that is not installed is a package to run
 /// again, and a bundle the text input system would not take is the identifier rule in
-/// `Flavor.inputMethodBundleIdentifier` being broken by a rename.
+/// `AppIdentity.inputMethodBundleIdentifier` being broken by a rename.
 public enum InputMethodFailure: Error, Equatable, CustomStringConvertible {
     case notInstalled(identifier: String, looked: URL)
     case registrationRefused(bundle: URL, status: OSStatus)

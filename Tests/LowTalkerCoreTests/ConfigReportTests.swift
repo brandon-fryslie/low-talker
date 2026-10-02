@@ -1,4 +1,3 @@
-import Flavors
 import Foundation
 import LowTalkerCore
 import Testing
@@ -7,12 +6,8 @@ import Testing
 /// `ConfigError` because the file was understood, and the config read back to the
 /// person who wrote it.
 @Suite struct ConfigReportTests {
-    /// What a report *says* about a file does not depend on which installation read it,
-    /// so these read as the release copy, named once here. [LAW:one-source-of-truth]
-    static let flavor = Flavor.release
-
     static func config(_ toml: String) throws(ConfigError) -> Config {
-        try Config(toml: toml, flavor: flavor)
+        try Config(toml: toml)
     }
 
     // MARK: - Gaps
@@ -74,7 +69,7 @@ import Testing
             name = "dictation"
             chord = { modifiers = ["rightOption"] }
             """)
-        let report = ConfigReport(.file(config, at: url, flavor: Self.flavor))
+        let report = ConfigReport(.file(config, at: url))
         #expect(report.description == """
             /tmp/low-talker-example.toml
 
@@ -97,14 +92,14 @@ import Testing
     /// about to debug a file nothing is reading.
     @Test func aReportWithNoFileSaysThereIsNoFile() {
         let url = URL(filePath: "/tmp/low-talker-absent.toml")
-        let report = ConfigReport(.noFile(at: url, flavor: Self.flavor))
+        let report = ConfigReport(.noFile(at: url))
         #expect(report.description.hasPrefix("no file at /tmp/low-talker-absent.toml, so these are the defaults"))
     }
 
     /// A chord, a vocabulary and a route are each read back in the words the file
     /// writes them in, so what is printed can be found in the file.
     @Test func aModeIsReadBackInTheWordsTheFileUses() throws {
-        let report = ConfigReport(.file(try Self.config(Self.notes), at: URL(filePath: "/tmp/x.toml"), flavor: Self.flavor))
+        let report = ConfigReport(.file(try Self.config(Self.notes), at: URL(filePath: "/tmp/x.toml")))
         let lines = report.description.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         #expect(lines.contains(#"mode "notes""#))
         #expect(lines.contains("  chord: leftCommand+leftShift"))
@@ -121,7 +116,7 @@ import Testing
             chord = { modifiers = ["rightOption"] }
             routes = []
             """)
-        let report = ConfigReport(.file(config, at: URL(filePath: "/tmp/x.toml"), flavor: Self.flavor))
+        let report = ConfigReport(.file(config, at: URL(filePath: "/tmp/x.toml")))
         #expect(report.gaps == config.gaps)
         #expect(report.description.hasSuffix("""
             gaps:
@@ -153,7 +148,7 @@ import Testing
             interface = "192.168.1.20"
             token = "sk-report-secret"
             """)
-        let report = ConfigReport(.file(config, at: URL(filePath: "/tmp/x.toml"), flavor: Self.flavor)).description
+        let report = ConfigReport(.file(config, at: URL(filePath: "/tmp/x.toml"))).description
         #expect(report.split(separator: "\n").contains("serve: 192.168.1.20, bearer token required"))
         #expect(!report.contains("sk-report-secret"))
     }

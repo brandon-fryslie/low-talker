@@ -1,6 +1,5 @@
 import AVFoundation
 import Grants
-import Flavors
 import Testing
 @testable import Onboarding
 
@@ -23,7 +22,7 @@ import Testing
 
     /// The app reads every row the CLI reads, plus its own grant, in the one order.
     @Test func theAppReadsItsOwnGrantWhereTheCLICannot() {
-        let asTheAppSeesIt = OnboardingProbe.readiness(flavor: .development, reader: .theApp(microphone: .withheld(.notDetermined)))
+        let asTheAppSeesIt = OnboardingProbe.readiness(reader: .theApp(microphone: .withheld(.notDetermined)))
         #expect(asTheAppSeesIt.requirements.map(\.row) == Requirement.Row.allCases)
         #expect(asTheAppSeesIt.notReadHere.isEmpty)
     }
@@ -31,18 +30,18 @@ import Testing
     /// The microphone row reads the authorization the app handed over.
     @Test func theAppsMicrophoneRowReadsWhatItWasGiven() {
         func microphoneRow(_ reason: MicrophoneAuthorization.Withheld) -> Requirement? {
-            OnboardingProbe.readiness(flavor: .development, reader: .theApp(microphone: .withheld(reason)))
+            OnboardingProbe.readiness(reader: .theApp(microphone: .withheld(reason)))
                 .requirements.first { $0.row == .microphone }
         }
         #expect(microphoneRow(.notDetermined)?.reads == "not asked yet")
         #expect(microphoneRow(.denied)?.reads == "turned off")
         #expect(microphoneRow(.restricted)?.met == false)
-        let granted = OnboardingProbe.readiness(flavor: .development, reader: .theApp(microphone: MicrophonePermission(authority: Authorized()).current))
+        let granted = OnboardingProbe.readiness(reader: .theApp(microphone: MicrophonePermission(authority: Authorized()).current))
         #expect(granted.requirements.first { $0.row == .microphone }?.met == true)
     }
 
     static var asTheCLISeesIt: Readiness {
-        OnboardingProbe.readiness(flavor: .development, reader: .elsewhere)
+        OnboardingProbe.readiness(reader: .elsewhere)
     }
 }
 

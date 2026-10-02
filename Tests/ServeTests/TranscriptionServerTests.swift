@@ -1,4 +1,4 @@
-import Flavors
+import Identity
 import Foundation
 import LowTalkerCore
 import Network
@@ -8,24 +8,23 @@ import Testing
 import TestProbes
 
 @Suite struct TranscriptionServerTests {
-    /// A second server on an address already served is refused, naming the installation and
-    /// the address: two copies of one flavor read as that, not as a bare socket error.
+    /// A second server on an address already served is refused, naming the app and the
+    /// address: two servers read as that, not as a bare socket error.
     @Test func aServedAddressIsRefusedByName() async throws {
         let running = try await Running.start(.ready(Stub()))
         defer { running.server.stop() }
-        let taken = ListenAddress(flavor: .release, port: running.server.port)
+        let taken = ListenAddress(port: running.server.port)
         await #expect {
             try await TranscriptionServer.listen(at: taken, engine: { .ready(Stub()) }, record: { _ in }).stop()
         } throws: { error in
-            "\(error)".hasPrefix("LowTalker (release) cannot serve on 127.0.0.1:\(running.server.port): ")
+            "\(error)".hasPrefix("LowTalker cannot serve on 127.0.0.1:\(running.server.port): ")
                 && "\(error)".contains("Address already in use")
         }
     }
 
-    /// An installation serves on loopback at its own port unless told otherwise.
-    @Test(arguments: Flavor.allCases)
-    func anInstallationServesOnLoopbackAtItsPort(flavor: Flavor) {
-        #expect("\(ListenAddress(flavor: flavor))" == "127.0.0.1:\(flavor.serverPort)")
+    /// The server is on loopback at the app's port unless told otherwise.
+    @Test func theServerIsOnLoopbackAtTheAppsPort() {
+        #expect("\(ListenAddress())" == "127.0.0.1:\(AppIdentity.serverPort)")
     }
 
     /// The contract, judged by the suite that judges every server (low-serve-axq.50m): its

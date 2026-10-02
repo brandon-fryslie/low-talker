@@ -1,5 +1,4 @@
 import Dictation
-import Flavors
 import Foundation
 import Grants
 import Insertion
@@ -18,7 +17,7 @@ private struct BadBuffer: Error {}
 @MainActor
 final class Rig {
     static let textEdit = BundleID(rawValue: "com.apple.TextEdit")
-    static let rightOption = Hotkey.defaultChord(for: .release)
+    static let rightOption = Hotkey.defaultChord
 
     let hardware = FakeHardware()
     let capture: AudioCapture

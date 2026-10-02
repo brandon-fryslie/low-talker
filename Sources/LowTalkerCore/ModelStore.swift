@@ -41,8 +41,8 @@ public struct ModelStore: Sendable {
     /// `CarriedModelStoreTests` holds that copy to this one.
     public static let carriedResourceName = "model-store"
 
-    /// The store `bundle` carries, if it carries one. Every bundle `make app` or `make
-    /// release` builds does, the development copy included; only a bundle built with
+    /// The store `bundle` carries, if it carries one. Every bundle `make app` builds does;
+    /// only a bundle built with
     /// `BUNDLED_MODEL_STORE=` (CI's, with no model to carry) does not.
     ///
     /// The app loads this store in place, read-only, and writes no model data outside

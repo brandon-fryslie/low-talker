@@ -1,4 +1,4 @@
-import Flavors
+import Identity
 import Grants
 
 /// One thing that must hold before low-talker can hear and type, as this Mac actually stands.
@@ -140,8 +140,8 @@ public extension Requirement {
     /// The microphone, which every setup needs: nothing is heard without it.
     ///
     /// - Parameter withheld: why macOS withholds it, or nil when it is allowed.
-    static func microphone(_ withheld: MicrophoneAuthorization.Withheld?, flavor: Flavor) -> Requirement {
-        Requirement(row: .microphone, reads: reads(forMicrophone: withheld), step: step(forMicrophone: withheld, flavor: flavor))
+    static func microphone(_ withheld: MicrophoneAuthorization.Withheld?) -> Requirement {
+        Requirement(row: .microphone, reads: reads(forMicrophone: withheld), step: step(forMicrophone: withheld))
     }
 
     private static func reads(forMicrophone withheld: MicrophoneAuthorization.Withheld?) -> String {
@@ -153,14 +153,14 @@ public extension Requirement {
         }
     }
 
-    private static func step(forMicrophone withheld: MicrophoneAuthorization.Withheld?, flavor: Flavor) -> String? {
+    private static func step(forMicrophone withheld: MicrophoneAuthorization.Withheld?) -> String? {
         switch withheld {
         case nil:
             nil
         case .notDetermined:
-            "Allow it in \(GuidedSetup.title(for: flavor))"
+            "Allow it in \(GuidedSetup.title)"
         case .denied:
-            "Turn on \(flavor.displayName) in \(privacyPane(.microphone))."
+            "Turn on \(AppIdentity.displayName) in \(privacyPane(.microphone))."
         case .restricted:
             "A policy on this Mac blocks it."
         }
@@ -170,11 +170,11 @@ public extension Requirement {
 // MARK: - the input method
 
 public extension Requirement {
-    /// Whether this installation's input method is switched on. macOS asks the person before
+    /// Whether the input method is switched on. macOS asks the person before
     /// an app may switch one on, so this is a grant, and the one dictation waits on. Copying
     /// and registering it ask nobody, and the app does both on its own.
-    static func inputMethod(switchedOn: Bool, flavor: Flavor) -> Requirement {
-        Requirement(row: .inputMethod, reads: reads(forSwitchedOn: switchedOn), step: switchedOn ? nil : "Switch it on in \(GuidedSetup.title(for: flavor))")
+    static func inputMethod(switchedOn: Bool) -> Requirement {
+        Requirement(row: .inputMethod, reads: reads(forSwitchedOn: switchedOn), step: switchedOn ? nil : "Switch it on in \(GuidedSetup.title)")
     }
 
     private static func reads(forSwitchedOn switchedOn: Bool) -> String {

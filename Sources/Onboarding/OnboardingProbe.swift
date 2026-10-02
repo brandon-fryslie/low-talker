@@ -1,4 +1,3 @@
-import Flavors
 import Grants
 import InputSource
 
@@ -29,11 +28,8 @@ public enum OnboardingProbe {
     /// Reading never asks: nothing here can put a system dialog on screen, which is what
     /// lets the app read the list at launch and every time its menu opens.
     ///
-    /// - Parameter flavor: which installation is being read. The two run side by side and
-    ///   each has its own input method and grants, so every reading below is a reading about
-    ///   one of them and there is no such thing as the readiness of "the app".
     /// - Parameter reader: who is asking, which decides the rows only the app can read.
-    public static func readiness(flavor: Flavor, reader: OnboardingReader) -> Readiness {
+    public static func readiness(reader: OnboardingReader) -> Readiness {
         let rows = Requirement.Row.allCases
         let requirements: [Requirement] = rows.compactMap { row in
             switch (row, reader) {
@@ -42,7 +38,7 @@ public enum OnboardingProbe {
                 case .granted: nil
                 case .withheld(let reason): reason
                 }
-                return .microphone(withheld, flavor: flavor)
+                return .microphone(withheld)
             // macOS keys the grant to the app that holds it, so any other process asking is
             // told about itself: a CLI run from a terminal would report the terminal's. A
             // reading of the wrong app is worse than none, so the row is named, unread.
@@ -50,7 +46,7 @@ public enum OnboardingProbe {
             case (.microphone, .elsewhere):
                 return nil
             case (.inputMethod, _):
-                return .inputMethod(switchedOn: InstalledInputMethod.isSwitchedOn(flavor), flavor: flavor)
+                return .inputMethod(switchedOn: InstalledInputMethod.isSwitchedOn())
             }
         }
         return Readiness(requirements, notReadHere: rows.filter { row in !requirements.contains { $0.row == row } })

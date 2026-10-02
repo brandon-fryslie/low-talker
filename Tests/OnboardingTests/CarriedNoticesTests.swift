@@ -1,5 +1,5 @@
 import Foundation
-import Flavors
+import Identity
 import Testing
 
 private let repository = URL(fileURLWithPath: #filePath)

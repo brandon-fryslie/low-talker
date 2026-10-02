@@ -1,4 +1,3 @@
-import Flavors
 import Grants
 import Testing
 @testable import Onboarding
@@ -8,9 +7,6 @@ import Testing
 /// is left without one, and that a fact nobody could read never reads as fine.
 /// [LAW:behavior-not-structure]
 @Suite struct RequirementTests {
-    /// The installation these steps are read against where one has to be picked.
-    static let flavor = Flavor.release
-
     static func readings(for row: Requirement.Row) -> [String] {
         Requirement.readings.filter { $0.row == row }.map(\.reading)
     }
@@ -19,10 +15,10 @@ import Testing
 
     /// Switched on asks for nothing; switched off sends the reader to the step that asks.
     @Test func onlyASwitchedOnInputMethodAsksNothing() {
-        #expect(Requirement.inputMethod(switchedOn: true, flavor: Self.flavor).met)
-        let off = Requirement.inputMethod(switchedOn: false, flavor: Self.flavor)
+        #expect(Requirement.inputMethod(switchedOn: true).met)
+        let off = Requirement.inputMethod(switchedOn: false)
         #expect(!off.met)
-        #expect(off.step?.contains(GuidedSetup.title(for: Self.flavor)) == true)
+        #expect(off.step?.contains(GuidedSetup.title) == true)
     }
 
     // MARK: - the vocabulary README keeps a copy of
@@ -30,8 +26,8 @@ import Testing
     /// Each row's readings in the table are the ones the row prints. [LAW:one-source-of-truth]
     @Test func eachRowsReadingsAreTheOnesItPrints() {
         let answers: [MicrophoneAuthorization.Withheld?] = [nil] + MicrophoneAuthorization.Withheld.allCases
-        #expect(Self.readings(for: .microphone) == answers.map { Requirement.microphone($0, flavor: Self.flavor).reads })
-        #expect(Self.readings(for: .inputMethod) == [true, false].map { Requirement.inputMethod(switchedOn: $0, flavor: Self.flavor).reads })
+        #expect(Self.readings(for: .microphone) == answers.map { Requirement.microphone($0).reads })
+        #expect(Self.readings(for: .inputMethod) == [true, false].map { Requirement.inputMethod(switchedOn: $0).reads })
     }
 
     /// Every row is in the table, and no row's readings are borrowed from another's. A
@@ -61,8 +57,8 @@ import Testing
     /// checked". [LAW:dataflow-not-control-flow]
     @Test func theListShowsEveryRequirementWhetherOrNotItNeedsAnything() {
         let readiness = Readiness([
-            .microphone(nil, flavor: Self.flavor),
-            .inputMethod(switchedOn: true, flavor: Self.flavor),
+            .microphone(nil),
+            .inputMethod(switchedOn: true),
         ])
         #expect(readiness.ready)
         #expect(readiness.description.contains("Microphone: allowed"))
@@ -71,8 +67,8 @@ import Testing
 
     @Test func oneUnmetRequirementIsEnoughToStopTheList() {
         let readiness = Readiness([
-            .microphone(nil, flavor: Self.flavor),
-            .inputMethod(switchedOn: false, flavor: Self.flavor),
+            .microphone(nil),
+            .inputMethod(switchedOn: false),
         ])
         #expect(!readiness.ready)
         #expect(readiness.unmet.map(\.row) == [.inputMethod])

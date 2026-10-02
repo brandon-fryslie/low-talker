@@ -19,13 +19,11 @@ struct OnboardCommand: ParsableCommand {
         subcommands: [Readings.self]
     )
 
-    @OptionGroup var installation: FlavorOption
-
     func run() throws {
         // Read from elsewhere, not as the app: macOS keys the privacy grants to the app that
         // holds them, so the grants only the app can read are named, unread, rather than read
         // as the terminal's.
-        let readiness = OnboardingProbe.readiness(flavor: installation.flavor, reader: .elsewhere)
+        let readiness = OnboardingProbe.readiness(reader: .elsewhere)
         print(readiness)
         // The code is a value computed the one way every time, rather than an exit taken
         // on some runs and not others. [LAW:dataflow-not-control-flow]

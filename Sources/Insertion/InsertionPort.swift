@@ -1,5 +1,5 @@
 import Darwin
-import Flavors
+import Identity
 import Foundation
 import DarwinCalls
 
@@ -51,14 +51,14 @@ public final class InsertionPort {
         }
     }
 
-    /// Hosts this flavor's insert port, admitting this flavor's app and nobody else.
+    /// Hosts the insert port, admitting the app and nobody else.
     public convenience init(
-        flavor: Flavor, queue: DispatchQueue,
+        queue: DispatchQueue,
         told: @escaping @Sendable (Event) -> Void, answer: @escaping @Sendable (String) -> InsertionAnswer
     ) throws(PortNotHosted) {
         let senders: PeerIdentity
-        do throws(PeerIdentity.Unreadable) { senders = try .signedLikeThisProcess(identifier: flavor.bundleIdentifier) } catch { throw .noRequirement(error) }
-        try self.init(portName: flavor.inputMethodPortName, senders: senders, queue: queue, told: told, answer: answer)
+        do throws(PeerIdentity.Unreadable) { senders = try .signedLikeThisProcess(identifier: AppIdentity.bundleIdentifier) } catch { throw .noRequirement(error) }
+        try self.init(portName: AppIdentity.inputMethodPortName, senders: senders, queue: queue, told: told, answer: answer)
     }
 
     /// Under a name and a requirement someone else chose, which is how a test hosts one

@@ -10,8 +10,8 @@ options:
 # One build configuration, so there is one way a bundle is built. A development build is
 # the release recipe run under the development identity: same optimisation, same single
 # Mach-O (Debug splits the code into a stub and a `.debug.dylib` beside it), same
-# entitlements, same timestamped signature. Anything that differs between the copy a
-# person develops on and the copy they ship is a path the development copy never ran.
+# entitlements, same timestamped signature. Anything that differs between the build a
+# person develops on and the build they ship is a path the development build never ran.
 # [LAW:no-mode-explosion] [LAW:one-type-per-behavior]
 configs:
   Release: release
@@ -29,12 +29,12 @@ configs:
 # team rides inside the certificate's name, which scripts/sign-release spells in full.
 #
 # Everything else notarization asks of a signature is set here for every build, the
-# development copy included, so the two are signed alike: the Hardened Runtime; no
+# development build included, so the two are signed alike: the Hardened Runtime; no
 # get-task-allow entitlement, which CODE_SIGN_INJECT_BASE_ENTITLEMENTS would add; and a
 # secure timestamp, which Xcode leaves out (--timestamp=none) unless told. The likeness
-# costs the development copy two things. A hardened process without get-task-allow refuses
+# costs the development build two things. A hardened process without get-task-allow refuses
 # a debugger, so lldb and Instruments cannot attach to it; the unified log is how it is
-# read, as it is for the shipped copy. And codesign asks Apple's timestamp server for each
+# read, as it is for the shipped build. And codesign asks Apple's timestamp server for each
 # signature, measured at 0.6 s with the self-signed identity, so a build with no network
 # fails to sign.
 settings:
@@ -62,17 +62,13 @@ packages:
   low-talker:
     path: .
 
-# [LAW:one-type-per-behavior] The two installations are not two apps. They are one app
-# built twice, and what separates them is a few strings: the identity macOS keys the TCC
-# grant to, the name a person reads in the menu bar, and which input method it is packaged with. So
-# there is one template and two sets of attributes rather than two targets that must be
-# kept in step by hand.
-#
-# The strings themselves belong to `Flavor` in Sources/Flavors; xcodegen cannot read
-# Swift, so they are written again here, and `ProjectFlavorTests` is what holds these
-# copies to that one. [LAW:one-source-of-truth]
-targetTemplates:
-  Installation:
+# Every name below is `AppIdentity`'s in Sources/Identity; xcodegen cannot read Swift, so they
+# are written again here, and `ProjectIdentityTests`, `AppEntitlementsTests` and
+# `InputMethodPlistTests` hold these copies to that one. [LAW:one-source-of-truth]
+targets:
+  # The app. A development build and a release build are this one target: they differ in
+  # the certificate that signs them and in ACCEPTS_CONNECTIONS, and in nothing else.
+  LowTalker:
     type: application
     platform: macOS
     sources:
@@ -106,11 +102,9 @@ targetTemplates:
         product: Serve
       # The input method bundle, built beside the app and not inside it: the installer
       # package puts it in /Library/Input Methods, the one place the text input system lists
-      # it from that an app under App Sandbox does not write to. It is a bundle of its own
-      # with its own identifier, so there is one target per flavor: macOS keys a registered
-      # input source by that identifier. A dependency so that building the app's scheme
-      # builds the input method its package carries.
-      - target: ${inputMethodTarget}
+      # it from that an app under App Sandbox does not write to. A dependency so that
+      # building the app's scheme builds the input method its package carries.
+      - target: LowTalkerInputMethod
         embed: false
     # Every entitlement here is named with the failure that required it, read off a
     # Hardened Runtime build rather than guessed; one nobody can name is removed.
@@ -131,16 +125,16 @@ targetTemplates:
     # The two Mach names, each denied by the sandbox without its line: the app registers
     # its hotkey port (`mach-register`, Sources/Insertion/NamedPort.swift) and looks up the
     # input method's insert port (`mach-lookup`, Sources/Insertion/Inserter.swift).
-    # `AppEntitlementsTests` holds these, and nothing beside them, to `Flavor`'s names.
+    # `AppEntitlementsTests` holds these, and nothing beside them, to `AppIdentity`'s names.
     entitlements:
-      path: App/Generated/${displayName}.entitlements
+      path: App/Generated/LowTalker.entitlements
       properties:
         com.apple.security.app-sandbox: true
         com.apple.security.device.audio-input: true
         com.apple.security.temporary-exception.mach-register.global-name:
-          - ${hotkeyPortName}
+          - ai.promptctl.low-talker.hotkey
         com.apple.security.temporary-exception.mach-lookup.global-name:
-          - ${inputMethodPortName}
+          - ai.promptctl.low-talker.inputmethod.dictation.insert
     # A bundle carries what a first run would otherwise fetch: a store holding its model, so
     # a first launch loads it with the network off. Copied in after every other phase, so
     # the signature Xcode writes last seals it with the rest of the bundle. `make` passes
@@ -166,8 +160,7 @@ targetTemplates:
             rm -rf "${resources}/${MODEL_STORE_RESOURCE}"
           fi
       # The notices the licenses of what the bundle ships require, written from the
-      # committed SBOM on every build, the development copy included, so no bundle is
-      # built without them. scripts/notices stops the build on a component it has no
+      # committed SBOM on every build, so no bundle is built without them. scripts/notices stops the build on a component it has no
       # license text for. [LAW:one-source-of-truth]
       - name: Carry the notices its licenses require
         basedOnDependencyAnalysis: false
@@ -180,16 +173,15 @@ targetTemplates:
       # The config a person wrote before the sandbox, in ~/.config/low-talker, which the
       # sandboxed app cannot read. macOS reads Contents/Resources/container-migration.plist
       # once, when it creates the container at the first sandboxed launch, and moves each
-      # listed file in; the development copy's file is renamed on the way, since the two
-      # copies no longer share a directory. Without it an upgrade runs on the defaults and
-      # says nothing. Measured 2026-09-29 with a throwaway sandboxed bundle: both files moved,
-      # the rename applied, and the originals left their old directory.
+      # listed file in. Without it an upgrade runs on the defaults and says nothing.
+      # Measured 2026-09-29 with a throwaway sandboxed bundle: the file moved, and the
+      # original left its old directory.
       - name: Carry the config from before the sandbox
         basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
           printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Move</key><array><array><string>%s</string><string>%s</string></array></array></dict></plist>\n' \
-            '${Home}/.config/low-talker/'"${UNSANDBOXED_CONFIG_FILE}" "${CONFIG_IN_CONTAINER}" \
+            '${Home}/.config/low-talker/config.toml' "${CONFIG_IN_CONTAINER}" \
             > "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/container-migration.plist"
       # [LAW:no-silent-failure] A bundle that ships without the version project.yml sets
       # fails the build rather than shipping quietly. Checked here, on the built plist,
@@ -216,7 +208,7 @@ targetTemplates:
     # xcodegen writes this plist, and Xcode merges it with the keys GENERATE_INFOPLIST_FILE
     # synthesises.
     info:
-      path: App/Generated/${displayName}-Info.plist
+      path: App/Generated/LowTalker-Info.plist
       properties:
         # The settings, not literals: xcodegen otherwise writes its own 1.0 and 1 here, a
         # second version the shipped bundle never carries.
@@ -224,11 +216,11 @@ targetTemplates:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
     settings:
       base:
-        PRODUCT_NAME: ${displayName}
-        PRODUCT_BUNDLE_IDENTIFIER: ${bundleIdentifier}
+        PRODUCT_NAME: LowTalker
+        PRODUCT_BUNDLE_IDENTIFIER: ai.promptctl.low-talker
         # Adds com.apple.security.network.server to the entitlements written above when
         # ACCEPTS_CONNECTIONS is YES, so the network build's server can listen; the Makefile's
-        # VARIANT sets it, and unset it is NO. Routed through a setting only this template
+        # VARIANT sets it, and unset it is NO. Routed through a setting only this target
         # reads, because set on the command line it would reach the input method and the CLI
         # too, which are the same bytes in both builds.
         # [LAW:one-type-per-behavior] The two builds are this one target with one value.
@@ -238,13 +230,11 @@ targetTemplates:
         INFOPLIST_KEY_LSUIElement: true
         # The name every system dialog, notice and list puts in front of a person: macOS
         # reads the display name first, and a prompt names whatever bundle raised it.
-        INFOPLIST_KEY_CFBundleDisplayName: ${displayName}
-        # One icon per installation, so the two copies side by side in Finder, the Dock
-        # and System Settings are told apart before their names are read.
-        ASSETCATALOG_COMPILER_APPICON_NAME: ${appIconName}
+        INFOPLIST_KEY_CFBundleDisplayName: LowTalker
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Shown inside macOS's microphone dialog, under the app's name. The guided setup
         # explains the same thing first, so the dialog repeats what the person just read.
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: ${displayName} listens only while you hold or tap your dictation key, to turn what you say into text. What it hears never leaves this Mac.
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: LowTalker listens only while you hold or tap your dictation key, to turn what you say into text. What it hears never leaves this Mac.
         # Where the bundle's resources hold the carried store, as ModelStore.carriedResourceName
         # names it; CarriedModelStoreTests holds the two equal. [LAW:one-source-of-truth]
         MODEL_STORE_RESOURCE: model-store
@@ -254,35 +244,28 @@ targetTemplates:
         # Where the container keeps the config, as Config.pathInContainer names it;
         # ContainerMigrationTests holds the two equal. [LAW:one-source-of-truth]
         CONFIG_IN_CONTAINER: .config/low-talker/config.toml
-        # The file's name in ~/.config/low-talker before the sandbox.
-        UNSANDBOXED_CONFIG_FILE: ${unsandboxedConfigFileName}
 
-  # [LAW:one-type-per-behavior] One input method, built once per installation. What
-  # separates the two copies is what separates the apps - the names macOS files them under
-  # - so this is one template with two sets of attributes, and every name in it is
-  # `Flavor`'s.
+  # The input method the app is packaged with.
   #
   # The `.inputmethod` segment in the identifier is not decoration and its position is not
   # free: measured on macOS Tahoe, a bundle whose identifier ENDS in `.inputmethod`, or
   # carries no such segment, registers nothing at all, while `…inputmethod.dictation` is
-  # taken - and `TISRegisterInputSource` answers noErr either way. `Flavor` is where that
-  # rule is written down; this file only spends the names it decides.
-  InputMethod:
+  # taken - and `TISRegisterInputSource` answers noErr either way. `AppIdentity` is where
+  # that rule is written down; this file only spends the names it decides.
+  LowTalkerInputMethod:
     type: application
     platform: macOS
     sources:
       - Sources/lowtalker-inputmethod
       # The glyph the Input menu shows beside the name. A template image, so macOS tints
       # it to match the menu bar rather than the bundle carrying a light and a dark copy.
-      # One icon for both flavors: what tells the two copies apart in that menu is the
-      # name beside it, which is `Flavor.displayName`.
       - App/InputMethods/InputMethod.tiff
     dependencies:
       - package: low-talker
         product: InputMethod
       - package: low-talker
-        product: Flavors
-      # Declared because main.swift imports it, the same reason `Flavors` is here. It
+        product: Identity
+      # Declared because main.swift imports it, the same reason `Identity` is here. It
       # builds without this line today only because Xcode leaves a transitive package
       # module importable, which is not a promise this target should rest on.
       - package: low-talker
@@ -291,22 +274,22 @@ targetTemplates:
     # launch, so this string and the class's `@objc` name are one fact in two places;
     # `InputMethodPlistTests` holds them equal.
     info:
-      path: App/Generated/${displayName}-InputMethod-Info.plist
+      path: App/Generated/LowTalker-InputMethod-Info.plist
       properties:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSUIElement: true
         NSPrincipalClass: NSApplication
         NSSupportsSuddenTermination: true
-        InputMethodConnectionName: ${inputMethodConnectionName}
+        InputMethodConnectionName: ai.promptctl.low-talker.inputmethod.dictation_Connection
         InputMethodServerControllerClass: DictationInputController
         TISIntendedLanguage: en
         TISIconIsTemplate: true
         tsInputMethodIconFileKey: InputMethod.tiff
         ComponentInputModeDict:
           tsInputModeListKey:
-            ${inputSourceIdentifier}:
-              TISInputSourceID: ${inputSourceIdentifier}
+            ai.promptctl.low-talker.inputmethod.dictation.text:
+              TISInputSourceID: ai.promptctl.low-talker.inputmethod.dictation.text
               tsInputModeDefaultStateKey: true
               tsInputModeIsVisibleKey: true
               tsInputModeMenuIconFileKey: InputMethod.tiff
@@ -321,22 +304,22 @@ targetTemplates:
           # wrong one is a source that silently never appears in the Input menu.
           # [LAW:no-silent-failure]
           tsVisibleInputModeOrderedArrayKey:
-            - ${inputSourceIdentifier}
+            - ai.promptctl.low-talker.inputmethod.dictation.text
     # Sandboxed, so the input method a person selects can reach no more than it needs: the
     # sandbox is what keeps a process handed the keyboard from reading the disk or the
     # network. It registers two names and nothing else - the text input system's connection
     # and the insert port the app sends to - and looks up one, the app's hotkey port, and a
     # sandboxed process may register or look up only the names listed here.
-    # `InputMethodEntitlementsTests` holds all three to `Flavor`'s.
+    # `InputMethodEntitlementsTests` holds all three to `AppIdentity`'s.
     entitlements:
-      path: App/Generated/${displayName}-InputMethod.entitlements
+      path: App/Generated/LowTalker-InputMethod.entitlements
       properties:
         com.apple.security.app-sandbox: true
         com.apple.security.temporary-exception.mach-register.global-name:
-          - ${inputMethodConnectionName}
-          - ${inputMethodPortName}
+          - ai.promptctl.low-talker.inputmethod.dictation_Connection
+          - ai.promptctl.low-talker.inputmethod.dictation.insert
         com.apple.security.temporary-exception.mach-lookup.global-name:
-          - ${hotkeyPortName}
+          - ai.promptctl.low-talker.hotkey
     settings:
       base:
         # The bundle and the process are named for what they are, so a person reading
@@ -344,20 +327,20 @@ targetTemplates:
         # `CFBundleName` follows PRODUCT_NAME - Xcode synthesises it and its value beats
         # anything the plist file says, measured - and that is left alone: what a person
         # reads in the Input Sources list is the LOCALIZED name, which the script below
-        # writes from `Flavor.displayName`, and which macOS prefers over this.
-        PRODUCT_NAME: ${displayName} Input Method
-        INFOPLIST_KEY_CFBundleDisplayName: ${displayName} Input Method
-        PRODUCT_BUNDLE_IDENTIFIER: ${inputMethodBundleIdentifier}
+        # writes from INPUT_METHOD_NAME, and which macOS prefers over this.
+        PRODUCT_NAME: LowTalker Input Method
+        INFOPLIST_KEY_CFBundleDisplayName: LowTalker Input Method
+        PRODUCT_BUNDLE_IDENTIFIER: ai.promptctl.low-talker.inputmethod.dictation
         GENERATE_INFOPLIST_FILE: true
         # Read by the script below, which is the only way this bundle's one localized
         # string can be written from the same names the plist above uses.
-        INPUT_SOURCE_ID: ${inputSourceIdentifier}
-        INPUT_METHOD_NAME: ${displayName}
+        INPUT_SOURCE_ID: ai.promptctl.low-talker.inputmethod.dictation.text
+        INPUT_METHOD_NAME: LowTalker
     # The name a person reads in the Input Sources list and the Input menu. macOS takes it
     # from the bundle's localized strings, keyed by the source identifier, and NOT from
     # `CFBundleName` alone: measured, a bundle without this file shows the raw identifier
     # for the mode. Written here rather than checked in so no input method name is spelled
-    # anywhere but `Flavor` and this file. [LAW:one-source-of-truth]
+    # anywhere but `AppIdentity` and this file. [LAW:one-source-of-truth]
     postBuildScripts:
       - name: The name the Input Sources list shows
         basedOnDependencyAnalysis: false
@@ -368,53 +351,3 @@ targetTemplates:
           printf '"CFBundleName" = "%s";\n"%s" = "%s";\n' \
             "${INPUT_METHOD_NAME}" "${INPUT_SOURCE_ID}" "${INPUT_METHOD_NAME}" > "${strings}"
       - *versionCheck
-
-targets:
-  # Every name below is `Flavor`'s, written again because xcodegen cannot read Swift, and
-  # `ProjectFlavorTests` is what holds these copies to it. The input method's names sit on
-  # its own target rather than on the app's: the app needs only the name of the target it
-  # carries, and a name written in both places is one that can come to disagree.
-  # [LAW:one-source-of-truth]
-  LowTalker:
-    templates: [Installation]
-    templateAttributes:
-      displayName: LowTalker
-      bundleIdentifier: ai.promptctl.low-talker
-      hotkeyPortName: ai.promptctl.low-talker.hotkey
-      inputMethodPortName: ai.promptctl.low-talker.inputmethod.dictation.insert
-      inputMethodTarget: LowTalkerInputMethod
-      appIconName: AppIcon
-      unsandboxedConfigFileName: config.toml
-
-  # The copy built from the working tree, installed and running beside the one above.
-  LowTalkerDev:
-    templates: [Installation]
-    templateAttributes:
-      displayName: LowTalker Dev
-      bundleIdentifier: ai.promptctl.low-talker.dev
-      hotkeyPortName: ai.promptctl.low-talker.dev.hotkey
-      inputMethodPortName: ai.promptctl.low-talker.dev.inputmethod.dictation.insert
-      inputMethodTarget: LowTalkerDevInputMethod
-      appIconName: AppIconDev
-      unsandboxedConfigFileName: config.dev.toml
-
-  # The input method each app above is packaged with, one bundle per installation.
-  LowTalkerInputMethod:
-    templates: [InputMethod]
-    templateAttributes:
-      displayName: LowTalker
-      inputMethodBundleIdentifier: ai.promptctl.low-talker.inputmethod.dictation
-      inputSourceIdentifier: ai.promptctl.low-talker.inputmethod.dictation.text
-      inputMethodConnectionName: ai.promptctl.low-talker.inputmethod.dictation_Connection
-      inputMethodPortName: ai.promptctl.low-talker.inputmethod.dictation.insert
-      hotkeyPortName: ai.promptctl.low-talker.hotkey
-
-  LowTalkerDevInputMethod:
-    templates: [InputMethod]
-    templateAttributes:
-      displayName: LowTalker Dev
-      inputMethodBundleIdentifier: ai.promptctl.low-talker.dev.inputmethod.dictation
-      inputSourceIdentifier: ai.promptctl.low-talker.dev.inputmethod.dictation.text
-      inputMethodConnectionName: ai.promptctl.low-talker.dev.inputmethod.dictation_Connection
-      inputMethodPortName: ai.promptctl.low-talker.dev.inputmethod.dictation.insert
-      hotkeyPortName: ai.promptctl.low-talker.dev.hotkey

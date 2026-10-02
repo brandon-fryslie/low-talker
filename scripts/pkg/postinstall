@@ -6,7 +6,8 @@
 # The package has just replaced the app and its input method on disk. What still runs is the
 # code that stood there before, so this retires it: the app first, since an app from before
 # the package copied its own input method into the home folder of whoever ran it, and would
-# copy it back; then those copies, which the text input system would go on launching; then,
+# copy it back; then the app and input method of an installation from before LowTalker was
+# one app; then those copies, which the text input system would go on launching; then,
 # for each person logged in, the new bundles are registered and the input methods whose
 # bundles are gone are switched off; then every person's input source caches, which predate
 # the new bundles; then every input method process, which the text input system relaunches
@@ -63,6 +64,30 @@ done
 apps=$(running "$app_executable")
 stop $(cut -d ' ' -f 1 <<<"$apps")
 say "stopped $(lines "$apps") running $app_executable"
+
+# LowTalker was once installed as two apps side by side, the second under identifiers of its
+# own, "dev" after the family and "dev.inputmethod.dictation" (low-build-41v). Whatever of
+# that installation stands in the two folders this package writes to is stopped and removed,
+# so one app and one input method remain, and the switched-on lists below drop the entry of
+# the input method that went. A person its app was running for gets this one started instead.
+for bundle in /Applications/*.app "/Library/Input Methods"/*.app; do
+  [ "$bundle" != "$app" ] && [ "$bundle" != "/Library/Input Methods/$input_method_name" ] || continue
+  # A bundle with no readable identifier is someone else's, and so is any identifier that
+  # is not one of the two the second installation had: the family holds other products' bundles.
+  id=$(identifier "$bundle") || continue
+  case "$id" in "${family}dev" | "${family}dev.inputmethod.dictation") ;; *) continue ;; esac
+  # A bundle with no executable name has no process to stop, and is removed all the same.
+  older=
+  if executable=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$bundle/Contents/Info.plist" 2>/dev/null); then
+    older=$(running "$executable")
+    stop $(cut -d ' ' -f 1 <<<"$older")
+  else
+    say "$bundle names no executable, so no process of it was looked for"
+  fi
+  case "$bundle" in /Applications/*) apps+=$'\n'"$older" ;; esac
+  rm -rf "$bundle"
+  say "removed $bundle ($id), an installation from before LowTalker was one app, and stopped $(lines "$older") running from it"
+done
 
 # No build installs into a home folder any more, so every LowTalker input method there is one
 # an older app put there, whichever installation or identifier it carried. Older builds linked

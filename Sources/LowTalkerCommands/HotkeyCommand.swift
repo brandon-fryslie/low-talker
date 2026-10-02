@@ -1,20 +1,19 @@
 import AppKit
 import ArgumentParser
+import Identity
 import InputSource
 import LowTalkerCore
 
-/// Watches this installation's hotkey from the command line, so a hold and a tap can each
-/// be seen without the app.
+/// Watches the hotkey from the command line, so a hold and a tap can each be seen without
+/// the app.
 ///
-/// It hears through this installation's input method, as the app does, so it is refused
-/// while the app is running: only one process of an installation can hear on its port.
+/// It hears through the input method, as the app does, so it is refused while the app is
+/// running: only one process can hear on the hotkey port.
 struct HotkeyCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "hotkey",
-        abstract: "Print each press of this installation's hotkey, hold or tap, until interrupted."
+        abstract: "Print each press of the hotkey, hold or tap, until interrupted."
     )
-
-    @OptionGroup var installation: FlavorOption
 
     // Whole milliseconds, for the same reason as `mic watch --interval`.
     @Option(help: "Milliseconds a press must stay under to be a tap.")
@@ -27,8 +26,8 @@ struct HotkeyCommand: AsyncParsableCommand {
     @MainActor
     func run() async throws {
         setvbuf(stdout, nil, _IOLBF, 0)
-        let config = try Config.load(for: installation.flavor).config
-        let hotkey = Hotkey(for: installation.flavor, listeningFor: config, tapThreshold: .milliseconds(tapThreshold))
+        let config = try Config.load().config
+        let hotkey = Hotkey(listeningFor: config, tapThreshold: .milliseconds(tapThreshold))
         try hotkey.start { transition in
             // The press's own stamp beside the moment it was handled, so a stamp not on the
             // uptime clock shows as a gap nobody could press through.
@@ -37,14 +36,14 @@ struct HotkeyCommand: AsyncParsableCommand {
             case .ended(_, let ending): print("ended (\(ending))")
             }
         }
-        // Named from the config the hotkey was built from rather than spelled here, because
-        // the two installations do not watch the same keys. [LAW:one-source-of-truth]
+        // Named from the config the hotkey was built from rather than spelled here.
+        // [LAW:one-source-of-truth]
         print("watching \(Hotkey.named(in: config))")
         // The input method is handed keys only while its source is the one in use, so a watch
         // over any other source would print nothing and look like a hotkey that is broken.
         // [LAW:no-silent-failure]
-        let selected = InstalledInputMethod.isSelected(installation.flavor)
-        print("\(installation.flavor.displayName) \(selected ? "is" : "is not; nothing is heard until it is") the selected input source")
+        let selected = InstalledInputMethod.isSelected()
+        print("\(AppIdentity.displayName) \(selected ? "is" : "is not; nothing is heard until it is") the selected input source")
         // The port's messages are handed to the main queue, which a command with no loop never
         // drains. The app has no Dock icon and no menu: it exists to be delivered to.
         NSApplication.shared.setActivationPolicy(.prohibited)

@@ -1,12 +1,12 @@
 import AppKit
-import Flavors
+import Identity
 import InputMethod
 import InputMethodKit
 import Insertion
 import os
 
 /// The input method process: macOS launches it out of its own bundle, it answers on its
-/// flavor's connection, and it holds nothing else.
+/// connection, and it holds nothing else.
 ///
 /// [LAW:effects-at-boundaries] Everything with an effect is here - reading the bundle,
 /// opening the port, running the loop - so the controller beside it stays a pure answer to
@@ -18,31 +18,7 @@ import os
 ///
 ///     log show --last 10m --predicate 'subsystem BEGINSWITH "ai.promptctl.low-talker"'
 
-/// [LAW:parse-dont-validate] The identifier macOS launched this process under is the only
-/// thing it is told, and it already says which installation it belongs to. Nothing is
-/// guessed from it: a bundle whose identifier is neither flavor's is a misbuilt bundle, and
-/// serving the other copy's connection would put one installation's words in the other's
-/// window. [LAW:no-silent-failure]
-///
-/// The refusal is filed under every flavor's name, because which one this would have been
-/// is exactly what is not known - so a reader who asks under either finds it.
-let flavor: Flavor = {
-    let identifier = Bundle.main.bundleIdentifier
-    guard let identifier, let flavor = Flavor(inputMethodBundleIdentifier: identifier) else {
-        for candidate in Flavor.allCases {
-            Logger(subsystem: candidate.inputMethodBundleIdentifier, category: "inputmethod").fault(
-                """
-                will not start: this bundle's identifier is \(identifier ?? "absent", privacy: .public), \
-                which is no installation's input method; expected one of \
-                \(Flavor.allCases.map(\.inputMethodBundleIdentifier).joined(separator: ", "), privacy: .public)
-                """)
-        }
-        exit(1)
-    }
-    return flavor
-}()
-
-private let logger = Logger(subsystem: flavor.inputMethodBundleIdentifier, category: "inputmethod")
+private let logger = Logger(subsystem: AppIdentity.inputMethodBundleIdentifier, category: "inputmethod")
 
 /// The server owns the port macOS reaches this process on. Held for the life of the process
 /// by being a top-level binding: released, the connection goes with it and the text input
@@ -52,8 +28,8 @@ private let logger = Logger(subsystem: flavor.inputMethodBundleIdentifier, categ
 /// does nothing when chosen, so it ends here rather than running on as a source that
 /// silently never answers. [LAW:no-silent-failure]
 let server: IMKServer = {
-    guard let server = IMKServer(name: flavor.inputMethodConnectionName, bundleIdentifier: flavor.inputMethodBundleIdentifier) else {
-        logger.fault("will not start: no server could be opened on \(flavor.inputMethodConnectionName, privacy: .public)")
+    guard let server = IMKServer(name: AppIdentity.inputMethodConnectionName, bundleIdentifier: AppIdentity.inputMethodBundleIdentifier) else {
+        logger.fault("will not start: no server could be opened on \(AppIdentity.inputMethodConnectionName, privacy: .public)")
         exit(1)
     }
     return server
@@ -80,7 +56,7 @@ func secureInputHolder() -> String? {
 
 /// Where the insert port's commits run, one serial queue per app, off the main thread. Held
 /// for the life of the process like everything else opened here.
-let committer = Committer(label: "\(flavor.inputMethodPortName).commits")
+let committer = Committer(label: "\(AppIdentity.inputMethodPortName).commits")
 
 /// The app's door, beside the text input system's. Held for the life of the process for
 /// the same reason the server is: released, the app's next request finds nothing listening.
@@ -104,7 +80,7 @@ let committer = Committer(label: "\(flavor.inputMethodPortName).commits")
 /// app. [LAW:no-silent-failure]
 let insertions: InsertionPort? = {
     do {
-        return try InsertionPort(flavor: flavor, queue: DispatchQueue(label: flavor.inputMethodPortName), told: { event in
+        return try InsertionPort(queue: DispatchQueue(label: AppIdentity.inputMethodPortName), told: { event in
             logger.error("\(String(describing: event), privacy: .public)")
         }) { text in
             // Read on the main actor, where the effects are, and handed to the decision as
@@ -134,7 +110,7 @@ let insertions: InsertionPort? = {
         }
     } catch {
         logger.fault("""
-            no insert port on \(flavor.inputMethodPortName, privacy: .public): \
+            no insert port on \(AppIdentity.inputMethodPortName, privacy: .public): \
             \(String(describing: error), privacy: .public); keys still pass through
             """)
         return nil
@@ -151,7 +127,7 @@ let insertions: InsertionPort? = {
 /// per modifier key pressed would bury everything else here. Every key still passes through
 /// whatever this says. [LAW:no-silent-failure]
 let tellingTheApp = Task.detached {
-    let sender = ModifierSender(flavor: flavor)
+    let sender = ModifierSender()
     var fared: ModifierSender.Told?
     for await held in ModifierChanges.shared.changes {
         let told = sender.tell(held)
@@ -173,9 +149,9 @@ let quits = NSWorkspace.shared.notificationCenter.addObserver(
 // What this process opened, rather than what it set out to open: the startup line is where
 // a reader looks first, and one that named the insert port whether or not it exists would
 // send them looking for a fault that is already in the log above. [LAW:no-silent-failure]
-let inserts = insertions.map { _ in "answering inserts on \(flavor.inputMethodPortName)" } ?? "answering no inserts"
+let inserts = insertions.map { _ in "answering inserts on \(AppIdentity.inputMethodPortName)" } ?? "answering no inserts"
 logger.notice("""
-    \(flavor.description, privacy: .public) serving \(flavor.inputMethodConnectionName, privacy: .public), \
+    serving \(AppIdentity.inputMethodConnectionName, privacy: .public), \
     \(inserts, privacy: .public)
     """)
 NSApplication.shared.run()

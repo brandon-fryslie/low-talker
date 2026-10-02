@@ -1,5 +1,4 @@
 import Dispatch
-import Flavors
 import Foundation
 import LowTalkerCore
 import Testing
@@ -135,40 +134,12 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
     }
 }
 
-/// The facts that stop one installation's chord from starting the other's.
-///
-/// Driven from `Flavor.allCases` rather than from the two chords spelled out, so a third
-/// installation is covered by existing rather than by somebody remembering these.
-/// [LAW:behavior-not-structure]
-@Suite struct EveryInstallationsChordTests {
-    /// The chords in a person's words, spelled out in press order, because this is the order
-    /// that once shipped wrong: the menu bar printed `hold rightOption+rightCommand to
-    /// dictate`, and a reader following it literally completed the release chord first.
-    /// `Modifier.allCases` puts rightOption at 5 and rightCommand at 7, so the order came
-    /// straight from the enum's declaration order - a fact about how the cases were typed,
-    /// being read as a fact about the keyboard.
-    @Test func aChordIsNamedInWordsInPressOrder() {
-        #expect(Hotkey.named(Hotkey.defaultChord(for: .development)) == "Right Command+Right Option")
-        #expect(Hotkey.named(Hotkey.defaultChord(for: .release)) == "Right Option")
-    }
-
-    /// **The order printed is an order that works.** A chord completes on whichever
-    /// modifier comes down last, so pressing them in an order whose *prefix* is another
-    /// installation's whole chord starts a press there instead. `rightOption+rightCommand`
-    /// is exactly that: Right Option alone is the release chord, complete.
-    ///
-    /// This asserts the property rather than the string, so it stays true of chords nobody
-    /// has written yet. [LAW:verifiable-goals]
-    @Test func theOrderPrintedIsAnOrderThatWorks() {
-        let rivals = Hotkey.everyInstallationsChord
-        for chord in Hotkey.everyInstallationsChord {
-            let order = Hotkey.pressOrder(of: chord)
-            #expect(Set(order) == chord.modifiers, "\(chord): the order is not the chord")
-            for held in 1..<max(order.count, 1) {
-                let prefix = Set(order.prefix(held))
-                #expect(!rivals.contains(where: { $0.modifiers == prefix }),
-                        "\(chord): holding \(order.prefix(held).map(\.rawValue).joined(separator: "+")) completes another installation's chord first")
-            }
-        }
+/// A chord in the words a person presses it by.
+@Suite struct ChordNameTests {
+    /// One chord spells one name whichever way its keys were listed, in `Modifier.allCases`
+    /// order.
+    @Test func aChordIsNamedInWords() throws {
+        #expect(Hotkey.named(Hotkey.defaultChord) == "Right Option")
+        #expect(Hotkey.named(try #require(KeyChord(modifiers: [.rightCommand, .rightOption]))) == "Right Option+Right Command")
     }
 }

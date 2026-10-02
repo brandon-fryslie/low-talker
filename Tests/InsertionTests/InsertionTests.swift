@@ -1,5 +1,4 @@
 import Darwin
-import Flavors
 import Foundation
 @testable import Insertion
 import DarwinCalls
@@ -470,20 +469,5 @@ private let anEditor = "com.example.editor"
             try await inserter(name).insert("hello")
         }
         withExtendedLifetime(port) {}
-    }
-}
-
-/// Each flavor reaches its own input method and never the other's.
-@Suite struct FlavorPortTests {
-    @Test func theTwoInstallationsDoNotShareAPort() {
-        #expect(Set(Flavor.allCases.map(\.inputMethodPortName)).count == Flavor.allCases.count)
-    }
-
-    /// Beside the text input system's connection, never equal to it: that one is opened by
-    /// macOS and speaks its protocol, not ours.
-    @Test(arguments: Flavor.allCases)
-    func theInsertPortIsNotTheConnection(flavor: Flavor) {
-        #expect(flavor.inputMethodPortName != flavor.inputMethodConnectionName)
-        #expect(flavor.inputMethodPortName.hasPrefix(flavor.inputMethodBundleIdentifier))
     }
 }

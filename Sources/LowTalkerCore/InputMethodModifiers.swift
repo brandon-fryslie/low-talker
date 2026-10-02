@@ -1,6 +1,6 @@
 import CoreGraphics
 import Dispatch
-import Flavors
+import Identity
 import Insertion
 import os
 
@@ -19,11 +19,7 @@ import os
 /// session's modifier keys itself - a reading that needs no grant - and lets go of what is no
 /// longer down. [LAW:no-silent-failure]
 public struct InputMethodModifiers: ModifierFeed {
-    private let flavor: Flavor
-
-    public init(flavor: Flavor) {
-        self.flavor = flavor
-    }
+    public init() {}
 
     /// How often a held key is looked for in the session: how late, at most, a release the
     /// input method never told is heard.
@@ -83,18 +79,18 @@ public struct InputMethodModifiers: ModifierFeed {
         }
     }
 
-    /// Throws when the hotkey port cannot be hosted - most often because another process of
-    /// this installation already hears on it, such as `lowtalker hotkey` run beside the app.
+    /// Throws when the hotkey port cannot be hosted - most often because another process
+    /// already hears on it, such as `lowtalker hotkey` run beside the app.
     public func install(handling handle: @escaping @MainActor (KeyEvent) -> Void) throws -> Disposal {
         // What is held as listening begins is read, not assumed to be nothing, so a key
         // already down when this comes up is not heard going down when it next moves.
         let installed = Installed(told: ToldModifiers(held: Modifier.held(in: CGEventSource.flagsState(.combinedSessionState))))
-        let log = Logger(subsystem: flavor.bundleIdentifier, category: "hotkey")
+        let log = Logger(subsystem: AppIdentity.bundleIdentifier, category: "hotkey")
         // Checked and read off the main thread, where the keys and the menu are, and handed
         // to it in the order the input method sent them: the main queue is first in, first
         // out, which keeps a key's down ahead of its up. [LAW:no-ambient-temporal-coupling]
         let port = try ModifierPort(
-            flavor: flavor, queue: DispatchQueue(label: flavor.hotkeyPortName),
+            queue: DispatchQueue(label: AppIdentity.hotkeyPortName),
             told: { event in log.error("\(event.description, privacy: .public)") },
             heard: { state in DispatchQueue.main.async { MainActor.assumeIsolated { installed.heard(state) } } })
         installed.open = (port, handle)
@@ -150,24 +146,18 @@ extension KeyEvent {
     /// twice - VS Code hands the input method each change twice, measured on studious,
     /// 2026-09-27 - the same as one. A state that moved by several keys at once, because
     /// the input method was not handed the changes in between or read the state after the
-    /// next had already come, is every one of them, the keys that came up first.
-    ///
-    /// The keys that went down are pressed in `Hotkey.pressOrder`, which puts a key another
-    /// installation's chord contains last: two keys that went down together are then never
-    /// taken for a chord of the other installation's that only one of them completes.
-    /// [LAW:one-source-of-truth]
+    /// next had already come, is every key that came up and then one key down carrying the
+    /// whole state: keys that went down together were never seen held apart, so no chord
+    /// that some of them make is completed on the way to the one they make together.
     public static func moves(from before: Set<Modifier>, to after: Set<Modifier>, at time: HostTime) -> [KeyEvent] {
         let released = Modifier.allCases.filter { before.contains($0) && !after.contains($0) }
-        let pressed = KeyChord(modifiers: after.subtracting(before)).map(Hotkey.pressOrder(of:)) ?? []
+        let pressed = Modifier.allCases.filter { after.contains($0) && !before.contains($0) }
         var held = before
         let ups = released.map { modifier in
             held.remove(modifier)
             return KeyEvent(key: modifier, direction: .up, modifiers: held, time: time)
         }
-        let downs = pressed.map { modifier in
-            held.insert(modifier)
-            return KeyEvent(key: modifier, direction: .down, modifiers: held, time: time)
-        }
+        let downs = pressed.suffix(1).map { KeyEvent(key: $0, direction: .down, modifiers: after, time: time) }
         return ups + downs
     }
 }

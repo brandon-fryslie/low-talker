@@ -1,4 +1,3 @@
-import Flavors
 import Foundation
 import LowTalkerCore
 import Testing
@@ -26,25 +25,18 @@ import Testing
 
     static let somewhere = URL(filePath: "/tmp/low-talker-test/config.toml")
 
-    /// What a save does to the running config is the same on either installation, so
-    /// these all read as the release copy and say so once here. A reading is assembled
-    /// through `reading(_:at:)` and `nothing(at:)` rather than case by case, so no test
-    /// can pair a file with the other copy's flavor and pin an arrangement that cannot
-    /// arise. [LAW:one-source-of-truth]
-    static let flavor = Flavor.release
-
     static func config(_ toml: String) throws(ConfigError) -> Config {
-        try Config(toml: toml, flavor: flavor)
+        try Config(toml: toml)
     }
 
     /// A reading that found a file.
     static func reading(_ toml: String, at url: URL) throws -> Config.Loaded {
-        .file(try config(toml), at: url, flavor: flavor)
+        .file(try config(toml), at: url)
     }
 
     /// A reading that found none, so the defaults apply.
     static func nothing(at url: URL) -> Config.Loaded {
-        .noFile(at: url, flavor: flavor)
+        .noFile(at: url)
     }
 
     static func running(_ toml: String) throws -> Config.Reload {
@@ -94,7 +86,7 @@ import Testing
         let last = try Self.running(Self.onRightCommand)
         let gone = Self.nothing(at: Self.somewhere)
         #expect(last.next(reading: .success(gone)) == .adopted(gone))
-        #expect(last.next(reading: .success(gone))?.running.config == Config.default(for: Self.flavor))
+        #expect(last.next(reading: .success(gone))?.running.config == Config.default)
     }
 
     // MARK: - Against a real file
@@ -130,7 +122,7 @@ import Testing
     static func watching(_ file: URL, settlingOn settling: String) async throws
         -> (running: Config.Loaded, reloads: AsyncStream<Config.Reload>.AsyncIterator)
     {
-        var reloads = Config.reloads(after: try Config.load(file, for: Self.flavor)).makeAsyncIterator()
+        var reloads = Config.reloads(after: try Config.load(file)).makeAsyncIterator()
         try settling.write(to: file, atomically: true, encoding: .utf8)
         let settled = try #require(await reloads.next())
         #expect(settled == .adopted(try Self.reading(settling, at: file)))
@@ -194,7 +186,7 @@ import Testing
     func aConfigDirectoryThatDoesNotExistYetIsStillWatched() async throws {
         let (directory, file) = try Self.scratch(existing: false)
         defer { try? FileManager.default.removeItem(at: directory.deletingLastPathComponent()) }
-        let started = try Config.load(file, for: Self.flavor)
+        let started = try Config.load(file)
         #expect(started == Self.nothing(at: file))
 
         var reloads = Config.reloads(after: started).makeAsyncIterator()
@@ -251,6 +243,6 @@ import Testing
 
         let reload = try #require(await reloads.next())
         #expect(reload == .adopted(Self.nothing(at: file)))
-        #expect(reload.running.config == Config.default(for: Self.flavor))
+        #expect(reload.running.config == Config.default)
     }
 }

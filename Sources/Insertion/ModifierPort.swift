@@ -1,6 +1,6 @@
 import Darwin
 import DarwinCalls
-import Flavors
+import Identity
 import Foundation
 
 /// The modifier keys held at one moment, as the input method read them the moment it was
@@ -66,17 +66,17 @@ public final class ModifierPort {
         }
     }
 
-    /// Hosts this flavor's hotkey port, hearing this flavor's input method and nobody else.
+    /// Hosts the hotkey port, hearing the input method and nobody else.
     /// `heard` and `told` run on `queue`, one message at a time, in the order they were sent.
     public convenience init(
-        flavor: Flavor, queue: DispatchQueue,
+        queue: DispatchQueue,
         told: @escaping @Sendable (Event) -> Void, heard: @escaping @Sendable (HeldModifiers) -> Void
     ) throws(PortNotHosted) {
         let senders: PeerIdentity
         do throws(PeerIdentity.Unreadable) {
-            senders = try .signedLikeThisProcess(identifier: flavor.inputMethodBundleIdentifier)
+            senders = try .signedLikeThisProcess(identifier: AppIdentity.inputMethodBundleIdentifier)
         } catch { throw .noRequirement(error) }
-        try self.init(portName: flavor.hotkeyPortName, senders: senders, queue: queue, told: told, heard: heard)
+        try self.init(portName: AppIdentity.hotkeyPortName, senders: senders, queue: queue, told: told, heard: heard)
     }
 
     /// Under a name and a requirement someone else chose, which is how a test hosts one
@@ -146,8 +146,8 @@ public struct ModifierSender: Sendable {
         }
     }
 
-    public init(flavor: Flavor) {
-        self.init(portName: flavor.hotkeyPortName)
+    public init() {
+        self.init(portName: AppIdentity.hotkeyPortName)
     }
 
     init(portName: String) {

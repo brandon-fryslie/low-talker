@@ -1,4 +1,4 @@
-import Flavors
+import Identity
 import Foundation
 import LowTalkerCore
 import Network
@@ -45,19 +45,18 @@ public final class TranscriptionServer: Sendable {
         self.ended = ended
     }
 
-    /// Listens on `flavor`'s port where `binding` says until `stop`, answering every request
+    /// Listens on `AppIdentity.serverPort` where `binding` says until `stop`, answering every request
     /// `binding` admits with what `engine` says at that moment and handing one
     /// `ServedRequest` per connection to `record`. Throws `ListenRefused` when the address
-    /// cannot be had, which is most often another process of the same installation already
+    /// cannot be had, which is most often another LowTalker process already
     /// serving on it. Cancelled while the address is not yet had, as while no interface holds
     /// it, the listen lets it go and throws.
     public static func listen(
-        for flavor: Flavor,
         on binding: ServeBinding,
         engine: @escaping @Sendable () -> ServedEngine,
         record: @escaping @Sendable (ServedRequest) -> Void = ServedRequest.log
     ) async throws(ListenRefused) -> TranscriptionServer {
-        try await listen(at: ListenAddress(flavor: flavor, binding: binding), engine: engine, record: record)
+        try await listen(at: ListenAddress(binding: binding), engine: engine, record: record)
     }
 
     static func listen(
@@ -72,7 +71,7 @@ public final class TranscriptionServer: Sendable {
         } catch {
             throw ListenRefused(address: address, reason: error)
         }
-        ServedRequest.logger.notice("\(address.flavor, privacy: .public) serving on \(server.address, privacy: .public), \(address.binding, privacy: .public)")
+        ServedRequest.logger.notice("serving on \(server.address, privacy: .public), \(address.binding, privacy: .public)")
         return server
     }
 
@@ -124,7 +123,7 @@ public final class TranscriptionServer: Sendable {
             listener.cancel()
         }
         return TranscriptionServer(
-            address: ListenAddress(flavor: address.flavor, binding: address.binding, port: bound),
+            address: ListenAddress(binding: address.binding, port: bound),
             listener: listener,
             ended: Task { for try await _ in ended {} }
         )
@@ -142,20 +141,16 @@ public final class TranscriptionServer: Sendable {
     }
 }
 
-/// Where a server listens, and for which installation: the installation is part of the
-/// address because it is what a person reading a refusal needs to know. The port alone does
-/// not say whose it is.
+/// Where a server listens.
 struct ListenAddress: Sendable, CustomStringConvertible {
-    let flavor: Flavor
     /// [LAW:one-source-of-truth] The host is read off the binding, so the interface a server
     /// listens on and the token it requires there cannot be two facts that disagree.
     let binding: ServeBinding
     let port: NWEndpoint.Port
 
-    init(flavor: Flavor, binding: ServeBinding = .loopback, port: NWEndpoint.Port? = nil) {
-        self.flavor = flavor
+    init(binding: ServeBinding = .loopback, port: NWEndpoint.Port? = nil) {
         self.binding = binding
-        self.port = port ?? NWEndpoint.Port(rawValue: flavor.serverPort)!
+        self.port = port ?? NWEndpoint.Port(rawValue: AppIdentity.serverPort)!
     }
 
     var host: NWEndpoint.Host {
@@ -174,15 +169,15 @@ struct ListenAddress: Sendable, CustomStringConvertible {
     }
 }
 
-/// A server that could not start listening, naming the installation and the address.
-/// [LAW:no-silent-failure] A second process binding one flavor's port is the case this
-/// exists for: without the names, it reads as a network error and not as two copies.
+/// A server that could not start listening, naming the app and the address.
+/// [LAW:no-silent-failure] A second LowTalker process binding the port is the case this
+/// exists for: without the name, it reads as a network error and not as two servers.
 public struct ListenRefused: Error, CustomStringConvertible {
     let address: ListenAddress
     let reason: any Error
 
     public var description: String {
-        "\(address.flavor.displayName) (\(address.flavor)) cannot serve on \(address): \(reason)"
+        "\(AppIdentity.displayName) cannot serve on \(address): \(reason)"
     }
 }
 
