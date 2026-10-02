@@ -31,6 +31,22 @@ jobs:
     env:
       NOTARY_PROFILE: release
     steps:
+      # [LAW:no-silent-failure] An unset secret reaches a step as an empty string, and the
+      # import below then fails on its parameters without saying which. Named here, first.
+      # The secrets checked are the SECRET_ variables this step is given.
+      - name: Check the release secrets are set
+        env:
+          SECRET_DEVELOPER_ID_P12: ${{ secrets.DEVELOPER_ID_P12 }}
+          SECRET_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          SECRET_NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          SECRET_NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          missing=()
+          for variable in "${!SECRET_@}"; do
+            [ -n "${!variable}" ] || missing+=("${variable#SECRET_}")
+          done
+          [ "${#missing[@]}" -eq 0 ] || { echo "::error::repository secrets not set: ${missing[*]}; scripts/release-secrets sets them" >&2; exit 1; }
+
       # SHA-pinned, as in ci.yml: third-party code in a job that holds the signing keys.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -80,17 +96,15 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k release "$RELEASE_KEYCHAIN" >/dev/null
 
       # store-credentials asks the notary service before saving, so bad credentials stop here.
+      # The team is the one the certificates name.
       - name: Store the notary credentials
         env:
-          NOTARY_API_KEY: ${{ secrets.NOTARY_API_KEY }}
-          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
-          NOTARY_API_ISSUER: ${{ secrets.NOTARY_API_ISSUER }}
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
         run: |
           set -euo pipefail
-          key="$RUNNER_TEMP/notary.p8"
-          printf '%s\n' "$NOTARY_API_KEY" > "$key"
-          xcrun notarytool store-credentials "$NOTARY_PROFILE" --key "$key" --key-id "$NOTARY_API_KEY_ID" --issuer "$NOTARY_API_ISSUER" --keychain "$RELEASE_KEYCHAIN"
-          rm "$key"
+          source scripts/developer-id
+          xcrun notarytool store-credentials "$NOTARY_PROFILE" --apple-id "$NOTARY_APPLE_ID" --team-id "$developer_team" --password "$NOTARY_PASSWORD" --keychain "$RELEASE_KEYCHAIN"
 
       # [LAW:one-source-of-truth] The model the release carries is the one the CLI built from
       # this tag names as its default, at the Hugging Face commits `main` names for it now.
