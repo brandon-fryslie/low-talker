@@ -1,4 +1,3 @@
-import Flavors
 import Foundation
 import LowTalkerCore
 import Testing
@@ -6,14 +5,8 @@ import Testing
 /// The config as the app meets it: what a file says, what an absent file says, and what
 /// a file that was written but cannot be understood says instead of running anyway.
 @Suite struct ConfigTests {
-    /// What a file *says* does not depend on which installation read it - only the
-    /// defaults behind a key it leaves out do. So these read as the release copy, named
-    /// once here instead of at all thirty-odd calls, and the handful of tests that are
-    /// actually about the defaults say which installation they mean.
-    static let flavor = Flavor.release
-
     static func config(_ toml: String) throws(ConfigError) -> Config {
-        try Config(toml: toml, flavor: flavor)
+        try Config(toml: toml)
     }
 
     /// Every key in the epic's list at once: the engine choice, chords to modes, a
@@ -61,7 +54,7 @@ import Testing
 
     /// The whole point of defaults: the app runs with no file written at all.
     @Test func anEmptyFileIsTheDefaults() throws {
-        #expect(try Self.config("") == Config.default(for: Self.flavor))
+        #expect(try Self.config("") == Config.default)
     }
 
     /// A key the file leaves out is the default for that key alone; naming a model does
@@ -69,7 +62,7 @@ import Testing
     @Test func aKeyLeftOutKeepsItsDefault() throws {
         let config = try Self.config(#"model = "base.en""#)
         #expect(config.model == "base.en")
-        #expect(config.modes == Config.default(for: Self.flavor).modes)
+        #expect(config.modes == Config.default.modes)
     }
 
     /// The epic's rule, pinned where the only writer of it is: a microphone held while
@@ -77,7 +70,7 @@ import Testing
     /// about it - which is every file anyone has written so far, and the absence of a file
     /// too - leaves the device closed.
     @Test func aFileThatAsksForNothingLeavesTheMicrophoneShutAtRest() throws {
-        #expect(Config.default(for: Self.flavor).microphone == .shut)
+        #expect(Config.default.microphone == .shut)
         #expect(try Self.config("").microphone == .shut)
         #expect(try Self.config(#"model = "base.en""#).microphone == .shut)
     }
@@ -113,16 +106,12 @@ import Testing
 
     /// [LAW:one-source-of-truth] The defaults are the values their own owners name, so
     /// this fails the moment a second spelling of one appears.
-    ///
-    /// Over every installation rather than one, because the defaults are per-installation
-    /// now: a chord wired to `.release` behind any of these would pass a release-only
-    /// check and still bring the two copies up listening for one chord.
-    @Test(arguments: Flavor.allCases) func theDefaultsAreTheValuesTheirOwnersName(_ flavor: Flavor) {
-        #expect(Config.default(for: flavor).model == ModelName.default)
-        #expect(Config.default(for: flavor).modes == [Mode.dictation(for: flavor)])
-        #expect(Mode.dictation(for: flavor).chord == Hotkey.defaultChord(for: flavor))
-        #expect(Mode.dictation(for: flavor).vocabulary == .empty)
-        #expect(Mode.dictation(for: flavor).router.routes == [Route.dictation])
+    @Test func theDefaultsAreTheValuesTheirOwnersName() {
+        #expect(Config.default.model == ModelName.default)
+        #expect(Config.default.modes == [Mode.dictation])
+        #expect(Mode.dictation.chord == Hotkey.defaultChord)
+        #expect(Mode.dictation.vocabulary == .empty)
+        #expect(Mode.dictation.router.routes == [Route.dictation])
     }
 
     /// The chord that started listening picks the mode, and the hotkey is told exactly the
@@ -137,14 +126,14 @@ import Testing
         #expect(config.chords.contains(dictation))
     }
 
-    /// [LAW:one-source-of-truth] A mode with no chord listens for the installation's own,
-    /// the chord `Hotkey.defaultChord` names.
-    @Test(arguments: Flavor.allCases) func aModeWithNoChordHearsTheInstallationsChord(_ flavor: Flavor) throws {
+    /// [LAW:one-source-of-truth] A mode with no chord listens for the default one, the
+    /// chord `Hotkey.defaultChord` names.
+    @Test func aModeWithNoChordHearsTheDefaultChord() throws {
         let config = try Config(toml: """
             [[modes]]
             name = "dictation"
-            """, flavor: flavor)
-        #expect(try #require(config.modes.first).chord == Hotkey.defaultChord(for: flavor))
+            """)
+        #expect(try #require(config.modes.first).chord == Hotkey.defaultChord)
     }
 
     /// The input method is told only of the modifier keys, so a chord with another key in
@@ -374,7 +363,7 @@ import Testing
         }
     }
 
-    /// Two modes that each leave the chord out both listen for the installation's chord,
+    /// Two modes that each leave the chord out both listen for the default chord,
     /// which is one chord for two modes.
     @Test func twoModesLeavingTheChordOutAreRefused() {
         #expect(throws: ConfigError.twoModesOnOneChord("second")) {
@@ -468,8 +457,8 @@ import Testing
     /// reader is never shown the defaults as though somebody had written them.
     @Test func noFileIsTheDefaults() throws {
         let missing = URL(filePath: NSTemporaryDirectory()).appending(path: "low-talker-\(UUID().uuidString)/config.toml")
-        #expect(try Config.load(missing, for: Self.flavor) == .noFile(at: missing, flavor: Self.flavor))
-        #expect(try Config.load(missing, for: Self.flavor).config == Config.default(for: Self.flavor))
+        #expect(try Config.load(missing) == .noFile(at: missing))
+        #expect(try Config.load(missing).config == Config.default)
     }
 
     /// A file that says exactly what the defaults say is still a file somebody wrote,
@@ -479,14 +468,14 @@ import Testing
         let url = URL(filePath: NSTemporaryDirectory()).appending(path: "low-talker-\(UUID().uuidString).toml")
         try "".write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
-        #expect(try Config.load(url, for: Self.flavor) == .file(Config.default(for: Self.flavor), at: url, flavor: Self.flavor))
+        #expect(try Config.load(url) == .file(Config.default, at: url))
     }
 
     @Test func aFileOnDiskIsWhatTheAppRunsOn() throws {
         let url = URL(filePath: NSTemporaryDirectory()).appending(path: "low-talker-\(UUID().uuidString).toml")
         try Self.full.write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
-        #expect(try Config.load(url, for: Self.flavor) == .file(Self.config(Self.full), at: url, flavor: Self.flavor))
+        #expect(try Config.load(url) == .file(Self.config(Self.full), at: url))
     }
 
     /// [LAW:no-silent-failure] A path that exists but hands back no config text is an
@@ -496,7 +485,7 @@ import Testing
         let directory = URL(filePath: NSTemporaryDirectory()).appending(path: "low-talker-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        #expect(throws: ConfigError.self) { try Config.load(directory, for: Self.flavor) }
+        #expect(throws: ConfigError.self) { try Config.load(directory) }
     }
 
     /// A file saved in some other encoding is a file whose owner needs to be told which
@@ -506,7 +495,7 @@ import Testing
         let url = URL(filePath: NSTemporaryDirectory()).appending(path: "low-talker-\(UUID().uuidString).toml")
         try Data([0xFF, 0xFE, 0xFD]).write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
-        let error = #expect(throws: ConfigError.self) { try Config.load(url, for: Self.flavor) }
+        let error = #expect(throws: ConfigError.self) { try Config.load(url) }
         guard case .unreadable(let path, _)? = error else {
             Issue.record("expected .unreadable, got \(String(describing: error))")
             return

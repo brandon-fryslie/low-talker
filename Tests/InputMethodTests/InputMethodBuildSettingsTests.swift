@@ -1,20 +1,16 @@
-import Flavors
+import Identity
 import Foundation
 import Testing
 
 private let repository = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
-/// The settings each flavor's input method is built under carry that flavor's own names.
+/// The settings the input method is built under carry `AppIdentity`'s names.
 ///
-/// project.yml writes those names as `${...}` attributes on the target and spends them in a
-/// template, and the two halves are right separately: a template reading
-/// `${inputMethodBundleIdentifer}` - one letter short of any attribute the target sets -
-/// leaves that literal standing as the bundle's identifier, while every check of what the
-/// target DECLARES still passes. What ships is then a bundle under a name with no
-/// `…inputmethod.dictation` in it, which registers nothing while `TISRegisterInputSource`
-/// answers noErr. [LAW:no-silent-failure] So what is read here is xcodegen's substitution,
-/// the same reason `InputMethodPlistTests` reads the plist xcodegen writes.
+/// A bundle under a name with no `…inputmethod.dictation` in it registers nothing while
+/// `TISRegisterInputSource` answers noErr. [LAW:no-silent-failure] What is read here is the
+/// project xcodegen generates, the same reason `InputMethodPlistTests` reads the plist
+/// xcodegen writes.
 ///
 /// The identifier is read here and not off the Info.plist beside it, which carries the
 /// literal `$(PRODUCT_BUNDLE_IDENTIFIER)`: `GENERATE_INFOPLIST_FILE` has Xcode synthesise
@@ -23,8 +19,7 @@ private let repository = URL(fileURLWithPath: #filePath)
 @Suite struct InputMethodBuildSettingsTests {
     /// Every build configuration that builds an input method, as the settings it resolves to.
     ///
-    /// Recognised by a setting only an input method sets, never by the target's name, because
-    /// a target copied from the other flavor's is renamed before anything else is.
+    /// Recognised by a setting only an input method sets, never by the target's name.
     /// [LAW:behavior-not-structure]
     private static func inputMethodConfigurations() throws -> [[String: String]] {
         let url = repository.appending(path: "LowTalker.xcodeproj/project.pbxproj")
@@ -47,17 +42,16 @@ private let repository = URL(fileURLWithPath: #filePath)
     /// The names macOS files the bundle under, as the project resolves them: the identifier
     /// LaunchServices registers, and the name the post-build script writes into the one
     /// localized string the Input Sources list reads.
-    @Test(arguments: Flavor.allCases)
-    func theBundleIsBuiltUnderItsFlavorsNames(flavor: Flavor) throws {
+    @Test func theBundleIsBuiltUnderItsNames() throws {
         let configurations = try Self.inputMethodConfigurations()
-        let mine = configurations.filter { $0["INPUT_SOURCE_ID"] == flavor.inputSourceIdentifier }
+        let mine = configurations.filter { $0["INPUT_SOURCE_ID"] == AppIdentity.inputSourceIdentifier }
         // Every configuration of the target, not the first, so a second configuration added
         // to project.yml is held to the names the same way the one it has today is.
         try #require(!mine.isEmpty,
-                     "the project builds no input method under \(flavor.inputSourceIdentifier); it builds \(configurations.compactMap { $0["INPUT_SOURCE_ID"] })")
+                     "the project builds no input method under \(AppIdentity.inputSourceIdentifier); it builds \(configurations.compactMap { $0["INPUT_SOURCE_ID"] })")
         for settings in mine {
-            #expect(settings["PRODUCT_BUNDLE_IDENTIFIER"] == flavor.inputMethodBundleIdentifier)
-            #expect(settings["INPUT_METHOD_NAME"] == flavor.displayName)
+            #expect(settings["PRODUCT_BUNDLE_IDENTIFIER"] == AppIdentity.inputMethodBundleIdentifier)
+            #expect(settings["INPUT_METHOD_NAME"] == AppIdentity.displayName)
         }
     }
 }

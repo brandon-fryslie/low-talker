@@ -1,4 +1,4 @@
-import Flavors
+import Identity
 import Foundation
 import Testing
 
@@ -25,8 +25,9 @@ private let repository = URL(fileURLWithPath: #filePath)
 
     /// Each plist defers to the settings. A literal here is a second version, and the one
     /// xcodegen writes by default - 1.0 - is not the one any bundle ships. Named from
-    /// `Flavor`, not by listing App/Generated, which keeps whatever an older xcodegen run wrote.
-    @Test(arguments: Flavor.allCases.flatMap { ["\($0.displayName)-Info.plist", "\($0.displayName)-InputMethod-Info.plist"] })
+    /// `AppIdentity`, not by listing App/Generated, which keeps whatever an older xcodegen
+    /// run wrote.
+    @Test(arguments: ["\(AppIdentity.displayName)-Info.plist", "\(AppIdentity.displayName)-InputMethod-Info.plist"])
     func everyGeneratedPlistTakesItsVersionFromTheSettings(name: String) throws {
         let data = try Self.generated("App/Generated/\(name)")
         let plist = try #require(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])

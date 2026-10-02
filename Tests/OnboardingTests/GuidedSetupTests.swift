@@ -1,4 +1,3 @@
-import Flavors
 import Foundation
 import Grants
 import Testing
@@ -7,34 +6,16 @@ import Testing
 /// The guided setup as a person meets it: one requirement at a time, each explained before
 /// macOS is asked, and a walk that survives a "no". [LAW:behavior-not-structure]
 @Suite struct GuidedSetupTests {
-    static let flavor = Flavor.development
-
     // MARK: - the words before the dialog
 
     /// Every step says what it is for and what happens if you skip it, before anything is
     /// asked of macOS. A step missing either is the unexplained prompt this setup exists to
     /// replace.
-    @Test(arguments: Requirement.Row.allCases, Flavor.allCases)
-    func everyStepExplainsWhyAndWhatSkippingCosts(row: Requirement.Row, flavor: Flavor) {
-        let explanation = row.explanation(for: flavor)
+    @Test(arguments: Requirement.Row.allCases)
+    func everyStepExplainsWhyAndWhatSkippingCosts(row: Requirement.Row) {
+        let explanation = row.explanation
         for (part, text) in [("why", explanation.why), ("if skipped", explanation.ifSkipped)] {
             #expect(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "\(row.rawValue) has no \(part)")
-        }
-    }
-
-    /// A step that names the app names the installation it is shown in, in every part of
-    /// its explanation. "LowTalker Dev" contains "LowTalker", so containment alone would
-    /// pass a part hardcoding the release name; a part that names the app is required to
-    /// differ between the two instead.
-    @Test func aStepNamingTheAppNamesTheInstallationItIsShownIn() {
-        let parts: [(name: String, of: (Explanation) -> String)] = [("why", \.why), ("if skipped", \.ifSkipped)]
-        for row in Requirement.Row.allCases {
-            for part in parts {
-                let texts = Flavor.allCases.map { part.of(row.explanation(for: $0)) }
-                if texts.contains(where: { $0.contains(Flavor.release.displayName) }) {
-                    #expect(Set(texts).count == Flavor.allCases.count, "\(row.rawValue)'s \(part.name) reads the same for every installation")
-                }
-            }
         }
     }
 
@@ -68,7 +49,7 @@ import Testing
     /// covered by the generic once-asked line, so a note on them would be a second, competing voice.
     @Test func onlyTheInputMethodCarriesASwitchOnNote() {
         for row in Requirement.Row.allCases {
-            #expect((row.switchOnNote(for: Self.flavor) != nil) == (row == .inputMethod), "\(row.rawValue)")
+            #expect((row.switchOnNote != nil) == (row == .inputMethod), "\(row.rawValue)")
         }
     }
 
@@ -78,19 +59,10 @@ import Testing
     /// neither is the silent failure; naming the login as unconditional would be the false
     /// claim the previous wording made.
     @Test func theInputMethodNoteNamesTheReturningDialogAndTheLogin() throws {
-        let note = try #require(Requirement.Row.inputMethod.switchOnNote(for: Self.flavor))
+        let note = try #require(Requirement.Row.inputMethod.switchOnNote)
         #expect(note.contains("Allow"), "the note never names the dialog to allow it")
         #expect(note.contains("again"), "the note never says the dialog returns after a No")
         #expect(note.contains("log out") && note.contains("back in"), "the note never names the login")
-    }
-
-    /// The note names the installation it is shown in, so the development copy does not tell
-    /// a person to reopen the release. "LowTalker Dev" contains "LowTalker", so the two
-    /// notes are required to differ rather than merely to contain a name.
-    @Test func theInputMethodNoteNamesTheInstallation() {
-        let notes = Flavor.allCases.compactMap { Requirement.Row.inputMethod.switchOnNote(for: $0) }
-        #expect(notes.count == Flavor.allCases.count)
-        #expect(Set(notes).count == Flavor.allCases.count, "the note reads the same for every installation")
     }
 
     /// A note that tells the person to press the button again is claiming the same fact
@@ -98,15 +70,15 @@ import Testing
     /// while the note kept saying "again", the page would hide the button the note still
     /// tells them to press. Ties the prose to the boolean, which nothing else does.
     @Test func aNotePromisingAnotherPressIsOnlyOnAReAskableRow() {
-        for row in Requirement.Row.allCases where row.switchOnNote(for: Self.flavor)?.contains("again") == true {
+        for row in Requirement.Row.allCases where row.switchOnNote?.contains("again") == true {
             #expect(row.reAskable, "\(row.rawValue)'s note says to press again but the row is not re-askable")
         }
     }
 
     // MARK: - the walk
 
-    static let unmetMicrophone = Requirement.microphone(.notDetermined, flavor: flavor)
-    static let unmetInputMethod = Requirement.inputMethod(switchedOn: false, flavor: flavor)
+    static let unmetMicrophone = Requirement.microphone(.notDetermined)
+    static let unmetInputMethod = Requirement.inputMethod(switchedOn: false)
     static let readiness = Readiness([unmetMicrophone, unmetInputMethod])
 
     /// One step at a time, in the list's order, and never a step that is already met.
@@ -129,7 +101,7 @@ import Testing
     /// A grant given in System Settings clears its step at the next reading: the walk keeps
     /// no answer of its own, so a fresh list with the grant met moves it on.
     @Test func aGrantMadeElsewhereClearsItsStepAtTheNextReading() {
-        let granted = Readiness([.microphone(nil, flavor: Self.flavor), Self.unmetInputMethod])
+        let granted = Readiness([.microphone(nil), Self.unmetInputMethod])
         #expect(GuidedSetup().current(in: granted)?.row == .inputMethod)
     }
 
@@ -139,9 +111,9 @@ import Testing
     /// own step; allowed asks for nothing.
     @Test func everyMicrophoneAnswerReadsAsItsOwnWord() {
         let answers: [MicrophoneAuthorization.Withheld?] = [nil] + MicrophoneAuthorization.Withheld.allCases
-        let rows = answers.map { Requirement.microphone($0, flavor: Self.flavor) }
+        let rows = answers.map { Requirement.microphone($0) }
         #expect(Set(rows.map(\.reads)).count == answers.count)
         #expect(rows.map(\.met) == [true, false, false, false])
-        #expect(Requirement.microphone(.denied, flavor: Self.flavor).step?.contains("Privacy & Security > Microphone") == true)
+        #expect(Requirement.microphone(.denied).step?.contains("Privacy & Security > Microphone") == true)
     }
 }

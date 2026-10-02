@@ -1,6 +1,5 @@
 import Foundation
 import LowTalkerCore
-import Flavors
 import Network
 @testable import Serve
 import Synchronization
@@ -83,7 +82,7 @@ struct Running {
 
     static func start(_ engine: ServedEngine, on binding: ServeBinding = .loopback, limits: ServedLimits = .standard) async throws -> Running {
         let (events, sink) = AsyncStream<ServedRequest>.makeStream()
-        let server = try await TranscriptionServer.listen(at: ListenAddress(flavor: .development, binding: binding, port: .any), limits: limits, engine: { engine }, record: { sink.yield($0) })
+        let server = try await TranscriptionServer.listen(at: ListenAddress(binding: binding, port: .any), limits: limits, engine: { engine }, record: { sink.yield($0) })
         return Running(server: server, events: events)
     }
 

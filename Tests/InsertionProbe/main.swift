@@ -1,11 +1,10 @@
-import Flavors
 import Insertion
 import Foundation
 
 /// Sends one insert from a process that is not the suite, and prints what came of it.
 ///
 ///     insertion-probe <port name> <answerer, as PeerIdentity JSON> <text>
-///     insertion-probe --flavor <flavor> <text>
+///     insertion-probe <text>
 ///
 /// The first is the suite's: a port it hosts, and the answerer it plays. The second builds
 /// the inserter exactly as the app does, for a probe signed as the app to send to the real
@@ -17,16 +16,16 @@ import Foundation
 let arguments = Array(CommandLine.arguments.dropFirst())
 let inserter: InputMethodInserter
 let text: String
-if arguments.count == 3, arguments[0] == "--flavor", let flavor = Flavor(word: arguments[1]) {
-    inserter = InputMethodInserter(flavor: flavor)
-    text = arguments[2]
+if arguments.count == 1 {
+    inserter = InputMethodInserter()
+    text = arguments[0]
 } else if arguments.count == 3, let answerer = try? JSONDecoder().decode(PeerIdentity.self, from: Data(arguments[1].utf8)) {
     inserter = InputMethodInserter(portName: arguments[0], timeout: .seconds(20), answerer: .success(answerer))
     text = arguments[2]
 } else {
     FileHandle.standardError.write(Data("""
         usage: insertion-probe <port name> <answerer, as PeerIdentity JSON> <text>
-               insertion-probe --flavor <flavor> <text>
+               insertion-probe <text>
 
         """.utf8))
     exit(2)

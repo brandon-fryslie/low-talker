@@ -1,4 +1,3 @@
-import Flavors
 import Foundation
 import LowTalkerCore
 import Network
@@ -26,7 +25,7 @@ import Testing
     /// A switch over this test's defaults, listening on loopback.
     func aSwitch() -> ServerSwitch {
         ServerSwitch(defaults: defaults) { [held] binding, engine throws(ListenRefused) in
-            let server = try await TranscriptionServer.listen(at: ListenAddress(flavor: .development, binding: binding, port: held.port.withLock { $0 }), engine: engine, record: { _ in })
+            let server = try await TranscriptionServer.listen(at: ListenAddress(binding: binding, port: held.port.withLock { $0 }), engine: engine, record: { _ in })
             held.port.withLock { $0 = server.port }
             return server
         }
@@ -67,7 +66,7 @@ import Testing
         await server.running?.value
         #expect("\(server.state)" == "off")
         #expect(!aSwitch().chosen)
-        let again = try await TranscriptionServer.listen(at: ListenAddress(flavor: .development, port: port), engine: { .ready(Stub()) }, record: { _ in })
+        let again = try await TranscriptionServer.listen(at: ListenAddress(port: port), engine: { .ready(Stub()) }, record: { _ in })
         again.stop()
     }
 
@@ -100,7 +99,7 @@ import Testing
         server.choose(false, at: .success(.loopback))
         await server.running?.value
         #expect("\(server.state)" == "off")
-        let again = try await TranscriptionServer.listen(at: ListenAddress(flavor: .development, port: held.port.withLock { $0 }), engine: { .ready(Stub()) }, record: { _ in })
+        let again = try await TranscriptionServer.listen(at: ListenAddress(port: held.port.withLock { $0 }), engine: { .ready(Stub()) }, record: { _ in })
         again.stop()
     }
 
@@ -124,13 +123,13 @@ import Testing
     /// An address another process holds, and a config that names none, each leave the switch
     /// on and the server stopped, saying why.
     @Test func whatKeepsItFromListeningIsSaid() async throws {
-        let holder = try await TranscriptionServer.listen(at: ListenAddress(flavor: .development, port: .any), engine: { .ready(Stub()) }, record: { _ in })
+        let holder = try await TranscriptionServer.listen(at: ListenAddress(port: .any), engine: { .ready(Stub()) }, record: { _ in })
         defer { holder.stop() }
         held.port.withLock { $0 = holder.port }
         let taken = aSwitch()
         taken.choose(true, at: .success(.loopback))
         await taken.running?.value
-        #expect("\(taken.state)".hasPrefix("stopped — LowTalker Dev (development) cannot serve on 127.0.0.1:\(holder.port): "))
+        #expect("\(taken.state)".hasPrefix("stopped — LowTalker cannot serve on 127.0.0.1:\(holder.port): "))
         #expect(taken.chosen)
 
         let unread = aSwitch()

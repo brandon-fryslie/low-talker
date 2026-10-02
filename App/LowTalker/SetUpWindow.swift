@@ -1,5 +1,5 @@
 import AppKit
-import Flavors
+import Identity
 import Onboarding
 
 /// The guided setup's window: one requirement at a time, explained in plain words before
@@ -17,7 +17,6 @@ import Onboarding
 /// back to the front, and Check Again - hand the reading they drew to `settle`, the app's.
 @MainActor
 final class SetUpWindow: NSObject, NSWindowDelegate {
-    private let flavor: Flavor
     /// The list as it stands now.
     private let read: () -> Readiness
     /// Asks macOS for one row's grant, and answers with what went wrong when something did.
@@ -39,7 +38,7 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: Self.width, height: 420),
             styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = GuidedSetup.title(for: flavor).replacingOccurrences(of: "…", with: "")
+        window.title = GuidedSetup.title.replacingOccurrences(of: "…", with: "")
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.contentView = page
@@ -58,10 +57,9 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
     private static let width: CGFloat = 520
 
     init(
-        flavor: Flavor, read: @escaping () -> Readiness, ask: @escaping (Requirement.Row) async -> String?,
+        read: @escaping () -> Readiness, ask: @escaping (Requirement.Row) async -> String?,
         settle: @escaping (Readiness) -> Void
     ) {
-        self.flavor = flavor
         self.read = read
         self.ask = ask
         self.settle = settle
@@ -117,7 +115,7 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
     }
 
     private func drawStep(_ requirement: Requirement, left: Int) {
-        let explanation = requirement.row.explanation(for: flavor)
+        let explanation = requirement.row.explanation
         let row = requirement.row
         // Asked once in this walk and still unmet: macOS will not show most of these
         // dialogs a second time, so the page offers System Settings where the button was.
@@ -132,13 +130,13 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
         add(label("If you skip it: \(explanation.ifSkipped)", size: 12, color: .secondaryLabelColor))
         // The step's own words, for what the explanation cannot know - a grant switched off
         // in System Settings - except words sending the reader to this page.
-        if let step = requirement.step, !step.contains(GuidedSetup.title(for: flavor)) {
+        if let step = requirement.step, !step.contains(GuidedSetup.title) {
             add(label(requirement.stepLines.joined(separator: " "), size: 12, color: .secondaryLabelColor))
         }
         // Names, on the step itself, what a person cannot see coming: that this row's dialog
         // returns after a No, and that a source installed this session waits for the next
         // login before it can switch on. Only the input method has one. [LAW:no-silent-failure]
-        if let note = row.switchOnNote(for: flavor) {
+        if let note = row.switchOnNote {
             add(label(note, size: 12, color: .secondaryLabelColor))
         }
         if askedAlready {
@@ -163,7 +161,7 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
 
     private func drawSummary(_ readiness: Readiness) {
         let skipped = readiness.unmet
-        add(label(skipped.isEmpty ? "\(flavor.displayName) is set up" : "Set aside for now", size: 20, weight: .semibold))
+        add(label(skipped.isEmpty ? "\(AppIdentity.displayName) is set up" : "Set aside for now", size: 20, weight: .semibold))
         for requirement in readiness.requirements where requirement.met {
             add(label("✓ \(requirement.name): \(requirement.reads)", size: 13))
         }
@@ -172,7 +170,7 @@ final class SetUpWindow: NSObject, NSWindowDelegate {
         for requirement in skipped {
             let row = requirement.row
             add(label("\(requirement.name): \(requirement.reads)", size: 13, weight: .semibold))
-            add(label(row.explanation(for: flavor).ifSkipped, size: 12, color: .secondaryLabelColor))
+            add(label(row.explanation.ifSkipped, size: 12, color: .secondaryLabelColor))
             add(buttonRow([button("Set Up \(requirement.name)…") { [unowned self] in walk.revisit(row); draw(shown) }]))
         }
         let done = button("Done") { [unowned self] in window.close() }

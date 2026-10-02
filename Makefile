@@ -1,7 +1,7 @@
 # `make app` is the one command that turns project.yml into a launchable app bundle.
 SHELL := /bin/bash
 DERIVED_DATA := DerivedData
-# The one configuration project.yml defines: every bundle, the development copy included,
+# The one configuration project.yml defines: every bundle, the development build included,
 # is built as a release. Passed to xcodebuild and spelled into the products path below.
 CONFIGURATION := Release
 PRODUCTS := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)
@@ -27,7 +27,7 @@ ACCEPTS_CONNECTIONS := $(or $(and $(filter $(VARIANT),$(VARIANTS)),$(ACCEPTS_CON
 
 # A store holding the model, for the bundle to carry.
 #
-# Every bundle carries its model, the development copy included. It is not an optimisation:
+# Every bundle carries its model, the development build included. It is not an optimisation:
 # `AppDelegate.loadEngine` has no other way to reach one, so a bundle built without a store
 # here launches and says it carries no model rather than reaching the network. A build-time
 # copy is the only door, which is what keeps a running app off the network entirely.
@@ -43,33 +43,21 @@ BUNDLED_MODEL_STORE := $(CARRIED_MODEL_STORE)
 # name, and `make app` only ever copies out of what it left behind. [LAW:one-way-deps]
 MODEL_SOURCE := $(HOME)/Library/Application Support/low-talker/hub
 
-# The two installations, as the scheme that builds each and the bundle it leaves behind.
+# The scheme that builds the app, and the bundles it leaves behind.
 # [LAW:one-source-of-truth] project.yml names these; they are written once here and every
 # target below reads them, so a renamed product breaks in one place.
 #
-# `Flavor.development` is what `make app` and `make run` build, and it is the default for
-# the same reason `--flavor` defaults to it: this tree is the development copy. The
-# installed copy is the one that runs all day, and rebuilding it is a thing done on
-# purpose, by name.
-#
-# Each app is built beside its input method, which the scheme builds with it and the package
+# The app is built beside its input method, which the scheme builds with it and the package
 # installs apart from it.
-DEV_SCHEME := LowTalkerDev
-DEV_APP := $(PRODUCTS)/LowTalker Dev.app
-DEV_INPUT_METHOD := $(PRODUCTS)/LowTalker Dev Input Method.app
-RELEASE_SCHEME := LowTalker
-RELEASE_APP := $(PRODUCTS)/LowTalker.app
-RELEASE_INPUT_METHOD := $(PRODUCTS)/LowTalker Input Method.app
+SCHEME := LowTalker
+APP := $(PRODUCTS)/LowTalker.app
+INPUT_METHOD := $(PRODUCTS)/LowTalker Input Method.app
 XCODE_RESOLVED_DIR := LowTalker.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
 
-.PHONY: app release package release-package install run variants test check-docs cli sbom check-sbom check-licenses clean signing-identity
+.PHONY: app package install run variants test check-docs cli sbom check-sbom check-licenses clean signing-identity
 
 # Regeneration is unconditional: xcodegen is idempotent and sub-second, and a
 # timestamp rule cannot see removed sources or in-place rewrites of the project.
-#
-# One recipe for both installations, taking the scheme: they are one app built twice, and
-# a second copy of these two commands is a second thing to keep in step.
-# [LAW:one-type-per-behavior]
 #
 # [LAW:one-source-of-truth] Package.resolved decides the app's package versions, as it does
 # `swift build`'s and the SBOM's. The project xcodegen writes has no resolved file, so
@@ -79,7 +67,7 @@ define build_app
 	xcodegen generate
 	mkdir -p $(XCODE_RESOLVED_DIR)
 	cp Package.resolved $(XCODE_RESOLVED_DIR)/Package.resolved
-	xcodebuild -project LowTalker.xcodeproj -scheme $(1) -configuration $(CONFIGURATION) \
+	xcodebuild -project LowTalker.xcodeproj -scheme $(SCHEME) -configuration $(CONFIGURATION) \
 		-onlyUsePackageVersionsFromResolvedFile \
 		-derivedDataPath $(DERIVED_DATA) BUNDLED_MODEL_STORE="$(BUNDLED_MODEL_STORE)" \
 		ACCEPTS_CONNECTIONS=$(ACCEPTS_CONNECTIONS) \
@@ -91,7 +79,7 @@ endef
 # own metadata, and a copy out of it takes only the files the manifests list, so the bundle
 # carries exactly what an install certifies. [LAW:one-source-of-truth]
 #
-# Both installations build on the store they carry, so the store is their prerequisite by
+# The build is on the store it carries, so the store is its prerequisite by
 # name: whichever store BUNDLED_MODEL_STORE names is the one filled before the build, and
 # `BUNDLED_MODEL_STORE=` names none, which is how CI builds a bundle with no model.
 # scripts/sign-release fills this same rule from the store it fetched, by passing
@@ -111,36 +99,27 @@ $(CARRIED_MODEL_STORE):
 	"$(CLI)" model download --models-dir "$@" --from "$(MODEL_SOURCE)"
 
 app: $(BUNDLED_MODEL_STORE)
-	$(call build_app,$(DEV_SCHEME))
-	@echo "$(DEV_APP)"
+	$(build_app)
+	@echo "$(APP)"
 
-release: $(BUNDLED_MODEL_STORE)
-	$(call build_app,$(RELEASE_SCHEME))
-	@echo "$(RELEASE_APP)"
-
-# The installer package for each installation: its app into /Applications and its input
-# method into /Library/Input Methods. A package is the only way either is installed, the
-# development copy included, since the text input system lists an input method only from
-# the standard folders and the app puts nothing there itself. scripts/sign-release builds
-# `release-package` under the Developer ID identity. [LAW:one-type-per-behavior]
-define make_pkg
-scripts/make-pkg "$(1)" "$(2)" "$(PRODUCTS)"
-endef
+# The installer package: the app into /Applications and its input method into
+# /Library/Input Methods. A package is the only way either is installed, a development
+# build included, since the text input system lists an input method only from the standard
+# folders and the app puts nothing there itself. scripts/sign-release builds this same
+# target under the Developer ID identity. [LAW:one-type-per-behavior]
+MAKE_PKG = scripts/make-pkg "$(APP)" "$(INPUT_METHOD)" "$(PRODUCTS)"
 
 package: app
-	$(call make_pkg,$(DEV_APP),$(DEV_INPUT_METHOD))
+	$(MAKE_PKG)
 
-release-package: release
-	$(call make_pkg,$(RELEASE_APP),$(RELEASE_INPUT_METHOD))
-
-# The development copy installed from its package, the way a person installs a release: the
-# package replaces what stood there, stops what ran from it, and starts the app again. The
-# package is the one make-pkg names, since it names it after what the app carries.
+# This build installed from its package, the way a person installs a release: the package
+# replaces what stood there, stops what ran from it, and starts the app again. The package
+# is the one make-pkg names, since it names it after what the app carries.
 install: app
-	pkg=$$($(call make_pkg,$(DEV_APP),$(DEV_INPUT_METHOD))) && sudo installer -pkg "$$pkg" -target /
+	pkg=$$($(MAKE_PKG)) && sudo installer -pkg "$$pkg" -target /
 
 run: install
-	open "/Applications/LowTalker Dev.app"
+	open "/Applications/LowTalker.app"
 
 variants:
 	@echo $(VARIANTS)

@@ -1,73 +1,19 @@
 import Dispatch
-import Flavors
 
 /// The hotkey for the life of the app: the modifier keys as the input method tells them, a
 /// detector reading them, and the presses it finds handed on by the main queue.
 @MainActor
 public final class Hotkey {
     nonisolated public static let defaultTapThreshold: Duration = .milliseconds(250)
-    /// The chord an installation listens for where its config names no other.
-    ///
-    /// Right Option for the installed copy, and Right Option held together with Right
-    /// Command for the development one. The development chord is a superset of the
-    /// release chord rather than a different key, which works because a chord is matched
-    /// by exact equality of what is held: `{rightOption, rightCommand}` is not
-    /// `{rightOption}`, so holding both is the development hotkey and neither
-    /// installation has to know the other's. [LAW:dataflow-not-control-flow]
-    ///
-    /// **Right Command goes down first.** A chord completes on whichever of its
-    /// modifiers comes down last, and the press it begins owns the hold until one of its
-    /// keys comes up. Pressing Right Option first therefore completes the release chord
-    /// exactly, starting a press there before Right Command can make it the development
-    /// one, and both installations then listen. Right Command alone completes nothing, so
-    /// starting with it leaves only the development chord to complete.
-    nonisolated public static func defaultChord(for flavor: Flavor) -> KeyChord {
-        switch flavor {
-        case .release: KeyChord(modifiers: .rightOption)
-        case .development: KeyChord(modifiers: .rightOption, .rightCommand)
-        }
-    }
+    /// The chord listened for where the config names no other: Right Option.
+    nonisolated public static let defaultChord = KeyChord(modifiers: .rightOption)
 
-    /// Every installation's chord, as it stands with no config: the chords `pressOrder`
-    /// orders a press around. The defaults, because they are all an installation can know -
-    /// App Sandbox keeps each one's config file in its own container, where no other copy
-    /// may read it.
-    nonisolated public static let everyInstallationsChord = Set(Flavor.allCases.map(defaultChord(for:)))
-
-    /// This chord's modifiers in the order a person must press them.
-    ///
-    /// [LAW:one-source-of-truth] The order was a fact recorded only in prose - "Right
-    /// Command goes down first" in the comment above - while the string a person actually
-    /// reads was ordered by `Modifier.allCases`, and so printed
-    /// `rightOption+rightCommand`: the one order that does not work. Two maps of
-    /// one territory, and the one the user was handed was the wrong one.
-    ///
-    /// A chord completes on whichever modifier comes down last, so pressing them in an
-    /// order whose prefix is another installation's whole chord starts a press *there*
-    /// first. The order is therefore not arbitrary and not remembered: a modifier no other
-    /// chord contains can never complete one, so those go down first, and the shared ones
-    /// go down last. `theOrderPrintedIsAnOrderThatWorks` holds that to every flavor.
-    /// [LAW:verifiable-goals]
-    nonisolated public static func pressOrder(of chord: KeyChord) -> [Modifier] {
-        let rivals = everyInstallationsChord.subtracting([chord]).map(\.modifiers)
-        // How many other installations' chords this modifier appears in. Zero means it
-        // cannot complete one of theirs, so it is safe to hold early.
-        func shared(_ modifier: Modifier) -> Int { rivals.filter { $0.contains(modifier) }.count }
-        // `Modifier.allCases` breaks ties, so one chord always spells one order: `sorted`
-        // is not stable, and an order that varied between two readings of the same chord
-        // would be two instructions for one hotkey. [LAW:one-source-of-truth]
-        return Modifier.allCases
-            .filter(chord.modifiers.contains)
-            .enumerated()
-            .sorted { (shared($0.element), $0.offset) < (shared($1.element), $1.offset) }
-            .map(\.element)
-    }
-
-    /// The chord in the words a person presses it by, in the order `pressOrder` says to hold
-    /// them: `rightOption` as "Right Option", the case's own name split at its capitals, so no
-    /// table of names stands beside the cases to fall out of step with them.
+    /// The chord in the words a person presses it by, in `Modifier.allCases` order, so one
+    /// chord always spells one name: `rightOption` as "Right Option", the case's own name
+    /// split at its capitals, so no table of names stands beside the cases to fall out of
+    /// step with them.
     nonisolated public static func named(_ chord: KeyChord) -> String {
-        pressOrder(of: chord).map { modifier in
+        Modifier.allCases.filter(chord.modifiers.contains).map { modifier in
             modifier.rawValue.reduce(into: "") { name, letter in
                 name += name.isEmpty ? letter.uppercased() : letter.isUppercase ? " \(letter)" : String(letter)
             }
@@ -91,9 +37,9 @@ public final class Hotkey {
         detector = HotkeyDetector(chords: chords, tapThreshold: tapThreshold)
     }
 
-    /// An installation's hotkey: the chords `config` names, heard through its input method.
-    public convenience init(for flavor: Flavor, listeningFor config: Config, tapThreshold: Duration = defaultTapThreshold) {
-        self.init(chords: config.chords, tapThreshold: tapThreshold, feed: InputMethodModifiers(flavor: flavor))
+    /// The app's hotkey: the chords `config` names, heard through the input method.
+    public convenience init(listeningFor config: Config, tapThreshold: Duration = defaultTapThreshold) {
+        self.init(chords: config.chords, tapThreshold: tapThreshold, feed: InputMethodModifiers())
     }
 
     public var phase: HotkeyDetector.Phase { detector.phase }

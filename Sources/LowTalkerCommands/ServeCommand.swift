@@ -12,7 +12,7 @@ import Synchronization
 struct ServeCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "serve",
-        abstract: "Serve OpenAI's POST /v1/audio/transcriptions and /v1/realtime on the installation's port over WhisperKit.",
+        abstract: "Serve OpenAI's POST /v1/audio/transcriptions and /v1/realtime over WhisperKit.",
         discussion: """
             Listens where the config's [serve] table says: loopback when it names no \
             interface, answering any token or none; otherwise that interface, answering \
@@ -20,9 +20,7 @@ struct ServeCommand: AsyncParsableCommand {
             """
     )
 
-    @OptionGroup var installation: FlavorOption
-
-    /// Absent means this installation's own file, resolved as `config check` resolves it.
+    /// Absent means the app's own file, as for `config check`.
     @Option(
         help: "The config file whose [serve] table says where to listen, for trying one out before it is installed.",
         transform: URL.init(fileURLWithPath:)
@@ -35,8 +33,7 @@ struct ServeCommand: AsyncParsableCommand {
     func run() async throws {
         // Bound before the model loads, so a port already taken is said at once rather than
         // a minute later, and a request meanwhile is refused with the reason.
-        let file = try ConfigSource(path: path, stated: installation.stated)
-        let loaded = try Config.load(file.path, for: file.flavor)
+        let loaded = try Config.load(path)
         // Said every time, as `config check` opens its report, so a `--path` that names no
         // file reads "no file at ..., so these are the defaults" rather than serving on
         // loopback in silence.
@@ -44,7 +41,6 @@ struct ServeCommand: AsyncParsableCommand {
         print("\(loaded)\nserve: \(loaded.config.serve)", to: &stderr)
         let resident = Mutex(ServedEngine.notResident("the model is still loading"))
         let server = try await TranscriptionServer.listen(
-            for: loaded.flavor,
             on: loaded.config.serve,
             engine: { resident.withLock { $0 } },
             record: { line($0.json) }

@@ -1,4 +1,3 @@
-import Flavors
 import Foundation
 import LowTalkerCore
 import Security
@@ -6,7 +5,7 @@ import Synchronization
 
 /// An app's transcription server: whether the person has switched it on, what it is doing,
 /// and the engine it answers with. The one owner of the app's listener, so the menu, the
-/// saved choice and the socket cannot disagree about whether this installation serves.
+/// saved choice and the socket cannot disagree about whether the app serves.
 /// [LAW:single-enforcer]
 ///
 /// Only a build signed to accept connections has one: see `ifEntitled`. With the choice off,
@@ -37,8 +36,8 @@ public final class ServerSwitch {
         didSet { ServedRequest.logger.notice("server: \(self.state, privacy: .public)") }
     }
 
-    /// Whether the person has switched serving on, kept in this installation's own defaults,
-    /// so each installation's choice is its own. Unset reads as off. [LAW:one-source-of-truth]
+    /// Whether the person has switched serving on, kept in the app's defaults. Unset reads
+    /// as off. [LAW:one-source-of-truth]
     public var chosen: Bool { defaults.bool(forKey: Self.choiceKey) }
     static let choiceKey = "serves"
 
@@ -68,14 +67,14 @@ public final class ServerSwitch {
     ///
     /// [LAW:one-source-of-truth] Read off the signature, the fact `scripts/variant` reads to
     /// name a package, rather than a second flag the build would have to keep in step with it.
-    public static func ifEntitled(flavor: Flavor, defaults: UserDefaults = .standard) -> ServerSwitch? {
+    public static func ifEntitled(defaults: UserDefaults = .standard) -> ServerSwitch? {
         let entitlement = "com.apple.security.network.server"
         let granted = SecTaskCreateFromSelf(nil)
             .flatMap { SecTaskCopyValueForEntitlement($0, entitlement as CFString, nil) } as? Bool == true
         ServedRequest.logger.notice("server: \(granted ? "network build, may serve" : "offline build, no server", privacy: .public)")
         guard granted else { return nil }
         return ServerSwitch(defaults: defaults) { binding, engine throws(ListenRefused) in
-            try await TranscriptionServer.listen(for: flavor, on: binding, engine: engine)
+            try await TranscriptionServer.listen(on: binding, engine: engine)
         }
     }
 

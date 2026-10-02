@@ -1,9 +1,9 @@
-import Flavors
+import Identity
 import Foundation
 import Testing
 @testable import InputSource
 
-/// Which installed bundle is this flavor's, the one decision that needs no text input system.
+/// Which installed bundle is the input method's, the one decision that needs no text input system.
 /// The TIS steps themselves are held by the checkpoint on a Mac, since registering a source
 /// from a test would change the Input menu of whoever runs the suite.
 @Suite struct InstalledInputMethodTests {
@@ -21,32 +21,30 @@ import Testing
         return directory
     }
 
-    @Test(arguments: Flavor.allCases)
-    func theBundleIsFoundByItsIdentifierAndNotItsName(flavor: Flavor) throws {
-        let other = Flavor.allCases.first { $0 != flavor }!
-        // The other flavor's bundle carries the name this flavor's would, so a scan that
-        // matched on names would take it.
+    @Test func theBundleIsFoundByItsIdentifierAndNotItsName() throws {
+        // Another bundle carries the name the input method's would, so a scan that matched
+        // on names would take it.
         let directory = try inputMethods([
-            (name: "\(flavor.displayName) Input Method.app", identifier: other.inputMethodBundleIdentifier),
-            (name: "Renamed.app", identifier: flavor.inputMethodBundleIdentifier),
+            (name: "\(AppIdentity.displayName) Input Method.app", identifier: "com.example.inputmethod.other"),
+            (name: "Renamed.app", identifier: AppIdentity.inputMethodBundleIdentifier),
         ])
         defer { try? FileManager.default.removeItem(at: directory) }
-        #expect(try InstalledInputMethod(flavor: flavor, directory: directory).bundle().lastPathComponent == "Renamed.app")
+        #expect(try InstalledInputMethod(directory: directory).bundle().lastPathComponent == "Renamed.app")
     }
 
     @Test func anInputMethodNotInstalledSaysSoByIdentifier() throws {
         let directory = try inputMethods([(name: "Other.app", identifier: "com.example.other")])
         defer { try? FileManager.default.removeItem(at: directory) }
         #expect(throws: InputMethodFailure.notInstalled(
-            identifier: Flavor.development.inputMethodBundleIdentifier, looked: directory
-        )) { try InstalledInputMethod(flavor: .development, directory: directory).bundle() }
+            identifier: AppIdentity.inputMethodBundleIdentifier, looked: directory
+        )) { try InstalledInputMethod(directory: directory).bundle() }
     }
 
     @Test func aMissingFolderIsNotInstalledAndAnUnreadableOneSaysWhy() throws {
         let missing = FileManager.default.temporaryDirectory.appending(path: "input-methods-\(UUID().uuidString)")
         #expect(throws: InputMethodFailure.notInstalled(
-            identifier: Flavor.development.inputMethodBundleIdentifier, looked: missing
-        )) { try InstalledInputMethod(flavor: .development, directory: missing).bundle() }
+            identifier: AppIdentity.inputMethodBundleIdentifier, looked: missing
+        )) { try InstalledInputMethod(directory: missing).bundle() }
 
         let unreadable = try inputMethods([(name: "Other.app", identifier: "com.example.other")])
         defer {
@@ -54,6 +52,6 @@ import Testing
             try? FileManager.default.removeItem(at: unreadable)
         }
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: unreadable.path)
-        #expect(throws: CocoaError.self) { try InstalledInputMethod(flavor: .development, directory: unreadable).bundle() }
+        #expect(throws: CocoaError.self) { try InstalledInputMethod(directory: unreadable).bundle() }
     }
 }

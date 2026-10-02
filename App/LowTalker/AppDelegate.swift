@@ -1,7 +1,7 @@
 import AppKit
 import Carbon
 import Dictation
-import Flavors
+import Identity
 import Grants
 import InputSource
 import Insertion
@@ -59,26 +59,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// One line per press: what was heard, how long after key-up, and what was inserted.
     private let sessions = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "dictation")
 
-    /// [LAW:parse-dont-validate] The one place this process learns which of the two
-    /// installations it is. macOS launched it under one bundle identifier or the other,
-    /// and everything keyed to the installation - the input method, the config file, the
-    /// chord, the name in the menu - is read from this and never decided again.
-    ///
-    /// [LAW:no-silent-failure] A bundle identifier that is neither flavor's is a
-    /// misconfigured build, and guessing is the one wrong answer: reading a development
-    /// bundle as `.release` would point this copy's input method, config and hotkey at the
-    /// installed copy's, which is the whole failure the two flavors exist to prevent.
-    /// There is nothing to fall back to, so it stops here, at launch, where the reason is
-    /// legible - rather than at the first keypress, in the other app.
-    static let flavor: Flavor = {
-        let identifier = Bundle.main.bundleIdentifier
-        guard let identifier, let flavor = Flavor(bundleIdentifier: identifier) else {
-            let known = Flavor.allCases.map(\.bundleIdentifier).joined(separator: " or ")
-            fatalError("launched under bundle identifier \(identifier ?? "none"), which is neither installation: expected \(known)")
-        }
-        return flavor
-    }()
-
     /// [LAW:one-source-of-truth] Every engine status passes through here, so the
     /// menu and the log never tell different stories.
     private func show(_ readiness: EngineReadiness) {
@@ -132,7 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// The transcription server, answering with `engine` once it is resident, so a caller is
     /// heard by the model dictation already holds and never a second copy of it. Nil in the
     /// offline build, which cannot accept a connection and so shows nothing about serving.
-    private lazy var serving = ServerSwitch.ifEntitled(flavor: Self.flavor)
+    private lazy var serving = ServerSwitch.ifEntitled()
 
     // MARK: - the loop
 
@@ -141,7 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// reading, so the two cannot come from different versions of the file. The menu's
     /// names for the chords read it too, so what the menu says to hold is what is heard.
     /// [LAW:one-source-of-truth]
-    private lazy var config = Result { () throws(ConfigError) in try Config.load(for: Self.flavor).config }
+    private lazy var config = Result { () throws(ConfigError) in try Config.load().config }
 
     /// The loop that is listening now.
     private struct Listening {
@@ -169,18 +149,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var lastFailure: String?
 
     private func drawStatusIcon() {
-        // Named from the flavor, because with both copies installed there are two of
-        // these icons in the menu bar and this label is what tells them apart - to a
-        // reader with VoiceOver, and to an agent reading the bar over Accessibility.
-        let description = engineReadiness.iconDescription(for: Self.flavor.displayName)
+        // Named, so the icon can be found by a reader with VoiceOver and by an agent
+        // reading the bar over Accessibility.
+        let description = engineReadiness.iconDescription(for: AppIdentity.displayName)
         switch engineReadiness.statusGlyph() {
         case .mark:
             // The asset catalog marks it a template, so the bar tints it like its neighbours.
             // A copy, because the named image is shared and the description is this state's.
             // [LAW:no-silent-failure] A bundle without the mark is built wrong; the item keeps
             // a symbol rather than shrinking to nothing and taking the menu with it.
-            guard let image = NSImage(named: Self.flavor.statusMarkName)?.copy() as? NSImage else {
-                log.fault("no \(Self.flavor.statusMarkName, privacy: .public) in the asset catalog")
+            guard let image = NSImage(named: AppIdentity.statusMarkName)?.copy() as? NSImage else {
+                log.fault("no \(AppIdentity.statusMarkName, privacy: .public) in the asset catalog")
                 statusItem.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: description)
                 return
             }
@@ -230,15 +209,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // `comeUp` reads the config before it adopts and adopts nothing on a config it cannot
         // read, so a loop is only ever built over one that was read.
         guard case .success(let config) = config else { preconditionFailure("a loop is adopted only once the config has been read") }
-        let hotkey = Hotkey(for: Self.flavor, listeningFor: config)
+        let hotkey = Hotkey(listeningFor: config)
         let dictation = Dictation(
             capture: capture,
             transcriber: { [unowned self] in try await engine.value },
             turns: turns,
             router: Router(routes: [.dictation]),
-            // The words cross to this flavor's own input method, which commits them at the
+            // The words cross to the input method, which commits them at the
             // cursor through the text input system.
-            executor: Executor(insertingThrough: InputMethodInserter(flavor: Self.flavor)),
+            executor: Executor(insertingThrough: InputMethodInserter()),
             report: { [unowned self] in report($0) }
         )
         listening = Listening(hotkey: hotkey, dictation: dictation)
@@ -271,14 +250,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// press and insert nothing, so it comes back as a refusal for the status line.
     private func selectInputMethod() async -> Result<Void, LoopRefusal> {
         do {
-            let inputMethod = InstalledInputMethod(flavor: Self.flavor)
+            let inputMethod = InstalledInputMethod()
             let bundle = try inputMethod.bundle()
             let state = try await inputMethod.select()
             log.notice("input method: \(state, privacy: .public) from \(bundle.path, privacy: .public)")
             // Stopped short of selected only where a person has yet to switch it on,
             // which is a step in setup rather than something that went wrong.
             return state.ready ? .success(()) : .failure("""
-                the input method is \(state); switch it on in \(GuidedSetup.title(for: Self.flavor)) \
+                the input method is \(state); switch it on in \(GuidedSetup.title) \
                 in this menu, where macOS asks you to allow it
                 """)
         } catch {
@@ -307,7 +286,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// The guided setup, over the one list the menu and `lowtalker onboard` read.
     private lazy var setUp = SetUpWindow(
-        flavor: Self.flavor,
         read: { [unowned self] in readReadiness() },
         ask: { [unowned self] in await ask($0) },
         settle: { [unowned self] in comeUpIfGranted($0) })
@@ -332,14 +310,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 return nil
             case .withheld(.denied):
                 NSWorkspace.shared.open(row.settingsPane)
-                return "macOS asks only once. Turn on \(Self.flavor.displayName) in the \(row.rawValue) list in System Settings."
+                return "macOS asks only once. Turn on \(AppIdentity.displayName) in the \(row.rawValue) list in System Settings."
             case .withheld(.restricted):
                 return "A policy on this Mac blocks the microphone."
             case .granted:
                 return nil
             }
         case .inputMethod:
-            do { try await InstalledInputMethod(flavor: Self.flavor).switchOn() } catch {
+            do { try await InstalledInputMethod().switchOn() } catch {
                 log.error("setup: input method: \(String(describing: error), privacy: .public)")
                 return "\(error)"
             }
@@ -449,7 +427,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // and the status says where it is the way the input method's refusal does.
             let whereToAllow = switch error {
             case MicrophoneAuthorization.Withheld.notDetermined, MicrophoneAuthorization.Withheld.denied:
-                "; allow it in \(GuidedSetup.title(for: Self.flavor)) in this menu"
+                "; allow it in \(GuidedSetup.title) in this menu"
             default: ""
             }
             showHotkeyStatus("off — \(error)\(whereToAllow)")
@@ -603,7 +581,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// exactly when it matters: right after the user gave the grant the menu was telling them
     /// to give. [LAW:no-ambient-temporal-coupling]
     private func readReadiness() -> Readiness {
-        let readiness = OnboardingProbe.readiness(flavor: Self.flavor, reader: .theApp(microphone: readMicrophone()))
+        let readiness = OnboardingProbe.readiness(reader: .theApp(microphone: readMicrophone()))
         log.notice("onboarding: \(readiness.ready ? "ready" : "not ready", privacy: .public)")
         for requirement in readiness.requirements {
             log.notice("onboarding: \(requirement.name, privacy: .public): \(requirement.reads, privacy: .public)")
@@ -627,7 +605,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// password field in front of them.
     private func unheardBecause() -> [String] {
         let reasons: [String?] = [
-            InstalledInputMethod.isSelected(Self.flavor) ? nil : "\(Self.flavor.displayName) is not the selected input source",
+            InstalledInputMethod.isSelected() ? nil : "\(AppIdentity.displayName) is not the selected input source",
             IsSecureEventInputEnabled() ? "an app holds Secure Event Input, as a password field does" : nil,
         ]
         let found = reasons.compactMap { $0 }
@@ -675,14 +653,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // The way into the guided setup, always there, and saying how much is left in it.
         let left = readiness.unmet.count
         let stepsLeft = left == 0 ? "" : " (\(left) left)"
-        menu.addItem(withTitle: "\(GuidedSetup.title(for: Self.flavor))\(stepsLeft)", action: #selector(openSetUp), keyEquivalent: "")
+        menu.addItem(withTitle: "\(GuidedSetup.title)\(stepsLeft)", action: #selector(openSetUp), keyEquivalent: "")
         serving.map { serving in
             let item = menu.addItem(withTitle: "Serve Transcription", action: #selector(toggleServing), keyEquivalent: "")
             item.state = serving.chosen ? .on : .off
         }
         menu.addItem(.separator())
         menu.addItem(withTitle: "Acknowledgements", action: #selector(openNotices), keyEquivalent: "")
-        menu.addItem(withTitle: "Quit \(Self.flavor.displayName)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: "Quit \(AppIdentity.displayName)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     }
 
     /// A line the menu says and nothing a reader can press. An item with no action is

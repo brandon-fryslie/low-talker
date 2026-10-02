@@ -34,13 +34,12 @@ public extension Config {
     /// Every change to the config the app is running on, from the one it is running on
     /// now until the consuming task stops.
     ///
-    /// The file watched, and the installation it is read as, are both the ones `loaded`
-    /// came from. [LAW:one-source-of-truth] There is no path parameter here to disagree
-    /// with it and no flavor parameter either, so a reload cannot be made to read another
-    /// installation's file, or this one's file against the other's defaults.
+    /// The file watched is the one `loaded` came from. [LAW:one-source-of-truth] There is
+    /// no path parameter here to disagree with it, so a reload cannot be made to read
+    /// another file.
     ///
     /// A config that cannot be read at *startup* is not this function's business: it has
-    /// no previous config to keep, so `load(_:for:)` throws it to a caller who can
+    /// no previous config to keep, so `load(_:)` throws it to a caller who can
     /// still refuse to start. What arrives here is a config already running, and everything
     /// after it is a reload.
     static func reloads(after loaded: Loaded) -> AsyncStream<Reload> {
@@ -76,11 +75,11 @@ public extension Config {
     /// [LAW:effects-at-boundaries] The one place a reload touches the disk. Everything
     /// downstream of it is a pure function of what it returned.
     ///
-    /// It takes the previous reading rather than a path and a flavor, so that reading the
-    /// same file again as the same installation is the only thing it can do.
+    /// It takes the previous reading rather than a path, so that reading the same file
+    /// again is the only thing it can do.
     /// [LAW:one-source-of-truth]
     private static func reading(again loaded: Loaded) -> Result<Loaded, ConfigError> {
-        do { return .success(try load(loaded.url, for: loaded.flavor)) }
+        do { return .success(try load(loaded.url)) }
         catch { return .failure(error) }
     }
 }

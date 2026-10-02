@@ -1,5 +1,5 @@
 import Darwin
-import Flavors
+import Identity
 import Foundation
 import DarwinCalls
 
@@ -51,7 +51,7 @@ public extension Inserter {
     }
 }
 
-/// The app's end of the channel: one round trip to this flavor's input method.
+/// The app's end of the channel: one round trip to the input method.
 ///
 /// Synchronous, with the wait bounded by the transport's own timeouts rather than by a
 /// deadline this type keeps. An insert is two round trips - a greeting, then the words -
@@ -82,14 +82,13 @@ public struct InputMethodInserter: Inserter {
     /// app arrives before this end stops listening; `CommitterTests` holds the two apart.
     public static let standardTimeout = Duration.seconds(5)
 
-    /// `flavor` says which installation's input method this reaches. No default: both copies
-    /// run at once, and a channel that guessed would put one installation's words in the
-    /// other's window.
-    public init(flavor: Flavor, timeout: Duration = standardTimeout) {
+    /// Onto the input method's own insert port, answered only by a process signed like this
+    /// one under the input method's identifier.
+    public init(timeout: Duration = standardTimeout) {
         self.init(
-            portName: flavor.inputMethodPortName, timeout: timeout,
+            portName: AppIdentity.inputMethodPortName, timeout: timeout,
             answerer: Result { () throws(PeerIdentity.Unreadable) in
-                try .signedLikeThisProcess(identifier: flavor.inputMethodBundleIdentifier)
+                try .signedLikeThisProcess(identifier: AppIdentity.inputMethodBundleIdentifier)
             })
     }
 

@@ -9,9 +9,8 @@ private let repository = URL(fileURLWithPath: #filePath)
 /// Xcode keeps each target's intermediates in a folder named for the target, and this Mac's
 /// volume, like every default macOS volume, is case-insensitive. Two targets that differ
 /// only in case build into one folder and link each other's objects without an error:
-/// measured, a CLI target named `lowtalker` beside the release app's `LowTalker` left the
-/// release app linked from the CLI's entry and carrying no AppDelegate. CI builds only the
-/// development app, so nothing else would notice. [LAW:no-silent-failure]
+/// measured, a CLI target named `lowtalker` beside the app's `LowTalker` left the app
+/// linked from the CLI's entry and carrying no AppDelegate. [LAW:no-silent-failure]
 @Suite struct ProjectTargetNamesTests {
     /// The names declared directly under `targets:`, two spaces in, which is where xcodegen
     /// reads them from.

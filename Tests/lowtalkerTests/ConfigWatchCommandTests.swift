@@ -1,5 +1,4 @@
 import ArgumentParser
-import Flavors
 import Foundation
 import LowTalkerCore
 import Testing
@@ -10,13 +9,8 @@ import Testing
 /// save taken up and a save turned away is ever said out loud. `ConfigWatchTests` pins
 /// which `Reload` a reading produces; these pin what that reload reads as.
 @Suite struct ConfigWatchCommandTests {
-    /// The release copy throughout, because `file` is the release copy's own path: a
-    /// reading that named one and was read as the other is the mismatch these types now
-    /// make unrepresentable, and a test should not be the one place it is spelled.
-    static let flavor = Flavor.release
-    /// Spelled out rather than taken from `Config.fileURL(for:)`: a literal reads the same
-    /// on every machine, where the real path carries whoever's home directory ran the
-    /// suite. It is the release copy's file name.
+    /// Spelled out rather than taken from `Config.fileURL`: a literal reads the same on
+    /// every machine, where the real path carries whoever's home directory ran the suite.
     static let file = URL(filePath: "/Users/someone/.config/low-talker/config.toml")
 
     static func running() throws -> Config.Loaded {
@@ -25,9 +19,8 @@ import Testing
                 [[modes]]
                 name = "dictation"
                 chord = { modifiers = ["rightOption"] }
-                """, flavor: flavor),
-            at: file,
-            flavor: flavor
+                """),
+            at: file
         )
     }
 
@@ -47,7 +40,7 @@ import Testing
     /// than printing the defaults as though somebody had written them.
     @Test func aDeletedFileReadsAsTheDefaultsAndSaysSo() {
         let narration = ConfigCommand.Watch.narration(
-            of: .adopted(.noFile(at: Self.file, flavor: Self.flavor))
+            of: .adopted(.noFile(at: Self.file))
         )
 
         #expect(narration.contains(Self.file.path))
@@ -82,7 +75,7 @@ import Testing
         try #"modle = "base.en""#.write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let watch = try ConfigCommand.Watch.parse(["--flavor", "release", "--path", url.path])
+        let watch = try ConfigCommand.Watch.parse(["--path", url.path])
         await #expect(throws: ConfigError.unknownKeys(["modle"])) { try await watch.run() }
     }
 }

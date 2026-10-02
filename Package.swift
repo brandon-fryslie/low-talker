@@ -7,7 +7,7 @@ let package = Package(
     products: [
         .library(name: "LowTalkerCore", targets: ["LowTalkerCore"]),
         .library(name: "Grants", targets: ["Grants"]),
-        .library(name: "Flavors", targets: ["Flavors"]),
+        .library(name: "Identity", targets: ["Identity"]),
         .library(name: "Onboarding", targets: ["Onboarding"]),
         .library(name: "Signals", targets: ["Signals"]),
         .library(name: "Dictation", targets: ["Dictation"]),
@@ -27,18 +27,17 @@ let package = Package(
     ],
     targets: [
         // [LAW:one-way-deps] Core knows nothing of the CLI or the app; both link it.
-        // Which installation this is: the one name every other name in a flavor is
-        // built from. It depends on nothing, so the input method process and the app's
+        // The names macOS keys LowTalker by. It depends on nothing, so the input method process and the app's
         // upper layers can both read it without either depending on the other.
         // [LAW:one-way-deps]
-        .target(name: "Flavors"),
-        .testTarget(name: "FlavorsTests", dependencies: ["Flavors"]),
-        // The Text Input Sources framework as this program uses it: where this flavor's
+        .target(name: "Identity"),
+        .testTarget(name: "IdentityTests", dependencies: ["Identity"]),
+        // The Text Input Sources framework as this program uses it: where the
         // input source stands on this Mac, and the steps that put it there. It links only
-        // Flavors and the Text Input Sources lock beneath it, so the app reaches it without
+        // Identity and the Text Input Sources lock beneath it, so the app reaches it without
         // the input method process linking anything of the app's. [LAW:one-way-deps]
-        .target(name: "InputSource", dependencies: ["Flavors", "TextInputSources"]),
-        .testTarget(name: "InputSourceTests", dependencies: ["InputSource", "Flavors"]),
+        .target(name: "InputSource", dependencies: ["Identity", "TextInputSources"]),
+        .testTarget(name: "InputSourceTests", dependencies: ["InputSource", "Identity"]),
         // What macOS has let this process do - listen - read without ever prompting, and asked
         // for only when called. Beneath the core and the setup list alike, so both read one
         // reading. [LAW:one-way-deps]
@@ -47,7 +46,7 @@ let package = Package(
         .target(
             name: "LowTalkerCore",
             dependencies: [
-                "Flavors",
+                "Identity",
                 "Grants",
                 // The app's end of the hotkey port, which the input method tells the modifier
                 // keys to.
@@ -59,8 +58,8 @@ let package = Package(
         // OpenAI's speech-to-text API over any Transcriber, for callers other than
         // dictation (epic low-serve-axq). Above the core, so the core never links Network
         // and the offline build's app need not link this at all. [LAW:one-way-deps]
-        .target(name: "Serve", dependencies: ["LowTalkerCore", "Flavors"]),
-        .testTarget(name: "ServeTests", dependencies: ["Serve", "LowTalkerCore", "Flavors", "TestProbes"], resources: [.copy("Fixtures")]),
+        .target(name: "Serve", dependencies: ["LowTalkerCore", "Identity"]),
+        .testTarget(name: "ServeTests", dependencies: ["Serve", "LowTalkerCore", "Identity", "TestProbes"], resources: [.copy("Fixtures")]),
         // Answering a signal rather than obeying it, for every process here that has an
         // ending of its own to unwind through. It links nothing, so any process here can
         // watch through it. [LAW:one-source-of-truth]
@@ -73,13 +72,13 @@ let package = Package(
         .target(name: "TestProbes", dependencies: ["LowTalkerCore"]),
         // Everything that must hold before low-talker can hear and type, as a list a reader
         // can act on: what was read off this Mac, and the step for whatever is missing. It
-        // links the flavor, the grants and the input source's switch, and not the core - so
+        // links the identity, the grants and the input source's switch, and not the core - so
         // both the CLI and the menu-bar app can show the same words, and the app's guided
         // setup walks the same list. [LAW:one-source-of-truth] [LAW:one-way-deps]
-        .target(name: "Onboarding", dependencies: ["Flavors", "Grants", "InputSource"]),
+        .target(name: "Onboarding", dependencies: ["Identity", "Grants", "InputSource"]),
         // The steps are what a person acts on, so they are asserted as values rather
         // than scraped off a terminal.
-        .testTarget(name: "OnboardingTests", dependencies: ["Onboarding", "Flavors", "Grants"]),
+        .testTarget(name: "OnboardingTests", dependencies: ["Onboarding", "Identity", "Grants"]),
         .testTarget(name: "SignalsTests", dependencies: ["Signals", "LowTalkerCore", "TestProbes"]),
         // The loop from a press to inserted text, with every collaborator taken as a value.
         // Its own target rather than app code so the loop runs under `swift test`; the
@@ -91,14 +90,14 @@ let package = Package(
         // suite compiles and exercises it: an Xcode-only target would be invisible to
         // `make test` the way App/LowTalker's sources are.
         .target(name: "InputMethod", dependencies: ["Insertion"]),
-        .testTarget(name: "InputMethodTests", dependencies: ["InputMethod", "Insertion", "Flavors"]),
+        .testTarget(name: "InputMethodTests", dependencies: ["InputMethod", "Insertion", "Identity"]),
         // The two calls that cross between the app and the input method - words one way, the
-        // modifier keys the other - and both ends of each port. It links Flavors for the
+        // modifier keys the other - and both ends of each port. It links Identity for the
         // ports' names and the Darwin calls beneath them, and nothing else - in particular no
         // InputMethodKit, because the app is one of its two callers and the app has no
         // business linking the text input system.
         // [LAW:one-way-deps]
-        .target(name: "Insertion", dependencies: ["Flavors", "DarwinCalls"]),
+        .target(name: "Insertion", dependencies: ["Identity", "DarwinCalls"]),
         // The bootstrap calls the SDK keeps from Swift, the Mach macros Swift cannot import
         // and the kernel's code signing call, each passed through by a line of C and nothing
         // more.
@@ -108,11 +107,11 @@ let package = Package(
         .target(name: "TextInputSources"),
         // A sender that is not the test process, so the insert port's refusal is held by a
         // request that really crossed from another process. In no product: nothing ships it.
-        .executableTarget(name: "insertion-probe", dependencies: ["Insertion", "Flavors"], path: "Tests/InsertionProbe"),
-        .testTarget(name: "InsertionTests", dependencies: ["Insertion", "Flavors", "DarwinCalls", "insertion-probe"]),
+        .executableTarget(name: "insertion-probe", dependencies: ["Insertion", "Identity"], path: "Tests/InsertionProbe"),
+        .testTarget(name: "InsertionTests", dependencies: ["Insertion", "Identity", "DarwinCalls", "insertion-probe"]),
         // The process macOS launches out of the input method bundle. It holds the effects -
         // reading the bundle, opening the port, running the loop - and nothing else.
-        .executableTarget(name: "lowtalker-inputmethod", dependencies: ["InputMethod", "Insertion", "Flavors"]),
+        .executableTarget(name: "lowtalker-inputmethod", dependencies: ["InputMethod", "Insertion", "Identity"]),
         // Every command the CLI has, as a library the tests import, with the entry below as
         // the whole of the executable: the shape the input method already takes, and this
         // list is the one place the CLI's dependencies are declared. [LAW:one-source-of-truth]
@@ -124,7 +123,7 @@ let package = Package(
                 // make from a source: the one place a model is written to disk.
                 "ModelInstall",
                 "Grants",
-                "Flavors",
+                "Identity",
                 "Onboarding",
                 "InputSource",
                 "Signals",
@@ -166,7 +165,7 @@ let package = Package(
         // The CLI's table shape is its contract; this pins column names to fields.
         .testTarget(
             name: "lowtalkerTests",
-            dependencies: ["LowTalkerCommands", "LowTalkerCore", "ModelInstall", "Onboarding", "Flavors"]
+            dependencies: ["LowTalkerCommands", "LowTalkerCore", "ModelInstall", "Onboarding", "Identity"]
         ),
     ]
 )

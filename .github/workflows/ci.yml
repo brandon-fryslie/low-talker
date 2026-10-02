@@ -53,12 +53,9 @@ jobs:
       - name: Build and test the package
         run: make test
 
-      # Both installations, because they are two Xcode targets built from one template
-      # and only building one proves only that one's attributes resolve. A release target
-      # left naming the development plist would pass a job that built `make app` alone.
       # The runner has no model to carry, so the bundles are built carrying none, which is
       # a build every Makefile path allows and one the app names at launch. Signing reaches
       # Apple's timestamp server, as every build's does (project.yml); a runner that cannot
       # fails here with "The timestamp service is not available".
-      - name: Build both installations
-        run: make app release BUNDLED_MODEL_STORE=
+      - name: Build the app
+        run: make app BUNDLED_MODEL_STORE=
