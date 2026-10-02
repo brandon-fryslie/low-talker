@@ -288,9 +288,9 @@ extension Result {
         let rig = try Rig(hearing: engine)
 
         let keyWentDown = rig.now
-        // The speaker starts talking as they press. The loop hears the press 0.4 s later -
-        // well past the warm-up an engine is allowed - so none of those words was captured.
-        rig.wait(0.4)
+        // The speaker starts talking as they press. The loop hears the press later than the
+        // warm-up an engine is allowed, so none of those words was captured.
+        rig.wait(AudioCapture.warmUpAllowance + 0.4)
         rig.dictation.press(.began(Rig.rightOption, at: keyWentDown))
         rig.speak([1, 2, 3])
         rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
@@ -298,6 +298,7 @@ extension Result {
         let press = try #require(await rig.report().failure as? SpeechLost)
         #expect(press.chord == Rig.rightOption)
         #expect(press.lost.unopened)
+        #expect("\(press)" == "WARNING: Your microphone did not respond within \(Int(AudioCapture.warmUpAllowance * 1000)) ms. Your dictation was ignored.")
         #expect(!press.lost.interrupted)
         #expect(press.lost.scrolledOff == 0)
         #expect(engine.clips.isEmpty)
@@ -590,7 +591,7 @@ extension Result {
         #expect(press.lost.interrupted)
         #expect(!press.lost.unopened)
         #expect(press.lost.scrolledOff == 0)
-        #expect(press.lost.description == "spliced where capture restarted")
+        #expect(press.lost.description == "Your microphone restarted while you were dictating")
     }
 
     /// [LAW:no-silent-failure] There is no microphone to open - the device cannot feed the

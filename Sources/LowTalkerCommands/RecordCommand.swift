@@ -12,7 +12,7 @@ import LowTalkerCore
 /// anything. It is no longer visible in the line either. It used to be: every run of this
 /// command is the first press in its process, and while a press built its own engine that
 /// cost far more than `AudioCapture.warmUpAllowance` allows, so the clip always came back
-/// cut where the microphone was not open and that was the reading rather than a fault.
+/// lost its head to a microphone that was not yet open and that was the reading rather than a fault.
 /// Now `start` readies the microphone, this waits for that to finish, and the press opens one
 /// already reached, which is inside the allowance - so a run comes back whole, and one that says it is cut is a
 /// fault to chase.

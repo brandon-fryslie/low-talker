@@ -4,21 +4,18 @@ import Synchronization
 
 /// The microphone, reached through CoreAudio's HAL audio unit.
 ///
-/// AVAudioEngine is the obvious way to do this and it cannot meet the budget. Measured on
-/// this Mac's built-in input, building an engine and starting it costs 315 ms from the
-/// key going down - 475-630 ms for the first one in a process - against a
-/// `AudioCapture.warmUpAllowance` of 100 ms, so under `shut`, where every press opens its
-/// own microphone, every press came back `partial` and was refused. Keeping one engine
-/// alive across presses does not fix it either: starts measured 43, 248 and 250 ms, and
-/// the device stayed running after `stop()`, which lights the menu-bar indicator on a Mac
-/// nobody is dictating to - the exact thing `shut` exists to prevent.
+/// AVAudioEngine is the obvious way to do this and it is the slower one: building an
+/// engine and starting it is paid from the key going down, and more for the first one in a
+/// process. Keeping one engine alive across presses does not fix it either: its starts
+/// vary, and the device stayed running after `stop()`, which lights the menu-bar indicator
+/// on a Mac nobody is dictating to - the exact thing `shut` exists to prevent.
 ///
-/// The same device through a HAL unit opens in 40 ms, ±2 ms, and goes dark on every stop.
+/// The same device through a HAL unit opens quickly and goes dark on every stop.
 /// What makes that possible is the split this type is named for: the expensive part of
 /// reaching a microphone is per-process and is spent in `AudioComponentInstanceNew` and
-/// `AudioUnitInitialize` (175 ms cold, 31 ms after), and neither of them opens a device.
+/// `AudioUnitInitialize`, and neither of them opens a device.
 /// Only `AudioOutputUnitStart` does. So an app that prepares while it is idle leaves a
-/// press paying 40 ms, and shows no indicator for the preparing.
+/// press paying only the opening, and shows no indicator for the preparing.
 ///
 /// That last sentence is a claim about a unit bound to a microphone, and it is false of one
 /// bound to anything carrying an output - which is what CoreAudio hands an app that enables
@@ -32,9 +29,9 @@ import Synchronization
 /// there made the key wait for it, and a run of notifications made it wait for each. So `init`
 /// hands the reaching to one serial queue and returns, and the one moment anything waits for
 /// it is `open` - a press that came for this input before it was ready, which pays whatever
-/// of it is left rather than the whole of it. Measured for low-privacy-o1z.68i on this Mac
-/// under a load average of 10 to 12: a warm readying held the main thread 95-126 ms, and
-/// handing the same work to the queue returned in under 0.1 ms.
+/// of it is left rather than the whole of it. Measured for low-privacy-o1z.68i on a loaded
+/// Mac: a warm readying held the main thread, and handing the same work to the queue
+/// returned at once.
 ///
 /// [LAW:effects-at-boundaries] Every CoreAudio call in the capture path is here, behind
 /// `PreparedInput`, so the state machine in `AudioCapture` runs in tests against hardware
@@ -341,18 +338,18 @@ final class HALInput: PreparedInput {
         ///
         /// Sized by the device rather than by the unit, and at the press rather than at the
         /// preparation, because both of the other answers were measured wrong on this Mac for
-        /// low-privacy-o1z.c0p. Moving the device's IO buffer from 512 frames to 4096 under a
-        /// prepared, stopped unit handed the next press 4096-frame slices, and a buffer sized
+        /// low-privacy-o1z.c0p. Moving the device's IO buffer to a larger size under a
+        /// prepared, stopped unit handed the next press slices of that size, and a buffer sized
         /// when the input was readied refused every one of them: the press heard nothing. The
         /// unit's `kAudioUnitProperty_MaximumFramesPerSlice` does follow the device, but on
         /// CoreAudio's schedule rather than this one's - read straight after the move it
-        /// answered 512 on two runs and 4096 on twenty-one. [LAW:no-ambient-temporal-coupling]
+        /// answered the old size on some runs and the new one on others. [LAW:no-ambient-temporal-coupling]
         /// The device's own range bounds every size it can be moved to, so no move of the size
         /// can outgrow it and nothing has to have caught up for it to be true.
         ///
         /// Allocated on every open rather than kept and grown, so there is no earlier size for
         /// this to be compared with. [LAW:one-source-of-truth] What that adds to a press was
-        /// measured the same day: about 0.1 ms, against the 40 ms the open itself costs.
+        /// measured the same day: negligible beside what the open itself costs.
         func renderBuffer() throws -> AVAudioPCMBuffer {
             var range = AudioValueRange(mMinimum: 0, mMaximum: 0)
             var size = UInt32(MemoryLayout<AudioValueRange>.size)
@@ -401,8 +398,8 @@ final class HALInput: PreparedInput {
             // the call; only the device says whether the microphone is still on.
             //
             // Both halves were read off this Mac for low-privacy-o1z.pr2, where the vocabulary
-            // had been guessed rather than measured. Over ten presses the device read dark the
-            // instant `AudioOutputUnitStop` returned, for about 6 µs against that call's 5 ms,
+            // had been guessed rather than measured. Across presses the device read dark the
+            // instant `AudioOutputUnitStop` returned, at a cost far under that call's own,
             // which is what makes the reading affordable here rather than owed to a later beat.
             // A device destroyed under a running unit answers every teardown call `noErr` and
             // this property `'who?'`: a microphone that has gone away cannot say it went dark,

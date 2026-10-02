@@ -255,5 +255,5 @@ public struct SpeechLost: Error, CustomStringConvertible {
     public let chord: KeyChord
     public let lost: CapturedAudio.Loss
 
-    public var description: String { "the audio of a press of \(chord) is \(lost); what was said was not inserted" }
+    public var description: String { "WARNING: \(lost). Your dictation was ignored." }
 }
