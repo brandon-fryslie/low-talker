@@ -248,7 +248,7 @@ extension Result {
         rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
         let stopped = try #require(await rig.report().failure as? PressStopped)
         #expect(stopped.landed == 1)
-        #expect(stopped.causes.last as? Refusal == .dictationIsInAnotherApp)
+        #expect(stopped.cause as? Refusal == .dictationIsInAnotherApp)
         #expect(failureLine(stopped) == "\(Refusal.dictationIsInAnotherApp) 1 words of your dictation were inserted before it; the rest were not.")
         #expect(rig.inputMethod.inserted == ["hello"])
     }
@@ -653,7 +653,7 @@ extension Result {
         let rig = try Rig(hearing: FakeTranscriber { _ in Transcript(typed: "a") })
         rig.inputMethod.reaching(BundleID(rawValue: "com.apple.Safari"))
         rig.hold()
-        #expect(try await rig.session().description.hasSuffix("1 inserts into com.apple.Safari"))
+        #expect(try await rig.session().description.hasSuffix("1 insert into com.apple.Safari"))
     }
 
     /// Nothing said is a session that performed nothing, and a destination it never had
@@ -688,7 +688,7 @@ extension Result {
         rig.inputMethod.refusing(Refusal.noClientHasFocus)
         rig.hold()
         let stopped = try #require(await rig.report().failure as? PressStopped)
-        #expect(stopped.causes.last as? Refusal == .noClientHasFocus)
+        #expect(stopped.cause as? Refusal == .noClientHasFocus)
         #expect(stopped.landed == 0)
         #expect(failureLine(stopped) == "\(Refusal.noClientHasFocus)")
         rig.inputMethod.refusing(nil)

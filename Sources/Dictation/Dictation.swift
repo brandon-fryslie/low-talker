@@ -57,7 +57,7 @@ public final class Dictation {
         /// went to, so the first names the one app all of them went to.
         public var description: String {
             let destination = performed.first.map { " into \($0.into.rawValue)" } ?? ""
-            return "heard \(transcript.words.count) words past \(String(format: "%.1f", transcript.quiet)) s of quiet \(Int(keyUpToTranscript / .milliseconds(1))) ms after key-up (\(duringPress); \(displaced)), \(performed.count) inserts\(destination)"
+            return "\(context.press): heard \(transcript.words.count) words past \(String(format: "%.1f", transcript.quiet)) s of quiet \(Int(keyUpToTranscript / .milliseconds(1))) ms after key-up (\(duringPress); \(displaced)), \(performed.count) insert\(performed.count == 1 ? "" : "s")\(destination)"
         }
     }
 
@@ -183,7 +183,7 @@ public final class Dictation {
         /// A run landed at the cursor.
         func landed(_ run: Run, as performed: Executor.Performed?) {
             state.withLock { state in
-                state.performed += performed.map { [$0] } ?? []
+                if let performed { state.performed.append(performed) }
                 state.words += run.words.words.count
             }
         }
@@ -357,9 +357,7 @@ public final class Dictation {
                 // first: a press the hotkey stopped during says so rather than describing the
                 // clip it left behind, which was never the whole utterance anyway. A
                 // microphone that was not there at all was refused at key-down, so it
-                // never reaches here. The focused element's role is a synchronous call
-                // into another process, up to half a second of it, and this is the main
-                // actor: a press waits on it, and so does every window this app draws.
+                // never reaches here.
                 let ended: Ending = switch (ending, lost) {
                 case (.lapsed, _): .lapsed(chord)
                 case (.released(let kind), nil): .released(Context(chord: chord, press: kind, frontmostApp: down.into))
@@ -449,7 +447,7 @@ public final class Dictation {
         for await _ in streaming.wakes {
             let run = streaming.take()
             do {
-                streaming.landed(run, as: try await executor.insert(run.words, following: streaming.landed.performed, since: run.since))
+                streaming.landed(run, as: try await executor.insert(run.words, following: streaming.landed.performed.last, since: run.since))
             } catch {
                 streaming.stop()
                 // A run is one insert, so none of it was done, and what stopped it is the cause.
@@ -479,8 +477,8 @@ public final class Dictation {
         do {
             let decoded = await heard.decode.value
             let transcript = try decoded.transcript.get()
-            let performed = try await executor.insert(heard.streaming.rest(of: transcript), following: landed.performed, since: .keyUp(keyUp))
-            return Session(context: context, transcript: transcript, duringPress: heard.duringPress, keyUpToTranscript: decoded.at - keyUp, displaced: decoded.displaced, performed: landed.performed + (performed.map { [$0] } ?? []))
+            let performed = try await executor.insert(heard.streaming.rest(of: transcript), following: landed.performed.last, since: .keyUp(keyUp))
+            return Session(context: context, transcript: transcript, duringPress: heard.duringPress, keyUpToTranscript: decoded.at - keyUp, displaced: decoded.displaced, performed: landed.performed + [performed].compactMap { $0 })
         } catch {
             // [LAW:no-silent-failure] Whatever stopped the press, the report says how many of
             // its words are already at the cursor.
@@ -534,14 +532,13 @@ public struct SpeechLost: WordFree {
 /// the press went nowhere. [LAW:no-silent-failure]
 ///
 /// Word-free whatever stopped it: a cause that could carry words is named by its type.
-public struct PressStopped: StoppedPartWay, WordFree {
+public struct PressStopped: WordFree {
     /// The words committed before it stopped.
     public let landed: Int
     public let cause: any Error
 
     public var description: String {
-        let root = cause.causes.last ?? cause
-        return ((root as? any WordFree).map { "\($0)" } ?? "It stopped on \(type(of: root)).") + insertedBefore(landed)
+        ((cause as? any WordFree).map { "\($0)" } ?? "It stopped on \(type(of: cause)).") + insertedBefore(landed)
     }
 }
 
@@ -550,7 +547,7 @@ public struct PressStopped: StoppedPartWay, WordFree {
 /// A failure written as fact then consequence opens with WARNING and carries its own framing;
 /// any other is a bare technical line, so it is told what it is.
 public func failureLine(_ failure: any Error) -> String {
-    let root = "\(failure.causes.last ?? failure)"
+    let root = "\((failure as? PressStopped)?.cause ?? failure)"
     let landed = (failure as? PressStopped)?.landed ?? 0
     let framed = root.hasPrefix("WARNING:") ? root : "Your last dictation \(landed == 0 ? "was not placed" : "stopped"): \(root)"
     return framed + insertedBefore(landed)

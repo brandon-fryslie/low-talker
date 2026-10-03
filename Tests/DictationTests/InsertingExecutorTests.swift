@@ -54,7 +54,7 @@ import Testing
     @Test func wordsAtTheFocusAreInsertedAtTheCursor() async throws {
         let inputMethod = Self.inserting(into: Self.textEdit)
         let performed = try #require(await Executor(insertingThrough: inputMethod)
-            .insert(Transcript(typed: "héllo there"), following: [], since: .keyUp(.now)))
+            .insert(Transcript(typed: "héllo there"), following: nil, since: .keyUp(.now)))
 
         #expect(inputMethod.texts == ["héllo there"])
         #expect(performed.into == Self.textEdit)
@@ -68,7 +68,7 @@ import Testing
     /// commits where the cursor is then. [FRAMING:representation]
     @Test func theAppNamedIsTheOneTheInputMethodReached() async throws {
         let performed = try #require(await Executor(insertingThrough: Self.inserting(into: Self.slack))
-            .insert(Transcript(typed: "hi"), following: [], since: .keyUp(.now)))
+            .insert(Transcript(typed: "hi"), following: nil, since: .keyUp(.now)))
 
         #expect(performed.into == Self.slack)
         #expect("\(performed)".hasPrefix("inserted 2 characters at the cursor in com.tinyspeck.slackmacgap, key-up to acknowledged "))
@@ -79,9 +79,9 @@ import Testing
     @Test func eachInsertIsBoundToTheAppTheOneBeforeItReached() async throws {
         let inputMethod = Self.inserting(into: Self.textEdit)
         let executor = Executor(insertingThrough: inputMethod)
-        let first = try #require(await executor.insert(Transcript(typed: "one"), following: [], since: .keyDown(.now)))
-        let second = try #require(await executor.insert(Transcript(typed: " two"), following: [first], since: .keyDown(.now)))
-        _ = try await executor.insert(Transcript(typed: " three"), following: [first, second], since: .keyUp(.now))
+        let first = try #require(await executor.insert(Transcript(typed: "one"), following: nil, since: .keyDown(.now)))
+        let second = try #require(await executor.insert(Transcript(typed: " two"), following: first, since: .keyDown(.now)))
+        _ = try await executor.insert(Transcript(typed: " three"), following: second, since: .keyUp(.now))
 
         #expect(inputMethod.destinations == [.cursorInFront, .app(Self.textEdit.rawValue), .app(Self.textEdit.rawValue)])
     }
@@ -91,7 +91,7 @@ import Testing
         let inputMethod = Self.inserting(into: Self.textEdit)
         let executor = Executor(insertingThrough: inputMethod)
         for blank in [Transcript(words: []), Transcript(words: [.init(text: " ", time: 0...0, confidence: 1.0)])] {
-            #expect(try await executor.insert(blank, following: [], since: .keyUp(.now)) == nil)
+            #expect(try await executor.insert(blank, following: nil, since: .keyUp(.now)) == nil)
         }
         #expect(inputMethod.texts.isEmpty)
     }
@@ -104,7 +104,7 @@ import Testing
         let inputMethod = AnInputMethod { _ in throw refusal }
         let thrown = try await #require(throws: Refusal.self) {
             try await Executor(insertingThrough: inputMethod)
-                .insert(Transcript(typed: "héllo there"), following: [], since: .keyUp(.now))
+                .insert(Transcript(typed: "héllo there"), following: nil, since: .keyUp(.now))
         }
 
         #expect(thrown == refusal)
@@ -117,7 +117,7 @@ import Testing
         let inputMethod = AnInputMethod { _ in throw late }
         let thrown = try await #require(throws: NotYetTaken.self) {
             try await Executor(insertingThrough: inputMethod)
-                .insert(Transcript(typed: "héllo there"), following: [], since: .keyUp(.now))
+                .insert(Transcript(typed: "héllo there"), following: nil, since: .keyUp(.now))
         }
 
         #expect(thrown == late)
@@ -138,7 +138,7 @@ import Testing
         let inputMethod = AnInputMethod { _ in throw why }
         let thrown = try await #require(throws: Unreachable.self) {
             try await Executor(insertingThrough: inputMethod)
-                .insert(Transcript(typed: "héllo there"), following: [], since: .keyUp(.now))
+                .insert(Transcript(typed: "héllo there"), following: nil, since: .keyUp(.now))
         }
 
         #expect(thrown == why)

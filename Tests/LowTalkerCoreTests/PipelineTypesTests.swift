@@ -24,6 +24,16 @@ import Testing
         #expect(Transcript(words: []).text == "")
     }
 
+    /// A typed transcript splits into engine-shaped words and reads back verbatim.
+    @Test func typedTranscriptSplitsIntoWordsAndReadsBackUnchanged() {
+        let transcript = Transcript(typed: "  Hello,  world. ")
+        #expect(transcript.words.map(\.text) == ["  Hello,", "  world. "])
+        #expect(transcript.text == "  Hello,  world. ")
+        #expect(transcript.words.allSatisfy { $0.time == 0...0 && $0.confidence == 1.0 })
+        #expect(Transcript(typed: "").words.isEmpty)
+        #expect(Transcript(typed: "   ").words.isEmpty)
+    }
+
     /// A chord with nothing pressed is not a chord; the decoder refuses it.
     @Test func chordDecodeRejectsNoKeys() {
         let json = Data(#"{"modifiers": []}"#.utf8)

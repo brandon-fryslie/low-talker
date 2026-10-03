@@ -61,14 +61,14 @@ public struct Executor {
     /// what was done: nil for a blank transcript, which is nothing said and inserts nothing.
     /// Throws the input method's refusal or the channel's failure as it is.
     ///
-    /// `earlier` is what the same dictation already inserted. The insert goes only to the app
-    /// the one before it went to, so a dictation's words all land in one app, and the first
+    /// `last` is the same dictation's latest insert, if it made one. The insert goes only to
+    /// the app that one went to, so a dictation's words all land in one app, and the first
     /// goes to the cursor in front. [LAW:one-source-of-truth] Derived here from what landed,
     /// the one record of where that was.
     @discardableResult
-    public func insert(_ transcript: Transcript, following earlier: [Performed], since: Since) async throws -> Performed? {
+    public func insert(_ transcript: Transcript, following last: Performed?, since: Since) async throws -> Performed? {
         guard !transcript.isBlank else { return nil }
-        let destination = earlier.last.map { Destination.app($0.into.rawValue) } ?? .cursorInFront
+        let destination = last.map { Destination.app($0.into.rawValue) } ?? .cursorInFront
         // Awaited, so the round trip runs on a thread of its own: this is the main actor, and
         // `Inserter` says in its own contract that the blocking call must not pump it.
         // [LAW:no-ambient-temporal-coupling]
