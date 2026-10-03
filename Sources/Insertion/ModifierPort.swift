@@ -13,23 +13,30 @@ import Foundation
 /// flags that do not tell Right Option from Left, so the state is read from the window
 /// server's session instead, which does, and a state read that way can be ahead of the event
 /// that prompted it. A state is true whichever event it follows, and one that has not changed
-/// is recognisably nothing; a key named as having moved would be neither.
-/// [FRAMING:representation]
+/// is recognisably nothing; a key named as having moved would be neither. For the same reason
+/// it is dated by the session's last change and not by the event's. [FRAMING:representation]
 public struct HeldModifiers: Equatable, Sendable {
     /// The session's modifier flags, device-side bits included: a `CGEventFlags` raw value,
     /// a `SessionModifiers` reading's `flags`.
     public let flags: UInt64
-    /// When the change happened, in nanoseconds on the clock the machine has been up on.
+    /// When the latest change in `flags` happened, in nanoseconds on the clock the machine has
+    /// been up on.
     public let uptimeNanoseconds: UInt64
 
     public init(flags: UInt64, uptimeNanoseconds: UInt64) {
         self.flags = flags
         self.uptimeNanoseconds = uptimeNanoseconds
     }
+
+    /// What a reading of the session says is held, and since when.
+    public init(_ reading: SessionModifiers) {
+        // Rounded: seconds as a double do not land on whole nanoseconds.
+        self.init(flags: reading.flags, uptimeNanoseconds: UInt64((reading.changedAt * 1_000_000_000).rounded()))
+    }
 }
 
-/// One reading of the window server's session: its modifier flags as it gives them, and
-/// whether the Fn key itself is down. The session sets the secondary-Fn bit
+/// One reading of the window server's session: its modifier flags as it gives them, whether
+/// the Fn key itself is down, and when its modifiers last changed. The session sets the secondary-Fn bit
 /// (`NX_SECONDARYFNMASK`) for the arrow, Home, End, Page Up/Down and Forward Delete keys too,
 /// Fn held or not, so `flags` takes that bit from the Fn key's own state, read from the same
 /// session like the rest, with no tally kept of its presses.
@@ -38,15 +45,26 @@ public struct HeldModifiers: Equatable, Sendable {
 public struct SessionModifiers: Equatable, Sendable, CustomStringConvertible {
     public let session: UInt64
     public let fnKeyDown: Bool
+    /// When the session last saw a modifier key move, in seconds since the machine came up -
+    /// `NSEvent.timestamp`'s clock. Measured on studious, 2026-10-03: for keys pressed through
+    /// vhid it lands 1.5-9 ms after each one was sent.
+    public let changedAt: TimeInterval
 
-    public init(session: UInt64, fnKeyDown: Bool) {
+    public init(session: UInt64, fnKeyDown: Bool, changedAt: TimeInterval) {
         self.session = session
         self.fnKeyDown = fnKeyDown
+        self.changedAt = changedAt
     }
 
     public static func read() -> SessionModifiers {
-        SessionModifiers(session: CGEventSource.flagsState(.combinedSessionState).rawValue,
-                         fnKeyDown: CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(kVK_Function)))
+        let session = CGEventSource.flagsState(.combinedSessionState).rawValue
+        let fnKeyDown = CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(kVK_Function))
+        // [LAW:no-ambient-temporal-coupling] Dated after the keys are read, so a key that
+        // moves between the two reads makes the date late, never early: a reading is never
+        // dated before a change it shows.
+        let since = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .flagsChanged)
+        return SessionModifiers(session: session, fnKeyDown: fnKeyDown,
+                                changedAt: ProcessInfo.processInfo.systemUptime - since)
     }
 
     /// The modifiers held: the session's flags, with the secondary-Fn bit the Fn key's.
@@ -60,6 +78,7 @@ public struct SessionModifiers: Equatable, Sendable, CustomStringConvertible {
     public var description: String {
         "session 0x\(String(session, radix: 16)), Fn key \(fnKeyDown ? "down" : "up")"
             + (flags == session ? "" : ", held 0x\(String(flags, radix: 16))")
+            + ", changed at \(changedAt)"
     }
 }
 

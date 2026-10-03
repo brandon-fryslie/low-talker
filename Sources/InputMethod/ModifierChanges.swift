@@ -17,7 +17,9 @@ import os
 /// down, each one's event carried 0x80000 and the session 0x80160, a bit for each side.
 /// Reading it needs no grant. A state read a
 /// moment after its event can already hold the next change, which costs nothing: the app
-/// hears states, and a state is true whichever event it follows.
+/// hears states, and a state is true whichever event it follows. It is dated by the session's
+/// last change for the same reason, since the event's stamp would put a release the reading
+/// already shows back at the earlier event, and turn a hold into a tap.
 public final class ModifierChanges: Sendable {
     public static let shared = ModifierChanges()
 
@@ -32,15 +34,14 @@ public final class ModifierChanges: Sendable {
         (changes, continuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(64))
     }
 
-    /// A controller was handed a change of the modifier keys, stamped `timestamp` seconds
-    /// after the machine came up - `NSEvent.timestamp`, the clock the app's presses are on.
-    public func moved(at timestamp: TimeInterval) {
-        let reading = SessionModifiers.read()
+    /// A controller was handed a change of the modifier keys stamped `timestamp` seconds
+    /// after the machine came up - `NSEvent.timestamp`, the clock the app's presses are on -
+    /// and read the session as `reading` when it handled it.
+    public func moved(at timestamp: TimeInterval, reading: SessionModifiers) {
         // [LAW:nothing-unseen] One record per change told: the only window into this process.
+        // The event's stamp is here and nowhere else, so a reading that ran ahead of its event
+        // shows as the gap between it and the reading's date.
         log.info("modifiers moved at \(timestamp, privacy: .public): \(reading, privacy: .public)")
-        continuation.yield(HeldModifiers(
-            flags: reading.flags,
-            // Rounded: seconds as a double do not land on whole nanoseconds.
-            uptimeNanoseconds: UInt64((timestamp * 1_000_000_000).rounded())))
+        continuation.yield(HeldModifiers(reading))
     }
 }
