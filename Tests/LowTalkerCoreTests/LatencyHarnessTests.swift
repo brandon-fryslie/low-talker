@@ -159,14 +159,17 @@ private final class CaseSensitiveVolume {
 /// but the first, which it hears as nothing, the way a pass over leading quiet
 /// reads no words; so the harness's bookkeeping can be checked without weights.
 /// It remembers how many clips each utterance arrived in and what it was told
-/// to expect.
+/// to expect, and says each time it has heard a clip, after its partial.
 private final class FixedEar: Transcriber {
     let heard: String
     let holds = Mutex<[Int]>([])
     let told = Mutex<[Vocabulary]>([])
+    let clipsHeard: AsyncStream<Void>
+    private let clipHeard: AsyncStream<Void>.Continuation
 
     init(heard: String) {
         self.heard = heard
+        (clipsHeard, clipHeard) = AsyncStream.makeStream()
     }
 
     func transcribe(_ audio: some AsyncSequence<AudioClip, Never> & Sendable, expecting vocabulary: Vocabulary, partial: @escaping @Sendable (Partial) -> Void) async throws -> Transcript {
@@ -174,6 +177,7 @@ private final class FixedEar: Transcriber {
         for await _ in audio {
             clips += 1
             partial(Partial(confirmed: Transcript(words: []), tentative: Transcript(typed: clips == 1 ? "" : heard), repunctuated: 0))
+            clipHeard.yield()
         }
         holds.withLock { $0.append(clips) }
         told.withLock { $0.append(vocabulary) }
@@ -194,7 +198,7 @@ private final class FixedEar: Transcriber {
         var loads = 0
         let ear = FixedEar(heard: "See you at noon.")
         let vocabulary = Vocabulary([try Vocabulary.Term("noon")])
-        let report = try await LatencyHarness.measure(fixtures, arrivals: [.batch], servings: [.idle], reruns: 2, expecting: vocabulary) {
+        let report = try await LatencyHarness.measure(fixtures, arrivals: [.batch], servings: [.idle], reruns: 2, expecting: vocabulary, on: ContinuousClock()) {
             loads += 1
             return .alone(ear)
         }
@@ -215,18 +219,30 @@ private final class FixedEar: Transcriber {
     /// first text shows during the hold, on the first partial with words in it:
     /// the second buffer's, since the ear hears the first as nothing. Batched, the
     /// clip arrives whole at key-up and the first text can only follow the hold.
-    @Test func streamedArrivalHandsOverABufferAtATime() async throws {
+    ///
+    /// On `TestClock`, each chunk's moment comes only once the ear has heard the one
+    /// before, so the readings are the harness's timeline exactly, on any machine.
+    @Test(.timeLimit(.minutes(1))) func streamedArrivalHandsOverABufferAtATime() async throws {
         let clip = AudioClip(samples: Array(repeating: 0.1, count: AudioClip.sampleCount(for: 0.35)))
         let ear = FixedEar(heard: "hi")
-        let report = try await LatencyHarness.measure([try Self.fixture("held", says: "hi", clip: clip)], arrivals: [.batch, .streamed], servings: [.idle], reruns: 0, expecting: .empty) { .alone(ear) }
-        #expect(report.fixtures.map(\.arrival) == [.batch, .streamed])
-        #expect(ear.holds.withLock { $0 } == [1, 4])
+        let clock = TestClock()
+        let arrivals: [LatencyHarness.Arrival] = [.batch, .streamed]
+        let chunks = arrivals.map { clip.chunks(of: $0.chunk(of: clip)).count }
+        async let measured = LatencyHarness.measure([try Self.fixture("held", says: "hi", clip: clip)], arrivals: arrivals, servings: [.idle], reruns: 0, expecting: .empty, on: clock) { .alone(ear) }
+        var heard = ear.clipsHeard.makeAsyncIterator()
+        for _ in 0..<chunks.reduce(0, +) {
+            try await clock.advanceToNextDeadline()
+            await heard.next()
+        }
+        let report = try await measured
+        #expect(report.fixtures.map(\.arrival) == arrivals)
+        #expect(chunks == [1, 4])
+        #expect(ear.holds.withLock { $0 } == chunks)
         let batch = report.fixtures[0].first
         let streamed = report.fixtures[1].first
-        #expect(batch.holdToFirstText >= .seconds(0.35))
-        #expect(streamed.holdToFirstText >= .seconds(0.2))
-        #expect(streamed.holdToFirstText < .seconds(0.35))
-        #expect(streamed.keyUpToTranscript < .seconds(0.1))
+        #expect(batch.holdToFirstText == .seconds(0.35))
+        #expect(streamed.holdToFirstText == .seconds(0.2))
+        #expect(streamed.keyUpToTranscript == .zero)
     }
 
     /// While serving, every hold has three served callers around it: an upload begun
@@ -236,7 +252,7 @@ private final class FixedEar: Transcriber {
     @Test func servingAsksTheServedEngineAroundEveryHold() async throws {
         let spoken = FixedEar(heard: "hi")
         let served = FixedEar(heard: "served")
-        let report = try await LatencyHarness.measure([try Self.fixture("one", says: "hi")], arrivals: [.batch], servings: [.idle, .served], reruns: 1, expecting: .empty) {
+        let report = try await LatencyHarness.measure([try Self.fixture("one", says: "hi")], arrivals: [.batch], servings: [.idle, .served], reruns: 1, expecting: .empty, on: ContinuousClock()) {
             LatencyHarness.Engine(dictation: spoken, served: served, turns: EngineTurns())
         }
         #expect(report.fixtures.map(\.serving) == [.idle, .served])
@@ -268,7 +284,7 @@ private final class FixedEar: Transcriber {
     }
 
     @Test func aSingleRunIsItsOwnMedian() async throws {
-        let report = try await LatencyHarness.measure([try Self.fixture("one", says: "hi")], arrivals: [.batch], servings: [.idle], reruns: 0, expecting: .empty) {
+        let report = try await LatencyHarness.measure([try Self.fixture("one", says: "hi")], arrivals: [.batch], servings: [.idle], reruns: 0, expecting: .empty, on: ContinuousClock()) {
             .alone(FixedEar(heard: "hi"))
         }
         let result = report.fixtures[0]
