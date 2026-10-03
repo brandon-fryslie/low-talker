@@ -29,6 +29,16 @@ private let rightOptionHeld = HeldModifiers(flags: 0x80140, uptimeNanoseconds: 1
 /// that a sender it was not told to hear is not heard, and that is a different sender, not a
 /// different process. [LAW:behavior-not-structure]
 @Suite struct ModifierPortTests {
+    /// The session sets the secondary-Fn bit while an arrow key is down, and an arrow key is
+    /// not Fn; the Fn key down with nothing else is Fn. Every other bit is the session's.
+    @Test func theFnBitIsTheFnKeyItself() {
+        let fn: UInt64 = 0x800000
+        let rightOptionAndAnArrow = 0x80140 | fn
+        #expect(HeldModifiers.flags(session: rightOptionAndAnArrow, fnKeyDown: false) == 0x80140)
+        #expect(HeldModifiers.flags(session: 0x100 | fn, fnKeyDown: true) == 0x100 | fn)
+        #expect(HeldModifiers.flags(session: 0x80140, fnKeyDown: true) == 0x80140 | fn)
+    }
+
     @Test func heldModifiersSurviveTheWire() {
         #expect(Wire.heldModifiers(of: Wire.modifiers(rightOptionHeld)) == rightOptionHeld)
         #expect(Wire.heldModifiers(of: Data(repeating: 0, count: 15)) == nil)

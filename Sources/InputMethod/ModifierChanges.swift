@@ -1,4 +1,3 @@
-import CoreGraphics
 import Foundation
 import Insertion
 
@@ -35,7 +34,7 @@ public final class ModifierChanges: Sendable {
     /// after the machine came up - `NSEvent.timestamp`, the clock the app's presses are on.
     public func moved(at timestamp: TimeInterval) {
         continuation.yield(HeldModifiers(
-            flags: CGEventSource.flagsState(.combinedSessionState).rawValue,
+            flags: HeldModifiers.sessionFlags(),
             // Rounded: seconds as a double do not land on whole nanoseconds.
             uptimeNanoseconds: UInt64((timestamp * 1_000_000_000).rounded())))
     }

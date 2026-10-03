@@ -1,3 +1,5 @@
+import Carbon.HIToolbox
+import CoreGraphics
 import Darwin
 import DarwinCalls
 import Identity
@@ -14,7 +16,8 @@ import Foundation
 /// is recognisably nothing; a key named as having moved would be neither.
 /// [FRAMING:representation]
 public struct HeldModifiers: Equatable, Sendable {
-    /// The session's modifier flags, device-side bits included: a `CGEventFlags` raw value.
+    /// The session's modifier flags, device-side bits included: a `CGEventFlags` raw value,
+    /// read by `sessionFlags()`.
     public let flags: UInt64
     /// When the change happened, in nanoseconds on the clock the machine has been up on.
     public let uptimeNanoseconds: UInt64
@@ -22,6 +25,24 @@ public struct HeldModifiers: Equatable, Sendable {
     public init(flags: UInt64, uptimeNanoseconds: UInt64) {
         self.flags = flags
         self.uptimeNanoseconds = uptimeNanoseconds
+    }
+
+    /// The session's modifier flags as they stand, with the secondary-Fn bit
+    /// (`NX_SECONDARYFNMASK`) saying whether the Fn key itself is down. The session sets that
+    /// bit for the arrow, Home, End, Page Up/Down and Forward Delete keys too, Fn held or not,
+    /// so read as it comes it would hold Fn for an arrow key; the Fn key's own state is read
+    /// from the same session, like the rest, with no tally kept of its presses.
+    /// [LAW:one-source-of-truth] Both processes read the session through this: the input
+    /// method at each change it tells, and the app when it confirms what is still held.
+    public static func sessionFlags() -> UInt64 {
+        flags(session: CGEventSource.flagsState(.combinedSessionState).rawValue,
+              fnKeyDown: CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(kVK_Function)))
+    }
+
+    /// `session` with the secondary-Fn bit taken from `fnKeyDown`, and every other bit as read.
+    static func flags(session: UInt64, fnKeyDown: Bool) -> UInt64 {
+        let fn = CGEventFlags.maskSecondaryFn.rawValue
+        return session & ~fn | (fnKeyDown ? fn : 0)
     }
 }
 

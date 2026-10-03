@@ -721,6 +721,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return found
     }
 
+    /// What macOS also does with the Fn key when a chord the config listens for holds it, read
+    /// at the moment the menu opens, so a setting changed in System Settings shows the next
+    /// time it does. Nil when no chord holds Fn or the Globe key does nothing.
+    private func globeKeyClash() -> String? {
+        let stored = CFPreferencesCopyAppValue("AppleFnUsageType" as CFString, "com.apple.HIToolbox" as CFString) as? Int
+        let action = GlobeKeyAction(appleFnUsageType: stored)
+        let clash: String? = switch config {
+        case .success(let config): action.clash(with: config.chords)
+        // The status line already says why no chord is heard.
+        case .failure: nil
+        }
+        log.notice("hotkey: Globe key \(String(describing: action), privacy: .public); \(clash ?? "no clash with the chords", privacy: .public)")
+        return clash
+    }
+
     /// Everything the menu says, made here, every time, from what this Mac reads now.
     ///
     /// An `LSUIElement` app has no window to activate, so opening the menu is the moment
@@ -737,6 +752,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let microphone = capture.doing
         log.notice("microphone at rest: \(microphone, privacy: .public)")
         let unheard = unheardBecause()
+        let globeKey = globeKeyClash()
         let openAtLogin = loginItem.current
         loginLog.notice("open at login: \(openAtLogin, privacy: .public)")
 
@@ -750,6 +766,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(readout("Microphone: \(microphone)"))
         menu.addItem(readout("Hotkey: \(hotkeyStatus)"))
         for reason in unheard { menu.addItem(readout("    Not heard now: \(reason)")) }
+        globeKey.map { menu.addItem(readout("    \($0)")) }
         lastFailure.map { menu.addItem(readout($0)) }
         if running.refusal != nil { menu.addItem(readout("Config: \(running)")) }
         if benchRuns.isRunning { menu.addItem(readout("A benchmark is running: presses are refused until it ends")) }
