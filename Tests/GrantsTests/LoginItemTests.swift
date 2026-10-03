@@ -1,61 +1,72 @@
 import Grants
 import ServiceManagement
-import Synchronization
 import Testing
 
-private struct Refused: Error, Equatable {}
+private struct Refused: Error {}
 
 /// A Login Items list a test controls: a status, and what registering and unregistering
-/// make of it - or a refusal, as macOS gives for an item switched off in System Settings.
+/// make of it - or a refusal that leaves it where it was, as macOS gives for an item
+/// switched off in System Settings.
 private final class FakeService: LoginItemService {
-    private let status_: Mutex<SMAppService.Status>
+    private(set) var status: SMAppService.Status
     private let refusing: Bool
 
     init(status: SMAppService.Status, refusing: Bool = false) {
-        status_ = Mutex(status)
+        self.status = status
         self.refusing = refusing
     }
 
-    var status: SMAppService.Status { status_.withLock { $0 } }
-
     func register() throws {
         if refusing { throw Refused() }
-        status_.withLock { $0 = .enabled }
+        status = .enabled
     }
 
     func unregister() throws {
         if refusing { throw Refused() }
-        status_.withLock { $0 = .notRegistered }
+        status = .notRegistered
     }
 }
 
 @Suite struct LoginItemTests {
+    /// A never-registered app reads `notFound`, so it reads off with the unregistered one.
     @Test(arguments: [
         (SMAppService.Status.enabled, LoginItemStatus.on),
         (.notRegistered, .off),
+        (.notFound, .off),
         (.requiresApproval, .requiresApproval),
-        (.notFound, .notFound),
     ])
     func everyStatusMacOSReportsReadsAsItsOwnState(status: SMAppService.Status, reads: LoginItemStatus) {
         #expect(LoginItem(service: FakeService(status: status)).current == reads)
     }
 
-    @Test func choosingOnRegistersAndReadsBackOn() throws {
-        let item = LoginItem(service: FakeService(status: .notRegistered))
-        #expect(try item.choose(true) == .on)
+    @Test func aStatusFromALaterMacOSReadsAsUnrecognizedRatherThanTrapping() throws {
+        let later = try #require(SMAppService.Status(rawValue: 99))
+        #expect(LoginItem(service: FakeService(status: later)).current == .unrecognized(99))
+    }
+
+    @Test(arguments: [SMAppService.Status.notRegistered, .notFound])
+    func togglingAnItemNotChosenRegistersIt(status: SMAppService.Status) throws {
+        let item = LoginItem(service: FakeService(status: status))
+        #expect(try item.toggle() == .on)
         #expect(item.current == .on)
     }
 
-    @Test func choosingOffUnregistersAndReadsBackOff() throws {
-        let item = LoginItem(service: FakeService(status: .enabled))
-        #expect(try item.choose(false) == .off)
+    /// An item waiting on System Settings is chosen, so a click takes it out of the list
+    /// rather than asking again for what is already asked.
+    @Test(arguments: [SMAppService.Status.enabled, .requiresApproval])
+    func togglingAChosenItemUnregistersIt(status: SMAppService.Status) throws {
+        #expect(try LoginItem(service: FakeService(status: status)).toggle() == .off)
     }
 
-    /// An item switched off in System Settings is not switched back on from the app: the
-    /// refusal reaches the caller, and the status still says where it can be allowed.
-    @Test func aRefusedChoiceThrowsAndLeavesTheStatusSayingWhy() {
+    /// A refusal that leaves the item waiting on System Settings is answered there.
+    @Test func aRefusalLeftWaitingOnSystemSettingsIsAllowedOnlyThere() {
         let item = LoginItem(service: FakeService(status: .requiresApproval, refusing: true))
-        #expect(throws: Refused.self) { try item.choose(true) }
-        #expect(item.current == .requiresApproval)
+        #expect { try item.toggle() } throws: { ($0 as? LoginItemRefusal)?.allowedOnlyInSystemSettings == true }
+    }
+
+    /// Any other refusal has nothing for the person to do in System Settings.
+    @Test func aRefusalOfAnUnregisteredItemIsNotSentToSystemSettings() {
+        let item = LoginItem(service: FakeService(status: .notFound, refusing: true))
+        #expect { try item.toggle() } throws: { ($0 as? LoginItemRefusal)?.allowedOnlyInSystemSettings == false }
     }
 }

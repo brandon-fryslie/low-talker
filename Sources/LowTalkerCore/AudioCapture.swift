@@ -230,7 +230,7 @@ public final class AudioCapture {
         retaining duration: TimeInterval = defaultRetention,
         hardware: any AudioHardware = SystemAudioHardware(),
         startingAt origin: HostTime = .now,
-        reporting: @escaping @MainActor (DeviceReport) -> Void = { _ in }
+        reporting: @escaping @MainActor (DeviceReport) -> Void
     ) {
         self.hardware = hardware
         self.reporting = reporting
@@ -611,7 +611,8 @@ public final class AudioCapture {
         // top of a gap nothing had booked. Readying is the half that is owed either way -
         // skip it for a failed engine and the next press opens the device that stopped
         // being the default, which is the whole of what this defers. [LAW:no-silent-failure]
-        if !started.prepared.isOnTheDefaultInput {
+        let owed = !started.prepared.isOnTheDefaultInput
+        if owed {
             if case .running(let live) = started.engine {
                 dispose(live)
                 started.engine = .shut
@@ -635,6 +636,15 @@ public final class AudioCapture {
             }
         }
         phase = .started(started)
+        // The answer `leftForTheKeyUp` promised, given now: what the resting mode left the
+        // microphone on the new default doing. [LAW:nothing-unseen]
+        if owed {
+            let answer: DeviceReport.Answer = switch started.engine {
+            case .shut: .readied
+            case .running, .failed: .launched(Self.outcome(of: started.engine))
+            }
+            reporting(DeviceReport(cause: .pressEndedOffTheDefault, answer: answer))
+        }
     }
 
     /// Books the end of a gap in capture. [LAW:single-enforcer] A device that came back is
@@ -768,7 +778,10 @@ public final class AudioCapture {
     /// press has no way to notice and no way to recover from, because the `shut` branch of
     /// `beginSession` deliberately records no failure.
     private func recover() {
-        guard case .started(var started) = phase else { return }
+        guard case .started(var started) = phase else {
+            reporting(DeviceReport(cause: .defaultInputChanged, answer: .outdated))
+            return
+        }
         let answer: DeviceReport.Answer
         switch started.engine {
         // A running engine owns the input it was launched on: the disposal it holds is weak,
@@ -866,6 +879,8 @@ public struct DeviceReport: CustomStringConvertible {
         case defaultInputChanged = "the default input changed"
         /// The device a readied microphone is bound to went away or changed shape.
         case boundDeviceChanged = "the microphone's device went away or changed shape"
+        /// A press ended on a device that stopped being the default while it recorded.
+        case pressEndedOffTheDefault = "a press ended on an input that is no longer the default"
     }
 
     public enum Answer: CustomStringConvertible {

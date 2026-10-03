@@ -45,7 +45,7 @@ final class Rig {
         atRest: MicrophoneAtRest = .shut,
         frontmost: @escaping @Sendable @MainActor () throws -> BundleID = { textEdit }
     ) throws {
-        capture = AudioCapture(retaining: retaining, hardware: hardware, startingAt: Self.origin)
+        capture = AudioCapture(retaining: retaining, hardware: hardware, startingAt: Self.origin, reporting: { _ in })
         // Shut between presses unless a test says otherwise, which is the loop the app
         // runs when no config file asks for the microphone to be held.
         try capture.start(try MicrophonePermission(authority: Authorized()).current.grant(), atRest: atRest)

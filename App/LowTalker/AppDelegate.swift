@@ -358,17 +358,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         serving.map { $0.choose(!$0.chosen, at: config.map(\.serve)) }
     }
 
-    /// Opens the app at login, or stops it. macOS refuses to register an item a person has
-    /// switched off in System Settings, so a refusal opens that pane at the switch.
-    /// [LAW:no-silent-failure]
+    /// Opens the app at login, or stops it. An item switched off in System Settings can be
+    /// allowed only there, so that refusal opens the pane at the switch; any other is said in
+    /// an alert, since a click that shows nothing tells a person nothing. [LAW:no-silent-failure]
     @objc private func toggleOpenAtLogin() {
-        let wanted = loginItem.current != .on
         do {
-            let now = try loginItem.choose(wanted)
-            loginLog.notice("open at login: chose \(wanted ? "on" : "off", privacy: .public); \(now, privacy: .public)")
+            let now = try loginItem.toggle()
+            loginLog.notice("open at login: toggled; \(now, privacy: .public)")
         } catch {
-            loginLog.error("open at login: chose \(wanted ? "on" : "off", privacy: .public), refused: \(error, privacy: .public); \(self.loginItem.current, privacy: .public)")
-            SMAppService.openSystemSettingsLoginItems()
+            loginLog.error("open at login: refused: \(error, privacy: .public)")
+            if error.allowedOnlyInSystemSettings { SMAppService.openSystemSettingsLoginItems() }
+            else { NSAlert(error: error.reason).runModal() }
         }
     }
 
@@ -717,7 +717,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         login.state = switch openAtLogin {
         case .on: .on
         case .requiresApproval: .mixed
-        case .off, .notFound: .off
+        case .off, .unrecognized: .off
         }
         // Anything but plainly on or off is said under the item, since a checkmark cannot say it.
         if openAtLogin != .on, openAtLogin != .off { menu.addItem(readout("    \(openAtLogin)")) }
