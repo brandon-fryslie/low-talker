@@ -18,12 +18,37 @@ import Testing
         let utterance = Utterance()
         async let heard = utterance.audio(beyond: 1_600 + Utterance.hangover)
         await utterance.append(Self.speech(1_600))
-        await utterance.append(Self.speech(1))
+        await utterance.append(Self.speech(1_600))
         let (samples, ended, _) = await heard
-        #expect(samples.count == 1_601 + Utterance.hangover)
-        #expect(samples.prefix(1_601).allSatisfy { $0 == 0.5 })
-        #expect(samples.dropFirst(1_601).allSatisfy { $0 == 0 })
+        #expect(samples.count == 3_200 + Utterance.hangover)
+        #expect(samples.prefix(3_200).allSatisfy { $0 == 0.5 })
+        #expect(samples.dropFirst(3_200).allSatisfy { $0 == 0 })
         #expect(!ended)
+    }
+
+    /// Frames are cut from the audio appended, not from each clip: a microphone's buffers
+    /// of a hundredth of a second are judged in tenths, as one clip would be. A soft tenth
+    /// whose own peak stands within range of the loudest is speech, though half of its
+    /// hundredths, judged alone, would be quiet. A frame the end leaves short is judged
+    /// as it stands.
+    @Test func framesSpanTheClipsTheyArriveIn() async {
+        let loud = Self.speech(1_600).samples
+        let soft = (0..<10).flatMap { Array(repeating: Float($0.isMultiple(of: 2) ? 0.1 : 0.01), count: 160) }
+        let whole = Utterance()
+        await whole.append(AudioClip(samples: loud + soft))
+        let buffered = Utterance()
+        for buffer in AudioClip(samples: loud + soft).chunks(of: 0.01) {
+            await buffered.append(buffer)
+        }
+        let (fromWhole, _, _) = await whole.audio(beyond: 0)
+        let (fromBuffers, _, _) = await buffered.audio(beyond: 0)
+        #expect(fromWhole.count == 3_200 + Utterance.hangover)
+        #expect(fromBuffers == fromWhole)
+
+        let partway = Utterance()
+        await partway.append(Self.speech(1_599))
+        await partway.end()
+        #expect(await partway.audio(beyond: 0).samples.count == 1_599 + Utterance.hangover)
     }
 
     /// Quiet after speech is not more speech: the audio is what was spoken plus the
@@ -52,12 +77,12 @@ import Testing
         let utterance = Utterance()
         await utterance.append(Self.speech(1_600))
         await utterance.append(Self.quiet(16_000))
-        await utterance.append(Self.speech(800))
-        let (samples, _, timeline) = await utterance.audio(beyond: 0)
+        await utterance.append(Self.speech(1_600))
+        let (samples, _, timeline) = await utterance.audio(beyond: 1_600 + Utterance.hangover)
         let pause = Utterance.hangover + Utterance.leadIn
-        #expect(samples.count == 1_600 + pause + 800 + Utterance.hangover)
+        #expect(samples.count == 1_600 + pause + 1_600 + Utterance.hangover)
         #expect(samples[1_600..<1_600 + pause].allSatisfy { $0 == 0.001 })
-        #expect(samples[1_600 + pause..<2_400 + pause].allSatisfy { $0 == 0.5 })
+        #expect(samples[1_600 + pause..<3_200 + pause].allSatisfy { $0 == 0.5 })
         #expect(timeline.quiet == AudioClip.duration(for: 16_000 - pause))
     }
 

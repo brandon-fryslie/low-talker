@@ -281,10 +281,10 @@ extension Result {
         #expect(rig.turns.reading.holds == 0)
     }
 
-    /// Two presses insert in the order they were spoken, whichever decode finishes first:
-    /// the second is heard while the first is still waiting on its engine, and is inserted
-    /// after it, so the words of one can never land inside the other's.
-    @Test func sessionsAreInsertedInOrderWhicheverIsHeardFirst() async throws {
+    /// Two presses are heard and inserted in the order they were spoken: the second press's
+    /// decode takes the engine once the first has its transcript, so its passes cannot hold
+    /// up the first's last one, and the words of one can never land inside the other's.
+    @Test func sessionsAreHeardAndInsertedInOrder() async throws {
         let gate = Gate()
         let engine = FakeTranscriber { clip in
             // The first hold says "a" and waits; the second says "b" at once.
@@ -294,7 +294,9 @@ extension Result {
         let rig = try Rig(hearing: engine)
         rig.hold(speaking: [1])
         rig.hold(speaking: [2])
-        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { gate.waiting == 1 && engine.clips.count == 2 })
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { gate.waiting == 1 })
+        #expect(engine.clips.count == 1)
+        #expect(engine.hearing == [1])
         #expect(rig.inputMethod.inserted.isEmpty)
         gate.open()
         let first = try await rig.session()
@@ -509,6 +511,39 @@ extension Result {
         rig.hold()
         _ = try await rig.session()
         #expect(rig.inputMethod.inserted == ["a"])
+    }
+
+    /// A press that will not be inserted is reported in its turn even while the model it
+    /// would have been heard by is still loading: nothing it could say waits on the engine.
+    @Test func aPressThatWillNotBeInsertedIsReportedWhileTheEngineStillLoads() async throws {
+        let gate = Gate()
+        let rig = try Rig { await gate.wait(); return FakeTranscriber { _ in Transcript(typed: "a") } }
+        rig.lapse()
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.reported.raised })
+        #expect(await rig.report().failure is PressLapsed)
+        gate.open()
+    }
+
+    /// A press that will not be inserted stops its decode, so the engine goes back to whoever
+    /// is waiting rather than finishing words nobody will read, and the next press is heard.
+    @Test func aPressThatWillNotBeInsertedStopsItsDecode() async throws {
+        let stopped = Flag()
+        let engine = FakeTranscriber { clip in
+            guard clip.samples == [1, 2, 3] else { return Transcript(typed: "a") }
+            do {
+                try await Task.sleep(for: .seconds(3600))
+            } catch {
+                stopped.raise()
+                throw error
+            }
+            return Transcript(typed: "never")
+        }
+        let rig = try Rig(hearing: engine)
+        rig.lapse(speaking: [1, 2, 3])
+        #expect(await rig.report().failure is PressLapsed)
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { stopped.raised && rig.turns.reading.holds == 0 })
+        rig.hold(speaking: [4, 5])
+        #expect(try await rig.session().transcript.text == "a")
     }
 
     /// [LAW:no-silent-failure] Two presses the speaker made identically, told apart by
