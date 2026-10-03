@@ -8,10 +8,11 @@ import os
 ///
 /// [LAW:no-shared-mutable-globals] Shared for `FocusedClient`'s reason: `IMKServer` builds
 /// controllers out of a class name, so there is no constructor of ours to hand a sender to.
-/// It is one stream with one writer's door, `moved(at:)`, and one reader, the process's
-/// entry point, which does the sending.
+/// It is one stream with one writer's door, `moved(at:reading:)`, and one reader, the
+/// process's entry point, which does the sending.
 ///
-/// The state is read from the window server's session rather than off the event, because
+/// The state the controller hands it is read from the window server's session rather than
+/// off the event, because
 /// the event the text input system hands over carries flags that do not tell Right Option
 /// from Left, and the session's do - measured on studious, 2026-09-27: with both Option keys
 /// down, each one's event carried 0x80000 and the session 0x80160, a bit for each side.

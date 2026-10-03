@@ -67,13 +67,11 @@ import Testing
         moved.type = .flagsChanged
         moved.flags = .maskAlternate
         let event = try #require(NSEvent(cgEvent: moved))
-        let held = HeldModifiers(SessionModifiers.read())
+        let held = SessionModifiers.read().flags
         #expect(controller.handle(event, client: nil) == false, "Right Option was claimed by the input method")
-        // Within a millisecond: two readings of one date differ in their last nanoseconds.
-        let told = await ModifierChanges.shared.changes.first { @Sendable in
-            $0.flags == held.flags && Int64(bitPattern: $0.uptimeNanoseconds &- held.uptimeNanoseconds).magnitude < 1_000_000
-        }
-        #expect(told != nil)
+        let handled = UInt64((ProcessInfo.processInfo.systemUptime * 1_000_000_000).rounded())
+        let told = await ModifierChanges.shared.changes.first { @Sendable in $0.flags == held }
+        #expect(try #require(told).uptimeNanoseconds <= handled, "told as changed after it was read")
     }
 
     /// Right Option down at 0, Shift down at 100 ms, Right Option up at 400 ms, and the Shift
