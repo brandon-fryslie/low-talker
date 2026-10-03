@@ -10,21 +10,26 @@ public enum BenchEnding: Hashable, Sendable {
 }
 
 /// The app's one bench run at a time: starting it, cancelling it, telling the log what it
-/// does, and refusing a dictation press while it holds the Neural Engine, so neither a press
-/// nor a reading is measured against the other.
+/// does, and keeping the process's own engine to itself while it runs, so neither a press, a
+/// served request nor a reading is measured against another.
 ///
 /// [LAW:single-enforcer] The window and `LowTalker --bench` both start their run here, so
-/// every run is logged by this one owner, an event per row, and the refusal reads the same
-/// state the run sets. [LAW:nothing-unseen]
+/// every run is logged by this one owner, an event per row. Whose decode runs is `turns`'
+/// rule: a run holds them as a press does, so a served request waits it out, and starts only
+/// while no press holds them. Holds do not exclude each other, so a press asks `admitPress`,
+/// which reads the state the run sets. [LAW:nothing-unseen]
 @MainActor
 public final class BenchRuns {
     private var current: Task<Void, Never>?
     /// Rows the current run has emitted, for the line that says how it ended.
     private var rows = 0
+    private let turns: EngineTurns
     private let log: @Sendable (String) -> Void
 
-    /// `log` is where each event's line goes; the unified log unless a test listens.
-    public init(log: @escaping @Sendable (String) -> Void = BenchRuns.unifiedLog) {
+    /// `turns` are the ones the process's presses and server decode through; `log` is where
+    /// each event's line goes, the unified log unless a test listens.
+    public init(turns: EngineTurns, log: @escaping @Sendable (String) -> Void = BenchRuns.unifiedLog) {
+        self.turns = turns
         self.log = log
     }
 
@@ -36,15 +41,18 @@ public final class BenchRuns {
     }
 
     /// Runs `work`, logging and forwarding each event it emits and how it ended. Refused while
-    /// another run is going. The returned task ends once `ended` has been told.
+    /// another run is going or a press holds the engine. The returned task ends once `ended`
+    /// has been told.
     @discardableResult
     public func start(
         _ summary: String,
         work: @escaping @Sendable (_ emit: @escaping @Sendable (BenchEvent) async -> Void) async throws -> Void,
         events: @escaping @MainActor (BenchEvent) -> Void,
         ended: @escaping @MainActor (BenchEnding) -> Void
-    ) throws(BenchmarkRunning) -> Task<Void, Never> {
-        try admitPress()
+    ) throws(RunRefused) -> Task<Void, Never> {
+        guard !isRunning else { throw .benchmarkRunning }
+        guard turns.reading.holds == 0 else { throw .dictationHeld }
+        let hold = turns.hold()
         log("bench: started \(summary)")
         rows = 0
         let task = Task { [log] in
@@ -67,7 +75,8 @@ public final class BenchRuns {
                 // CancellationError; cancelled is what the person did, so it is what is said.
                 ending = Task.isCancelled || error is CancellationError ? .cancelled : .failed("\(error)")
             }
-            log("bench: \(Self.describe(ending, rows: rows))")
+            let displaced = hold.release()
+            log("bench: \(Self.describe(ending, rows: rows)); \(displaced)")
             current = nil
             ended(ending)
         }
@@ -95,6 +104,20 @@ public final class BenchRuns {
         let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "lowtalker", category: "bench")
         return { logger.notice("\($0, privacy: .public)") }
     }()
+}
+
+/// Why a run was not started.
+public enum RunRefused: Error, Equatable, CustomStringConvertible {
+    case benchmarkRunning
+    /// A press holds the engine until its transcript is out.
+    case dictationHeld
+
+    public var description: String {
+        switch self {
+        case .benchmarkRunning: "a benchmark is already running"
+        case .dictationHeld: "a dictation is being heard; run once its text is placed"
+        }
+    }
 }
 
 /// A dictation press made while a bench run holds the engine.

@@ -19,8 +19,9 @@ enum BenchTerminal {
         do { options = try BenchFlags.options(arguments) } catch { BenchFlags.exit(withError: error) }
         var printedHeader = false
         do {
-            // A run of its own in a fresh process, so the one refusal `start` has cannot arise.
-            try BenchRuns().start(options.description, work: { emit in
+            // A run of its own in a fresh process, with turns nothing else decodes through, so
+            // neither refusal `start` has can arise.
+            try BenchRuns(turns: EngineTurns()).start(options.description, work: { emit in
                 try await Bench.run(options, folders: BenchFolders(), carried: ModelStore.carried(by: .main), load: Bench.loadInPlace, emit: emit)
             }, events: { event in
                 switch event {

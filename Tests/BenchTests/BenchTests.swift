@@ -143,7 +143,7 @@ private final class Picked: Sendable {
         let ear = ScriptedEar()
         let plan = try BenchPlan(models: ["one"], arrivals: [.batch, .streamed], servings: [.idle], runs: 1, vocabulary: .empty)
         let lines = Mutex<[String]>([])
-        let runs = await BenchRuns { line in lines.withLock { $0.append(line) } }
+        let runs = await BenchRuns(turns: EngineTurns()) { line in lines.withLock { $0.append(line) } }
         let seen = Mutex<[BenchEvent]>([])
         let ending = Mutex<BenchEnding?>(nil)
         let options = BenchOptions(fixtures: picked.fixtures, store: .folder(picked.store), plan: plan)
@@ -155,7 +155,7 @@ private final class Picked: Sendable {
         await run.value
         let rows = seen.withLock { $0 }.compactMap { if case .row(let row) = $0 { row } else { nil } }
         #expect(rows.count == 2)
-        #expect(lines.withLock { $0 } == ["bench: started over a", "bench: loading one"] + rows.map { "bench row: \($0.fields)" } + ["bench: finished, 2 rows"])
+        #expect(lines.withLock { $0 } == ["bench: started over a", "bench: loading one"] + rows.map { "bench row: \($0.fields)" } + ["bench: finished, 2 rows; 0 served preempted, 0 served waiting"])
         #expect(rows[0].fields.hasPrefix("model=one fixture=a delivery=batch serving=idle audio_s=0.100 "))
         #expect(ending.withLock { $0 } == .finished)
     }
@@ -167,7 +167,7 @@ private final class Picked: Sendable {
         let ear = ScriptedEar(gate: Gate())
         let plan = try BenchPlan(models: ["one"], arrivals: [.batch], servings: [.idle], runs: 3, vocabulary: .empty)
         let lines = Mutex<[String]>([])
-        let runs = await BenchRuns { line in lines.withLock { $0.append(line) } }
+        let runs = await BenchRuns(turns: EngineTurns()) { line in lines.withLock { $0.append(line) } }
         let ending = Mutex<BenchEnding?>(nil)
         let options = BenchOptions(fixtures: picked.fixtures, store: .folder(picked.store), plan: plan)
         let run = try await runs.start("over a", work: { emit in
@@ -179,16 +179,37 @@ private final class Picked: Sendable {
 
         await #expect(throws: BenchmarkRunning()) { try await runs.admitPress() }
         #expect("\(BenchmarkRunning())".hasPrefix("a benchmark is running"))
-        await #expect(throws: BenchmarkRunning()) {
+        await #expect(throws: RunRefused.benchmarkRunning) {
             try await runs.start("again", work: { _ in }, events: { _ in }, ended: { _ in })
         }
 
         await runs.cancel()
         await run.value
         #expect(ending.withLock { $0 } == .cancelled)
-        #expect(lines.withLock { $0 }.last == "bench: cancelled after 0 rows")
+        #expect(lines.withLock { $0 }.last == "bench: cancelled after 0 rows; 0 served preempted, 0 served waiting")
         try await runs.admitPress()
         #expect(await !runs.isRunning)
+    }
+
+    /// A run takes the process's turns as a press does, so a served request waits it out, and
+    /// is refused while a press already holds them.
+    @Test func aRunHoldsTheEngineAndWaitsForNoPress() async throws {
+        let turns = EngineTurns()
+        let runs = await BenchRuns(turns: turns) { _ in }
+        let press = turns.hold()
+        await #expect(throws: RunRefused.dictationHeld) {
+            try await runs.start("held", work: { _ in }, events: { _ in }, ended: { _ in })
+        }
+        #expect(await !runs.isRunning)
+        press.release()
+
+        let gate = Gate()
+        let run = try await runs.start("holding", work: { _ in await gate.wait(); try Task.checkCancellation() }, events: { _ in }, ended: { _ in })
+        while gate.waiting == 0 { await Task.yield() }
+        #expect(turns.reading.holds == 1)
+        await runs.cancel()
+        await run.value
+        #expect(turns.reading.holds == 0)
     }
 
     /// The flags and the window build one value: each flag lands where the window's control

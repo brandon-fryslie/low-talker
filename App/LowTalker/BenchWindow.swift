@@ -155,18 +155,27 @@ final class BenchWindow: NSObject, NSTableViewDataSource {
         cancelButton.isEnabled = runs.isRunning
     }
 
-    /// A box per model the store has recorded; the default model, or else the first, checked.
+    /// A box per model the store has recorded, checked as the person left it; while none of
+    /// the store's models is, the default model, or else the first.
     /// [LAW:no-silent-failure] A store that cannot be listed says why where the boxes go.
     private func drawModels() {
+        let checked = Set(checkedModels)
         modelBoxes.arrangedSubviews.forEach { $0.removeFromSuperview() }
         do {
             let recorded = try recordedModels()
+            let fallback = recorded.contains(.default) ? ModelName.default : recorded.first
+            let keeps = recorded.contains(where: checked.contains)
             for model in recorded {
-                modelBoxes.addArrangedSubview(check(model.rawValue, on: model == (recorded.contains(.default) ? .default : recorded.first)))
+                modelBoxes.addArrangedSubview(check(model.rawValue, on: keeps ? checked.contains(model) : model == fallback))
             }
         } catch {
             modelBoxes.addArrangedSubview(NSTextField(labelWithString: "this store cannot be listed: \(error)"))
         }
+    }
+
+    /// The models whose boxes are checked, in the order the store lists them.
+    private var checkedModels: [ModelName] {
+        modelBoxes.arrangedSubviews.compactMap { $0 as? NSButton }.filter { $0.state == .on }.compactMap { ModelName(rawValue: $0.title) }
     }
 
     private func recordedModels() throws -> [ModelName] {
@@ -245,7 +254,7 @@ final class BenchWindow: NSObject, NSTableViewDataSource {
     /// The options the controls show, or why they are not a run.
     private func options() throws -> BenchOptions {
         guard let fixtures else { throw NothingPicked() }
-        let models = modelBoxes.arrangedSubviews.compactMap { $0 as? NSButton }.filter { $0.state == .on }.compactMap { ModelName(rawValue: $0.title) }
+        let models = checkedModels
         let terms = try vocabulary.stringValue.split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }

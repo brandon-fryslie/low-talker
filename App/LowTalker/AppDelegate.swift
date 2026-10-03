@@ -345,8 +345,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - the bench
 
-    /// The one bench run at a time, which presses ask before they take the engine.
-    private let benchRuns = BenchRuns()
+    /// The one bench run at a time, which presses ask before they take the engine. It holds
+    /// the app's turns for a run, so a served request waits for it as for a press.
+    private lazy var benchRuns = BenchRuns(turns: turns)
 
     private lazy var bench = BenchWindow(runs: benchRuns, carried: ModelStore.carried(by: .main))
 
