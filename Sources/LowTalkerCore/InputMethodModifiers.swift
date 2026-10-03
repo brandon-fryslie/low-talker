@@ -38,9 +38,12 @@ public struct InputMethodModifiers: ModifierFeed {
         }
         private var told: ToldModifiers
         private var confirming: DispatchSourceTimer?
+        /// The port's queue, where the session is read too.
+        private let hearing: DispatchQueue
 
-        init(told: ToldModifiers) {
+        init(told: ToldModifiers, hearing: DispatchQueue) {
             self.told = told
+            self.hearing = hearing
         }
 
         func heard(_ moves: [KeyEvent]) {
@@ -53,19 +56,28 @@ public struct InputMethodModifiers: ModifierFeed {
                             at: HostTime(uptime: .nanoseconds(state.uptimeNanoseconds))))
         }
 
+        func confirmed(_ session: Set<Modifier>, at time: HostTime) {
+            heard(told.confirm(session: session, at: time))
+        }
+
         /// [LAW:dataflow-not-control-flow] The session is read for as long as the tap is
         /// open and something is held, derived from those two facts wherever either changes,
         /// so there is no starting or stopping of it to get out of step with them.
+        ///
+        /// Read on the port's queue and handed on as its messages are, so a reading follows
+        /// every message that reached the port before it, and its stamp is when it was read,
+        /// not when the main queue got to it. [LAW:no-ambient-temporal-coupling]
         private func settleConfirming() {
             switch (open != nil && !told.held.isEmpty, confirming) {
             case (true, nil):
-                let timer = DispatchSource.makeTimerSource(queue: .main)
+                let timer = DispatchSource.makeTimerSource(queue: hearing)
                 timer.schedule(deadline: .now() + InputMethodModifiers.confirming, repeating: InputMethodModifiers.confirming,
                                leeway: .milliseconds(50))
-                timer.setEventHandler { [unowned self] in
-                    MainActor.assumeIsolated {
-                        heard(told.confirm(session: Modifier.heldInSession(), at: .now))
-                    }
+                // Held by the timer until it is cancelled, so a reading on its way to the
+                // main queue still has somewhere to land.
+                timer.setEventHandler { [self] in
+                    let (session, time) = (Modifier.heldInSession(), HostTime.now)
+                    DispatchQueue.main.async { MainActor.assumeIsolated { self.confirmed(session, at: time) } }
                 }
                 timer.resume()
                 confirming = timer
@@ -83,13 +95,14 @@ public struct InputMethodModifiers: ModifierFeed {
     public func install(handling handle: @escaping @MainActor (KeyEvent) -> Void) throws -> Disposal {
         // What is held as listening begins is read, not assumed to be nothing, so a key
         // already down when this comes up is not heard going down when it next moves.
-        let installed = Installed(told: ToldModifiers(held: Modifier.heldInSession()))
+        let hearing = DispatchQueue(label: AppIdentity.hotkeyPortName)
+        let installed = Installed(told: ToldModifiers(held: Modifier.heldInSession()), hearing: hearing)
         let log = Logger(subsystem: AppIdentity.bundleIdentifier, category: "hotkey")
         // Checked and read off the main thread, where the keys and the menu are, and handed
         // to it in the order the input method sent them: the main queue is first in, first
         // out, which keeps a key's down ahead of its up. [LAW:no-ambient-temporal-coupling]
         let port = try ModifierPort(
-            queue: DispatchQueue(label: AppIdentity.hotkeyPortName),
+            queue: hearing,
             told: { event in log.error("\(event.description, privacy: .public)") },
             heard: { state in DispatchQueue.main.async { MainActor.assumeIsolated { installed.heard(state) } } })
         installed.open = (port, handle)

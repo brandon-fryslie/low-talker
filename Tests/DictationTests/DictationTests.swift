@@ -102,7 +102,13 @@ final class Rig {
     func hold(speaking samples: [Float] = [1, 2, 3]) {
         dictation.press(.began(Self.rightOption, at: now))
         speak(samples)
-        dictation.press(.ended(Self.rightOption, .released(.hold)))
+        keyUp()
+    }
+
+    /// The key of a hold coming up, its event stamped on the real host clock - the clock
+    /// key-up figures are timed by - and told to the loop `late` after it was stamped.
+    func keyUp(deliveredLate late: Duration = .zero) {
+        dictation.press(.ended(Self.rightOption, .released(.hold, at: HostTime(uptime: HostTime.now.uptime - late))))
     }
 
     /// A hold that opens no microphone, because something refused the press before one
@@ -111,7 +117,7 @@ final class Rig {
     /// the state being described.
     func refusedHold() {
         dictation.press(.began(Self.rightOption, at: now))
-        dictation.press(.ended(Self.rightOption, .released(.hold)))
+        keyUp()
     }
 
     /// The same hold, ended by the hotkey stopping rather than by the speaker letting
@@ -185,7 +191,7 @@ extension Result {
         rig.inputMethod.hold()
         rig.speak([5, 6])
         #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.inputMethod.holding == 1 })
-        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        rig.keyUp()
         rig.inputMethod.letGo()
         let session = try await rig.session()
         #expect(rig.inputMethod.inserted == ["hello", " there", " my", " friend"])
@@ -213,7 +219,7 @@ extension Result {
         rig.inputMethod.refusing(Refusal.cursorIsInAnotherApp)
         rig.speak([3, 4])
         #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { engine.hearing == [1, 2, 3, 4] })
-        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        rig.keyUp()
         let stopped = try #require(await rig.report().failure as? PressStopped)
         #expect(stopped.landed == 1)
         #expect(stopped.cause as? Refusal == .cursorIsInAnotherApp)
@@ -236,7 +242,7 @@ extension Result {
         rig.inputMethod.reaching(BundleID(rawValue: "com.apple.finder"))
         rig.speak([3, 4])
         #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { engine.hearing == [1, 2, 3, 4] })
-        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        rig.keyUp()
         let stopped = try #require(await rig.report().failure as? PressStopped)
         #expect(stopped.landed == 1)
         #expect(stopped.cause as? Refusal == .dictationIsInAnotherApp)
@@ -254,7 +260,7 @@ extension Result {
         rig.speak([1, 2])
         #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.inputMethod.inserted == ["hello"] })
         rig.inputMethod.reaching(BundleID(rawValue: "com.apple.finder"))
-        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        rig.keyUp()
         let stopped = try #require(await rig.report().failure as? PressStopped)
         #expect(stopped.landed == 1)
         #expect(stopped.cause as? Refusal == .dictationIsInAnotherApp)
@@ -271,7 +277,7 @@ extension Result {
         rig.dictation.press(.began(Rig.rightOption, at: rig.now))
         rig.speak([1, 2])
         #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.turns.reading.holds == 0 })
-        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        rig.keyUp()
         #expect(try #require(await rig.report().failure as? PressStopped).landed == 0)
     }
 
@@ -297,7 +303,7 @@ extension Result {
         rig.dictation.press(.began(Rig.rightOption, at: rig.now))
         rig.speak([1, 2])
         #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.inputMethod.inserted == ["hello there"] })
-        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        rig.keyUp()
         let stopped = try #require(await rig.report().failure as? PressStopped)
         #expect(stopped.cause is NoEngine)
         #expect(stopped.landed == 2)
@@ -317,7 +323,7 @@ extension Result {
         rig.speak([1, 2])
         #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.turns.reading.holds == 0 })
         #expect(rig.inputMethod.inserted.isEmpty)
-        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        rig.keyUp()
         let press = try #require(await rig.report().failure as? SpeechLost)
         #expect(press.lost.unopened)
         #expect(press.landed == 0)
@@ -355,7 +361,7 @@ extension Result {
         #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { engine.hearing == [1, 2] })
         #expect(engine.clips.isEmpty)
         let read = HostTime.now
-        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        rig.keyUp()
         let session = try await rig.session()
         #expect(engine.clips.map(\.samples) == [[1, 2]])
         #expect(session.duringPress.passes >= 1)
@@ -364,6 +370,23 @@ extension Result {
         #expect(firstWords > .zero && firstWords <= read - keyDown)
         #expect("\(session)".contains("passes during the press, 2 repunctuating a settled word, first words \(Int(firstWords / .milliseconds(1))) ms after key-down"))
         #expect(rig.inputMethod.inserted == ["hello"])
+    }
+
+    /// A key-up told late is timed from where the key came up, as a key-down is: the input
+    /// method's hop to the app and the main queue's wait behind it are inside every key-up
+    /// figure, and the session names how long the telling took.
+    @Test func aKeyUpDeliveredLateIsTimedFromTheKeyComingUp() async throws {
+        let rig = try Rig(hearing: FakeTranscriber { _ in Transcript(typed: "hi") })
+        let late = Duration.milliseconds(300)
+        rig.dictation.press(.began(Rig.rightOption, at: rig.now))
+        rig.speak([1, 2, 3])
+        rig.keyUp(deliveredLate: late)
+        let session = try await rig.session()
+        #expect(session.keyUpDelivery >= late)
+        #expect(session.keyUpToTranscript >= session.keyUpDelivery)
+        let insert = try #require(session.performed.last)
+        #expect(insert.since == .up && insert.acknowledged >= session.keyUpDelivery)
+        #expect("\(session)".contains("after key-up (delivered \(Int(session.keyUpDelivery / .milliseconds(1))) ms after it;"))
     }
 
     /// A press whose engine read nothing before the key came up says so, rather than
@@ -418,7 +441,7 @@ extension Result {
 
         rig.dictation.press(.began(Rig.rightOption, at: duringTheFirstPress))
         rig.speak([4, 5])
-        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        rig.keyUp()
         _ = try await rig.session()
         #expect(engine.clips.map(\.samples) == [[1, 2, 3], [4, 5]])
     }
@@ -454,7 +477,7 @@ extension Result {
         rig.dictation.press(.began(Rig.rightOption, at: rig.now))
         #expect(rig.turns.reading.holds == 1)
         rig.speak([1, 2, 3])
-        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        rig.keyUp()
         #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { gate.waiting == 1 })
         #expect(rig.turns.reading.holds == 1)
         gate.open()
@@ -516,7 +539,7 @@ extension Result {
         rig.wait(AudioCapture.warmUpAllowance + 0.4)
         rig.dictation.press(.began(Rig.rightOption, at: keyWentDown))
         rig.speak([1, 2, 3])
-        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        rig.keyUp()
 
         let press = try #require(await rig.report().failure as? SpeechLost)
         #expect(press.chord == Rig.rightOption)
@@ -789,7 +812,7 @@ extension Result {
         rig.speak([1, 2])
         rig.changeDevice()
         rig.speak([3, 4])
-        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        rig.keyUp()
 
         let press = try #require(await rig.report().failure as? SpeechLost)
         #expect(press.chord == Rig.rightOption)
@@ -824,7 +847,7 @@ extension Result {
         // captured over it and the positions either side of it are adjacent.
         rig.wait(0.3)
         rig.speak([3, 4])
-        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        rig.keyUp()
 
         let press = try #require(await rig.report().failure as? SpeechLost)
         #expect(press.lost.interrupted)
@@ -875,7 +898,7 @@ extension Result {
         rig.dictation.press(.began(Rig.rightOption, at: rig.now))
         rig.speak([1, 2])
         rig.hardware.live.onFailure(BadBuffer())
-        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        rig.keyUp()
 
         let press = try #require(await rig.report().failure as? SpeechLost)
         #expect(press.chord == Rig.rightOption)
@@ -898,7 +921,7 @@ extension Result {
         rig.dictation.press(.began(Rig.rightOption, at: rig.now))
         #expect(rig.shown.activities == [.listening(heard: Transcript(words: []))])
         rig.speak([1, 2, 3])
-        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        rig.keyUp()
         #expect(rig.shown.activities == [.listening(heard: Transcript(words: [])), .transcribing])
         gate.open()
         _ = try await rig.session()
@@ -920,7 +943,7 @@ extension Result {
         rig.speak([4])
         #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { engine.hearing == [1, 2, 3, 4] })
         #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.shown.activities.last == .listening(heard: Transcript(typed: " hello")) })
-        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        rig.keyUp()
         _ = try await rig.session()
         #expect(rig.shown.activities == [.listening(heard: Transcript(words: [])), .listening(heard: Transcript(typed: " hello")), .transcribing, .idle])
     }
@@ -943,7 +966,7 @@ extension Result {
         rig.dictation.press(.began(Rig.rightOption, at: rig.now))
         #expect(rig.shown.activities == [.listening(heard: Transcript(words: [])), .transcribing, .listening(heard: Transcript(words: []))])
         rig.speak([4, 5])
-        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        rig.keyUp()
         gate.open()
         _ = try await rig.session()
         _ = try await rig.session()

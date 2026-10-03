@@ -66,7 +66,7 @@ private func rightOption(_ direction: KeyEvent.Direction, at ms: Int64) -> KeyEv
         #expect(transitions == [.began(rightOption, at: at(0))])
         installation.handle(rightOption(.up, at: 400))
         await settle()
-        #expect(transitions == [.began(rightOption, at: at(0)), .ended(rightOption, .released(.hold))])
+        #expect(transitions == [.began(rightOption, at: at(0)), .ended(rightOption, .released(.hold, at: at(400)))])
     }
 
     /// Every transition leaves by the main queue, never from inside the feed's call, so a

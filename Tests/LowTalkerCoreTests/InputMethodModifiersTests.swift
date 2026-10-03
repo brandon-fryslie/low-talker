@@ -42,13 +42,13 @@ private let twoKeys = KeyChord(modifiers: .rightOption, .rightCommand)
 @Suite struct InputMethodModifiersTests {
     @Test func aHoldBeginsAtThePressAndEndsAtTheRelease() {
         var told = Told(listeningFor: oneKey)
-        #expect(told.told([([.rightOption], 0), ([], 600)]) == [.began(oneKey, at: at(0)), .ended(oneKey, .released(.hold))])
+        #expect(told.told([([.rightOption], 0), ([], 600)]) == [.began(oneKey, at: at(0)), .ended(oneKey, .released(.hold, at: at(600)))])
     }
 
     @Test func aTapLatchesUntilTheNextPress() {
         var told = Told(listeningFor: oneKey)
         #expect(told.told([([.rightOption], 0), ([], 100)]) == [.began(oneKey, at: at(0))])
-        #expect(told.told([([.rightOption], 2000), ([], 2100)]) == [.ended(oneKey, .released(.tap))])
+        #expect(told.told([([.rightOption], 2000), ([], 2100)]) == [.ended(oneKey, .released(.tap, at: at(2000)))])
     }
 
     /// VS Code hands the input method every change twice, measured on studious,
@@ -72,7 +72,7 @@ private let twoKeys = KeyChord(modifiers: .rightOption, .rightCommand)
     @Test func anotherModifierDuringAHoldChangesNothing() {
         var told = Told(listeningFor: oneKey)
         #expect(told.told([([.rightOption], 0), ([.rightOption, .leftShift], 200), ([.rightOption], 300), ([], 600)])
-            == [.began(oneKey, at: at(0)), .ended(oneKey, .released(.hold))])
+            == [.began(oneKey, at: at(0)), .ended(oneKey, .released(.hold, at: at(600)))])
     }
 
     /// Right Command then Right Option is the chord of both, and a listener for Right
@@ -82,7 +82,7 @@ private let twoKeys = KeyChord(modifiers: .rightOption, .rightCommand)
         var hearingTwoKeys = Told(listeningFor: twoKeys)
         let states: [(Set<Modifier>, Int64)] = [([.rightCommand], 0), ([.rightCommand, .rightOption], 50), ([], 700)]
         #expect(hearingOneKey.told(states).isEmpty)
-        #expect(hearingTwoKeys.told(states) == [.began(twoKeys, at: at(50)), .ended(twoKeys, .released(.hold))])
+        #expect(hearingTwoKeys.told(states) == [.began(twoKeys, at: at(50)), .ended(twoKeys, .released(.hold, at: at(700)))])
     }
 
     /// Both keys arriving in one state - pressed inside the moment the input method took to
@@ -93,7 +93,7 @@ private let twoKeys = KeyChord(modifiers: .rightOption, .rightCommand)
         var hearingTwoKeys = Told(listeningFor: twoKeys)
         let states: [(Set<Modifier>, Int64)] = [([.rightCommand, .rightOption], 0), ([], 700)]
         #expect(hearingOneKey.told(states).isEmpty)
-        #expect(hearingTwoKeys.told(states) == [.began(twoKeys, at: at(0)), .ended(twoKeys, .released(.hold))])
+        #expect(hearingTwoKeys.told(states) == [.began(twoKeys, at: at(0)), .ended(twoKeys, .released(.hold, at: at(700)))])
     }
 
     /// A release the input method was never handed - focus moved to where it hears nothing
@@ -102,7 +102,7 @@ private let twoKeys = KeyChord(modifiers: .rightOption, .rightCommand)
     @Test func aReleaseThatWasNotToldIsHeardInTheNextState() {
         var told = Told(listeningFor: oneKey)
         #expect(told.told([([.rightOption], 0), ([.leftShift], 900)])
-            == [.began(oneKey, at: at(0)), .ended(oneKey, .released(.hold))])
+            == [.began(oneKey, at: at(0)), .ended(oneKey, .released(.hold, at: at(900)))])
     }
 
     /// A release the input method is never told at all - let go over the Desktop, or its
@@ -111,7 +111,7 @@ private let twoKeys = KeyChord(modifiers: .rightOption, .rightCommand)
     @Test func aReleaseTheSessionNoLongerHoldsIsHeard() {
         var told = Told(listeningFor: oneKey)
         #expect(told.holding([.rightOption], at: 0) == [.began(oneKey, at: at(0))])
-        #expect(told.session([], at: 800) == [.ended(oneKey, .released(.hold))])
+        #expect(told.session([], at: 800) == [.ended(oneKey, .released(.hold, at: at(800)))])
     }
 
     /// The session only confirms: a key down there that the input method never told is not
@@ -128,7 +128,7 @@ private let twoKeys = KeyChord(modifiers: .rightOption, .rightCommand)
     @Test func aStateOlderThanTheSessionsReleaseDoesNotPressItAgain() {
         var told = Told(listeningFor: oneKey)
         #expect(told.holding([.rightOption], at: 0) == [.began(oneKey, at: at(0))])
-        #expect(told.session([], at: 800) == [.ended(oneKey, .released(.hold))])
+        #expect(told.session([], at: 800) == [.ended(oneKey, .released(.hold, at: at(800)))])
         #expect(told.holding([.rightOption], at: 700).isEmpty)
         #expect(told.holding([.rightOption], at: 2000) == [.began(oneKey, at: at(2000))])
     }
@@ -142,7 +142,7 @@ private let twoKeys = KeyChord(modifiers: .rightOption, .rightCommand)
         #expect(told.session([.rightOption], at: 1002).isEmpty)
         #expect(told.holding([], at: 990).isEmpty)
         #expect(told.holding([.rightOption], at: 1000) == [.began(oneKey, at: at(1000))])
-        #expect(told.holding([], at: 1700) == [.ended(oneKey, .released(.hold))])
+        #expect(told.holding([], at: 1700) == [.ended(oneKey, .released(.hold, at: at(1700)))])
     }
 
     /// A chord of two keys completed while a session read let go of nothing in between
