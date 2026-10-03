@@ -906,19 +906,23 @@ extension Result {
     }
 
     /// While the key is down, what the press's passes read is shown as they read it, and a
-    /// pass that reads nothing new shows nothing again.
+    /// pass that rereads the same words, however it times them, shows nothing again.
     @Test func aPressShowsWhatItsPassesReadWhileTheKeyIsDown() async throws {
-        let engine = FakeTranscriber(reading: { Transcript(typed: $0.count < 2 ? "" : "hello") }) { _ in Transcript(typed: "hello") }
+        let engine = FakeTranscriber(reading: { heard in
+            heard.count < 2 ? Transcript(words: [])
+                : Transcript(words: [.init(text: " hello", time: 0...Double(heard.count), confidence: 0.9)])
+        }) { _ in Transcript(typed: "hello") }
         let rig = try Rig(hearing: engine)
         rig.dictation.press(.began(Rig.rightOption, at: rig.now))
         rig.speak([1])
         rig.speak([2])
         rig.speak([3])
-        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { engine.hearing == [1, 2, 3] })
-        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.shown.activities.last == .listening(heard: Transcript(typed: "hello")) })
+        rig.speak([4])
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { engine.hearing == [1, 2, 3, 4] })
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.shown.activities.last == .listening(heard: Transcript(typed: " hello")) })
         rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
         _ = try await rig.session()
-        #expect(rig.shown.activities == [.listening(heard: Transcript(words: [])), .listening(heard: Transcript(typed: "hello")), .transcribing, .idle])
+        #expect(rig.shown.activities == [.listening(heard: Transcript(words: [])), .listening(heard: Transcript(typed: " hello")), .transcribing, .idle])
     }
 
     /// A press refused its microphone is never shown as listening, and its failure, once

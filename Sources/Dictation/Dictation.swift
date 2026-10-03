@@ -111,7 +111,8 @@ public final class Dictation {
             /// Nil while the key is down.
             var keyUp: ContinuousClock.Instant?
             var confirmed: [Transcript.Word] = []
-            /// Everything the latest pass read, confirmed then tentative.
+            /// The text the latest pass read, confirmed then tentative, without its timings:
+            /// a pass that rereads the same words has read nothing new.
             var heard = Transcript(words: [])
             var cursor = ConfirmedCursor()
             /// False once the press stops committing.
@@ -159,7 +160,7 @@ public final class Dictation {
                 state.repunctuated = partial.repunctuated
                 state.firstWords = state.firstWords ?? (partial.text.isEmpty ? nil : now - keyDown)
                 state.confirmed = partial.confirmed.words
-                state.heard = Transcript(words: partial.confirmed.words + partial.tentative.words)
+                state.heard = Transcript(typed: partial.text)
             }
             wake.yield()
             read.yield()

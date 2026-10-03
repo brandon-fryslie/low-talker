@@ -9,8 +9,8 @@ extension Dictation {
     /// on their way.
     public enum Activity: Sendable, Equatable, CustomStringConvertible {
         case idle
-        /// A press's microphone is open, and `heard` is everything the engine has read of it
-        /// so far, confirmed then tentative. Wins over `transcribing`: the press being spoken
+        /// A press's microphone is open, and `heard` is the text the engine has read of it so
+        /// far, confirmed then tentative. Wins over `transcribing`: the press being spoken
         /// is the one the person is watching for.
         case listening(heard: Transcript)
         /// A press has ended and its outcome is not yet reported.
