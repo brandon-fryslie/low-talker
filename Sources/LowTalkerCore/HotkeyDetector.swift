@@ -86,7 +86,7 @@ public struct HotkeyDetector: Sendable {
         case latched(KeyChord)
     }
 
-    public let chords: Set<KeyChord>
+    public private(set) var chords: Set<KeyChord>
     /// A press released before this long is a tap.
     public let tapThreshold: Duration
     public private(set) var phase: Phase = .idle
@@ -138,6 +138,13 @@ public struct HotkeyDetector: Sendable {
         case .held, .latched, .idle:
             return nil
         }
+    }
+
+    /// Listens for `chords` from the next press on. A press already open is left open: it
+    /// belongs to the chord that began it, and ends the way it would have, when a key of that
+    /// chord comes up or, latched, when a chord now listened for goes down.
+    public mutating func listen(for chords: Set<KeyChord>) {
+        self.chords = chords
     }
 
     /// The hotkey stopped hearing: the open press ends, since its release can no longer

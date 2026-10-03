@@ -136,12 +136,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - the loop
 
-    /// The config this app runs on, read the first time it is asked for and never again:
-    /// what the microphone does at rest and the chords the hotkey listens for, from one
-    /// reading, so the two cannot come from different versions of the file. The menu's
-    /// names for the chords read it too, so what the menu says to hold is what is heard.
-    /// [LAW:one-source-of-truth]
-    private lazy var config = Result { () throws(ConfigError) in try Config.load() }
+    /// The config this app runs on, read the first time it is asked for and again at every
+    /// save: what the microphone does at rest, the chords the hotkey listens for and where
+    /// the server listens, from one reading, so none of them comes from a different version
+    /// of the file. The menu's names for the chords read it too, so what the menu says to
+    /// hold is what is heard. Only `follow` changes it once it is read. [LAW:one-source-of-truth]
+    private lazy var running = RunningConfig(reading: Result { () throws(ConfigError) in try Config.load() })
+    private var config: Result<Config, ConfigError> { running.config }
+    private let configLog = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "config")
+
+    /// Takes up a save of the config file: each part of the app the config sets is moved to
+    /// the new value, and only the parts whose value changed. A save the file refused leaves
+    /// every one where it was, and the menu says why. [LAW:no-silent-failure]
+    ///
+    /// Nothing here ends a press. A chord moved mid-hold leaves the hold to end at its own
+    /// release, and a resting mode moved mid-hold is taken up at the key-up.
+    private func follow(_ next: RunningConfig) {
+        let was = try? config.get()
+        running = next
+        guard case .success(let now) = next.config, now != was else {
+            configLog.notice("config: \(next, privacy: .public)")
+            return
+        }
+        let moved = [
+            now.chords != was?.chords ? "chords \(Hotkey.named(in: now))" : nil,
+            now.microphone != was?.microphone ? "microphone \(now.microphone)" : nil,
+            now.serve != was?.serve ? "server binding" : nil,
+        ].compactMap { $0 }
+        configLog.notice("config: \(next, privacy: .public); moved [\(moved.joined(separator: "; "), privacy: .public)]")
+        // The first config this run has had: the loop was held down for want of one, and
+        // comes up the way it does once a grant arrives.
+        guard let was else {
+            comeUpIfGranted(readReadiness())
+            serving?.resume(at: config.map(\.serve))
+            return
+        }
+        if now.chords != was.chords, let hotkey = listening?.hotkey {
+            hotkey.listen(for: now.chords)
+            if hotkey.isWatching { showHotkeyStatus(listeningStatus) }
+        }
+        if now.microphone != was.microphone { capture.rest(as: now.microphone) }
+        if now.serve != was.serve { serving?.resume(at: config.map(\.serve)) }
+    }
 
     /// The loop that is listening now.
     private struct Listening {
@@ -258,7 +294,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }.mapError { LoopRefusal(stringLiteral: "\($0)") }
         }
         switch hearing {
-        case .success: showHotkeyStatus("hold \(chordName), or tap it to start and again to stop")
+        case .success: showHotkeyStatus(listeningStatus)
         case .failure(let refusal): showHotkeyStatus("off — \(refusal.reason)")
         }
     }
@@ -297,6 +333,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let reason: String
         init(stringLiteral reason: String) { self.reason = reason }
     }
+
+    /// The status line of a hotkey that is listening.
+    private var listeningStatus: String { "hold \(chordName), or tap it to start and again to stop" }
 
     /// The chords the config listens for, in the words a person presses them by.
     private var chordName: String {
@@ -425,6 +464,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         serving?.resume(at: config.map(\.serve))
         showHotkeyStatus("starting…")
         Task { await listen() }
+        // Read after `serving` and the loop's first reading of the config, so a save from
+        // here on is a reload of the config they started on.
+        Task { [running] in
+            for await next in RunningConfig.reloads(after: running) { follow(next) }
+        }
     }
 
     /// The loop as far as what is already granted allows, then the guided setup when
@@ -697,6 +741,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(readout("Hotkey: \(hotkeyStatus)"))
         for reason in unheard { menu.addItem(readout("    Not heard now: \(reason)")) }
         lastFailure.map { menu.addItem(readout($0)) }
+        if running.refusal != nil { menu.addItem(readout("Config: \(running)")) }
         if benchRuns.isRunning { menu.addItem(readout("A benchmark is running: presses are refused until it ends")) }
         // Every requirement, met or not, and its step under it as the lines it was
         // written in - one item per line, so nothing here wraps text the requirement
