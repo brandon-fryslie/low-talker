@@ -15,6 +15,7 @@ let package = Package(
         .library(name: "Insertion", targets: ["Insertion"]),
         .library(name: "InputSource", targets: ["InputSource"]),
         .library(name: "Serve", targets: ["Serve"]),
+        .library(name: "Bench", targets: ["Bench"]),
         .executable(name: "lowtalker", targets: ["lowtalker"]),
         .executable(name: "lowtalker-inputmethod", targets: ["lowtalker-inputmethod"]),
     ],
@@ -119,6 +120,8 @@ let package = Package(
             name: "LowTalkerCommands",
             dependencies: [
                 "LowTalkerCore",
+                // `bench`, the same loop and table the app's Benchmark window runs.
+                "Bench",
                 // `model download`, `model pack`, and the loads `transcribe` and `bench`
                 // make from a source: the one place a model is written to disk.
                 "ModelInstall",
@@ -133,6 +136,11 @@ let package = Package(
             ]
         ),
         .executableTarget(name: "lowtalker", dependencies: ["LowTalkerCommands"]),
+        // The bench: its options, flags, table, the folders a person picked for it, and the
+        // one run at a time the app's window and `LowTalker --bench` start. Beneath the app
+        // and the CLI; the engine it loads is the core's, read in place, never installed.
+        .target(name: "Bench", dependencies: ["LowTalkerCore", .product(name: "ArgumentParser", package: "swift-argument-parser")]),
+        .testTarget(name: "BenchTests", dependencies: ["Bench", "LowTalkerCore", "TestProbes"]),
         // The write side of the model store: fetching from huggingface.co or a published
         // base, copying from another store, packing one to publish. Beneath the CLI alone.
         // The app links the core and loads the store its bundle carries, read-only, so the

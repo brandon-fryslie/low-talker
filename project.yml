@@ -100,6 +100,10 @@ targets:
       # ServerSwitch.ifEntitled.
       - package: low-talker
         product: Serve
+      # The Benchmark window and `LowTalker --bench`, which load models in place from the
+      # carried store or a picked one, as the app does, and never install one.
+      - package: low-talker
+        product: Bench
       # The input method bundle, built beside the app and not inside it: the installer
       # package puts it in /Library/Input Methods, the one place the text input system lists
       # it from that an app under App Sandbox does not write to. A dependency so that
@@ -122,6 +126,11 @@ targets:
     # model, captures the microphone and reads its input source with nothing more; with no
     # network entitlement, connect() and getaddrinfo are refused as `network-outbound`.
     #
+    # com.apple.security.files.user-selected.read-only: the Benchmark window's Choose…
+    # buttons, without it, show nothing, and AppKit logs "Unable to display open panel: your
+    # app is missing the User Selected File Read app sandbox entitlement" (studious,
+    # 2026-10-03). Read-only: the bench reads fixtures and a model store and writes neither.
+    #
     # The two Mach names, each denied by the sandbox without its line: the app registers
     # its hotkey port (`mach-register`, Sources/Insertion/NamedPort.swift) and looks up the
     # input method's insert port (`mach-lookup`, Sources/Insertion/Inserter.swift).
@@ -131,6 +140,7 @@ targets:
       properties:
         com.apple.security.app-sandbox: true
         com.apple.security.device.audio-input: true
+        com.apple.security.files.user-selected.read-only: true
         com.apple.security.temporary-exception.mach-register.global-name:
           - ai.promptctl.low-talker.hotkey
         com.apple.security.temporary-exception.mach-lookup.global-name:

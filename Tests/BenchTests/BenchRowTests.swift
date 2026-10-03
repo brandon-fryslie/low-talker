@@ -1,7 +1,7 @@
 import Foundation
 import LowTalkerCore
 import Testing
-@testable import LowTalkerCommands
+import Bench
 
 @Suite struct BenchRowTests {
     /// Every field of the result is distinct, so a value fed into the wrong column
@@ -24,7 +24,7 @@ import Testing
             ),
             served: LatencyReport.Served(cancelled: 6, deferred: 3, changed: 2)
         )
-        let row = BenchCommand.row(model: "base.en", load: .milliseconds(1_250), result: result)
+        let row = BenchRow(model: "base.en", load: .milliseconds(1_250), result: result).cells
         #expect(row.map(\.name) == [
             "model", "fixture", "delivery", "serving", "audio_s", "load_s", "first_s", "median_s", "partial_s",
             "wer", "substituted", "dropped", "added", "reference_words",
