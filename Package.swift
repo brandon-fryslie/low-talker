@@ -145,6 +145,7 @@ let package = Package(
             dependencies: [
                 "LowTalkerCore",
                 "Grants",
+                "Insertion",
                 "TestProbes",
                 // The tests build WhisperKit's result types by hand to exercise the
                 // mapping without model weights.

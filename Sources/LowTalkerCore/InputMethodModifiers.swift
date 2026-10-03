@@ -31,19 +31,24 @@ public struct InputMethodModifiers: ModifierFeed {
     /// the main queue when the feed is disposed of, and a hotkey that has stopped must hear
     /// nothing after it. Disposing of the feed is what closes the port, then and there, and
     /// what a late message finds. [LAW:no-ambient-temporal-coupling]
+    ///
+    /// Generic in the port because it only holds it open and never calls it.
     @MainActor
-    private final class Installed {
-        var open: (port: ModifierPort, handle: @MainActor (KeyEvent) -> Void)? {
+    final class Installed<Port> {
+        var open: (port: Port, handle: @MainActor (KeyEvent) -> Void)? {
             didSet { settleConfirming() }
         }
         private var told: ToldModifiers
         private var confirming: DispatchSourceTimer?
         /// The port's queue, where the session is read too.
         private let hearing: DispatchQueue
+        /// [LAW:effects-at-boundaries] The reading of the session's modifier keys.
+        private let session: @Sendable () -> Set<Modifier>
 
-        init(told: ToldModifiers, hearing: DispatchQueue) {
+        init(told: ToldModifiers, hearing: DispatchQueue, session: @escaping @Sendable () -> Set<Modifier>) {
             self.told = told
             self.hearing = hearing
+            self.session = session
         }
 
         func heard(_ moves: [KeyEvent]) {
@@ -74,9 +79,11 @@ public struct InputMethodModifiers: ModifierFeed {
                 timer.schedule(deadline: .now() + InputMethodModifiers.confirming, repeating: InputMethodModifiers.confirming,
                                leeway: .milliseconds(50))
                 // Held by the timer until it is cancelled, so a reading on its way to the
-                // main queue still has somewhere to land.
-                timer.setEventHandler { [self] in
-                    let (session, time) = (Modifier.heldInSession(), HostTime.now)
+                // main queue still has somewhere to land. Sendable, so it is isolated to no
+                // actor: written in this main-actor class it would otherwise be the main
+                // actor's, and trap when the timer runs it on `hearing`.
+                timer.setEventHandler { @Sendable [self, session] in
+                    let (session, time) = (session(), HostTime.now)
                     DispatchQueue.main.async { MainActor.assumeIsolated { self.confirmed(session, at: time) } }
                 }
                 timer.resume()
@@ -96,7 +103,8 @@ public struct InputMethodModifiers: ModifierFeed {
         // What is held as listening begins is read, not assumed to be nothing, so a key
         // already down when this comes up is not heard going down when it next moves.
         let hearing = DispatchQueue(label: AppIdentity.hotkeyPortName)
-        let installed = Installed(told: ToldModifiers(held: Modifier.heldInSession()), hearing: hearing)
+        let installed = Installed<ModifierPort>(told: ToldModifiers(held: Modifier.heldInSession()), hearing: hearing,
+                                                session: Modifier.heldInSession)
         let log = Logger(subsystem: AppIdentity.bundleIdentifier, category: "hotkey")
         // Checked and read off the main thread, where the keys and the menu are, and handed
         // to it in the order the input method sent them: the main queue is first in, first
