@@ -3,13 +3,18 @@ import Foundation
 import LowTalkerCore
 import ModelInstall
 
-/// The model store from the terminal: what is on disk, and fetching what is not.
-/// This is how "a fresh install downloads once and the next launch loads from
-/// cache" is checked without launching the app.
-struct ModelCommand: AsyncParsableCommand {
+/// The model store, for the build: which model is the default, which commits `main` names
+/// for it, whether a store holds it whole, and fetching or packing it. `make app`,
+/// scripts/sbom, scripts/sign-release and the release and model-cache workflows run it.
+///
+/// [LAW:one-way-deps] Built from this tree and run only by the build. It is in no product
+/// and project.yml never copies it into a bundle, so nothing a person installs can reach
+/// ModelInstall through it.
+@main
+struct ModelTool: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "model",
-        abstract: "Inspect and download the Whisper model the app loads at launch.",
+        commandName: "model-tool",
+        abstract: "Name, check, fetch and pack the Whisper model a bundle carries.",
         subcommands: [Status.self, Download.self, Pack.self, Default.self, Revision.self]
     )
 
@@ -73,11 +78,13 @@ struct ModelCommand: AsyncParsableCommand {
         )
 
         @OptionGroup var options: ModelOptions
-        @OptionGroup var source: SourceOptions
+
+        @Option(name: .customLong("from"), help: "Where to take a model the store lacks: huggingface.co at a revision `revision` printed, an http(s) base URL serving <model>.zip, as `pack` writes them, or a directory holding another model store. Defaults to huggingface.co at the revision `main` names.")
+        var source: ModelSource = .huggingFace(nil)
 
         func run() async throws {
             let reporter = PhaseReporter()
-            let installed = try await options.store().install(options.model, from: source.source) { reporter.report(.installing($0)) }
+            let installed = try await options.store().install(options.model, from: source, phase: reporter.report)
             print("installed: \(installed.folder.path)")
         }
     }
@@ -96,7 +103,7 @@ struct ModelCommand: AsyncParsableCommand {
 
         func run() async throws {
             let reporter = PhaseReporter()
-            let archive = try await options.store().pack(options.model, into: directory) { reporter.report(.installing($0)) }
+            let archive = try await options.store().pack(options.model, into: directory, phase: reporter.report)
             print("packed: \(archive.path)")
         }
     }

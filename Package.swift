@@ -122,8 +122,7 @@ let package = Package(
                 "LowTalkerCore",
                 // `bench`, the same loop and table the app's Benchmark window runs.
                 "Bench",
-                // `model download`, `model pack`, and the loads `transcribe` and `bench`
-                // make from a source: the one place a model is written to disk.
+                // The loads `transcribe`, `serve` and `bench` make from a source.
                 "ModelInstall",
                 "Grants",
                 "Identity",
@@ -142,11 +141,17 @@ let package = Package(
         .target(name: "Bench", dependencies: ["LowTalkerCore", .product(name: "ArgumentParser", package: "swift-argument-parser")]),
         .testTarget(name: "BenchTests", dependencies: ["Bench", "LowTalkerCore", "TestProbes"]),
         // The write side of the model store: fetching from huggingface.co or a published
-        // base, copying from another store, packing one to publish. Beneath the CLI alone.
+        // base, copying from another store, packing one to publish. Beneath the CLI and
+        // `model-tool` alone.
         // The app links the core and loads the store its bundle carries, read-only, so the
         // graph and not the call sites is what says the app cannot download;
         // `AppLinksNoInstallerTests` reads this graph for that. [LAW:one-way-deps]
         .target(name: "ModelInstall", dependencies: ["LowTalkerCore", .product(name: "WhisperKit", package: "argmax-oss-swift")]),
+        // What the build runs to name, check, fetch and pack the model a bundle carries. Like
+        // insertion-probe it is in no product, and project.yml never copies it into a bundle,
+        // so nothing a person installs runs it. [LAW:one-way-deps]
+        .executableTarget(name: "model-tool", dependencies: ["ModelInstall", "LowTalkerCore", .product(name: "ArgumentParser", package: "swift-argument-parser")]),
+        .testTarget(name: "ModelToolTests", dependencies: ["model-tool", "ModelInstall", "LowTalkerCore"]),
         .testTarget(
             name: "ModelInstallTests",
             dependencies: [
@@ -173,7 +178,7 @@ let package = Package(
         // The CLI's table shape is its contract; this pins column names to fields.
         .testTarget(
             name: "lowtalkerTests",
-            dependencies: ["LowTalkerCommands", "LowTalkerCore", "ModelInstall", "Onboarding", "Identity"]
+            dependencies: ["LowTalkerCommands", "LowTalkerCore", "Onboarding", "Identity"]
         ),
     ]
 )
