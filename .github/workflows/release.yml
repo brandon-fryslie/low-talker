@@ -71,7 +71,8 @@ jobs:
           keychain=$(scripts/runner-keychain release)
           echo "RELEASE_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
 
-      # `make cli` signs the CLI with it, as on any Mac, and the release runs the CLI.
+      # The identity project.yml names for every bundle; scripts/sign-release replaces it with
+      # the Developer ID one through SIGNING_IDENTITY.
       - name: Create the dev signing identity
         run: make signing-identity
 
@@ -106,17 +107,17 @@ jobs:
           source scripts/developer-id
           xcrun notarytool store-credentials "$NOTARY_PROFILE" --apple-id "$NOTARY_APPLE_ID" --team-id "$developer_team" --password "$NOTARY_PASSWORD" --keychain "$RELEASE_KEYCHAIN"
 
-      # [LAW:one-source-of-truth] The model the release carries is the one the CLI built from
+      # [LAW:one-source-of-truth] The model the release carries is the one model-tool built from
       # this tag names as its default, at the Hugging Face commits `main` names for it now.
       - name: Name the default model
         id: model
         run: |
           set -euo pipefail
-          cli=$(make cli | tail -n 1)
-          model=$("$cli" model default)
-          revision=$("$cli" model revision --model "$model")
+          tool=$(make model-tool | tail -n 1)
+          model=$("$tool" default)
+          revision=$("$tool" revision --model "$model")
           {
-            echo "cli=$cli"
+            echo "tool=$tool"
             echo "default=$model"
             echo "revision=$revision"
             echo "key=model-store-$model-$revision"
@@ -160,9 +161,9 @@ jobs:
       # Either way it fetches at the commits the key names, so the store is the key's.
       - name: Fill the model store
         env:
-          CLI: ${{ steps.model.outputs.cli }}
+          TOOL: ${{ steps.model.outputs.tool }}
           REVISION: ${{ steps.model.outputs.revision }}
-        run: '"$CLI" model download --models-dir "$RUNNER_TEMP/model-store" --from "$REVISION"'
+        run: '"$TOOL" download --models-dir "$RUNNER_TEMP/model-store" --from "$REVISION"'
 
       - name: Build, sign and notarize
         env:

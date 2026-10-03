@@ -172,7 +172,7 @@ extension ModelStore {
     }
 }
 
-/// One installer per store at a time, across processes: two `model download`s into one
+/// One installer per store at a time, across processes: two `model-tool download`s into one
 /// directory would evict and write the same files under each other.
 ///
 /// [LAW:no-ambient-temporal-coupling] The store owns the order of evict, download,

@@ -7,9 +7,9 @@
 #     # prints <output directory>/LowTalker-offline.pkg and <output directory>/LowTalker-network.pkg
 #
 # The bundle carries the default model in Contents/Resources/model-store, so a first launch
-# loads it in place with the network off. The model source is what `lowtalker model download
+# loads it in place with the network off. The model source is what `model-tool download
 # --from` takes: a store holding the model, such as ~/Library/Application Support/low-talker/hub,
-# or a base URL serving the archive `lowtalker model pack` writes. With none, the model comes
+# or a base URL serving the archive `model-tool pack` writes. With none, the model comes
 # from Hugging Face.
 #
 # The build is `make package` signed with the Developer ID identity in place of the
@@ -44,13 +44,13 @@ cd "$(dirname "$0")/.."
 derived=$(mktemp -d "${TMPDIR:-/tmp}/lowtalker-release.XXXXXX")
 trap 'rm -rf "$derived"' EXIT
 
-# The CLI decides which model is the default and installs it whole, manifests and all, so
+# The model tool decides which model is the default and installs it whole, manifests and all, so
 # this script names neither. [LAW:one-source-of-truth] It fetches once here; `make package`
 # then copies the store the bundle carries out of the fetched one by the same rule every
 # build uses, so what the bundle carries is exactly what an install certifies.
-cli=$(make cli | tee /dev/stderr | tail -n 1)
+tool=$(make model-tool | tee /dev/stderr | tail -n 1)
 fetched="$derived/fetched-store"
-"$cli" model download --models-dir "$fetched" ${source:+--from "$source"} >&2
+"$tool" download --models-dir "$fetched" ${source:+--from "$source"} >&2
 # The SBOM's model rules held to the store this release carries, not to whichever store
 # the Mac that last ran `make sbom` had, the committed SBOM held to this checkout, and every
 # component in it held to the accepted licenses: this release is the distribution.
@@ -88,7 +88,7 @@ release_package() {
   local variant=$1 built bundle method methods
   built=$(make package VARIANT="$variant" SIGNING_IDENTITY="$identity" DERIVED_DATA="$derived" MODEL_SOURCE="$fetched" | tee /dev/stderr | tail -n 1)
   codesign --verify --deep --strict "$app" || fail "$app does not verify"
-  "$cli" model status --models-dir "$app/Contents/Resources/$store" >&2 \
+  "$tool" status --models-dir "$app/Contents/Resources/$store" >&2 \
     || fail "$app does not carry the default model whole"
   check "$app"
   # The input method bundle the package installs beside the app. The notary service refuses

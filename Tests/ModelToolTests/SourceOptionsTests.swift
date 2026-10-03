@@ -1,4 +1,4 @@
-@testable import LowTalkerCommands
+@testable import model_tool
 import LowTalkerCore
 import ModelInstall
 import Testing

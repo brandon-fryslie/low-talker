@@ -6,6 +6,10 @@ import Synchronization
 
 /// Which store, for every command that touches models.
 ///
+/// [LAW:one-source-of-truth] exception: `model-tool` parses these flags with its own copy,
+/// since an executable cannot import this library; this one goes with the CLI on
+/// low-no-cli-hpk.c0i.
+///
 /// [LAW:one-source-of-truth] The default store is the one `make app` copies each bundle's
 /// model out of, so a download from the terminal is what the next build carries. The app
 /// itself never reads it: it loads the store inside its bundle.
@@ -32,7 +36,7 @@ struct ModelOptions: ParsableArguments {
 
 /// Where a command takes a model from when the store does not have it.
 struct SourceOptions: ParsableArguments {
-    @Option(name: .customLong("from"), help: "Where to take a model the store lacks: huggingface.co at a revision `model revision` printed, an http(s) base URL serving <model>.zip, as `model pack` writes them, or a directory holding another model store. Defaults to huggingface.co at the revision `main` names.")
+    @Option(name: .customLong("from"), help: "Where to take a model the store lacks: huggingface.co at a revision `model-tool revision` printed, an http(s) base URL serving <model>.zip, as `model-tool pack` writes them, or a directory holding another model store. Defaults to huggingface.co at the revision `main` names.")
     var source: ModelSource = .huggingFace(nil)
 }
 

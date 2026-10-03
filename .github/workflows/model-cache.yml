@@ -1,12 +1,15 @@
 # Keeps the model a release carries in the Actions cache, saved from master: a run for a tag
 # can restore a cache saved on the default branch, but never one saved for another tag. So
-# release.yml only restores, and this saves, under the name of the model master's CLI names
-# as its default and the Hugging Face commits `main` names for it, once per pair.
+# release.yml only restores, and this saves, under the name of the model master's model-tool
+# names as its default and the Hugging Face commits `main` names for it, once per pair.
 name: Model cache
 
 on:
   push:
     branches: [master]
+  # A run on a branch saves under that branch, which no tag can restore, so it proves the
+  # steps rather than filling the cache.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -30,26 +33,17 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install xcodegen
-        run: brew install xcodegen
-
-      - name: Create an unlocked default keychain
-        run: scripts/runner-keychain model-cache
-
-      - name: Create the dev signing identity
-        run: make signing-identity
-
       # [LAW:one-source-of-truth] The same questions release.yml asks: the default is the
-      # source's, and the commits `main` names for it are the hub's, asked through the CLI.
+      # source's, and the commits `main` names for it are the hub's, asked through model-tool.
       - name: Name the default model
         id: model
         run: |
           set -euo pipefail
-          cli=$(make cli | tail -n 1)
-          model=$("$cli" model default)
-          revision=$("$cli" model revision --model "$model")
+          tool=$(make model-tool | tail -n 1)
+          model=$("$tool" default)
+          revision=$("$tool" revision --model "$model")
           {
-            echo "cli=$cli"
+            echo "tool=$tool"
             echo "revision=$revision"
             echo "key=model-store-$model-$revision"
           } >> "$GITHUB_OUTPUT"
@@ -67,9 +61,9 @@ jobs:
       - name: Fetch the model
         if: steps.lookup.outputs.cache-hit != 'true'
         env:
-          CLI: ${{ steps.model.outputs.cli }}
+          TOOL: ${{ steps.model.outputs.tool }}
           REVISION: ${{ steps.model.outputs.revision }}
-        run: '"$CLI" model download --models-dir "$RUNNER_TEMP/model-store" --from "$REVISION"'
+        run: '"$TOOL" download --models-dir "$RUNNER_TEMP/model-store" --from "$REVISION"'
 
       - name: Save the model
         if: steps.lookup.outputs.cache-hit != 'true'

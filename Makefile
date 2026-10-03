@@ -38,8 +38,8 @@ ACCEPTS_CONNECTIONS := $(or $(and $(filter $(VARIANT),$(VARIANTS)),$(ACCEPTS_CON
 CARRIED_MODEL_STORE := $(abspath $(DERIVED_DATA)/model-store)
 BUNDLED_MODEL_STORE := $(CARRIED_MODEL_STORE)
 
-# Where `make app` takes the model from, which is where `lowtalker model download` puts it.
-# A local copy, never a fetch: the CLI is what talks to Hugging Face, on purpose and by
+# Where `make app` takes the model from, which is where `model-tool download` puts it.
+# A local copy, never a fetch: the tool is what talks to Hugging Face, on purpose and by
 # name, and `make app` only ever copies out of what it left behind. [LAW:one-way-deps]
 MODEL_SOURCE := $(HOME)/Library/Application Support/low-talker/hub
 
@@ -54,7 +54,7 @@ APP := $(PRODUCTS)/LowTalker.app
 INPUT_METHOD := $(PRODUCTS)/LowTalker Input Method.app
 XCODE_RESOLVED_DIR := LowTalker.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
 
-.PHONY: app package install run variants test check-docs cli sbom check-sbom check-licenses clean signing-identity
+.PHONY: app package install run variants test check-docs cli model-tool sbom check-sbom check-licenses clean signing-identity
 
 # Regeneration is unconditional: xcodegen is idempotent and sub-second, and a
 # timestamp rule cannot see removed sources or in-place rewrites of the project.
@@ -75,7 +75,7 @@ define build_app
 endef
 
 # The store the bundle carries, copied out of $(MODEL_SOURCE). Two stores and not one,
-# the way `model pack` works: a store filled from Hugging Face also holds the hub client's
+# the way `model-tool pack` works: a store filled from Hugging Face also holds the hub client's
 # own metadata, and a copy out of it takes only the files the manifests list, so the bundle
 # carries exactly what an install certifies. [LAW:one-source-of-truth]
 #
@@ -85,18 +85,18 @@ endef
 # scripts/sign-release fills this same rule from the store it fetched, by passing
 # MODEL_SOURCE. [LAW:dataflow-not-control-flow]
 #
-# Idempotent and cheap on the second run: `model download --from` is an install, and an
+# Idempotent and cheap on the second run: `model-tool download --from` is an install, and an
 # install of a model already whole copies nothing. It is a directory rather than a file, so
-# it is phony and asks the CLI rather than asking make to compare timestamps on 632 MB.
+# it is phony and asks the tool rather than asking make to compare timestamps on 632 MB.
 .PHONY: $(CARRIED_MODEL_STORE)
 $(CARRIED_MODEL_STORE):
 	@test -d "$(MODEL_SOURCE)" || { \
 		echo "no model store at $(MODEL_SOURCE)."; \
-		echo "Run '$(CLI) model download' once; it is the only thing here that reaches the network."; \
+		echo "Run 'make model-tool' and then '$(MODEL_TOOL) download' once; it is the only thing here that reaches the network."; \
 		exit 1; \
 	}
-	$(MAKE) --no-print-directory cli >/dev/null
-	"$(CLI)" model download --models-dir "$@" --from "$(MODEL_SOURCE)"
+	$(MAKE) --no-print-directory model-tool >/dev/null
+	"$(MODEL_TOOL)" download --models-dir "$@" --from "$(MODEL_SOURCE)"
 
 app: $(BUNDLED_MODEL_STORE)
 	$(build_app)
@@ -132,8 +132,7 @@ variants:
 # ad-hoc signs the product, and the CLI's signing identifier is what the Neural Engine keys
 # its compiled model by, so without this a green run leaves the next `lowtalker` paying the
 # minutes-long specialization again. Unconditional, because a recipe cannot see what SwiftPM
-# chose to link. [LAW:dataflow-not-control-flow] The signing is `check-sbom`'s: `sbom`
-# builds the CLI through `cli` to read the default model out of it.
+# chose to link. [LAW:dataflow-not-control-flow]
 # Generating first is what lets `InputMethodPlistTests` read the plist xcodegen writes
 # without generating it itself: a test that rewrote LowTalker.xcodeproj and App/Generated
 # would be doing it underneath any build already running in this tree.
@@ -145,6 +144,7 @@ test:
 	$(MAKE) check-docs
 	swift test
 	$(MAKE) check-licenses
+	$(MAKE) cli
 
 # [LAW:one-source-of-truth] The onboarding rows' readings are a vocabulary README.md keeps a
 # copy of: each way macOS can answer for the microphone, and the input method switched on or
@@ -189,16 +189,24 @@ cli:
 	codesign --force --sign "$$(scripts/signing-identity)" --identifier "$(CLI_IDENTIFIER)" "$(CLI)"
 	@echo "$(CLI)"
 
+# The model store, for the build: the default model's name, the commits `main` names for it,
+# and fetching, checking and packing it. Nothing in it loads a model, so it needs no signing
+# identity; the ad-hoc signature the link leaves is enough. Prints its path, as `cli` does.
+MODEL_TOOL := .build/debug/model-tool
+model-tool:
+	swift build --product model-tool
+	@echo "$(MODEL_TOOL)"
+
 # What a release ships and under what license, as CycloneDX, read off the resolved
 # build: Package.resolved, the checkouts `swift build` resolves under .build, and the
-# CLI's default model. The CLI is built because the model's name is read from it, not
+# default model. The model tool is built because the model's name is read from it, not
 # copied, and building it is what resolves the checkouts on a clean clone. When this Mac's
 # store holds the model, the rules for its two repos are held to what that install wrote.
 # scripts/sbom stops and names any component sbom/rules.json cannot license.
 # [LAW:no-silent-failure]
-sbom: cli
+sbom: model-tool
 	@set -eu; store="$(MODEL_SOURCE)"; [ -d "$$store" ] || store=""; \
-	scripts/sbom "$(CLI)" sbom/lowtalker.cdx.json $${store:+"$$store"}
+	scripts/sbom "$(MODEL_TOOL)" sbom/lowtalker.cdx.json $${store:+"$$store"}
 
 # The committed SBOM is the one the build writes, or `make test` fails: a committed file
 # that can drift from Package.resolved is a maintained list wearing a generated one's name.

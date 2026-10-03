@@ -7,7 +7,7 @@ import Testing
 
 /// What an install writes, exercised on a scratch directory with small files in place
 /// of model weights. The download itself needs the network and 632 MB, so it is
-/// exercised by `lowtalker model download` on a Mac, not here; what a whole store reads
+/// exercised by `model-tool download` on a Mac, not here; what a whole store reads
 /// as is `ModelStoreTests`, in the core.
 @Suite struct ModelInstallTests {
     /// An installed model is found before any source is opened, so a published base
@@ -45,7 +45,7 @@ import Testing
         }
     }
 
-    /// Two `model download`s share one store: the second installer waits for the
+    /// Two `model-tool download`s share one store: the second installer waits for the
     /// first, then finds its work already done.
     @Test(.timeLimit(.minutes(1))) func installWaitsForAnotherInstallerAndTakesItsResult() async throws {
         let scratch = try ScratchStore(files: ScratchStore.files)

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Writes the SBOM of what a release ships, read off the resolved build.
 
-    scripts/sbom <cli> <output.cdx.json> [model store]
+    scripts/sbom <model-tool> <output.cdx.json> [model store]
 
 CycloneDX 1.6, one component per thing that reaches a user's Mac: every package
 Package.resolved pins, the third-party code vendored inside those packages, and the model
 the app loads (its weights and its tokenizer). Identity, URL, version and revision come
-from Package.resolved, the checkouts under .build, and the CLI; sbom/rules.json holds
+from Package.resolved, the checkouts under .build, and model-tool; sbom/rules.json holds
 only what none of those can say - the license of each component, which packages carry
 code no manifest declares, which Hugging Face repos the default model's two parts come
 from, and which revision of a package that can reach the network scripts/wire-check last
@@ -22,7 +22,7 @@ store holding the model is named, the rules are held to the folders its install
 manifests record, and a rule naming a repo the install did not fetch from stops the run.
 The store changes nothing in the output; it only refuses a wrong rule.
 
-Run through `make sbom`, which builds the CLI first, names it, and names this Mac's store
+Run through `make sbom`, which builds model-tool first, names it, and names this Mac's store
 when it has one.
 """
 import hashlib
@@ -180,16 +180,16 @@ def vendored_component(identity, checkout, rule):
     }
 
 
-def model_components(cli, rules, store):
-    """The model the CLI names as the default, which is the one the release carries and
+def model_components(tool, rules, store):
+    """The model model-tool names as the default, which is the one the release carries and
     a launch loads where nothing names another. WhisperKit fetches its weights from the
     repo it names and picks the tokenizer's repo off the weights' config, so both repos
     are the rule's to state and the store's, when there is one, to confirm."""
-    if not cli.is_file():
-        fail(f"no CLI at {cli}; run `make cli`")
-    model = run(str(cli), ["model", "default"], "the default model").strip()
+    if not tool.is_file():
+        fail(f"no model tool at {tool}; run `make model-tool`")
+    model = run(str(tool), ["default"], "the default model").strip()
     if not model:
-        fail("`lowtalker model default` printed nothing")
+        fail("`model-tool default` printed nothing")
     rule = rules.get(model)
     if rule is None:
         fail(f"the default model is {model} and rules.json has no entry for it")
@@ -256,8 +256,8 @@ def application():
 
 def main():
     if len(sys.argv) not in (3, 4):
-        fail("usage: scripts/sbom <cli> <output.cdx.json> [model store]")
-    cli = Path(sys.argv[1]).resolve()
+        fail("usage: scripts/sbom <model-tool> <output.cdx.json> [model store]")
+    tool = Path(sys.argv[1]).resolve()
     output = Path(sys.argv[2])
     store = Path(sys.argv[3]) if len(sys.argv) == 4 else None
     if store is not None and not store.is_dir():
@@ -274,7 +274,7 @@ def main():
         fail(f"sbom/rules.json has an entry for {', '.join(sorted(ruled - pinned))}, which Package.resolved no longer pins")
 
     components = [package_component(pin, rules["packages"][pin["identity"]]) for pin in pins]
-    models, confirmed = model_components(cli, rules["models"], store)
+    models, confirmed = model_components(tool, rules["models"], store)
     components += models
     components.sort(key=lambda c: c["bom-ref"])
     app = application()
