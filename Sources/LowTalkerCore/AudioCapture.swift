@@ -171,6 +171,10 @@ public final class AudioCapture {
         /// a microphone that never opened for it at all - and which a held microphone can
         /// arrive at too, by dying quietly rather than by opening late.
         var openedForSession: HostTime?
+        /// Where the open session's audio goes as it lands, once something has asked for
+        /// it with `stream(_:)`. Beside the ring and under its lock, so a buffer reaches
+        /// the ring and the feed together or neither.
+        var feed: AsyncStream<AudioClip>.Continuation?
     }
 
     /// The stream behind a lock, shared between the tap's queue and the main actor.
@@ -373,14 +377,35 @@ public final class AudioCapture {
     /// the samples at all, and a microphone that never opened leaves no samples to mark.
     /// So what crosses is a `CapturedAudio`, which cannot be read as whole unless it is.
     public func endSession(_ session: AudioSession) -> CapturedAudio {
+        end(session, scrolledOff: { ring, range in ring.scrolledOff(from: range) }) { ring, range, lost in
+            let clip = ring.clip(in: range)
+            return lost.map { .partial(clip, lost: $0) } ?? .whole(clip)
+        }
+    }
+
+    /// Ends a session whose audio was streamed: what was missing from it, or nil when the
+    /// stream carried all of it. No clip, because the stream already handed every sample
+    /// over. [LAW:types-are-the-program] The ring scrolling past a streamed session loses
+    /// nothing, since each buffer reached the stream as it landed; only what the ring had
+    /// dropped before the stream began is missing.
+    public func endSession(_ streamed: StreamedSession) -> CapturedAudio.Loss? {
+        end(streamed.session, scrolledOff: { _, _ in streamed.missed }) { _, _, lost in lost }
+    }
+
+    /// The end both kinds of session share: the end mark, the losses and what is delivered
+    /// are taken under one lock, the feed finished with them, and the microphone given back.
+    private func end<Delivered>(
+        _ session: AudioSession,
+        scrolledOff: (AudioRing, Range<Int>) -> Int,
+        deliver: (AudioRing, Range<Int>, CapturedAudio.Loss?) -> Delivered
+    ) -> Delivered {
         let open = isOpen
-        let captured = shared.stream.withLock { stream -> CapturedAudio in
+        let delivered = shared.stream.withLock { stream -> Delivered in
             let range = session.range(endingAt: stream.ring.end)
             // Where the session's own audio starts among the positions that exist: the
             // pre-roll may reach back before the first sample ever captured, and audio
             // that never existed was not lost.
             let began = range.clamped(to: 0..<stream.ring.end).lowerBound
-            let clip = stream.ring.clip(in: range)
             // How long the session waited for its microphone, and a wait that never ended
             // for one nothing was ever delivered for - a hold shorter than the engine took
             // to start, or one whose engine never started. That is the same sentence about
@@ -389,7 +414,7 @@ public final class AudioCapture {
             let openedLate = stream.openedForSession
                 .map { session.unheard(since: $0) > .seconds(Self.warmUpAllowance) } ?? true
             let lost = CapturedAudio.Loss(
-                scrolledOff: stream.ring.scrolledOff(from: range),
+                scrolledOff: scrolledOff(stream.ring, range),
                 interrupted: began < stream.continuousSince,
                 // Two readings of one fact - the microphone was not open for part of this
                 // session. It opened so long after the key went down that the stretch in
@@ -398,10 +423,44 @@ public final class AudioCapture {
                 // tail.
                 unopened: openedLate || !open
             )
-            return lost.map { .partial(clip, lost: $0) } ?? .whole(clip)
+            stream.feed?.finish()
+            stream.feed = nil
+            return deliver(stream.ring, range, lost)
         }
         rest()
-        return captured
+        return delivered
+    }
+
+    /// An open session whose audio is streamed as it is captured, ended by
+    /// `endSession(_: StreamedSession)`.
+    public struct StreamedSession: Sendable {
+        fileprivate let session: AudioSession
+        /// What the ring already holds of the session, then each buffer as it lands,
+        /// finished when the session ends.
+        public let audio: AsyncStream<AudioClip>
+        /// Samples of the session the ring had dropped before the stream began.
+        fileprivate let missed: Int
+    }
+
+    /// Streams the open session's audio as it is captured. A decoder fed this hears the press
+    /// while it is still going on. [LAW:one-source-of-truth] The ring is read and the feed
+    /// attached under one lock, so no buffer lands between the two to be missed or heard twice.
+    ///
+    /// Whether what was heard is whole is still the end's to say: a stream cannot know it was
+    /// spliced or began late, and the loss its end returns does.
+    public func stream(_ session: AudioSession) -> StreamedSession {
+        guard case .started(let started) = phase, started.sessionIsOpen else {
+            preconditionFailure("a session's audio was asked for with no session open; nothing would ever finish it")
+        }
+        let (audio, feed) = AsyncStream<AudioClip>.makeStream()
+        let missed = shared.stream.withLock { stream in
+            precondition(stream.feed == nil, "a session's audio is handed out once")
+            let range = session.range(endingAt: stream.ring.end)
+            feed.yield(stream.ring.clip(in: range))
+            stream.feed = feed
+            return stream.ring.scrolledOff(from: range)
+        }
+        return StreamedSession(session: session, audio: audio, missed: missed)
     }
 
     /// Holds the grant, watches the input device, and brings the microphone to its resting
@@ -591,6 +650,7 @@ public final class AudioCapture {
                         $0.timeline.mark($0.ring.end, at: time)
                         $0.openedForSession = $0.openedForSession ?? time
                         $0.ring.append(samples)
+                        $0.feed?.yield(AudioClip(samples: samples))
                     }
                 },
                 onFailure: { [weak self] error in self?.fail(error, from: generation) }

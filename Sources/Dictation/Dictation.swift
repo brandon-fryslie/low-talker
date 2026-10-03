@@ -1,9 +1,10 @@
 import LowTalkerCore
+import Synchronization
 
 /// The loop from a press of the hotkey to words at the cursor: key-down names the app in
-/// front and opens the microphone, marking where the utterance begins on the ring;
-/// key-up ends it and closes the microphone again; and what was said is heard, routed
-/// and inserted while the next press can already begin.
+/// front and opens the microphone, marking where the utterance begins on the ring, and the
+/// engine starts hearing it as it is captured; key-up ends it and closes the microphone
+/// again; and the transcript is routed and inserted while the next press can already begin.
 ///
 /// [LAW:decomposition] Presses in, sessions out. The microphone, the engine, the
 /// router and the input method are values it is given, so the whole loop runs in a test
@@ -11,10 +12,11 @@ import LowTalkerCore
 /// hotkey is not among them: it is fed `press`, and what starts it is not this loop's
 /// concern. [LAW:composability]
 ///
-/// [LAW:no-ambient-temporal-coupling] Sessions are heard and inserted on one serial
-/// queue, so two presses in quick succession insert in the order they were spoken and
-/// never interleave, however long the engine takes on either. Key-down and key-up reach
-/// this from the main queue, as the hotkey hands them on.
+/// [LAW:no-ambient-temporal-coupling] The engine hears each press after the press before
+/// it, and sessions are inserted on one serial queue, so two presses in quick succession
+/// insert in the order they were spoken and never interleave, however long the engine
+/// takes on either. Key-down and key-up reach this from the main queue, as the hotkey
+/// hands them on.
 ///
 /// With the microphone shut at rest, audio before the engine launches does not exist, so
 /// a later launch is a longer head the microphone was not open for, and `beginSession`
@@ -37,6 +39,8 @@ public final class Dictation {
     public struct Session: Sendable, CustomStringConvertible {
         public let context: Context
         public let transcript: Transcript
+        /// What the engine had shown by the time the key came up.
+        public let duringPress: DuringPress
         /// From the key coming up to the transcript, the engine's share of the wait.
         public let keyUpToTranscript: Duration
         /// What the press's hold put off of the engine's served callers.
@@ -54,18 +58,72 @@ public final class Dictation {
         public var description: String {
             let into = Set(performed.map(\.into)).map(\.rawValue).sorted().joined(separator: ", ")
             let destination = into.isEmpty ? "" : " into \(into)"
-            return "heard \(transcript.words.count) words past \(String(format: "%.1f", transcript.quiet)) s of quiet \(Int(keyUpToTranscript / .milliseconds(1))) ms after key-up (\(displaced)), \(performed.count) actions\(destination)"
+            return "heard \(transcript.words.count) words past \(String(format: "%.1f", transcript.quiet)) s of quiet \(Int(keyUpToTranscript / .milliseconds(1))) ms after key-up (\(duringPress); \(displaced)), \(performed.count) actions\(destination)"
         }
     }
 
-    /// What key-down left for key-up: the marks on the ring and the app in front, or
-    /// the reason there was nothing to insert into, and either way the engine's hold.
+    /// What a press's decode showed while the key was still down: the passes it had run,
+    /// and how long after the key went down the first of them read any words.
+    public struct DuringPress: Sendable, CustomStringConvertible {
+        public let passes: Int
+        /// [LAW:types-are-the-program] Absent when no pass before key-up read a word,
+        /// which a short tap or a slow engine leaves - not a zero, which would say the
+        /// words were there at once.
+        public let firstWords: Duration?
+
+        public var description: String {
+            let words = firstWords.map { "first words \(Int($0 / .milliseconds(1))) ms after key-down" } ?? "no words before key-up"
+            return "\(passes) passes during the press, \(words)"
+        }
+    }
+
+    /// The partials of one press's decode, counted as they come. Read once, at key-up:
+    /// what the snapshot holds is what the press showed while it was open, and a pass that
+    /// ends after it changes a count nobody reads again.
+    private final class Partials: Sendable {
+        private let keyDown: HostTime
+        private let seen = Mutex(DuringPress(passes: 0, firstWords: nil))
+
+        init(since keyDown: HostTime) {
+            self.keyDown = keyDown
+        }
+
+        func heard(_ partial: Partial) {
+            let now = HostTime.now
+            seen.withLock { seen in
+                let words = partial.text.isEmpty ? nil : now - keyDown
+                seen = DuringPress(passes: seen.passes + 1, firstWords: seen.firstWords ?? words)
+            }
+        }
+
+        var atKeyUp: DuringPress { seen.withLock { $0 } }
+    }
+
+    /// A press's decode, begun at key-down: the transcript it came to, when, and what the
+    /// press's hold put off. The hold is let go inside it the moment the transcript is out,
+    /// so served callers wait for this press's engine and not for an earlier press's insert.
+    private struct Decoded: Sendable {
+        let transcript: Result<Transcript, any Error>
+        let at: ContinuousClock.Instant
+        let displaced: EngineHold.Displaced
+    }
+
+    /// What key-down left for key-up: the marks on the ring, the app in front and the
+    /// decode already hearing the press, or the reason there was nothing to insert into.
     /// [LAW:types-are-the-program] One value rather than an optional session beside an
     /// optional app, so an end can never find half a beginning.
     private enum Press {
         case up
-        case down(AudioSession, into: BundleID, EngineHold)
-        case refused(any Error, EngineHold)
+        case down(AudioCapture.StreamedSession, into: BundleID, Task<Decoded, Never>, Partials)
+        case refused(any Error)
+    }
+
+    /// A press the speaker ended whole, handed to the queue: where it goes, what it showed
+    /// while it was open, and the decode that will say what was in it.
+    private struct Heard: Sendable {
+        let context: Context
+        let duringPress: DuringPress
+        let decode: Task<Decoded, Never>
     }
 
     private let capture: AudioCapture
@@ -76,6 +134,9 @@ public final class Dictation {
     private let frontmost: @Sendable @MainActor () throws -> BundleID
     private let report: @Sendable @MainActor (Result<Session, any Error>) -> Void
     private var press: Press = .up
+    /// The decode of the latest press, which the next press's decode waits out before it
+    /// takes the engine. Nil until the first press.
+    private var latestDecode: Task<Decoded, Never>?
     private let sessions = SerialQueue()
 
     /// `transcriber` is awaited per session, so a press that comes while the model is
@@ -110,8 +171,8 @@ public final class Dictation {
         case .began(_, let moment):
             guard case .up = press else { preconditionFailure("a press began while one was open; the detector pairs every began with an ended") }
             // First, so a served decode in flight is cancelled before the microphone opens,
-            // and taken by every press, refused or not: each press releases its hold by the
-            // one path its session ends on. [LAW:dataflow-not-control-flow]
+            // and taken by every press, refused or not: a refused press lets go of it at once,
+            // and a heard one when its decode stops. [LAW:dataflow-not-control-flow]
             let hold = turns.hold()
             do {
                 // The app in front before the microphone, so a reading that throws cannot
@@ -122,9 +183,12 @@ public final class Dictation {
                 // marks the ring where the key went down. What it reaches
                 // back over is the resting mode's to say: nothing behind a microphone that
                 // opens here, and the look-back behind one held open since `start()`.
-                press = .down(try capture.beginSession(at: moment), into: into, hold)
+                let session = capture.stream(try capture.beginSession(at: moment))
+                let partials = Partials(since: moment)
+                press = .down(session, into: into, decode(session.audio, into: partials, releasing: hold), partials)
             } catch {
-                press = .refused(error, hold)
+                hold.release()
+                press = .refused(error)
             }
         case .ended(let chord, let ending):
             let keyUp = ContinuousClock.now
@@ -135,22 +199,23 @@ public final class Dictation {
             // the same path: the failure is thrown inside the queued operation, which
             // is what makes it wait its turn instead of overtaking a session still
             // being inserted. [LAW:dataflow-not-control-flow]
-            let heard: Result<(AudioClip, Context), any Error>
-            let hold: EngineHold
+            let heard: Result<Heard, any Error>
             switch open {
             case .up:
                 preconditionFailure("a press ended that never began; the detector pairs every ended with a began")
-            case .refused(let error, let held):
+            case .refused(let error):
                 heard = .failure(error)
-                hold = held
-            case .down(let session, let into, let held):
-                hold = held
+            case .down(let session, let into, let decode, let partials):
+                // Read before the session ends, so it holds only what the press showed
+                // while it was open.
+                let duringPress = partials.atKeyUp
                 // The marks are closed and the microphone with them, however the press
                 // ended, so a session left open cannot carry its beginning into the next
                 // press's clip and cannot leave the device held after the key came up.
-                let audio = capture.endSession(session)
+                // Its audio ends here too, which is what lets the decode finish.
+                let lost = capture.endSession(session)
                 // What there was to hear, read once. [LAW:no-silent-failure] A hotkey that
-                // stopped and audio the capture could not hand over whole each leave
+                // stopped and audio the capture could not stream whole each leave
                 // something this loop must not report as an utterance. The lapse is asked
                 // first: a press the hotkey stopped during says so rather than describing the
                 // clip it left behind, which was never the whole utterance anyway. A
@@ -159,12 +224,15 @@ public final class Dictation {
                 // into another process, up to half a second of it, and this is the main
                 // actor: a press waits on it, and so does every window this app draws.
                 // A route that wants the role reads it off this thread.
-                heard = switch (ending, audio) {
+                heard = switch (ending, lost) {
                 case (.lapsed, _): .failure(PressLapsed(chord: chord))
-                case (.released(let kind), .whole(let clip)):
-                    .success((clip, Context(chord: chord, press: kind, frontmostApp: into, focusedElementRole: nil)))
-                case (.released, .partial(_, let lost)): .failure(SpeechLost(chord: chord, lost: lost))
+                case (.released(let kind), nil):
+                    .success(Heard(context: Context(chord: chord, press: kind, frontmostApp: into, focusedElementRole: nil), duringPress: duringPress, decode: decode))
+                case (.released, let lost?): .failure(SpeechLost(chord: chord, lost: lost))
                 }
+                // A press that will not be inserted has no use for the rest of its decode, and
+                // the engine goes back to whoever is waiting as soon as it stops.
+                if case .failure = heard { decode.cancel() }
             }
             do {
                 // Handed over before key-up returns, so a `finish` that comes next
@@ -175,7 +243,7 @@ public final class Dictation {
                 try sessions.submit { [report] in
                     let outcome: Result<Session, any Error>
                     do {
-                        outcome = .success(try await self.hear(heard, since: keyUp, releasing: hold))
+                        outcome = .success(try await self.hear(heard, since: keyUp))
                     } catch {
                         outcome = .failure(error)
                     }
@@ -183,9 +251,9 @@ public final class Dictation {
                 }
             } catch {
                 // The operation reports its own outcome; only the queue's own refusal
-                // to accept it reaches here, and then the operation that would have let go
-                // of the hold never runs. [LAW:no-silent-failure]
-                hold.release()
+                // to accept it reaches here, and then nothing will ever read the decode, so
+                // it is stopped and lets go of the engine as it does. [LAW:no-silent-failure]
+                if case .success(let heard) = heard { heard.decode.cancel() }
                 report(.failure(error))
             }
         }
@@ -201,22 +269,43 @@ public final class Dictation {
         try await sessions.drain()
     }
 
-    private func hear(_ heard: Result<(AudioClip, Context), any Error>, since keyUp: ContinuousClock.Instant, releasing hold: EngineHold) async throws -> Session {
-        let transcribed: Result<(Context, Transcript), any Error>
-        do {
-            let (clip, context) = try heard.get()
-            transcribed = .success((context, try await transcriber().transcribe(clip, expecting: .empty)))
-        } catch {
-            transcribed = .failure(error)
+    /// Hears the press while it is still going on: the session's audio is handed to the
+    /// engine as it is captured, and the transcript is what the engine makes of it once the
+    /// key comes up and the audio ends. [LAW:one-type-per-behavior] A held press and a
+    /// toggled one are heard the same way; how the press was made is the context's to say.
+    ///
+    /// [LAW:no-ambient-temporal-coupling] It takes the engine once the press before it has
+    /// its transcript, so a press made while the last one's final pass is still to run
+    /// cannot put its own passes ahead of it; its audio waits on the stream meanwhile.
+    ///
+    /// The hold ends with the transcript, whatever became of it: the insert that follows is
+    /// not the engine's, and served callers wait for this press and no longer.
+    private func decode(_ audio: AsyncStream<AudioClip>, into partials: Partials, releasing hold: EngineHold) -> Task<Decoded, Never> {
+        let before = latestDecode
+        let decode = Task { [transcriber] in
+            _ = await before?.value
+            let transcript: Result<Transcript, any Error>
+            do {
+                transcript = .success(try await transcriber().transcribe(audio, expecting: .empty) { partials.heard($0) })
+            } catch {
+                transcript = .failure(error)
+            }
+            return Decoded(transcript: transcript, at: .now, displaced: hold.release())
         }
-        // The hold ends with its transcript, whatever became of it: the insert that follows
-        // is not the engine's, and served callers wait for this press and no longer.
-        let displaced = hold.release()
-        let (context, transcript) = try transcribed.get()
-        let keyUpToTranscript = ContinuousClock.now - keyUp
-        let actions = router.actions(for: transcript, in: context)
+        latestDecode = decode
+        return decode
+    }
+
+    /// Waits for the press's decode, then routes and inserts what it heard. A press that
+    /// will not be inserted is reported in its turn without waiting on its decode, which
+    /// was told to stop and may still be waiting for the model to load.
+    private func hear(_ heard: Result<Heard, any Error>, since keyUp: ContinuousClock.Instant) async throws -> Session {
+        let heard = try heard.get()
+        let decoded = await heard.decode.value
+        let transcript = try decoded.transcript.get()
+        let actions = router.actions(for: transcript, in: heard.context)
         let performed = try await executor.perform(actions, since: keyUp)
-        return Session(context: context, transcript: transcript, keyUpToTranscript: keyUpToTranscript, displaced: displaced, performed: performed)
+        return Session(context: heard.context, transcript: transcript, duringPress: heard.duringPress, keyUpToTranscript: decoded.at - keyUp, displaced: decoded.displaced, performed: performed)
     }
 }
 

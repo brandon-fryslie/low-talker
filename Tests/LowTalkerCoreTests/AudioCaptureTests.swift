@@ -378,6 +378,43 @@ private struct Authorized: MicrophoneAuthority {
         #expect(capture.endSession(session) == .whole(AudioClip(samples: [1, 2, 3, 4])))
     }
 
+    /// A streamed session's audio is the look-back the ring already holds and then every
+    /// buffer as it lands, heard before the key comes up, and it ends when the session does,
+    /// whole. Buffers after the end belong to no session and do not reach it.
+    @Test func aSessionsAudioArrivesAsItIsCapturedAndEndsWithTheSession() async throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .open)
+        hardware.engines[0].appending([1, 2], origin)
+        let session = capture.stream(try capture.beginSession(at: after(2), preRoll: AudioSession.defaultPreRoll))
+        var audio = session.audio.makeAsyncIterator()
+        #expect(await audio.next()?.samples == [1, 2])
+        hardware.engines[0].appending([3, 4], after(2))
+        #expect(await audio.next()?.samples == [3, 4])
+        #expect(capture.endSession(session) == nil)
+        hardware.engines[0].appending([5, 6], after(4))
+        #expect(await audio.next() == nil)
+    }
+
+    /// The ring scrolling past a streamed session loses nothing: each buffer reached the
+    /// stream as it landed. What the ring had dropped before the stream began is missing,
+    /// and the end says how much.
+    @Test func aStreamedSessionMissesOnlyWhatTheRingDroppedBeforeItsStreamBegan() async throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(retaining: 0.5, hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .open)
+        let long = AudioClip.sampleCount(for: 0.8)
+        let held = capture.stream(try capture.beginSession(at: origin, preRoll: 0))
+        hardware.engines[0].appending([Float](repeating: 1, count: long), origin)
+        #expect(capture.endSession(held) == nil)
+        var heard: [Float] = []
+        for await clip in held.audio { heard += clip.samples }
+        #expect(heard.count == long)
+
+        let reaching = capture.stream(try capture.beginSession(at: after(long), preRoll: 0.8))
+        #expect(capture.endSession(reaching)?.scrolledOff == AudioClip.sampleCount(for: 0.3))
+    }
+
     /// The key-up does not close a microphone the user asked to have held, and does not
     /// relaunch it either: a relaunch would splice the ring at every release, which is the
     /// look-back being thrown away once per press by the mode that exists to keep it.

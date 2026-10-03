@@ -25,8 +25,9 @@ public enum CapturedAudio: Sendable, Equatable {
     /// something was lost.
     public struct Loss: Sendable, Equatable {
         /// Samples of the session's own audio the ring had already dropped by the time it
-        /// ended: the head of the clip, gone for good. The key was held for longer than
-        /// the ring retains, so the first of what was said was overwritten by the last.
+        /// ended, or for a streamed session by the time its stream began: the head of the
+        /// clip, gone for good. The first of what was said was overwritten before it could
+        /// be handed over.
         public let scrolledOff: Int
         /// Capture restarted while the session was open - the input device changed, or an
         /// engine that failed was replaced - so the audio between the engine that stopped

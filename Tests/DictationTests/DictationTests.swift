@@ -155,6 +155,38 @@ extension Result {
         #expect(rig.inputMethod.inserted == ["hi"])
     }
 
+    /// The engine hears a press while it is still going on: the audio reaches it as it is
+    /// captured, and what it reads comes back before the key does. The press's line carries
+    /// the passes run by key-up and how long after key-down the first words came.
+    @Test func aPressIsHeardWhileTheKeyIsStillDown() async throws {
+        let engine = FakeTranscriber(reading: { Transcript(typed: $0.isEmpty ? "" : "hello") }) { _ in Transcript(typed: "hello") }
+        let rig = try Rig(hearing: engine)
+        let keyDown = HostTime.now
+        rig.dictation.press(.began(Rig.rightOption, at: keyDown))
+        rig.speak([1, 2])
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { engine.hearing == [1, 2] })
+        #expect(engine.clips.isEmpty)
+        let read = HostTime.now
+        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        let session = try await rig.session()
+        #expect(engine.clips.map(\.samples) == [[1, 2]])
+        #expect(session.duringPress.passes >= 1)
+        let firstWords = try #require(session.duringPress.firstWords)
+        #expect(firstWords > .zero && firstWords <= read - keyDown)
+        #expect("\(session)".contains("passes during the press, first words \(Int(firstWords / .milliseconds(1))) ms after key-down"))
+        #expect(rig.inputMethod.inserted == ["hello"])
+    }
+
+    /// A press whose engine read nothing before the key came up says so, rather than
+    /// timing words it never showed.
+    @Test func aPressThatShowedNoWordsBeforeKeyUpSaysSo() async throws {
+        let rig = try Rig(hearing: FakeTranscriber { _ in Transcript(typed: "hi") })
+        rig.hold()
+        let session = try await rig.session()
+        #expect(session.duringPress.firstWords == nil)
+        #expect("\(session)".contains("no words before key-up"))
+    }
+
     /// The audio is what the ring held between the marks, and the microphone opens for
     /// the press, so there is nothing in front of them: the pre-roll reaches back over the
     /// moment the engine started and stops there. A press hears what was said into it and
@@ -249,8 +281,9 @@ extension Result {
         #expect(rig.turns.reading.holds == 0)
     }
 
-    /// Two presses insert in the order they were spoken: the second is not heard until
-    /// the first is inserted, so the words of one can never land inside the other's.
+    /// Two presses are heard and inserted in the order they were spoken: the second press's
+    /// decode takes the engine once the first has its transcript, so its passes cannot hold
+    /// up the first's last one, and the words of one can never land inside the other's.
     @Test func sessionsAreHeardAndInsertedInOrder() async throws {
         let gate = Gate()
         let engine = FakeTranscriber { clip in
@@ -263,6 +296,8 @@ extension Result {
         rig.hold(speaking: [2])
         #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { gate.waiting == 1 })
         #expect(engine.clips.count == 1)
+        #expect(engine.hearing == [1])
+        #expect(rig.inputMethod.inserted.isEmpty)
         gate.open()
         let first = try await rig.session()
         let second = try await rig.session()
@@ -300,14 +335,13 @@ extension Result {
         #expect("\(press)" == "WARNING: Your microphone was not open for the whole of your dictation. Your dictation was ignored.")
         #expect(!press.lost.interrupted)
         #expect(press.lost.scrolledOff == 0)
-        #expect(engine.clips.isEmpty)
         #expect(rig.inputMethod.inserted.isEmpty)
 
         // The next press is heard the moment it is made, so its microphone is open for all
         // of it and it inserts.
         rig.hold(speaking: [4, 5])
         #expect(try await rig.session().transcript.text == "a")
-        #expect(engine.clips.map(\.samples) == [[4, 5]])
+        #expect(engine.clips.last?.samples == [4, 5])
         #expect(rig.inputMethod.inserted == ["a"])
     }
 
@@ -479,10 +513,43 @@ extension Result {
         #expect(rig.inputMethod.inserted == ["a"])
     }
 
+    /// A press that will not be inserted is reported in its turn even while the model it
+    /// would have been heard by is still loading: nothing it could say waits on the engine.
+    @Test func aPressThatWillNotBeInsertedIsReportedWhileTheEngineStillLoads() async throws {
+        let gate = Gate()
+        let rig = try Rig { await gate.wait(); return FakeTranscriber { _ in Transcript(typed: "a") } }
+        rig.lapse()
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.reported.raised })
+        #expect(await rig.report().failure is PressLapsed)
+        gate.open()
+    }
+
+    /// A press that will not be inserted stops its decode, so the engine goes back to whoever
+    /// is waiting rather than finishing words nobody will read, and the next press is heard.
+    @Test func aPressThatWillNotBeInsertedStopsItsDecode() async throws {
+        let stopped = Flag()
+        let engine = FakeTranscriber { clip in
+            guard clip.samples == [1, 2, 3] else { return Transcript(typed: "a") }
+            do {
+                try await Task.sleep(for: .seconds(3600))
+            } catch {
+                stopped.raise()
+                throw error
+            }
+            return Transcript(typed: "never")
+        }
+        let rig = try Rig(hearing: engine)
+        rig.lapse(speaking: [1, 2, 3])
+        #expect(await rig.report().failure is PressLapsed)
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { stopped.raised && rig.turns.reading.holds == 0 })
+        rig.hold(speaking: [4, 5])
+        #expect(try await rig.session().transcript.text == "a")
+    }
+
     /// [LAW:no-silent-failure] Two presses the speaker made identically, told apart by
     /// nothing but how listening stopped. The hotkey stops partway through the first, so
     /// what it captured runs to the stop and not to the release: it is reported as lapsed
-    /// and never reaches the engine, because a fragment inserted into the user's editor
+    /// and never inserted, because a fragment inserted into the user's editor
     /// arrives unmarked as a fragment and cannot be marked there. The second is released
     /// and inserts. The outcomes have nothing in common, which is the whole of
     /// what the ending buys.
@@ -493,42 +560,23 @@ extension Result {
         rig.lapse(speaking: [1, 2, 3])
         let lapsed = try #require(await rig.report().failure as? PressLapsed)
         #expect(lapsed.chord == Rig.rightOption)
-        #expect(engine.clips.isEmpty)
         #expect(rig.inputMethod.inserted.isEmpty)
 
         rig.hold(speaking: [1, 2, 3])
         #expect(try await rig.session().transcript.text == "a")
-        #expect(engine.clips.count == 1)
         #expect(rig.inputMethod.inserted == ["a"])
     }
 
-    /// [LAW:no-silent-failure] The speaker held the key for longer than the ring retains,
-    /// so the first of what they said was overwritten by the last of it before the key
-    /// came up. What is left is a plausible utterance: nothing in the samples says where
-    /// it was cut, and - as the epic's contract test found by losing 0.4 s of speech with
-    /// every assertion over inserted text still passing - nothing in the text says it either.
-    /// So the press is reported rather than inserted, the same answer a lapsed press gets and
-    /// for the same reason: the destination is the user's editor, where a fragment cannot
-    /// be marked as one. The loss is named in samples, which is what makes this an
-    /// assertion and not a hope. [LAW:behavior-not-structure]
-    @Test func aPressTheRingCouldNotHoldWholeIsReportedInsteadOfInsertedAndTheNextPressInserts() async throws {
+    /// The speaker held the key for longer than the ring retains. The ring overwrote the
+    /// first of what was said with the last of it, but the engine had already heard every
+    /// buffer as it landed, so the press is whole and inserts.
+    @Test func aPressLongerThanTheRingRetainsIsHeardWholeAndInserts() async throws {
         let engine = FakeTranscriber { _ in Transcript(typed: "a") }
         let rig = try Rig(hearing: engine, retaining: 0.5)
-
-        rig.hold(speaking: [Float](repeating: 1, count: AudioClip.sampleCount(for: 0.8)))
-        let press = try #require(await rig.report().failure as? SpeechLost)
-        #expect(press.chord == Rig.rightOption)
-        // A 0.8 s hold into a ring that keeps 0.5 s: the missing 0.3 s is the head of the
-        // utterance, and the pre-roll reaching back before the microphone started is not
-        // part of it - there was no audio there to lose.
-        #expect(press.lost.scrolledOff == AudioClip.sampleCount(for: 0.3))
-        #expect(!press.lost.interrupted)
-        #expect(engine.clips.isEmpty)
-        #expect(rig.inputMethod.inserted.isEmpty)
-
-        rig.hold(speaking: [2, 3])
+        let said = [Float](repeating: 1, count: AudioClip.sampleCount(for: 0.8))
+        rig.hold(speaking: said)
         #expect(try await rig.session().transcript.text == "a")
-        #expect(engine.clips.count == 1)
+        #expect(engine.clips.last?.samples == said)
         #expect(rig.inputMethod.inserted == ["a"])
     }
 
@@ -554,14 +602,13 @@ extension Result {
         #expect(press.chord == Rig.rightOption)
         #expect(press.lost.interrupted)
         #expect(press.lost.scrolledOff == 0)
-        #expect(engine.clips.isEmpty)
         #expect(rig.inputMethod.inserted.isEmpty)
 
         // The next press is whole: it opens a microphone of its own and reaches back over
         // nothing, so the seam is behind it however close to it the key went down.
         rig.hold(speaking: [5, 6])
         #expect(try await rig.session().transcript.text == "a")
-        #expect(engine.clips.map(\.samples) == [[5, 6]])
+        #expect(engine.clips.last?.samples == [5, 6])
     }
 
     /// A device change that really took time is still only a splice: the head of the press
@@ -641,7 +688,6 @@ extension Result {
         #expect(press.chord == Rig.rightOption)
         #expect(press.lost.unopened)
         #expect(!press.lost.interrupted)
-        #expect(engine.clips.isEmpty)
         #expect(rig.inputMethod.inserted.isEmpty)
 
         // The failed engine was let go with the press, so the next one opens a microphone

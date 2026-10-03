@@ -52,7 +52,7 @@ actor Utterance {
     /// Where `samples` lie in the audio appended: the quiet let go from between them.
     private var timeline = Timeline()
     /// Samples through the end of the last clip that held speech, once one has.
-    /// Each clip is judged as it arrives, against the loudest so far, and never
+    /// Each frame is judged as it fills, against the loudest so far, and never
     /// again: a louder clip later may put an earlier one outside the range, but
     /// the speech only ever grows, which is what a pass waiting on it relies on.
     /// [LAW:types-are-the-program] No speech yet is its own state, not a count of
@@ -66,16 +66,28 @@ actor Utterance {
     private var waiting: [CheckedContinuation<Void, Never>] = []
 
     /// The span each clip is judged in: the tenth of a second the floor and the range
-    /// were measured over. [LAW:one-type-per-behavior] A clip of any length is judged
-    /// as the frames it holds, so an upload sent as one clip, or an item appended in
-    /// clips of seconds, is cut into speech and quiet as a stream of short clips is.
+    /// were measured over. [LAW:one-type-per-behavior] Frames are cut from the audio
+    /// appended, not from each clip, so an upload sent as one clip, an item appended in
+    /// clips of seconds, and a microphone's buffers of a hundredth of a second are cut
+    /// into the same speech and quiet.
     static let frame: TimeInterval = 0.1
+    private static let frameCount = AudioClip.sampleCount(for: frame)
+    /// Audio appended that does not yet fill a frame: judged once it does, or as it stands
+    /// when the utterance ends.
+    private var unframed: [Float] = []
 
     func append(_ clip: AudioClip) {
-        for frame in clip.chunks(of: Self.frame) {
+        unframed += clip.samples
+        let framed = unframed.count - unframed.count % Self.frameCount
+        frame(Array(unframed.prefix(framed)))
+        unframed.removeFirst(framed)
+        wake()
+    }
+
+    private func frame(_ samples: [Float]) {
+        for frame in AudioClip(samples: samples).chunks(of: Self.frame) {
             take(frame)
         }
-        wake()
     }
 
     private func take(_ clip: AudioClip) {
@@ -105,6 +117,8 @@ actor Utterance {
 
     /// The key came up: nothing more arrives.
     func end() {
+        frame(unframed)
+        unframed = []
         ended = true
         wake()
     }

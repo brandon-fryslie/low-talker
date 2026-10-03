@@ -103,18 +103,29 @@ struct Authorized: MicrophoneAuthority {
 /// gate - since the answer is a value. [LAW:composability]
 final class FakeTranscriber: Transcriber {
     private let heard = Mutex<[AudioClip]>([])
+    private let arrived = Mutex<[Float]>([])
+    private let reading: @Sendable ([Float]) -> Transcript
     private let answer: @Sendable (AudioClip) async throws -> Transcript
 
-    init(_ answer: @escaping @Sendable (AudioClip) async throws -> Transcript) {
+    /// `reading` is what a pass makes of the audio so far; one pass runs per clip as it
+    /// arrives, and reads nothing unless a test says otherwise.
+    init(reading: @escaping @Sendable ([Float]) -> Transcript = { _ in Transcript(typed: "") }, _ answer: @escaping @Sendable (AudioClip) async throws -> Transcript) {
+        self.reading = reading
         self.answer = answer
     }
 
     /// Every utterance so far, each as the one clip its audio added up to.
     var clips: [AudioClip] { heard.withLock { $0 } }
+    /// The audio of the utterance being heard, as far as it has arrived and been read.
+    var hearing: [Float] { arrived.withLock { $0 } }
 
     func transcribe(_ audio: some AsyncSequence<AudioClip, Never> & Sendable, expecting vocabulary: Vocabulary, partial: @escaping @Sendable (Partial) -> Void) async throws -> Transcript {
         var samples: [Float] = []
-        for await clip in audio { samples += clip.samples }
+        for await clip in audio {
+            samples += clip.samples
+            partial(Partial(confirmed: Transcript(typed: ""), tentative: reading(samples)))
+            arrived.withLock { $0 = samples }
+        }
         let clip = AudioClip(samples: samples)
         heard.withLock { $0.append(clip) }
         return try await answer(clip)
