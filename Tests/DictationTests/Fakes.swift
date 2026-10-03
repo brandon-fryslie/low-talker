@@ -105,12 +105,19 @@ final class FakeTranscriber: Transcriber {
     private let heard = Mutex<[AudioClip]>([])
     private let arrived = Mutex<[Float]>([])
     private let reading: @Sendable ([Float]) -> Transcript
+    private let confirming: @Sendable ([Float]) -> Transcript
     private let answer: @Sendable (AudioClip) async throws -> Transcript
 
-    /// `reading` is what a pass makes of the audio so far; one pass runs per clip as it
-    /// arrives, and reads nothing unless a test says otherwise.
-    init(reading: @escaping @Sendable ([Float]) -> Transcript = { _ in Transcript(typed: "") }, _ answer: @escaping @Sendable (AudioClip) async throws -> Transcript) {
+    /// `reading` is what a pass makes of the audio so far and `confirming` the words two
+    /// passes have agreed on, which the answer has to begin with; one pass runs per clip as
+    /// it arrives, and reads and confirms nothing unless a test says otherwise.
+    init(
+        reading: @escaping @Sendable ([Float]) -> Transcript = { _ in Transcript(typed: "") },
+        confirming: @escaping @Sendable ([Float]) -> Transcript = { _ in Transcript(typed: "") },
+        _ answer: @escaping @Sendable (AudioClip) async throws -> Transcript
+    ) {
         self.reading = reading
+        self.confirming = confirming
         self.answer = answer
     }
 
@@ -123,7 +130,7 @@ final class FakeTranscriber: Transcriber {
         var samples: [Float] = []
         for await clip in audio {
             samples += clip.samples
-            partial(Partial(confirmed: Transcript(typed: ""), tentative: reading(samples)))
+            partial(Partial(confirmed: confirming(samples), tentative: reading(samples)))
             arrived.withLock { $0 = samples }
         }
         let clip = AudioClip(samples: samples)
