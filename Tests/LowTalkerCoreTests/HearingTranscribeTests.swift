@@ -144,7 +144,7 @@ import Testing
         #expect(passes.map(\.saying) == ["", ""])
         #expect(partials.map(\.text) == [" see you", " see you"])
         #expect(partials[0].confirmed.words.isEmpty)
-        #expect(partials[1].confirmed.text == " see you")
+        #expect(partials[1].confirmed.text == " see")
         #expect(transcript.text == " see you")
     }
 }
