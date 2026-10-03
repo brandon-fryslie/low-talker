@@ -51,6 +51,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var hotkeyStatus = ""
     /// What the loop is doing with presses, which the icon shows over the engine's readiness.
     private var activity: Dictation.Activity = .idle
+    /// The loop's activity again, floating over the app being dictated into.
+    private let hud = HUD()
 
     /// When this process began, which every readout of the engine's wait counts from.
     private let launched = ContinuousClock.now
@@ -73,6 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func show(_ activity: Dictation.Activity) {
         self.activity = activity
         drawStatusIcon()
+        hud.show(activity)
         sessions.info("activity: \(String(describing: activity), privacy: .public)")
     }
 

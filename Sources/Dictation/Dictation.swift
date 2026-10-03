@@ -111,6 +111,8 @@ public final class Dictation {
             /// Nil while the key is down.
             var keyUp: ContinuousClock.Instant?
             var confirmed: [Transcript.Word] = []
+            /// Everything the latest pass read, confirmed then tentative.
+            var text = ""
             var cursor = ConfirmedCursor()
             /// False once the press stops committing.
             var committing = true
@@ -129,11 +131,20 @@ public final class Dictation {
         /// A wake for each change to the confirmed words; ends when no more can come. The
         /// newest is all that is kept, since each run takes every word confirmed so far.
         let wakes: AsyncStream<Void>
+        private let read: AsyncStream<Void>.Continuation
+        /// A wake for each pass, for whoever shows what the press has read; ends with `wakes`.
+        let reads: AsyncStream<Void>
 
         init(since keyDown: HostTime) {
             self.keyDown = .now - (HostTime.now - keyDown)
             state = Mutex(State())
             (wakes, wake) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
+            (reads, read) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
+        }
+
+        /// Everything the latest pass read.
+        var text: String {
+            state.withLock { $0.text }
         }
 
         /// The microphone is open and the decode begun.
@@ -148,14 +159,17 @@ public final class Dictation {
                 state.repunctuated = partial.repunctuated
                 state.firstWords = state.firstWords ?? (partial.text.isEmpty ? nil : now - keyDown)
                 state.confirmed = partial.confirmed.words
+                state.text = partial.text
             }
             wake.yield()
+            read.yield()
         }
 
         /// The decode is over: nothing more is confirmed. What the transcript adds past the
         /// confirmed words is `rest`'s.
         func decoded() {
             wake.finish()
+            read.finish()
         }
 
         /// The words confirmed since the last run, which are now this run's.
@@ -202,6 +216,7 @@ public final class Dictation {
             }
             decode?.cancel()
             wake.finish()
+            read.finish()
         }
 
         /// The key came up: what the press showed while it was open.
@@ -266,6 +281,8 @@ public final class Dictation {
     private let report: @Sendable @MainActor (Result<Session, any Error>) -> Void
     private let showing: @Sendable @MainActor (Activity) -> Void
     private var press: Press = .up
+    /// What `showing` last heard.
+    private var shown: Activity = .idle
     /// Presses ended and not yet reported.
     private var unreported = 0
     /// The decode of the latest press, which the next press's decode waits out before it
@@ -279,7 +296,8 @@ public final class Dictation {
     /// until its transcript is out, so served callers wait for the speaker rather than the
     /// speaker for them. [LAW:dataflow-not-control-flow] `report` hears every session's
     /// outcome on the main actor, in the order the presses came. `showing` hears the loop's
-    /// activity each time a press begins or ends and each time an outcome is reported.
+    /// activity each time it changes: a press beginning or ending, a pass reading the open
+    /// press, an outcome reported.
     public init(
         capture: AudioCapture,
         transcriber: @escaping @Sendable @MainActor () async throws -> any Transcriber,
@@ -299,15 +317,25 @@ public final class Dictation {
     }
 
     private var activity: Activity {
-        if case .down = press { return .listening }
+        if case .down(let open) = press { return .listening(heard: open.streaming.text) }
         return unreported > 0 ? .transcribing : .idle
+    }
+
+    /// Tells `showing` the activity when it differs from what it last heard. Every change
+    /// passes through here, so a pass that read nothing new, or that read a press no longer
+    /// open, shows nothing twice. [LAW:single-enforcer]
+    private func show() {
+        let now = activity
+        guard now != shown else { return }
+        shown = now
+        showing(now)
     }
 
     /// Reports a press's outcome, and then shows that it is no longer on its way.
     private func settle(_ outcome: Result<Session, any Error>) {
         report(outcome)
         unreported -= 1
-        showing(activity)
+        show()
     }
 
     /// The hotkey's handler. The detector pairs every `began` with one `ended`, a lapse
@@ -339,19 +367,22 @@ public final class Dictation {
                 let decode = decode(session.audio, into: streaming, releasing: hold)
                 streaming.hearing(decode) { [capture] in capture.missing(from: session) }
                 press = .down(Open(session: session, into: into, decode: decode, streaming: streaming, committing: committing))
+                // Each pass is shown on the main actor, where the press is read, until the
+                // decode is over or the press stops.
+                Task { for await _ in streaming.reads { show() } }
             } catch {
                 // Nothing will be decoded, so the commits queued for it end at once.
                 streaming.stop()
                 hold.release()
                 press = .refused(error)
             }
-            showing(activity)
+            show()
         case .ended(let chord, let ending):
             let keyUp = ContinuousClock.now
             let open = press
             press = .up
             unreported += 1
-            showing(activity)
+            show()
             // What there is to hear, or the reason there is nothing. One value, so a
             // press that was refused at key-down and one that was heard leave here by
             // the same path: the failure is thrown inside the queued operation, which
