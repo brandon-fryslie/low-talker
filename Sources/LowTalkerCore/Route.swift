@@ -35,6 +35,14 @@ public struct Route: Hashable, Sendable, CustomStringConvertible {
             }
         }
 
+        /// Whether it claims every utterance before a word of it is heard, so the route it
+        /// belongs to decides an utterance that is still being spoken.
+        public var claimsUnheard: Bool {
+            switch self {
+            case .always: true
+            }
+        }
+
         /// What this match claims, in a person's words. A case added here has to say
         /// what it claims before it compiles, so a report can never list a match it
         /// has no words for.
@@ -54,9 +62,22 @@ public struct Route: Hashable, Sendable, CustomStringConvertible {
 
         public func actions(for transcript: Transcript, in context: Context) -> [Action] {
             switch self {
-            case .insertTranscript:
-                transcript.isBlank ? [] : [.insertText(text: transcript.text)]
+            case .insertTranscript: Self.insert(transcript).map { [$0] } ?? []
             }
+        }
+
+        /// What each run of words becomes as it is confirmed, while the utterance is still
+        /// being spoken, or nil for an emit that acts on the whole transcript and so waits
+        /// for it. The runs' actions, in order, are the whole transcript's. [LAW:types-are-the-program]
+        /// At most one per run, so a run that stops stops whole: none of it was done.
+        public var asHeard: (@Sendable (Transcript) -> Action?)? {
+            switch self {
+            case .insertTranscript: { Self.insert($0) }
+            }
+        }
+
+        private static func insert(_ transcript: Transcript) -> Action? {
+            transcript.isBlank ? nil : .insertText(text: transcript.text)
         }
 
         public var description: String {
@@ -87,5 +108,13 @@ public struct Router: Hashable, Sendable {
     public func actions(for transcript: Transcript, in context: Context) -> [Action] {
         routes.first { $0.when.matches(context, transcript) }
             .map { $0.then.actions(for: transcript, in: context) } ?? []
+    }
+
+    /// What each run of confirmed words becomes while the utterance is still being spoken:
+    /// the first route's, when it claims every utterance unheard and acts on words as they
+    /// come. Nil when the route that decides cannot be known until the words are, or acts
+    /// on the whole transcript, such as a spoken edit: such a mode waits for the press to end.
+    public var asHeard: (@Sendable (Transcript) -> Action?)? {
+        routes.first.flatMap { $0.when.claimsUnheard ? $0.then.asHeard : nil }
     }
 }

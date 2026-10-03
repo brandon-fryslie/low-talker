@@ -402,33 +402,51 @@ public final class AudioCapture {
         let open = isOpen
         let delivered = shared.stream.withLock { stream -> Delivered in
             let range = session.range(endingAt: stream.ring.end)
-            // Where the session's own audio starts among the positions that exist: the
-            // pre-roll may reach back before the first sample ever captured, and audio
-            // that never existed was not lost.
-            let began = range.clamped(to: 0..<stream.ring.end).lowerBound
-            // How long the session waited for its microphone, and a wait that never ended
-            // for one nothing was ever delivered for - a hold shorter than the engine took
-            // to start, or one whose engine never started. That is the same sentence about
-            // the whole press that lateness is about its head, so it is the same reading
-            // rather than one of its own. [LAW:one-source-of-truth]
-            let openedLate = stream.openedForSession
-                .map { session.unheard(since: $0) > .seconds(Self.warmUpAllowance) } ?? true
-            let lost = CapturedAudio.Loss(
-                scrolledOff: scrolledOff(stream.ring, range),
-                interrupted: began < stream.continuousSince,
-                // Two readings of one fact - the microphone was not open for part of this
-                // session. It opened so long after the key went down that the stretch in
-                // between is speech rather than warm-up, which takes the head; or it was
-                // gone by the time the key came up and never came back, which takes the
-                // tail.
-                unopened: openedLate || !open
-            )
+            let lost = Self.loss(of: session, in: stream, scrolledOff: scrolledOff(stream.ring, range), open: open, ended: true)
             stream.feed?.finish()
             stream.feed = nil
             return deliver(stream.ring, range, lost)
         }
         rest()
         return delivered
+    }
+
+    /// What a streamed session still open is already known to be missing, or nil while all
+    /// of it has streamed so far. A head the ring dropped, a microphone that opened late and
+    /// a break in capture are each known the moment they happen and never heal, so what this
+    /// reads, `endSession` reads too; it can only learn more by then.
+    public func missing(from streamed: StreamedSession) -> CapturedAudio.Loss? {
+        guard case .started(let started) = phase, started.sessionIsOpen else {
+            preconditionFailure("a session's losses were asked for with no session open; its end is what says them")
+        }
+        let open = isOpen
+        return shared.stream.withLock { Self.loss(of: streamed.session, in: $0, scrolledOff: streamed.missed, open: open, ended: false) }
+    }
+
+    /// What `session` lacks as `stream` stands, read under its lock. [LAW:one-source-of-truth]
+    /// The reading the end of a session and an open one's `missing` share.
+    private static func loss(of session: AudioSession, in stream: Stream, scrolledOff: Int, open: Bool, ended: Bool) -> CapturedAudio.Loss? {
+        // Where the session's own audio starts among the positions that exist: the pre-roll
+        // may reach back before the first sample ever captured, and audio that never existed
+        // was not lost.
+        let began = session.range(endingAt: stream.ring.end).clamped(to: 0..<stream.ring.end).lowerBound
+        // How long the session waited for its microphone, and a wait that never ended for
+        // one nothing was ever delivered for - a hold shorter than the engine took to start,
+        // or one whose engine never started. That is the same sentence about the whole press
+        // that lateness is about its head, so it is the same reading rather than one of its
+        // own. [LAW:one-source-of-truth] A session still open that nothing has reached yet
+        // has missed nothing yet: what it is waiting for may still come in time.
+        let openedLate = stream.openedForSession
+            .map { session.unheard(since: $0) > .seconds(warmUpAllowance) } ?? ended
+        return CapturedAudio.Loss(
+            scrolledOff: scrolledOff,
+            interrupted: began < stream.continuousSince,
+            // Two readings of one fact - the microphone was not open for part of this
+            // session. It opened so long after the key went down that the stretch in
+            // between is speech rather than warm-up, which takes the head; or it was gone
+            // by the time the key came up, or is gone now, which takes the tail.
+            unopened: openedLate || !open
+        )
     }
 
     /// An open session whose audio is streamed as it is captured, ended by

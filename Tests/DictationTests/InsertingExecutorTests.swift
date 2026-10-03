@@ -50,7 +50,7 @@ import Testing
     @Test func wordsAtTheFocusAreInsertedAtTheCursor() async throws {
         let inputMethod = Self.inserting(into: Self.textEdit)
         let performed = try await Executor(insertingThrough: inputMethod)
-            .perform([.insertText(text: "héllo there")], since: .now)
+            .perform([.insertText(text: "héllo there")], since: .keyUp(.now))
 
         #expect(inputMethod.texts == ["héllo there"])
         #expect(performed.count == 1)
@@ -65,7 +65,7 @@ import Testing
     /// commits where the cursor is then. [FRAMING:representation]
     @Test func theAppNamedIsTheOneTheInputMethodReached() async throws {
         let performed = try await Executor(insertingThrough: Self.inserting(into: Self.slack))
-            .perform([.insertText(text: "hi")], since: .now)
+            .perform([.insertText(text: "hi")], since: .keyUp(.now))
 
         #expect(performed[0].into == Self.slack)
         #expect("\(performed[0])".hasPrefix("inserted 2 characters at the cursor in com.tinyspeck.slackmacgap, key-up to acknowledged "))
@@ -79,7 +79,7 @@ import Testing
         let inputMethod = AnInputMethod { _ in throw refusal }
         let stopped = try await #require(throws: RouteStopped.self) {
             try await Executor(insertingThrough: inputMethod)
-                .perform([.insertText(text: "héllo there")], since: .now)
+                .perform([.insertText(text: "héllo there")], since: .keyUp(.now))
         }
 
         #expect(stopped.cause as? Refusal == refusal)
@@ -93,7 +93,7 @@ import Testing
         let inputMethod = AnInputMethod { _ in throw late }
         let stopped = try await #require(throws: RouteStopped.self) {
             try await Executor(insertingThrough: inputMethod)
-                .perform([.insertText(text: "héllo there")], since: .now)
+                .perform([.insertText(text: "héllo there")], since: .keyUp(.now))
         }
 
         #expect(stopped.cause as? NotYetTaken == late)
@@ -115,7 +115,7 @@ import Testing
         let inputMethod = AnInputMethod { _ in throw why }
         let stopped = try await #require(throws: RouteStopped.self) {
             try await Executor(insertingThrough: inputMethod)
-                .perform([.insertText(text: "héllo there")], since: .now)
+                .perform([.insertText(text: "héllo there")], since: .keyUp(.now))
         }
 
         #expect(stopped.cause as? Unreachable == why)
@@ -135,7 +135,7 @@ import Testing
             let inputMethod = Self.inserting(into: Self.textEdit)
             let refusal = try await #require(throws: NotAnInsert.self) {
                 try await Executor(insertingThrough: inputMethod)
-                    .perform([.insertText(text: "first"), action], since: .now)
+                    .perform([.insertText(text: "first"), action], since: .keyUp(.now))
             }
 
             #expect(refusal.action == action)

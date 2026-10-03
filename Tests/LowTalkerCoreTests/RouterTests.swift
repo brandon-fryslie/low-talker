@@ -35,6 +35,15 @@ import Testing
         #expect(actions == [.insertText(text: "hi")])
     }
 
+    /// Dictation acts on words as they are confirmed, and each run's actions are what the
+    /// whole transcript's would be for those words; a router that claims nothing does not.
+    @Test func dictationActsOnWordsAsTheyAreHeard() throws {
+        let asHeard = try #require(Router.dictation.asHeard)
+        #expect(asHeard(Transcript(typed: " there")) == .insertText(text: " there"))
+        #expect(asHeard(Transcript(typed: " ")) == nil)
+        #expect(Router(routes: []).asHeard == nil)
+    }
+
     @Test func noRoutesProducesNoActions() {
         #expect(Router(routes: []).actions(for: Transcript(typed: "hi"), in: Self.context) == [])
     }

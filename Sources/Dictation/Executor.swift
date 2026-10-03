@@ -30,7 +30,23 @@ public struct Executor {
 
     nonisolated public static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "lowtalker", category: "insert")
 
-    /// One insert, done. The time is from the hotkey's key-up to the input method's answer.
+    /// The key event an insert is timed from: key-down for words committed while the press is
+    /// still open, key-up for what is inserted once it is over.
+    public struct Since: Sendable {
+        public enum Key: String, Sendable {
+            case down = "key-down"
+            case up = "key-up"
+        }
+
+        public let key: Key
+        public let instant: ContinuousClock.Instant
+
+        public static func keyDown(_ instant: ContinuousClock.Instant) -> Since { Since(key: .down, instant: instant) }
+        public static func keyUp(_ instant: ContinuousClock.Instant) -> Since { Since(key: .up, instant: instant) }
+    }
+
+    /// One insert, done. The time is from the key event it is timed from to the input
+    /// method's answer.
     public struct Performed: CustomStringConvertible, Sendable {
         public let characters: Int
         /// The app whose cursor took the words, as the input method names it - not
@@ -39,9 +55,10 @@ public struct Executor {
         /// [FRAMING:representation]
         public let into: BundleID
         public let acknowledged: Duration
+        public let since: Since.Key
 
         public var description: String {
-            "inserted \(characters) characters at the cursor in \(into.rawValue), key-up to acknowledged \(Int(acknowledged / .milliseconds(1))) ms"
+            "inserted \(characters) characters at the cursor in \(into.rawValue), \(since.rawValue) to acknowledged \(Int(acknowledged / .milliseconds(1))) ms"
         }
     }
 
@@ -50,7 +67,7 @@ public struct Executor {
     /// focus; throws `RouteStopped` from the insert that stopped, carrying the earlier ones,
     /// which are done.
     @discardableResult
-    public func perform(_ actions: [Action], since keyUp: ContinuousClock.Instant) async throws -> [Performed] {
+    public func perform(_ actions: [Action], since: Since) async throws -> [Performed] {
         let texts = try actions.map(Self.text(of:))
         let clock = ContinuousClock()
         var performed: [Performed] = []
@@ -61,7 +78,7 @@ public struct Executor {
             // as it is, and stops the route by name.
             let inserted: Inserted
             do { inserted = try await inserter.insert(text) } catch { throw RouteStopped(performed: performed, cause: error) }
-            let done = Performed(characters: inserted.characters, into: BundleID(rawValue: inserted.into), acknowledged: clock.now - keyUp)
+            let done = Performed(characters: inserted.characters, into: BundleID(rawValue: inserted.into), acknowledged: clock.now - since.instant, since: since.key)
             log.info("\(done.description, privacy: .public)")
             performed.append(done)
         }
