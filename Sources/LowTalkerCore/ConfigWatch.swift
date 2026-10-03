@@ -14,8 +14,9 @@ public enum RunningConfig: Equatable, Sendable, CustomStringConvertible {
     /// and it goes on running.
     ///
     /// [LAW:no-silent-failure] Replacing a working config with the defaults because a save
-    /// was half-written is the failure the parser exists to prevent, and a reload mid-edit
-    /// is where it would be easiest to commit.
+    /// was refused is the failure this case exists to prevent, and a reload mid-edit is where
+    /// it would be easiest to commit. A save read while empty or missing is not refused: it
+    /// is `Config.load`'s no-file default, and the tick for the rest of the write follows it.
     case kept(Config, because: ConfigError)
     /// Every reading since launch was refused, so there is no config to run on.
     case refused(ConfigError)
