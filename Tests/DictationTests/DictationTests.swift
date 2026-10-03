@@ -156,12 +156,16 @@ extension Result {
     }
 
     /// Confirmed words land while the key is still down, each run once and in order, and
-    /// key-up commits only what follows them. The press's line counts the commits made while
-    /// it was open, the words they carried, and when the first landed.
+    /// key-up commits only what follows them. The press's line counts the commits acknowledged
+    /// while it was open, the words they carried, and when the first landed.
+    ///
+    /// [LAW:no-ambient-temporal-coupling] The third run is held at the input method's gate
+    /// across the key-up: the runs go one at a time, so a third insert waiting there is the
+    /// proof the second has been counted, where the fake having taken the second's text is not.
     @Test func confirmedWordsAreCommittedInOrderWhileThePressIsOpenAndKeyUpCommitsTheRest() async throws {
         let engine = FakeTranscriber(confirming: { samples in
-            Transcript(typed: samples.count >= 4 ? "hello there" : samples.count >= 2 ? "hello" : "")
-        }) { _ in Transcript(typed: "hello there friend") }
+            Transcript(typed: samples.count >= 6 ? "hello there my" : samples.count >= 4 ? "hello there" : samples.count >= 2 ? "hello" : "")
+        }) { _ in Transcript(typed: "hello there my friend") }
         let rig = try Rig(hearing: engine)
         let keyDown = HostTime.now
         rig.dictation.press(.began(Rig.rightOption, at: keyDown))
@@ -171,18 +175,22 @@ extension Result {
         rig.speak([4])
         #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.inputMethod.inserted == ["hello", " there"] })
         let landed = HostTime.now
+        rig.inputMethod.hold()
+        rig.speak([5, 6])
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.inputMethod.holding == 1 })
         rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        rig.inputMethod.letGo()
         let session = try await rig.session()
-        #expect(rig.inputMethod.inserted == ["hello", " there", " friend"])
-        #expect(session.transcript.text == "hello there friend")
-        #expect(session.performed.count == 3)
+        #expect(rig.inputMethod.inserted == ["hello", " there", " my", " friend"])
+        #expect(session.transcript.text == "hello there my friend")
+        #expect(session.performed.count == 4)
         #expect(session.duringPress.commits == 2)
         #expect(session.duringPress.wordsCommitted == 2)
         let firstCommit = try #require(session.duringPress.firstCommit)
         #expect(firstCommit > .zero && firstCommit <= landed - keyDown)
         #expect("\(session)".contains("2 commits of 2 words, the first \(Int(firstCommit / .milliseconds(1))) ms after key-down"))
-        #expect("\(session.performed[0])".contains("key-down to acknowledged"))
-        #expect("\(session.performed[2])".contains("key-up to acknowledged"))
+        #expect("\(session.performed[2])".contains("key-down to acknowledged"))
+        #expect("\(session.performed[3])".contains("key-up to acknowledged"))
     }
 
     /// A refusal while the press is open stops its commits: nothing after it is inserted,
