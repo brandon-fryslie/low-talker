@@ -62,21 +62,22 @@ public struct Route: Hashable, Sendable, CustomStringConvertible {
 
         public func actions(for transcript: Transcript, in context: Context) -> [Action] {
             switch self {
-            case .insertTranscript: Self.insert(transcript)
+            case .insertTranscript: Self.insert(transcript).map { [$0] } ?? []
             }
         }
 
         /// What each run of words becomes as it is confirmed, while the utterance is still
         /// being spoken, or nil for an emit that acts on the whole transcript and so waits
-        /// for it. The runs' actions, in order, are the whole transcript's.
-        public var asHeard: (@Sendable (Transcript) -> [Action])? {
+        /// for it. The runs' actions, in order, are the whole transcript's. [LAW:types-are-the-program]
+        /// At most one per run, so a run that stops stops whole: none of it was done.
+        public var asHeard: (@Sendable (Transcript) -> Action?)? {
             switch self {
             case .insertTranscript: { Self.insert($0) }
             }
         }
 
-        private static func insert(_ transcript: Transcript) -> [Action] {
-            transcript.isBlank ? [] : [.insertText(text: transcript.text)]
+        private static func insert(_ transcript: Transcript) -> Action? {
+            transcript.isBlank ? nil : .insertText(text: transcript.text)
         }
 
         public var description: String {
@@ -113,7 +114,7 @@ public struct Router: Hashable, Sendable {
     /// the first route's, when it claims every utterance unheard and acts on words as they
     /// come. Nil when the route that decides cannot be known until the words are, or acts
     /// on the whole transcript, such as a spoken edit: such a mode waits for the press to end.
-    public var asHeard: (@Sendable (Transcript) -> [Action])? {
+    public var asHeard: (@Sendable (Transcript) -> Action?)? {
         routes.first.flatMap { $0.when.claimsUnheard ? $0.then.asHeard : nil }
     }
 }

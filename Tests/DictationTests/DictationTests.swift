@@ -199,11 +199,60 @@ extension Result {
         rig.speak([3, 4])
         #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { engine.hearing == [1, 2, 3, 4] })
         rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
-        let stopped = try #require(await rig.report().failure as? CommitStopped)
+        let stopped = try #require(await rig.report().failure as? PressStopped)
         #expect(stopped.landed == 1)
         #expect(stopped.cause as? Refusal == .cursorIsInAnotherApp)
+        #expect(failureLine(stopped) == "\(Refusal.cursorIsInAnotherApp) 1 words of your dictation were inserted before it; the rest were not.")
         #expect("\(stopped)".hasSuffix("1 words of your dictation were inserted before it; the rest were not."))
         #expect(rig.inputMethod.inserted == ["hello"])
+    }
+
+    /// A refusal while the press is open stops its decode too: nothing will read it, so the
+    /// engine goes back to whoever is waiting while the key is still down.
+    @Test func aRefusalDuringThePressLetsGoOfTheEngineBeforeKeyUp() async throws {
+        let engine = FakeTranscriber(confirming: { samples in Transcript(typed: samples.count >= 2 ? "hello" : "") }) { _ in Transcript(typed: "hello") }
+        let rig = try Rig(hearing: engine)
+        rig.inputMethod.refusing(Refusal.cursorIsInAnotherApp)
+        rig.dictation.press(.began(Rig.rightOption, at: rig.now))
+        rig.speak([1, 2])
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.turns.reading.holds == 0 })
+        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        #expect(try #require(await rig.report().failure as? PressStopped).landed == 0)
+    }
+
+    /// A decode that fails after words were committed says how many are at the cursor
+    /// rather than that nothing was placed.
+    @Test func aDecodeThatFailsAfterCommitsSaysHowManyLanded() async throws {
+        let engine = FakeTranscriber(confirming: { samples in Transcript(typed: samples.count >= 2 ? "hello there" : "") }) { _ in throw NoEngine() }
+        let rig = try Rig(hearing: engine)
+        rig.dictation.press(.began(Rig.rightOption, at: rig.now))
+        rig.speak([1, 2])
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.inputMethod.inserted == ["hello there"] })
+        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        let stopped = try #require(await rig.report().failure as? PressStopped)
+        #expect(stopped.cause is NoEngine)
+        #expect(stopped.landed == 2)
+        #expect(failureLine(stopped) == "Your last dictation stopped: NoEngine() 2 words of your dictation were inserted before it; the rest were not.")
+    }
+
+    /// [LAW:no-silent-failure] A press whose microphone opened after the words it was pressed
+    /// for commits nothing while the key is down: the engine reads the fragment it was given
+    /// as a fluent sentence with the first words gone, and the capture knew the head was lost
+    /// before any of it was confirmed.
+    @Test func aPressMissingItsHeadCommitsNothingWhileTheKeyIsDown() async throws {
+        let engine = FakeTranscriber(confirming: { samples in Transcript(typed: samples.count >= 2 ? "there" : "") }) { _ in Transcript(typed: "there") }
+        let rig = try Rig(hearing: engine)
+        let keyWentDown = rig.now
+        rig.wait(AudioCapture.warmUpAllowance + 0.4)
+        rig.dictation.press(.began(Rig.rightOption, at: keyWentDown))
+        rig.speak([1, 2])
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.turns.reading.holds == 0 })
+        #expect(rig.inputMethod.inserted.isEmpty)
+        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        let press = try #require(await rig.report().failure as? SpeechLost)
+        #expect(press.lost.unopened)
+        #expect(press.landed == 0)
+        #expect(rig.inputMethod.inserted.isEmpty)
     }
 
     /// A press that lapses after some of its words were committed keeps them, commits
@@ -220,6 +269,7 @@ extension Result {
         let lapsed = try #require(await rig.report().failure as? PressLapsed)
         #expect(lapsed.landed == 2)
         #expect("\(lapsed)".hasSuffix("The 2 words already inserted stay; the rest of your dictation was ignored."))
+        #expect(failureLine(lapsed) == "\(lapsed)")
         #expect(rig.inputMethod.inserted == ["hello there"])
     }
 
@@ -577,7 +627,10 @@ extension Result {
             return Transcript(typed: "a")
         })
         rig.hold()
-        #expect(await rig.report().failure is NoEngine)
+        let stopped = try #require(await rig.report().failure as? PressStopped)
+        #expect(stopped.cause is NoEngine)
+        #expect(stopped.landed == 0)
+        #expect(failureLine(stopped) == "Your last dictation was not placed: NoEngine()")
         failing.withLock { $0 = false }
         rig.hold()
         _ = try await rig.session()
@@ -590,9 +643,10 @@ extension Result {
         let rig = try Rig(hearing: FakeTranscriber { _ in Transcript(typed: "a") })
         rig.inputMethod.refusing(Refusal.noClientHasFocus)
         rig.hold()
-        let stopped = try #require(await rig.report().failure as? CommitStopped)
-        #expect(stopped.cause as? Refusal == .noClientHasFocus)
+        let stopped = try #require(await rig.report().failure as? PressStopped)
+        #expect(stopped.causes.last as? Refusal == .noClientHasFocus)
         #expect(stopped.landed == 0)
+        #expect(failureLine(stopped) == "\(Refusal.noClientHasFocus)")
         rig.inputMethod.refusing(nil)
         rig.hold()
         _ = try await rig.session()

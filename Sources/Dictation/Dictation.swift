@@ -78,8 +78,6 @@ public final class Dictation {
         /// Absent when nothing was committed before key-up, for the reason `firstWords` is.
         public let firstCommit: Duration?
 
-        static let none = DuringPress(passes: 0, firstWords: nil, commits: 0, wordsCommitted: 0, firstCommit: nil)
-
         public var description: String {
             let words = firstWords.map { "first words \(Int($0 / .milliseconds(1))) ms after key-down" } ?? "no words before key-up"
             let committed = firstCommit.map { "\(commits) commits of \(wordsCommitted) words, the first \(Int($0 / .milliseconds(1))) ms after key-down" } ?? "nothing committed before key-up"
@@ -87,8 +85,8 @@ public final class Dictation {
         }
     }
 
-    /// One press as its decode unfolds: the partials counted as they come, and the confirmed
-    /// words handed out as runs to commit while the press is open.
+    /// One press as its decode unfolds: the partials counted as they come, the confirmed
+    /// words handed out as runs to commit while the press is open, and what landed.
     ///
     /// What the press showed is read once, at key-up: a pass or a commit that ends after it
     /// changes nothing that is read again.
@@ -104,74 +102,108 @@ public final class Dictation {
             let since: Executor.Since
         }
 
+        /// What the press is heard through once its microphone is open: the decode, and the
+        /// capture's reading of what the press's audio already lacks.
+        struct Hearing {
+            let decode: Task<Decoded, Never>
+            let missing: @MainActor @Sendable () -> CapturedAudio.Loss?
+        }
+
         private struct State {
-            var shown = DuringPress.none
+            var passes = 0
+            var firstWords: Duration?
             /// Nil while the key is down.
             var keyUp: ContinuousClock.Instant?
             var confirmed: [Transcript.Word] = []
-            var handedOut = 0
+            var cursor = ConfirmedCursor()
             /// Nil once the press stops committing.
-            var asHeard: (@Sendable (Transcript) -> [Action])?
+            var asHeard: (@Sendable (Transcript) -> Action?)?
+            /// Nil until the microphone is open, and for a press refused before it was.
+            var hearing: Hearing?
+            var performed: [Executor.Performed] = []
+            var words = 0
         }
 
-        private let keyDown: (host: HostTime, clock: ContinuousClock.Instant)
+        /// [LAW:one-source-of-truth] The key event's own stamp, on the clock every insert is
+        /// timed by: a key-down told late is timed from where the key went down, by every
+        /// line that times from it.
+        private let keyDown: ContinuousClock.Instant
         private let state: Mutex<State>
         private let wake: AsyncStream<Void>.Continuation
         /// A wake for each change to the confirmed words; ends when no more can come. The
         /// newest is all that is kept, since each run takes every word confirmed so far.
         let wakes: AsyncStream<Void>
 
-        init(since keyDown: HostTime, committing asHeard: (@Sendable (Transcript) -> [Action])?) {
-            self.keyDown = (keyDown, .now)
+        init(since keyDown: HostTime, committing asHeard: (@Sendable (Transcript) -> Action?)?) {
+            self.keyDown = .now - (HostTime.now - keyDown)
             state = Mutex(State(asHeard: asHeard))
             (wakes, wake) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
         }
 
+        /// The microphone is open and the decode begun.
+        func hearing(_ decode: Task<Decoded, Never>, missing: @escaping @MainActor @Sendable () -> CapturedAudio.Loss?) {
+            state.withLock { $0.hearing = Hearing(decode: decode, missing: missing) }
+        }
+
         func heard(_ partial: Partial) {
-            let now = HostTime.now
+            let now = ContinuousClock.now
             state.withLock { state in
-                let words = partial.text.isEmpty ? nil : now - keyDown.host
-                let shown = state.shown
-                state.shown = DuringPress(passes: shown.passes + 1, firstWords: shown.firstWords ?? words, commits: shown.commits, wordsCommitted: shown.wordsCommitted, firstCommit: shown.firstCommit)
+                state.passes += 1
+                state.firstWords = state.firstWords ?? (partial.text.isEmpty ? nil : now - keyDown)
                 state.confirmed = partial.confirmed.words
             }
             wake.yield()
         }
 
-        /// The decode is over. A transcript is every word, and it begins with each one
-        /// confirmed before it, which `Partial` promises; a decode that failed confirms
-        /// nothing more.
-        func decoded(_ transcript: Result<Transcript, any Error>) {
-            if case .success(let heard) = transcript {
-                state.withLock { $0.confirmed = heard.words }
-                wake.yield()
-            }
+        /// The decode is over: nothing more is confirmed. What the transcript adds past the
+        /// confirmed words is `rest`'s.
+        func decoded() {
             wake.finish()
         }
 
         /// The words confirmed since the last run, which are now this run's.
-        func take() -> Run {
-            state.withLock { state in
-                let since: Executor.Since = state.keyUp.map { .keyUp($0) } ?? .keyDown(keyDown.clock)
+        ///
+        /// While the key is down, audio the capture already knows is missing stops the
+        /// commits: what is confirmed from then on reads a fragment, and key-up reports the
+        /// loss with the words that landed before it. From key-up on, how the press ended
+        /// says. [LAW:no-silent-failure]
+        @MainActor func take() -> Run {
+            if let missing = state.withLock({ $0.keyUp == nil ? $0.hearing?.missing : nil }), missing() != nil { stop() }
+            return state.withLock { state in
+                let since: Executor.Since = state.keyUp.map { .keyUp($0) } ?? .keyDown(keyDown)
                 guard let asHeard = state.asHeard else { return Run(actions: [], words: 0, since: since) }
-                let run = Transcript(words: Array(state.confirmed[state.handedOut...]))
-                state.handedOut = state.confirmed.count
-                return Run(actions: asHeard(run), words: run.words.count, since: since)
+                let run = state.cursor.advance(through: state.confirmed)
+                return Run(actions: asHeard(run).map { [$0] } ?? [], words: run.words.count, since: since)
             }
+        }
+
+        /// What the transcript holds past every word already handed out as a run: all of it
+        /// for a mode that waits for the whole transcript.
+        func rest(of transcript: Transcript) -> Transcript {
+            state.withLock { $0.cursor.advance(through: transcript.words) }
         }
 
         /// A run landed at the cursor.
         func landed(_ run: Run, as performed: [Executor.Performed]) {
-            let now = HostTime.now
             state.withLock { state in
-                let shown = state.shown
-                state.shown = DuringPress(passes: shown.passes, firstWords: shown.firstWords, commits: shown.commits + performed.count, wordsCommitted: shown.wordsCommitted + run.words, firstCommit: shown.firstCommit ?? performed.first.map { _ in now - keyDown.host })
+                state.performed += performed
+                state.words += run.words
             }
         }
 
-        /// Nothing more is committed for this press, whatever is confirmed after this.
+        /// The inserts that landed, and the words they carried.
+        var landed: (performed: [Executor.Performed], words: Int) {
+            state.withLock { ($0.performed, $0.words) }
+        }
+
+        /// Nothing more is committed for this press, whatever is confirmed after this, and its
+        /// decode, which no one will read, stops: the engine goes back to whoever is waiting.
         func stop() {
-            state.withLock { $0.asHeard = nil }
+            let decode = state.withLock { state in
+                state.asHeard = nil
+                return state.hearing?.decode
+            }
+            decode?.cancel()
             wake.finish()
         }
 
@@ -179,17 +211,9 @@ public final class Dictation {
         func keyUp(at instant: ContinuousClock.Instant) -> DuringPress {
             state.withLock { state in
                 state.keyUp = instant
-                return state.shown
+                return DuringPress(passes: state.passes, firstWords: state.firstWords, commits: state.performed.count, wordsCommitted: state.words, firstCommit: state.performed.first?.acknowledged)
             }
         }
-    }
-
-    /// What a press committed while it was heard: the inserts and the words they carried,
-    /// and what stopped them, when something did.
-    private struct Committed: Sendable {
-        let performed: [Executor.Performed]
-        let words: Int
-        let stopped: CommitStopped?
     }
 
     /// A press's decode, begun at key-down: the transcript it came to, when, and what the
@@ -216,7 +240,8 @@ public final class Dictation {
         let into: BundleID
         let decode: Task<Decoded, Never>
         let streaming: Streaming
-        let committing: Task<Committed, any Error>
+        /// What stopped the commits, when something did.
+        let committing: Task<(any Error)?, any Error>
     }
 
     /// How a press that was heard ended.
@@ -232,7 +257,8 @@ public final class Dictation {
         let ending: Ending
         let duringPress: DuringPress
         let decode: Task<Decoded, Never>
-        let committing: Task<Committed, any Error>
+        let streaming: Streaming
+        let committing: Task<(any Error)?, any Error>
     }
 
     private let capture: AudioCapture
@@ -298,7 +324,9 @@ public final class Dictation {
                 // back over is the resting mode's to say: nothing behind a microphone that
                 // opens here, and the look-back behind one held open since `start()`.
                 let session = capture.stream(try capture.beginSession(at: moment))
-                press = .down(Open(session: session, into: into, decode: decode(session.audio, into: streaming, releasing: hold), streaming: streaming, committing: committing))
+                let decode = decode(session.audio, into: streaming, releasing: hold)
+                streaming.hearing(decode) { [capture] in capture.missing(from: session) }
+                press = .down(Open(session: session, into: into, decode: decode, streaming: streaming, committing: committing))
             } catch {
                 // Nothing will be decoded, so the commits queued for it end at once.
                 streaming.stop()
@@ -345,17 +373,14 @@ public final class Dictation {
                 case (.released, let lost?): .lost(chord, lost)
                 }
                 // A press that will not be inserted commits nothing more and has no use for
-                // the rest of its decode, and the engine goes back to whoever is waiting as
-                // soon as it stops. What it already committed stays: the person watched it
-                // arrive. Stopped here on the main actor, where every run is taken, so a
-                // transcript the ended audio lets the engine finish is never committed.
+                // the rest of its decode. What it already committed stays: the person watched
+                // it arrive. Stopped here on the main actor, where every run is taken, so a
+                // pass the ended audio lets the engine finish is never committed.
                 switch ended {
                 case .released: break
-                case .lapsed, .lost:
-                    down.streaming.stop()
-                    down.decode.cancel()
+                case .lapsed, .lost: down.streaming.stop()
                 }
-                heard = .success(Heard(ending: ended, duringPress: duringPress, decode: down.decode, committing: down.committing))
+                heard = .success(Heard(ending: ended, duringPress: duringPress, decode: down.decode, streaming: down.streaming, committing: down.committing))
             }
             do {
                 // Handed over before key-up returns, so a `finish` that comes next
@@ -414,7 +439,7 @@ public final class Dictation {
             } catch {
                 transcript = .failure(error)
             }
-            streaming.decoded(transcript)
+            streaming.decoded()
             return Decoded(transcript: transcript, at: .now, displaced: hold.release())
         }
         latestDecode = decode
@@ -426,25 +451,19 @@ public final class Dictation {
     /// queue, so the words land after every press before it and before every press after it.
     ///
     /// [LAW:no-silent-failure] An insert that fails stops the commits for the rest of the
-    /// press: the words after it go nowhere else, and the failure says how many landed.
-    private func commit(_ streaming: Streaming) async -> Committed {
-        var performed: [Executor.Performed] = []
-        var words = 0
+    /// press, and is what this returns: the words after it go nowhere else.
+    private func commit(_ streaming: Streaming) async -> (any Error)? {
         for await _ in streaming.wakes {
             let run = streaming.take()
             do {
-                let done = try await executor.perform(run.actions, since: run.since)
-                streaming.landed(run, as: done)
-                performed += done
-                words += run.words
+                streaming.landed(run, as: try await executor.perform(run.actions, since: run.since))
             } catch {
                 streaming.stop()
-                // A run is one insert, so nothing before it in the run was done, and what
-                // stopped it is the cause.
-                return Committed(performed: performed, words: words, stopped: CommitStopped(landed: words, cause: (error as? RouteStopped)?.cause ?? error))
+                // A run is one insert, so none of it was done, and what stopped it is the cause.
+                return (error as? RouteStopped)?.cause ?? error
             }
         }
-        return Committed(performed: performed, words: words, stopped: nil)
+        return nil
     }
 
     /// Waits for the press's commits and its decode, then routes and inserts what was heard
@@ -453,21 +472,25 @@ public final class Dictation {
     /// the model to load.
     private func hear(_ heard: Result<Heard, any Error>, since keyUp: ContinuousClock.Instant) async throws -> Session {
         let heard = try heard.get()
-        let committed = try await heard.committing.value
+        let stopped = try await heard.committing.value
+        let landed = heard.streaming.landed
         let context: Context
         switch heard.ending {
         case .released(let released): context = released
-        case .lapsed(let chord): throw PressLapsed(chord: chord, landed: committed.words)
-        case .lost(let chord, let lost): throw SpeechLost(chord: chord, lost: lost, landed: committed.words)
+        case .lapsed(let chord): throw PressLapsed(chord: chord, landed: landed.words)
+        case .lost(let chord, let lost): throw SpeechLost(chord: chord, lost: lost, landed: landed.words)
         }
-        if let stopped = committed.stopped { throw stopped }
-        let decoded = await heard.decode.value
-        let transcript = try decoded.transcript.get()
-        // Nothing twice: the transcript begins with every word committed, so what is left is
-        // what follows them - all of it for a mode that waits for the whole transcript.
-        let rest = Transcript(words: Array(transcript.words.dropFirst(committed.words)))
-        let performed = try await executor.perform(router.actions(for: rest, in: context), since: .keyUp(keyUp))
-        return Session(context: context, transcript: transcript, duringPress: heard.duringPress, keyUpToTranscript: decoded.at - keyUp, displaced: decoded.displaced, performed: committed.performed + performed)
+        do {
+            if let stopped { throw stopped }
+            let decoded = await heard.decode.value
+            let transcript = try decoded.transcript.get()
+            let performed = try await executor.perform(router.actions(for: heard.streaming.rest(of: transcript), in: context), since: .keyUp(keyUp))
+            return Session(context: context, transcript: transcript, duringPress: heard.duringPress, keyUpToTranscript: decoded.at - keyUp, displaced: decoded.displaced, performed: landed.performed + performed)
+        } catch {
+            // [LAW:no-silent-failure] Whatever stopped the press, the report says how many of
+            // its words are already at the cursor.
+            throw PressStopped(landed: landed.words, cause: error)
+        }
     }
 }
 
@@ -511,19 +534,36 @@ public struct SpeechLost: WordFree {
     public var description: String { "WARNING: \(lost). \(ignored(after: landed))" }
 }
 
-/// A press whose commits an insert stopped: the words before it are at the cursor, and the
-/// rest of the press went nowhere. [LAW:no-silent-failure]
+/// A press that stopped after it began: an insert refused, the engine failed, or what was
+/// left at key-up would not go in. The words before it are at the cursor, and the rest of
+/// the press went nowhere. [LAW:no-silent-failure]
 ///
 /// Word-free whatever stopped it: a cause that could carry words is named by its type.
-public struct CommitStopped: StoppedPartWay, WordFree {
-    /// The words committed before the insert that stopped.
+public struct PressStopped: StoppedPartWay, WordFree {
+    /// The words committed before it stopped.
     public let landed: Int
     public let cause: any Error
 
     public var description: String {
-        let stated = (cause as? any WordFree).map { "\($0)" } ?? "Inserting failed (\(type(of: cause)))."
-        return "\(stated) \(landed) words of your dictation were inserted before it; the rest were not."
+        let root = cause.causes.last ?? cause
+        return ((root as? any WordFree).map { "\($0)" } ?? "It stopped on \(type(of: root)).") + insertedBefore(landed)
     }
+}
+
+/// What the menu tells the person who dictated about a press that failed: what stopped it,
+/// in full, since only they read it, and how many of their words it left at the cursor.
+/// A failure written as fact then consequence opens with WARNING and carries its own framing;
+/// any other is a bare technical line, so it is told what it is.
+public func failureLine(_ failure: any Error) -> String {
+    let root = "\(failure.causes.last ?? failure)"
+    let landed = (failure as? PressStopped)?.landed ?? 0
+    let framed = root.hasPrefix("WARNING:") ? root : "Your last dictation \(landed == 0 ? "was not placed" : "stopped"): \(root)"
+    return framed + insertedBefore(landed)
+}
+
+/// How many of a press's words reached the cursor before what stopped it, when any did.
+private func insertedBefore(_ landed: Int) -> String {
+    landed == 0 ? "" : " \(landed) words of your dictation were inserted before it; the rest were not."
 }
 
 /// What became of a press's words, after however many had landed.

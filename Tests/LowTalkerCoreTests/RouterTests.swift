@@ -39,8 +39,8 @@ import Testing
     /// whole transcript's would be for those words; a router that claims nothing does not.
     @Test func dictationActsOnWordsAsTheyAreHeard() throws {
         let asHeard = try #require(Router.dictation.asHeard)
-        #expect(asHeard(Transcript(typed: " there")) == [.insertText(text: " there")])
-        #expect(asHeard(Transcript(typed: " ")) == [])
+        #expect(asHeard(Transcript(typed: " there")) == .insertText(text: " there"))
+        #expect(asHeard(Transcript(typed: " ")) == nil)
         #expect(Router(routes: []).asHeard == nil)
     }
 

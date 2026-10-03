@@ -429,9 +429,10 @@ private final class Waiting: Sendable {
 final class Deltas: Sendable {
     let item: String
     private let outbox: Outbox
-    /// How many words have gone out as deltas, and whether the item was let go, after which
-    /// it sends nothing. Held across the send, so deltas leave in the order their words were heard.
-    private let sent = Mutex((words: 0, letGo: false))
+    /// How far into the confirmed words the deltas have gone, and whether the item was let
+    /// go, after which it sends nothing. Held across the send, so deltas leave in the order
+    /// their words were heard.
+    private let sent = Mutex((cursor: ConfirmedCursor(), letGo: false))
 
     init(item: String, outbox: Outbox) {
         self.item = item
@@ -463,9 +464,9 @@ final class Deltas: Sendable {
 
     private func send(_ words: [Transcript.Word]) {
         sent.withLock { sent in
-            guard !sent.letGo, words.count > sent.words else { return }
-            outbox.emit(.delta(item: item, Transcript(words: Array(words[sent.words...])).text))
-            sent.words = words.count
+            let new = sent.cursor.advance(through: words)
+            guard !sent.letGo, !new.words.isEmpty else { return }
+            outbox.emit(.delta(item: item, new.text))
         }
     }
 }

@@ -59,3 +59,24 @@ public struct Partial: Hashable, Sendable {
         confirmed.text + tentative.text
     }
 }
+
+/// How far into an utterance's confirmed words a reader has gone: each read hands out the
+/// words past the ones already handed out.
+///
+/// [LAW:one-source-of-truth] The one reading of `Partial`'s promise that confirmed words only
+/// grow and open the transcript the utterance ends with: the server's deltas and the words a
+/// press commits at the cursor both go through it. A list no longer than what was already
+/// handed out has nothing new in it, so an engine that broke the promise is handed nothing
+/// twice rather than trapping the process that reads it.
+public struct ConfirmedCursor: Sendable {
+    private var handedOut = 0
+
+    public init() {}
+
+    /// The words of `heard` past those already handed out, which are handed out now.
+    public mutating func advance(through heard: [Transcript.Word]) -> Transcript {
+        let new = Transcript(words: Array(heard.dropFirst(handedOut)))
+        handedOut = max(handedOut, heard.count)
+        return new
+    }
+}
