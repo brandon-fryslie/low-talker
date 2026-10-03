@@ -226,16 +226,18 @@ private final class FixedEar: Transcriber {
         let clip = AudioClip(samples: Array(repeating: 0.1, count: AudioClip.sampleCount(for: 0.35)))
         let ear = FixedEar(heard: "hi")
         let clock = TestClock()
-        async let measured = LatencyHarness.measure([try Self.fixture("held", says: "hi", clip: clip)], arrivals: [.batch, .streamed], servings: [.idle], reruns: 0, expecting: .empty, on: clock) { .alone(ear) }
-        // The batch hold's one chunk, then the streamed hold's four.
+        let arrivals: [LatencyHarness.Arrival] = [.batch, .streamed]
+        let chunks = arrivals.map { clip.chunks(of: $0.chunk(of: clip)).count }
+        async let measured = LatencyHarness.measure([try Self.fixture("held", says: "hi", clip: clip)], arrivals: arrivals, servings: [.idle], reruns: 0, expecting: .empty, on: clock) { .alone(ear) }
         var heard = ear.clipsHeard.makeAsyncIterator()
-        for _ in 0..<5 {
-            clock.advance(to: await clock.nextDeadline())
+        for _ in 0..<chunks.reduce(0, +) {
+            try await clock.advanceToNextDeadline()
             await heard.next()
         }
         let report = try await measured
-        #expect(report.fixtures.map(\.arrival) == [.batch, .streamed])
-        #expect(ear.holds.withLock { $0 } == [1, 4])
+        #expect(report.fixtures.map(\.arrival) == arrivals)
+        #expect(chunks == [1, 4])
+        #expect(ear.holds.withLock { $0 } == chunks)
         let batch = report.fixtures[0].first
         let streamed = report.fixtures[1].first
         #expect(batch.holdToFirstText == .seconds(0.35))
