@@ -161,21 +161,40 @@ private func update(_ input: [String: Any]) -> [String: Any] {
     /// newest audio each time it outgrows its share, so the socket never holds more than the
     /// limit, and the item committed at last is heard with no more than its share. Each item
     /// let go is cancelled. Limit 4 s: a share of 2 s, of which 1 s is kept, so 10 s
-    /// uncommitted lets go 1 s eight times.
+    /// uncommitted lets go 1 s eight times. What an item let go held is free only once its
+    /// cancelled transcribe has ended, so the client keeps pace with the engine, as a client
+    /// appending in real time does: each second's appends wait for the item they let go to
+    /// have started and the one let go before it to have ended. Sent as fast as the socket
+    /// reads them, they outran the engine on a stalled runner and were refused (low-tests-ape).
     @Test func appendingPastTheLimitWithoutACommitStartsTheItemOverAndIsNeverRefused() async throws {
         let stub = Stub()
         let running = try await Running.start(.ready(stub), limits: ServedLimits(uploads: 1, sockets: 1, audio: 4))
         defer { running.server.stop() }
         var client = Client(running)
-        try await client.append(seconds: 10)
+        var passes = stub.passes.makeAsyncIterator()
+        var (started, ended) = (0, 0)
+        try await client.append(seconds: 2)
+        for second in 1...8 {
+            while started < second || ended < second - 1 {
+                switch await passes.next() {
+                case .started: started += 1
+                case .ended: ended += 1
+                case nil: Issue.record("the stub's passes ended"); return
+                }
+            }
+            try await client.send(update([:]))
+            _ = try await client.until("session.updated")
+            try await client.append(seconds: 1)
+        }
         try await client.send(["type": "input_audio_buffer.commit"])
         let committed = try #require(try await client.until("input_audio_buffer.committed")["item_id"] as? String)
         let completed = try await client.until("conversation.item.input_audio_transcription.completed")
         #expect(completed["item_id"] as? String == committed)
         client.task.cancel(with: .normalClosure, reason: nil)
         let heard = stub.heard.withLock { $0 }
-        #expect(heard.count == 9 && heard.allSatisfy { abs($0.seconds - 2) < 0.01 })
-        #expect(heard.filter(\.cancelled).count == 8)
+        let letGo = heard.filter(\.cancelled)
+        #expect(heard.count == 9 && letGo.count == 8 && letGo.allSatisfy { $0.seconds < 2.01 })
+        #expect(heard.filter { !$0.cancelled }.map { abs($0.seconds - 2) < 0.01 } == [true])
         let realtime = try #require(try await running.nextEvent().realtime)
         #expect(realtime.appends == 100 && realtime.refusals.isEmpty && realtime.sent.errors == 0)
         #expect(realtime.items == 9 && realtime.itemsLetGo == 8 && abs(realtime.letGoAudioSeconds - 8) < 0.01)
