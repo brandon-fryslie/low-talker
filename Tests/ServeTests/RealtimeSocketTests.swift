@@ -302,6 +302,29 @@ private func update(_ input: [String: Any]) -> [String: Any] {
         #expect(abs(realtime.heldAudioSeconds - 6) < 0.01 && abs(refused - 6.1) < 0.01 && realtime.heldItems == 4)
     }
 
+    /// A client that sends events the server refuses and never reads what it is sent is
+    /// read no further once the frames left unsent pass the outbox's limit: its own sends
+    /// stall, and the server holds no more than the limit and one message's answer.
+    @Test func aClientThatDoesNotReadIsNotRead() async throws {
+        let running = try await Running.start(.ready(Stub()))
+        defer { running.server.stop() }
+        let client = try RawSocket(port: running.server.port.rawValue)
+        try client.upgrade()
+        let refused = Self.masked(Data(#"{"type":"x"}"#.utf8))
+        let batch = Data((0..<1_000).flatMap { _ in refused })
+        var sent = 0
+        while try client.send(batch) {
+            sent += batch.count
+            try #require(sent < 64 << 20, "the server read 64 MB from a client that read nothing")
+        }
+        client.close()
+        let event = try await running.nextEvent()
+        let realtime = try #require(event.realtime)
+        #expect(realtime.backpressureWaits >= 1)
+        #expect(realtime.mostUnsentBytes > Outbox.limit && realtime.mostUnsentBytes < Outbox.limit + 4_096)
+        #expect(event.lost != nil)
+    }
+
     /// An append that holds no whole sample puts no audio in the buffer, so committing it
     /// is refused as committing nothing is.
     @Test func aCommitWithNoWholeSampleIsRefusedAsEmpty() async throws {
@@ -385,6 +408,63 @@ private func update(_ input: [String: Any]) -> [String: Any] {
     }
 }
 
+/// A client frame, masked as every client frame is, of a payload under 126 bytes.
+extension RealtimeSocketTests {
+    static func masked(_ payload: Data) -> Data {
+        let mask: [UInt8] = [1, 2, 3, 4]
+        return Data([0x81, 0x80 | UInt8(payload.count)] + mask) + Data(payload.enumerated().map { $0.element ^ mask[$0.offset % 4] })
+    }
+}
+
+/// A TCP connection to the server that reads only when asked to, so a test can be a client
+/// that stops reading. Upgraded with RFC 6455's own example key.
+private final class RawSocket {
+    private let descriptor: Int32
+
+    init(port: UInt16) throws {
+        descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        var address = sockaddr_in(sin_len: UInt8(MemoryLayout<sockaddr_in>.size), sin_family: sa_family_t(AF_INET), sin_port: port.bigEndian, sin_addr: in_addr(s_addr: inet_addr("127.0.0.1")), sin_zero: (0, 0, 0, 0, 0, 0, 0, 0))
+        let connected = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+        guard connected == 0 else { throw POSIXError(.init(rawValue: errno)!) }
+    }
+
+    /// Sends the upgrade and reads up to the end of the 101, and nothing after it.
+    func upgrade() throws {
+        let request = "GET /v1/realtime?intent=transcription HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        _ = try Data(request.utf8).withUnsafeBytes { bytes in
+            guard write(descriptor, bytes.baseAddress, bytes.count) == bytes.count else { throw POSIXError(.init(rawValue: errno)!) }
+        }
+        var head = Data()
+        var byte: UInt8 = 0
+        while !head.suffix(4).elementsEqual(Data("\r\n\r\n".utf8)) {
+            guard read(descriptor, &byte, 1) == 1 else { throw POSIXError(.ECONNRESET) }
+            head.append(byte)
+        }
+        guard String(decoding: head, as: UTF8.self).hasPrefix("HTTP/1.1 101 ") else { throw POSIXError(.EPROTO) }
+        _ = fcntl(descriptor, F_SETFL, fcntl(descriptor, F_GETFL) | O_NONBLOCK)
+    }
+
+    /// Sends all of `bytes`; false when the server has taken nothing for two seconds.
+    func send(_ bytes: Data) throws -> Bool {
+        try bytes.withUnsafeBytes { bytes in
+            var offset = 0
+            while offset < bytes.count {
+                let wrote = write(descriptor, bytes.baseAddress! + offset, bytes.count - offset)
+                if wrote > 0 { offset += wrote; continue }
+                guard errno == EAGAIN else { throw POSIXError(.init(rawValue: errno)!) }
+                var writable = pollfd(fd: descriptor, events: Int16(POLLOUT), revents: 0)
+                if poll(&writable, 1, 2_000) == 0 { return false }
+            }
+            return true
+        }
+    }
+
+    /// Closes with what the server sent still unread, which resets the connection.
+    func close() {
+        Darwin.close(descriptor)
+    }
+}
+
 /// `count` words, `w1` onward, each a second long.
 private func timed(_ count: Int) -> Transcript {
     Transcript(words: (0..<count).map { Transcript.Word(text: " w\($0 + 1)", time: Double($0)...Double($0 + 1), confidence: 1.0) })
@@ -392,10 +472,10 @@ private func timed(_ count: Int) -> Transcript {
 
 /// The deltas `body` sends through an outbox, in order.
 private func deltas(_ body: (Outbox) -> Void) async -> [String] {
-    let (frames, continuation) = AsyncStream<Outgoing>.makeStream()
-    body(Outbox(continuation))
-    continuation.finish()
+    let outbox = Outbox()
+    body(outbox)
+    outbox.close(nil)
     var sent: [String] = []
-    for await case .event(.delta(_, let text)) in frames { sent.append(text) }
+    for await case .event(.delta(_, let text)) in outbox.frames.map(\.frame) { sent.append(text) }
     return sent
 }

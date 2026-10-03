@@ -21,22 +21,23 @@ struct RealtimeSocket {
     /// Serves the socket until the client closes it, breaks the protocol, or is lost, and
     /// says what happened on it.
     func run(_ connection: NWConnection, _ reader: inout Reader) async -> (RealtimeActivity, lost: String?) {
-        let (outgoing, frames) = AsyncStream<Outgoing>.makeStream()
-        let outbox = Outbox(frames)
+        let outbox = Outbox()
         // [LAW:single-enforcer] The one writer: every frame goes out in the order it was
         // put in the outbox, and is counted once it has gone.
         let writer = Task {
             var sent = RealtimeActivity.Sent()
-            for await frame in outgoing {
+            for await queued in outbox.frames {
                 do {
-                    try await connection.send(frame.bytes)
+                    try await connection.send(queued.bytes)
                 } catch {
-                    // Nothing more can reach the client, so the reader stops too: the
-                    // cancel fails its pending read.
+                    // Nothing more can reach the client, so the reader stops too: closing
+                    // ends its wait for room, and the cancel fails its pending read.
+                    outbox.close(nil)
                     connection.cancel()
                     return (sent, "\(error)" as String?)
                 }
-                sent.count(frame)
+                outbox.sent(queued.bytes.count)
+                sent.count(queued.frame)
             }
             return (sent, nil as String?)
         }
@@ -51,6 +52,9 @@ struct RealtimeSocket {
             var last: Data?
             var lost: String?
             reading: while true {
+                // Backpressure: a client that does not read is not read, so what it sends
+                // cannot pile up frames it will never take (low-serve-axq.69k).
+                await outbox.room()
                 let message: WebSocket.Message
                 do {
                     message = try await reader.message(&assembler, limit: Self.messageLimit)
@@ -92,6 +96,7 @@ struct RealtimeSocket {
         }
         let (sent, unsent) = await writer.value
         activity.sent = sent
+        (activity.mostUnsentBytes, activity.backpressureWaits) = outbox.pressure
         return (activity, unsent ?? lost)
     }
 
@@ -472,12 +477,32 @@ final class Deltas: Sendable {
 }
 
 /// Where every frame bound for the client is put, in order, until it is closed.
+/// [LAW:single-enforcer] The one count of what the client has not yet been sent, which the
+/// reader waits on, so a client's own events cannot grow it without bound.
 final class Outbox: Sendable {
-    /// Held across each put and the close, so no frame can land after the last.
-    private let frames: Mutex<AsyncStream<Outgoing>.Continuation>
+    /// The most bytes of frames left unsent before the reader waits for the client to read.
+    /// Thousands of events, so a client that keeps up with its own never meets it.
+    static let limit = 1 << 18
 
-    init(_ frames: AsyncStream<Outgoing>.Continuation) {
-        self.frames = Mutex(frames)
+    /// Frames in the order they were put, each encoded once.
+    let frames: AsyncStream<Queued>
+    /// Held across each put and the close, so no frame can land after the last.
+    private let state: Mutex<State>
+
+    private struct State {
+        let frames: AsyncStream<Queued>.Continuation
+        var closed = false
+        var unsent = 0
+        var mostUnsent = 0
+        var waits = 0
+        /// The reader, while it waits for room.
+        var waiter: CheckedContinuation<Void, Never>?
+    }
+
+    init() {
+        let (frames, continuation) = AsyncStream<Queued>.makeStream()
+        self.frames = frames
+        state = Mutex(State(frames: continuation))
     }
 
     func emit(_ event: ServerEvent) {
@@ -486,15 +511,60 @@ final class Outbox: Sendable {
 
     /// `frame` bound for the client, or dropped once the outbox is closed.
     func put(_ frame: Outgoing) {
-        frames.withLock { _ = $0.yield(frame) }
+        let queued = Queued(frame)
+        state.withLock { state in
+            guard case .enqueued = state.frames.yield(queued) else { return }
+            state.unsent += queued.bytes.count
+            state.mostUnsent = max(state.mostUnsent, state.unsent)
+        }
+    }
+
+    /// `bytes` of frames have gone to the client.
+    func sent(_ bytes: Int) {
+        state.withLock { state in
+            state.unsent -= bytes
+            return state.unsent <= Self.limit ? state.waiter.take() : nil
+        }?.resume()
+    }
+
+    /// Returns once the frames left unsent are within the limit, or the outbox is closed.
+    func room() async {
+        await withCheckedContinuation { waiter in
+            let ready = state.withLock { state in
+                guard state.unsent > Self.limit, !state.closed else { return true }
+                state.waits += 1
+                state.waiter = waiter
+                return false
+            }
+            if ready { waiter.resume() }
+        }
     }
 
     /// `last` is the final frame sent; nothing put after it is.
     func close(_ last: Data?) {
-        frames.withLock { frames in
-            if let last { frames.yield(.control(last)) }
-            frames.finish()
-        }
+        state.withLock { state in
+            if let last { state.frames.yield(Queued(.control(last))) }
+            state.frames.finish()
+            state.closed = true
+            return state.waiter.take()
+        }?.resume()
+    }
+
+    /// The most bytes the client was left unsent at once, and how often the reader waited
+    /// for it to read.
+    var pressure: (mostUnsent: Int, waits: Int) {
+        state.withLock { ($0.mostUnsent, $0.waits) }
+    }
+}
+
+/// A frame in the outbox, with the bytes it goes out as.
+struct Queued: Sendable {
+    let frame: Outgoing
+    let bytes: Data
+
+    init(_ frame: Outgoing) {
+        self.frame = frame
+        bytes = frame.bytes
     }
 }
 
@@ -538,6 +608,10 @@ public struct RealtimeActivity: Sendable, Codable, Equatable {
     /// How the client broke the protocol, when it did.
     public internal(set) var violation: String?
     public internal(set) var sent = Sent()
+    /// The most bytes of frames the client was left unsent at once, and how often the
+    /// reader stopped reading until it took them (backpressure).
+    public internal(set) var mostUnsentBytes = 0
+    public internal(set) var backpressureWaits = 0
 
     mutating func letGo(seconds: TimeInterval) {
         itemsLetGo += 1
