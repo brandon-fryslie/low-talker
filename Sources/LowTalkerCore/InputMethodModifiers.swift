@@ -1,4 +1,3 @@
-import CoreGraphics
 import Dispatch
 import Identity
 import Insertion
@@ -50,7 +49,7 @@ public struct InputMethodModifiers: ModifierFeed {
         }
 
         func heard(_ state: HeldModifiers) {
-            heard(told.take(Modifier.held(in: CGEventFlags(rawValue: state.flags)),
+            heard(told.take(Modifier.held(in: state.flags),
                             at: HostTime(uptime: .nanoseconds(state.uptimeNanoseconds))))
         }
 

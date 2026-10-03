@@ -31,12 +31,16 @@ private let rightOptionHeld = HeldModifiers(flags: 0x80140, uptimeNanoseconds: 1
 @Suite struct ModifierPortTests {
     /// The session sets the secondary-Fn bit while an arrow key is down, and an arrow key is
     /// not Fn; the Fn key down with nothing else is Fn. Every other bit is the session's.
+    /// The log line says what was held whenever that is not the session's flags as given.
     @Test func theFnBitIsTheFnKeyItself() {
         let fn: UInt64 = 0x800000
-        let rightOptionAndAnArrow = 0x80140 | fn
-        #expect(HeldModifiers.flags(session: rightOptionAndAnArrow, fnKeyDown: false) == 0x80140)
-        #expect(HeldModifiers.flags(session: 0x100 | fn, fnKeyDown: true) == 0x100 | fn)
-        #expect(HeldModifiers.flags(session: 0x80140, fnKeyDown: true) == 0x80140 | fn)
+        let anArrowWithRightOption = SessionModifiers(session: 0x80140 | fn, fnKeyDown: false)
+        #expect(anArrowWithRightOption.flags == 0x80140)
+        #expect(anArrowWithRightOption.description == "session 0x880140, Fn key up, held 0x80140")
+        let fnAlone = SessionModifiers(session: 0x100 | fn, fnKeyDown: true)
+        #expect(fnAlone.flags == 0x100 | fn)
+        #expect(fnAlone.description == "session 0x800100, Fn key down")
+        #expect(SessionModifiers(session: 0x80140, fnKeyDown: true).flags == 0x80140 | fn)
     }
 
     @Test func heldModifiersSurviveTheWire() {
