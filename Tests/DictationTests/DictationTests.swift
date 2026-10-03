@@ -220,6 +220,20 @@ extension Result {
         #expect(try #require(await rig.report().failure as? PressStopped).landed == 0)
     }
 
+    /// A refusal while the press is open is what the report names even when the press then
+    /// lapses: it is what stopped the words landing, and the lapse came after it.
+    @Test func aRefusalBeforeALapseIsWhatTheReportNames() async throws {
+        let engine = FakeTranscriber(confirming: { samples in Transcript(typed: samples.count >= 2 ? "hello" : "") }) { _ in Transcript(typed: "hello") }
+        let rig = try Rig(hearing: engine)
+        rig.inputMethod.refusing(Refusal.noClientHasFocus)
+        rig.dictation.press(.began(Rig.rightOption, at: rig.now))
+        rig.speak([1, 2])
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.turns.reading.holds == 0 })
+        rig.dictation.press(.ended(Rig.rightOption, .lapsed))
+        let stopped = try #require(await rig.report().failure as? PressStopped)
+        #expect(stopped.cause as? Refusal == .noClientHasFocus)
+    }
+
     /// A decode that fails after words were committed says how many are at the cursor
     /// rather than that nothing was placed.
     @Test func aDecodeThatFailsAfterCommitsSaysHowManyLanded() async throws {

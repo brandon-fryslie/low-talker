@@ -474,6 +474,9 @@ public final class Dictation {
         let heard = try heard.get()
         let stopped = try await heard.committing.value
         let landed = heard.streaming.landed
+        // [LAW:no-silent-failure] The report names what stopped the press's words first: a
+        // refused commit came before whatever the key-up found.
+        if let stopped { throw PressStopped(landed: landed.words, cause: stopped) }
         let context: Context
         switch heard.ending {
         case .released(let released): context = released
@@ -481,7 +484,6 @@ public final class Dictation {
         case .lost(let chord, let lost): throw SpeechLost(chord: chord, lost: lost, landed: landed.words)
         }
         do {
-            if let stopped { throw stopped }
             let decoded = await heard.decode.value
             let transcript = try decoded.transcript.get()
             let performed = try await executor.perform(router.actions(for: heard.streaming.rest(of: transcript), in: context), since: .keyUp(keyUp))
