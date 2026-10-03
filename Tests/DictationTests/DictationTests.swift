@@ -930,14 +930,20 @@ extension Result {
         #expect(rig.shown.activities == [.listening, .transcribing, .listening, .transcribing, .transcribing, .idle])
     }
 
-    /// The icon is the press's while there is one and the engine's otherwise.
+    /// The icon is the press's while there is one and the engine's otherwise, except that a
+    /// press ended before the engine is ready shows the wait it is in.
     @Test func theIconIsTheActivityOverTheEnginesReadiness() {
+        let ready = EngineReadiness.ready(.default, after: .seconds(2))
+        let preparing = EngineReadiness.preparing(.loading, since: .now)
         let failed = EngineReadiness.failed("no model")
         #expect(Dictation.Activity.idle.glyph(over: failed) == failed.statusGlyph())
         #expect(Dictation.Activity.idle.iconDescription(for: "L", over: failed) == failed.iconDescription(for: "L"))
         #expect(Dictation.Activity.listening.glyph(over: failed) == .symbol("waveform"))
-        #expect(Dictation.Activity.listening.iconDescription(for: "L", over: failed) == "L: listening")
-        #expect(Dictation.Activity.transcribing.glyph(over: failed) == .symbol("text.cursor"))
-        #expect(Dictation.Activity.transcribing.iconDescription(for: "L", over: failed) == "L: transcribing")
+        #expect(Dictation.Activity.listening.iconDescription(for: "L", over: preparing) == "L: listening")
+        #expect(Dictation.Activity.transcribing.glyph(over: ready) == .symbol("text.cursor"))
+        #expect(Dictation.Activity.transcribing.iconDescription(for: "L", over: ready) == "L: transcribing")
+        #expect(Dictation.Activity.transcribing.glyph(over: preparing) == .symbol("hourglass"))
+        #expect(Dictation.Activity.transcribing.iconDescription(for: "L", over: preparing) == "L: preparing the model")
+        #expect(Dictation.Activity.transcribing.glyph(over: failed) == failed.statusGlyph())
     }
 }

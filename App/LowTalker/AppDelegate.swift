@@ -73,7 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func show(_ activity: Dictation.Activity) {
         self.activity = activity
         drawStatusIcon()
-        log.info("activity: \(String(describing: activity), privacy: .public)")
+        sessions.info("activity: \(String(describing: activity), privacy: .public)")
     }
 
     private func showHotkeyStatus(_ status: String) {
@@ -169,7 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // a symbol rather than shrinking to nothing and taking the menu with it.
             guard let image = NSImage(named: AppIdentity.statusMarkName)?.copy() as? NSImage else {
                 log.fault("no \(AppIdentity.statusMarkName, privacy: .public) in the asset catalog")
-                statusItem.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: description)
+                statusItem.button?.image = NSImage(systemSymbolName: "questionmark.square.dashed", accessibilityDescription: description)
                 return
             }
             image.accessibilityDescription = description
@@ -526,12 +526,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // going mid-utterance leaving nothing behind to say it did, and no key-down
             // arriving during the wait can open a session there is no longer anyone to close.
             await listening?.hotkey.stopAndDeliver()
+            // Every session's audio ended at its key-up and no key-down can open another, so
+            // the microphone goes now: a resting mode that holds it open does not hold it
+            // through a drain that can wait minutes on a cold load.
+            capture.stop()
             // A refused wait is reported and the quit still granted: an app that cannot
             // be quit would be the worse failure of the two. [LAW:no-silent-failure]
             do { try await listening?.dictation.finish() } catch { report(.failure(error)) }
-            // The microphone is let go last, once no session can want it, so a resting mode
-            // that holds it open does not hold it into the exit.
-            capture.stop()
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
