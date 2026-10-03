@@ -51,6 +51,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var hotkeyStatus = ""
     /// What the loop is doing with presses, which the icon shows over the engine's readiness.
     private var activity: Dictation.Activity = .idle
+    /// The loop's activity again, floating over the app being dictated into.
+    private let hud = HUD()
 
     /// When this process began, which every readout of the engine's wait counts from.
     private let launched = ContinuousClock.now
@@ -59,7 +61,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// nobody has open is no way to measure a launch, and no way for an agent to check
     /// what the app is showing without a screen. [LAW:verifiable-goals]
     private let log = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "engine")
-    /// One line per press: what was heard, how long after key-up, and what was inserted.
+    /// Each press's activity as it changes, then one line for its outcome: what was heard, how
+    /// long after key-up, and what was inserted.
     private let sessions = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "dictation")
 
     /// [LAW:one-source-of-truth] Every engine status passes through here, so the
@@ -73,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func show(_ activity: Dictation.Activity) {
         self.activity = activity
         drawStatusIcon()
+        hud.show(activity)
         sessions.info("activity: \(String(describing: activity), privacy: .public)")
     }
 
