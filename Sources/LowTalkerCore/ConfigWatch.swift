@@ -99,3 +99,29 @@ public enum RunningConfig: Equatable, Sendable, CustomStringConvertible {
         }
     }
 }
+
+extension Config {
+    /// A part of the running app a config sets, and a reload can move.
+    public enum Setting: CaseIterable, Sendable {
+        /// What the hotkey listens for.
+        case chords
+        /// What the microphone does between presses.
+        case microphone
+        /// Where the server listens.
+        case serve
+    }
+
+    /// The settings this config gives a value `earlier` did not, in `Setting.allCases` order.
+    ///
+    /// [LAW:nothing-unseen] What a reload moved is the fact its log line carries, decided here
+    /// rather than by the one that applies it, so the fact is the one tested.
+    public func settings(changedFrom earlier: Config) -> [Setting] {
+        Setting.allCases.filter { setting in
+            switch setting {
+            case .chords: chords != earlier.chords
+            case .microphone: microphone != earlier.microphone
+            case .serve: serve != earlier.serve
+            }
+        }
+    }
+}

@@ -145,39 +145,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var config: Result<Config, ConfigError> { running.config }
     private let configLog = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "config")
 
-    /// Takes up a save of the config file: each part of the app the config sets is moved to
-    /// the new value, and only the parts whose value changed. A save the file refused leaves
-    /// every one where it was, and the menu says why. [LAW:no-silent-failure]
+    /// Takes up a save of the config file: each setting whose value changed is moved to the
+    /// new value, and the rest are left alone. A save the file refused leaves every one where
+    /// it was, and the menu says why. [LAW:no-silent-failure]
     ///
     /// Nothing here ends a press. A chord moved mid-hold leaves the hold to end at its own
     /// release, and a resting mode moved mid-hold is taken up at the key-up.
     private func follow(_ next: RunningConfig) {
         let was = try? config.get()
         running = next
-        guard case .success(let now) = next.config, now != was else {
+        switch (was, next.config) {
+        // No config ran before this reading: the loop was held down for want of one, and
+        // comes up the way it does at launch, whose status line says what still stops it -
+        // this reading's refusal among them.
+        case (nil, _):
             configLog.notice("config: \(next, privacy: .public)")
-            return
-        }
-        let moved = [
-            now.chords != was?.chords ? "chords \(Hotkey.named(in: now))" : nil,
-            now.microphone != was?.microphone ? "microphone \(now.microphone)" : nil,
-            now.serve != was?.serve ? "server binding" : nil,
-        ].compactMap { $0 }
-        configLog.notice("config: \(next, privacy: .public); moved [\(moved.joined(separator: "; "), privacy: .public)]")
-        // The first config this run has had: the loop was held down for want of one, and
-        // comes up the way it does once a grant arrives.
-        guard let was else {
-            comeUpIfGranted(readReadiness())
             serving?.resume(at: config.map(\.serve))
-            return
+            Task { await comeUp() }
+        case (.some, .failure):
+            configLog.notice("config: \(next, privacy: .public)")
+        case (let was?, .success(let now)):
+            // [LAW:nothing-unseen] Each moved setting lands on the event with what came of
+            // moving it.
+            let moved = now.settings(changedFrom: was).map { setting in
+                switch setting {
+                case .chords:
+                    if let hotkey = listening?.hotkey {
+                        hotkey.listen(for: now.chords)
+                        if hotkey.isWatching { showHotkeyStatus(listeningStatus) }
+                    }
+                    return "chords \(Hotkey.named(in: now))"
+                case .microphone:
+                    capture.rest(as: now.microphone)
+                    return "microphone \(capture.doing)"
+                case .serve:
+                    serving?.resume(at: config.map(\.serve))
+                    return "server binding"
+                }
+            }
+            configLog.notice("config: \(next, privacy: .public); moved [\(moved.joined(separator: "; "), privacy: .public)]")
         }
-        if now.chords != was.chords, let hotkey = listening?.hotkey {
-            hotkey.listen(for: now.chords)
-            if hotkey.isWatching { showHotkeyStatus(listeningStatus) }
-        }
-        if now.microphone != was.microphone { capture.rest(as: now.microphone) }
-        if now.serve != was.serve { serving?.resume(at: config.map(\.serve)) }
     }
+
+    /// The task following the config file's saves, ended by a quit.
+    private var reloading: Task<Void, Never>?
 
     /// The loop that is listening now.
     private struct Listening {
@@ -466,7 +477,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { await listen() }
         // Read after `serving` and the loop's first reading of the config, so a save from
         // here on is a reload of the config they started on.
-        Task { [running] in
+        reloading = Task { [running] in
             for await next in RunningConfig.reloads(after: running) { follow(next) }
         }
     }
@@ -590,6 +601,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// [LAW:no-ambient-temporal-coupling] The quit has an owner, rather than a race.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         quitting = true
+        // A save during the drain would rebind the server and move the microphone under it.
+        reloading?.cancel()
         Task {
             // A rebuild in progress is let finish first, so the loop waited on is the last one.
             await rebuilding?.value

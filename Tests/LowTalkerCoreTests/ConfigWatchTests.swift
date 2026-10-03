@@ -75,6 +75,25 @@ import Testing
         #expect(launch.next(reading: .success(fixed)) == .adopted(fixed))
     }
 
+    /// What a reload says it moved is every setting whose value changed, and only those: a
+    /// save that moves the chord and leaves the rest names the chord alone, and one that
+    /// moves every setting names each.
+    @Test func aReloadNamesTheSettingsItMoved() throws {
+        let was = try Self.config(Self.onRightCommand)
+        #expect(was.settings(changedFrom: was) == [])
+        #expect(try Self.config(Self.onLeftControl).settings(changedFrom: was) == [.chords])
+        let everything = try Self.config("""
+            microphone = { at_rest = "open" }
+            [serve]
+            interface = "192.168.1.20"
+            token = "t"
+            [[modes]]
+            name = "dictation"
+            chord = { modifiers = ["leftControl"] }
+            """)
+        #expect(everything.settings(changedFrom: was) == [.chords, .microphone, .serve])
+    }
+
     // MARK: - Against a real file
 
     // A real directory and a real FSEvents stream, because what these prove is that the
@@ -84,14 +103,11 @@ import Testing
     /// A directory to write configs into, and the config path inside it, made only when
     /// `existing` says so: a config directory nobody has created yet is the state of a fresh
     /// install, and a watch has to survive it.
-    static func scratch(existing: Bool) throws -> (directory: URL, file: URL) {
-        let directory = URL(filePath: NSTemporaryDirectory())
-            .appending(path: "low-talker-\(UUID().uuidString)/low-talker")
-        try FileManager.default.createDirectory(
-            at: existing ? directory : directory.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        return (directory, directory.appending(path: "config.toml"))
+    static func scratch(existing: Bool) throws -> (root: URL, directory: URL, file: URL) {
+        let root = URL(filePath: NSTemporaryDirectory()).appending(path: "low-talker-\(UUID().uuidString)")
+        let directory = root.appending(path: "low-talker")
+        try FileManager.default.createDirectory(at: existing ? directory : root, withIntermediateDirectories: true)
+        return (root, directory, directory.appending(path: "config.toml"))
     }
 
     /// A watch on `file` that is already past the read it does as it comes up, so every edit
@@ -109,8 +125,8 @@ import Testing
 
     @Test(.timeLimit(.minutes(1)))
     func editingTheChordTakesEffect() async throws {
-        let (directory, file) = try Self.scratch(existing: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let (root, _, file) = try Self.scratch(existing: true)
+        defer { try? FileManager.default.removeItem(at: root) }
         var (_, reloads) = try await Self.watching(file, settlingOn: Self.onRightCommand)
 
         try Self.onLeftControl.write(to: file, atomically: true, encoding: .utf8)
@@ -123,8 +139,8 @@ import Testing
     /// the line reading stopped on.
     @Test(.timeLimit(.minutes(1)))
     func aSyntaxErrorLeavesTheRunningConfigInPlace() async throws {
-        let (directory, file) = try Self.scratch(existing: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let (root, _, file) = try Self.scratch(existing: true)
+        defer { try? FileManager.default.removeItem(at: root) }
         var (running, reloads) = try await Self.watching(file, settlingOn: Self.onRightCommand)
 
         try Self.notTOML.write(to: file, atomically: true, encoding: .utf8)
@@ -143,8 +159,8 @@ import Testing
     /// and finding that change, rather than the touch, at the head of the stream.
     @Test(.timeLimit(.minutes(1)))
     func aSaveThatChangesNothingIsNotReported() async throws {
-        let (directory, file) = try Self.scratch(existing: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let (root, directory, file) = try Self.scratch(existing: true)
+        defer { try? FileManager.default.removeItem(at: root) }
         var (_, reloads) = try await Self.watching(file, settlingOn: Self.onRightCommand)
 
         try Self.onRightCommand.write(to: file, atomically: true, encoding: .utf8)
@@ -158,8 +174,8 @@ import Testing
     /// nothing has ever written a config.
     @Test(.timeLimit(.minutes(1)))
     func aConfigDirectoryThatDoesNotExistYetIsStillWatched() async throws {
-        let (directory, file) = try Self.scratch(existing: false)
-        defer { try? FileManager.default.removeItem(at: directory.deletingLastPathComponent()) }
+        let (root, directory, file) = try Self.scratch(existing: false)
+        defer { try? FileManager.default.removeItem(at: root) }
         let launch = RunningConfig(reading: Result { () throws(ConfigError) in try Config.load(file) })
         #expect(launch == .adopted(.default))
 
@@ -177,8 +193,8 @@ import Testing
     /// Deleting the file goes back to the defaults.
     @Test(.timeLimit(.minutes(1)))
     func deletingTheFileGoesBackToTheDefaults() async throws {
-        let (directory, file) = try Self.scratch(existing: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let (root, _, file) = try Self.scratch(existing: true)
+        defer { try? FileManager.default.removeItem(at: root) }
         var (_, reloads) = try await Self.watching(file, settlingOn: Self.onRightCommand)
 
         try FileManager.default.removeItem(at: file)

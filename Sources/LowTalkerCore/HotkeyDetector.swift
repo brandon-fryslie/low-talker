@@ -82,7 +82,8 @@ public struct HotkeyDetector: Sendable {
         case idle
         /// The chord is down and the press is not yet known to be a hold or a tap.
         case held(KeyChord, since: HostTime)
-        /// A tap left listening on; the next chord press ends it.
+        /// A tap left listening on; the next press of its chord, or of any chord listened
+        /// for, ends it.
         case latched(KeyChord)
     }
 
@@ -115,10 +116,12 @@ public struct HotkeyDetector: Sendable {
         case (.idle, let chord?):
             phase = .held(chord, since: event.time)
             return .began(chord, at: event.time)
-        case (.latched(let chord), .some):
+        // Its own chord ends it too, listened for or not: the press belongs to the chord that
+        // began it, so a chord moved by `listen(for:)` mid-latch still ends what it started.
+        case (.latched(let chord), _) where completed != nil || chord.isCompleted(by: event.key, holding: event.modifiers):
             phase = .idle
             return .ended(chord, .released(.tap))
-        case (.held, _), (_, nil):
+        case (.held, _), (.latched, _), (.idle, nil):
             return nil
         }
     }
@@ -142,7 +145,7 @@ public struct HotkeyDetector: Sendable {
 
     /// Listens for `chords` from the next press on. A press already open is left open: it
     /// belongs to the chord that began it, and ends the way it would have, when a key of that
-    /// chord comes up or, latched, when a chord now listened for goes down.
+    /// chord comes up or, latched, when that chord or one now listened for goes down.
     public mutating func listen(for chords: Set<KeyChord>) {
         self.chords = chords
     }

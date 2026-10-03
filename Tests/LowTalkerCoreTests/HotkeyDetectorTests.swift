@@ -138,18 +138,18 @@ private func ended(_ chord: KeyChord, _ press: PressKind) -> HotkeyDetector.Tran
         #expect(keyboard.press(.rightCommand, at: 1000) == began(rightCommand, at: 1000))
     }
 
-    /// A tap latched under the old chord stays latched, and the chord listened for now is
-    /// what ends it, since that is the one the person has been told to press.
-    @Test func aTapLatchedWhenTheChordMovesIsEndedByTheNewChord() {
+    /// A tap latched under the old chord stays latched, and is ended by the chord that began
+    /// it - the one the person tapped to start - or by the chord listened for now, the one
+    /// the menu names. Neither leaves the microphone recording with no way to stop it.
+    @Test(arguments: [Modifier.rightOption, .rightCommand])
+    func aTapLatchedWhenTheChordMovesIsEndedByEitherChord(_ ending: Modifier) {
         let rightCommand = KeyChord(modifiers: .rightCommand)
         var keyboard = Keyboard()
         _ = keyboard.press(.rightOption, at: 0)
         _ = keyboard.release(.rightOption, at: 100)
         keyboard.detector.listen(for: [rightCommand])
         #expect(keyboard.detector.phase == .latched(rightOption))
-        #expect(keyboard.press(.rightOption, at: 2000) == nil)
-        _ = keyboard.release(.rightOption, at: 2100)
-        #expect(keyboard.press(.rightCommand, at: 3000) == ended(rightOption, .tap))
+        #expect(keyboard.press(ending, at: 2000) == ended(rightOption, .tap))
         #expect(keyboard.detector.phase == .idle)
     }
 
