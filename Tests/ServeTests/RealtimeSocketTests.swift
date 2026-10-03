@@ -162,28 +162,19 @@ private func update(_ input: [String: Any]) -> [String: Any] {
     /// limit, and the item committed at last is heard with no more than its share. Each item
     /// let go is cancelled. Limit 4 s: a share of 2 s, of which 1 s is kept, so 10 s
     /// uncommitted lets go 1 s eight times. What an item let go held is free only once its
-    /// cancelled transcribe has ended, so the client keeps pace with the engine, as a client
-    /// appending in real time does: each second's appends wait for the item they let go to
-    /// have started and the one let go before it to have ended. Sent as fast as the socket
-    /// reads them, they outran the engine on a stalled runner and were refused (low-tests-ape).
-    @Test func appendingPastTheLimitWithoutACommitStartsTheItemOverAndIsNeverRefused() async throws {
+    /// cancelled transcribe has ended, and the item that replaces it is heard only then, so
+    /// the client keeps pace with the engine as a client appending in real time does: each
+    /// second's appends wait for the item they let go to have started (low-tests-ape).
+    @Test(.timeLimit(.minutes(1))) func appendingPastTheLimitWithoutACommitStartsTheItemOverAndIsNeverRefused() async throws {
         let stub = Stub()
-        let running = try await Running.start(.ready(stub), limits: ServedLimits(uploads: 1, sockets: 1, audio: 4))
+        let (starts, started) = AsyncStream<Void>.makeStream()
+        let running = try await Running.start(.ready(Starting(stub: stub, started: started)), limits: ServedLimits(uploads: 1, sockets: 1, audio: 4))
         defer { running.server.stop() }
         var client = Client(running)
-        var passes = stub.passes.makeAsyncIterator()
-        var (started, ended) = (0, 0)
+        var heardStarting = starts.makeAsyncIterator()
         try await client.append(seconds: 2)
-        for second in 1...8 {
-            while started < second || ended < second - 1 {
-                switch await passes.next() {
-                case .started: started += 1
-                case .ended: ended += 1
-                case nil: Issue.record("the stub's passes ended"); return
-                }
-            }
-            try await client.send(update([:]))
-            _ = try await client.until("session.updated")
+        for _ in 1...8 {
+            try #require(await heardStarting.next() != nil)
             try await client.append(seconds: 1)
         }
         try await client.send(["type": "input_audio_buffer.commit"])
@@ -502,4 +493,19 @@ private func deltas(_ body: (Outbox) -> Void) async -> [String] {
     var sent: [String] = []
     for await case .event(.delta(_, let text)) in outbox.frames.map(\.frame) { sent.append(text) }
     return sent
+}
+
+/// The stub, saying as each transcribe starts.
+private struct Starting: Transcriber {
+    let stub: Stub
+    let started: AsyncStream<Void>.Continuation
+
+    func transcribe(
+        _ audio: some AsyncSequence<AudioClip, Never> & Sendable,
+        expecting vocabulary: Vocabulary,
+        partial: @escaping @Sendable (Partial) -> Void
+    ) async throws -> Transcript {
+        started.yield()
+        return try await stub.transcribe(audio, expecting: vocabulary, partial: partial)
+    }
 }

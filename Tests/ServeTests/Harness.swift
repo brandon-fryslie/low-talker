@@ -12,15 +12,9 @@ import Testing
 final class Stub: Transcriber {
     let heard = Mutex<[(seconds: TimeInterval, vocabulary: Vocabulary, cancelled: Bool)]>([])
     let answer: Result<Transcript, any Error>
-    /// Each transcribe as it starts and as it ends, for a client that keeps pace with them.
-    let passes: AsyncStream<Pass>
-    private let pass: AsyncStream<Pass>.Continuation
-
-    enum Pass { case started, ended }
 
     init(_ answer: Result<Transcript, any Error> = .success(Transcript(typed: " Hello world, this is LowTalker."))) {
         self.answer = answer
-        (passes, pass) = AsyncStream.makeStream()
     }
 
     func transcribe(
@@ -28,8 +22,6 @@ final class Stub: Transcriber {
         expecting vocabulary: Vocabulary,
         partial: @escaping @Sendable (Partial) -> Void
     ) async throws -> Transcript {
-        pass.yield(.started)
-        defer { pass.yield(.ended) }
         let words = (try? answer.get())?.words ?? []
         var seconds: TimeInterval = 0
         for await clip in audio {
