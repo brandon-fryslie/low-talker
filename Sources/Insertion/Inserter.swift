@@ -11,7 +11,7 @@ import DarwinCalls
 /// methods or macOS - the caller's question is "did these words land", and that question
 /// outlives whatever carries it.
 public protocol Inserter: Sendable {
-    /// Inserts `text` at the cursor, or throws why it did not: a `Refusal` when the input
+    /// Inserts `text` at the cursor `destination` admits, or throws why it did not: a `Refusal` when the input
     /// method looked and would not, `NotYetTaken` when the app has not taken them yet, and
     /// otherwise whatever stopped the question reaching it, which the channel below names
     /// in its own types.
@@ -23,7 +23,7 @@ public protocol Inserter: Sendable {
     /// Said here rather than at the one implementation because this is the seam
     /// low-input-method-s71.b26's executor consumes, and the obligation belongs to whatever
     /// satisfies it. [LAW:no-ambient-temporal-coupling]
-    func insert(_ text: String) throws -> Inserted
+    func insert(_ text: String, into destination: Destination) throws -> Inserted
 }
 
 public extension Inserter {
@@ -35,7 +35,7 @@ public extension Inserter {
     /// remember it. [LAW:single-enforcer]
     ///
     /// The `insert` inside is the blocking one: that closure is not async, so the overload
-    /// it names is the protocol's own. An async caller writing `try await insert(text)` gets
+    /// it names is the protocol's own. An async caller writing `try await insert(text, into:)` gets
     /// this; there is no spelling of the call that is both awaited and blocking.
     /// [LAW:no-ambient-temporal-coupling]
     ///
@@ -44,9 +44,9 @@ public extension Inserter {
     /// words did not land when they may have - the one conflation this module exists to
     /// prevent. What bounds the wait is the timeout, which is also the bound the answer
     /// names. [LAW:no-silent-failure]
-    func insert(_ text: String) async throws -> Inserted {
+    func insert(_ text: String, into destination: Destination) async throws -> Inserted {
         try await withCheckedThrowingContinuation { continuation in
-            Thread { continuation.resume(with: Result { try insert(text) }) }.start()
+            Thread { continuation.resume(with: Result { try insert(text, into: destination) }) }.start()
         }
     }
 }
@@ -100,7 +100,7 @@ public struct InputMethodInserter: Inserter {
         self.answerer = answerer
     }
 
-    public func insert(_ text: String) throws -> Inserted {
+    public func insert(_ text: String, into destination: Destination) throws -> Inserted {
         let answerer = try answerer.get()
         var remote = mach_port_t()
         // [LAW:parse-dont-validate] The boundary: past here there is a port or a thrown
@@ -131,7 +131,7 @@ public struct InputMethodInserter: Inserter {
             throw refusal
         }
         let received = try roundTrip(
-            Wire.request(text), id: Wire.insert, to: remote, answeredOn: reply, by: answerer, within: phase, once: .mayHaveLanded,
+            Wire.request(InsertRequest(text, into: destination)), id: Wire.insert, to: remote, answeredOn: reply, by: answerer, within: phase, once: .mayHaveLanded,
             unanswered: .answerDidNotArrive(port: portName, after: phase),
             abandoned: .answerWasAbandoned(port: portName))
         let data = received.payload ?? Data()

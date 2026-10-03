@@ -31,7 +31,7 @@ if arguments.count == 1 {
     exit(2)
 }
 do {
-    let inserted = try inserter.insert(text)
+    let inserted = try inserter.insert(text, into: .cursorInFront)
     print("inserted \(inserted.characters) into \(inserted.into)")
 } catch {
     print("\(error)")

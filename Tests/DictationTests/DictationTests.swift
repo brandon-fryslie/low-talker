@@ -215,6 +215,46 @@ extension Result {
         #expect(rig.inputMethod.inserted == ["hello"])
     }
 
+    /// The person moves to another app with a text client while the press is open - the
+    /// Finder, on studious - and the words after the move are refused there, never typed
+    /// into it: the press stops, and the report says how many landed in the app they began in.
+    @Test func movingToAnotherAppMidPressStopsItsCommits() async throws {
+        let engine = FakeTranscriber(confirming: { samples in
+            Transcript(typed: samples.count >= 4 ? "hello there" : samples.count >= 2 ? "hello" : "")
+        }) { _ in Transcript(typed: "hello there friend") }
+        let rig = try Rig(hearing: engine)
+        rig.dictation.press(.began(Rig.rightOption, at: rig.now))
+        rig.speak([1, 2])
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.inputMethod.inserted == ["hello"] })
+        rig.inputMethod.reaching(BundleID(rawValue: "com.apple.finder"))
+        rig.speak([3, 4])
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { engine.hearing == [1, 2, 3, 4] })
+        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        let stopped = try #require(await rig.report().failure as? PressStopped)
+        #expect(stopped.landed == 1)
+        #expect(stopped.cause as? Refusal == .dictationIsInAnotherApp)
+        #expect(rig.inputMethod.inserted == ["hello"])
+    }
+
+    /// The same move with nothing confirmed after it: what key-up inserts is the press's rest,
+    /// and it is bound to the app the press's words went to like every commit before it.
+    @Test func movingToAnotherAppBeforeKeyUpKeepsTheRestOutOfIt() async throws {
+        let engine = FakeTranscriber(confirming: { samples in
+            Transcript(typed: samples.count >= 2 ? "hello" : "")
+        }) { _ in Transcript(typed: "hello there friend") }
+        let rig = try Rig(hearing: engine)
+        rig.dictation.press(.began(Rig.rightOption, at: rig.now))
+        rig.speak([1, 2])
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.inputMethod.inserted == ["hello"] })
+        rig.inputMethod.reaching(BundleID(rawValue: "com.apple.finder"))
+        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        let stopped = try #require(await rig.report().failure as? PressStopped)
+        #expect(stopped.landed == 1)
+        #expect(stopped.causes.last as? Refusal == .dictationIsInAnotherApp)
+        #expect(failureLine(stopped) == "\(Refusal.dictationIsInAnotherApp) 1 words of your dictation were inserted before it; the rest were not.")
+        #expect(rig.inputMethod.inserted == ["hello"])
+    }
+
     /// A refusal while the press is open stops its decode too: nothing will read it, so the
     /// engine goes back to whoever is waiting while the key is still down.
     @Test func aRefusalDuringThePressLetsGoOfTheEngineBeforeKeyUp() async throws {

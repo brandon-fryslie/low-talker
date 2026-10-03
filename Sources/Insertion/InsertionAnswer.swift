@@ -1,6 +1,45 @@
 import Darwin
 import Foundation
 
+/// Which cursor an insert's words may go to.
+///
+/// [LAW:types-are-the-program] A dictation's words belong together: its first go to the
+/// cursor in front, wherever that is, and every later one only to the app those went to.
+/// Which of the two an insert is crosses the wire as this value, so the input method, the
+/// one process that knows which app holds the cursor, is the one that refuses the rest once
+/// the person has moved. [LAW:single-enforcer]
+public enum Destination: Codable, Equatable, Sendable, CustomStringConvertible {
+    case cursorInFront
+    case app(String)
+
+    /// Whether words bound here may go to a cursor in `application`, which is absent when
+    /// no app is in front.
+    public func admits(_ application: String?) -> Bool {
+        switch self {
+        case .cursorInFront: true
+        case .app(let bound): bound == application
+        }
+    }
+
+    public var description: String {
+        switch self {
+        case .cursorInFront: "the cursor in front"
+        case .app(let bound): "the cursor in front only in \(bound)"
+        }
+    }
+}
+
+/// An insert as the input method is asked it: the words, and where they may go.
+public struct InsertRequest: Codable, Equatable, Sendable {
+    public let text: String
+    public let destination: Destination
+
+    public init(_ text: String, into destination: Destination) {
+        self.text = text
+        self.destination = destination
+    }
+}
+
 /// What the input method did with the text it was asked to insert.
 ///
 /// The shape the answer crosses the wire in, which is the only reason it is a sum: the far
@@ -66,10 +105,17 @@ public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, 
     /// from. Its own reason and not `noClientHasFocus`, because the two are fixed
     /// differently: this one is words arriving while the person is somewhere else.
     case cursorIsInAnotherApp
-    /// The bytes that arrived were not text. Answered rather than dropped, because a
+    /// The cursor in front is in another app than the one the dictation's words already
+    /// went to. Its own reason and not `cursorIsInAnotherApp`, because nothing is stale
+    /// here: the person moved, and the rest of what they said belongs beside the words that
+    /// landed, not in whatever they moved to.
+    case dictationIsInAnotherApp
+    /// The bytes that arrived were not a request. Answered rather than dropped, because a
     /// sender that hears nothing waits out its whole timeout and learns nothing.
-    /// [LAW:no-silent-failure]
-    case requestWasNotText
+    /// [LAW:no-silent-failure] Spelled on the wire as it was when a request was bare text,
+    /// because that is how an input method from then refuses a request it cannot read, and
+    /// the app has to read that refusal as one rather than as an answer it cannot read.
+    case requestWasNotReadable = "requestWasNotText"
     /// Some app holds Secure Event Input - Secure Keyboard Entry in Terminal or iTerm2, or a
     /// password field - and while it does, macOS switches every input method off. Its own
     /// reason and not `noClientHasFocus`, because it is fixed somewhere else entirely: not
@@ -92,7 +138,8 @@ public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, 
         switch self {
         case .noClientHasFocus: "WARNING: No text field has focus. Your dictation was not inserted."
         case .cursorIsInAnotherApp: "WARNING: The cursor is in an app that is not in front. Your dictation was not inserted."
-        case .requestWasNotText: "WARNING: The input method was asked to insert something that is not text. Nothing was inserted."
+        case .dictationIsInAnotherApp: "WARNING: You moved to another app while dictating."
+        case .requestWasNotReadable: "WARNING: The input method was asked something it could not read. Nothing was inserted."
         case .secureInputIsOn: "WARNING: An app has secure keyboard entry on, and macOS turns input methods off while it does. Your dictation was not inserted."
         case .senderIsNotThisInstallationsApp:
             "WARNING: The input method takes words only from the app, signed by the certificate that signed it, and this process is not that app. Your dictation was not inserted."
@@ -174,28 +221,32 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
 /// modifier keys the input method was just handed, which nobody answers.
 /// [LAW:single-enforcer]
 ///
-/// The request is the text and nothing else, so it crosses as its own UTF-8 and carries no
-/// envelope to keep in step. The answer is a sum type, so it crosses as JSON, which is the
-/// codec Swift already writes for one. Both directions are held by tests against the
-/// values, never against the bytes: what matters is that what goes in comes out.
-/// [LAW:behavior-not-structure]
+/// The request and the answer are both values with more than one field, so both cross as
+/// JSON, which is the codec Swift already writes for them. Both directions are held by
+/// tests against the values, never against the bytes: what matters is that what goes in
+/// comes out. [LAW:behavior-not-structure]
 enum Wire {
     static let greeting: mach_msg_id_t = 1
     static let insert: mach_msg_id_t = 2
     static let modifiers: mach_msg_id_t = 3
 
-    static func request(_ text: String) -> Data { Data(text.utf8) }
+    /// The first byte of every request, and one no UTF-8 text contains. An input method built
+    /// when a request was its bare text, still running past an install, reads this as bytes
+    /// that are not text and refuses them, rather than typing the request out.
+    static let requestMark: UInt8 = 0xFF
 
-    /// [LAW:parse-dont-validate] Hands back the text or nothing at all; a caller cannot
-    /// receive bytes it has not established are text.
-    static func text(of request: Data) -> String? { String(data: request, encoding: .utf8) }
+    // The encoder cannot fail on these types: every case holds `Codable` primitives and
+    // nothing else. Said here, at the one place it is true, rather than as a throw every
+    // caller would carry and none could act on.
+    static func request(_ request: InsertRequest) -> Data { Data([requestMark]) + (try! JSONEncoder().encode(request)) }
 
-    static func answer(_ answer: InsertionAnswer) -> Data {
-        // The encoder cannot fail on this type: every case holds `Codable` primitives and
-        // nothing else. Said here, at the one place it is true, rather than as a throw
-        // every caller would carry and none could act on.
-        try! JSONEncoder().encode(answer)
+    /// [LAW:parse-dont-validate] A request or nothing at all.
+    static func request(of data: Data) -> InsertRequest? {
+        guard data.first == requestMark else { return nil }
+        return try? JSONDecoder().decode(InsertRequest.self, from: data.dropFirst())
     }
+
+    static func answer(_ answer: InsertionAnswer) -> Data { try! JSONEncoder().encode(answer) }
 
     /// [LAW:parse-dont-validate] An answer or nothing at all.
     ///

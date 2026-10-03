@@ -140,7 +140,8 @@ final class FakeTranscriber: Transcriber {
 }
 
 /// An input method that records every text it put at the cursor, answers that it reached
-/// the app it is told, and refuses or holds an insert when a test says so. One fake for every
+/// the app it is told, refuses an insert bound to another app as the real one does, and
+/// refuses or holds an insert when a test says so. One fake for every
 /// behavior, since each is a value. [LAW:composability]
 ///
 /// Asked on a thread of the executor's choosing: `Inserter`'s awaited overload puts the
@@ -178,7 +179,7 @@ final class FakeInputMethod: Inserter, Sendable {
         gate?.signal()
     }
 
-    func insert(_ text: String) throws -> Inserted {
+    func insert(_ text: String, into destination: Destination) throws -> Inserted {
         if let gate = state.withLock({ $0.gate }) {
             state.withLock { $0.holding += 1 }
             gate.wait()
@@ -186,6 +187,7 @@ final class FakeInputMethod: Inserter, Sendable {
         }
         return try state.withLock { state in
             if let refusal = state.refusal { throw refusal }
+            guard destination.admits(state.into) else { throw Refusal.dictationIsInAnotherApp }
             state.inserted.append(text)
             return Inserted(characters: text.count, into: state.into)
         }

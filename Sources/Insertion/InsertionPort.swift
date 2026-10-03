@@ -6,7 +6,7 @@ import DarwinCalls
 /// The input method's end of the channel: the named port the app sends to.
 ///
 /// [LAW:effects-at-boundaries] Hosting the port, checking who sent each request and
-/// decoding its bytes is all this does. What to do with the text is the closure's, and the
+/// decoding its bytes is all this does. What to do with the request is the closure's, and the
 /// closure is where the text input system lives - so the half that knows about macOS
 /// clients knows nothing about ports, and this half knows nothing about clients.
 ///
@@ -54,7 +54,7 @@ public final class InsertionPort {
     /// Hosts the insert port, admitting the app and nobody else.
     public convenience init(
         queue: DispatchQueue,
-        told: @escaping @Sendable (Event) -> Void, answer: @escaping @Sendable (String) -> InsertionAnswer
+        told: @escaping @Sendable (Event) -> Void, answer: @escaping @Sendable (InsertRequest) -> InsertionAnswer
     ) throws(PortNotHosted) {
         let senders: PeerIdentity
         do throws(PeerIdentity.Unreadable) { senders = try .signedLikeThisProcess(identifier: AppIdentity.bundleIdentifier) } catch { throw .noRequirement(error) }
@@ -65,7 +65,7 @@ public final class InsertionPort {
     /// without being an input method. [LAW:decomposition]
     convenience init(
         portName: String, senders: PeerIdentity, queue: DispatchQueue,
-        told: @escaping @Sendable (Event) -> Void, answer: @escaping @Sendable (String) -> InsertionAnswer
+        told: @escaping @Sendable (Event) -> Void, answer: @escaping @Sendable (InsertRequest) -> InsertionAnswer
     ) throws(PortNotHosted) {
         try self.init(portName: portName, queue: queue, told: told) { request in
             do throws(PeerIdentity.NotAdmitted) {
@@ -78,10 +78,10 @@ public final class InsertionPort {
             // it asked. [LAW:dataflow-not-control-flow] The id is the wire's own
             // discriminator, and these are its two values.
             guard request.id != Wire.greeting else { return Data() }
-            // Bytes that are not text are answered, never dropped: a sender that hears
+            // Bytes that are not a request are answered, never dropped: a sender that hears
             // nothing waits out its timeout and learns nothing. [LAW:no-silent-failure]
-            let text = request.payload.flatMap(Wire.text(of:))
-            return Wire.answer(text.map(answer) ?? .refused(.requestWasNotText))
+            let asked = request.payload.flatMap(Wire.request(of:))
+            return Wire.answer(asked.map(answer) ?? .refused(.requestWasNotReadable))
         }
     }
 

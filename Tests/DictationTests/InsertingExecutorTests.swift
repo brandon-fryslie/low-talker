@@ -27,18 +27,22 @@ import Testing
     private final class AnInputMethod: Inserter, @unchecked Sendable {
         private let lock = NSLock()
         private let answering: @Sendable (String) throws -> Inserted
-        private var asked: [String] = []
+        private var asked: [(text: String, destination: Destination)] = []
 
         init(_ answering: @escaping @Sendable (String) throws -> Inserted) {
             self.answering = answering
         }
 
         var texts: [String] {
-            lock.withLock { asked }
+            lock.withLock { asked.map(\.text) }
         }
 
-        func insert(_ text: String) throws -> Inserted {
-            lock.withLock { asked.append(text) }
+        var destinations: [Destination] {
+            lock.withLock { asked.map(\.destination) }
+        }
+
+        func insert(_ text: String, into destination: Destination) throws -> Inserted {
+            lock.withLock { asked.append((text, destination)) }
             return try answering(text)
         }
     }
@@ -50,7 +54,7 @@ import Testing
     @Test func wordsAtTheFocusAreInsertedAtTheCursor() async throws {
         let inputMethod = Self.inserting(into: Self.textEdit)
         let performed = try await Executor(insertingThrough: inputMethod)
-            .perform([.insertText(text: "héllo there")], since: .keyUp(.now))
+            .perform([.insertText(text: "héllo there")], following: [], since: .keyUp(.now))
 
         #expect(inputMethod.texts == ["héllo there"])
         #expect(performed.count == 1)
@@ -65,10 +69,21 @@ import Testing
     /// commits where the cursor is then. [FRAMING:representation]
     @Test func theAppNamedIsTheOneTheInputMethodReached() async throws {
         let performed = try await Executor(insertingThrough: Self.inserting(into: Self.slack))
-            .perform([.insertText(text: "hi")], since: .keyUp(.now))
+            .perform([.insertText(text: "hi")], following: [], since: .keyUp(.now))
 
         #expect(performed[0].into == Self.slack)
         #expect("\(performed[0])".hasPrefix("inserted 2 characters at the cursor in com.tinyspeck.slackmacgap, key-up to acknowledged "))
+    }
+
+    /// A dictation's first words go to the cursor in front, and each insert after them only
+    /// to the app the one before it reached, within one list and across lists alike.
+    @Test func eachInsertIsBoundToTheAppTheOneBeforeItReached() async throws {
+        let inputMethod = Self.inserting(into: Self.textEdit)
+        let executor = Executor(insertingThrough: inputMethod)
+        let first = try await executor.perform([.insertText(text: "one"), .insertText(text: "two")], following: [], since: .keyDown(.now))
+        _ = try await executor.perform([.insertText(text: "three")], following: first, since: .keyUp(.now))
+
+        #expect(inputMethod.destinations == [.cursorInFront, .app(Self.textEdit.rawValue), .app(Self.textEdit.rawValue)])
     }
 
     /// Every refusal stops the route by name with nothing performed: the words are not at
@@ -79,7 +94,7 @@ import Testing
         let inputMethod = AnInputMethod { _ in throw refusal }
         let stopped = try await #require(throws: RouteStopped.self) {
             try await Executor(insertingThrough: inputMethod)
-                .perform([.insertText(text: "héllo there")], since: .keyUp(.now))
+                .perform([.insertText(text: "héllo there")], following: [], since: .keyUp(.now))
         }
 
         #expect(stopped.cause as? Refusal == refusal)
@@ -93,7 +108,7 @@ import Testing
         let inputMethod = AnInputMethod { _ in throw late }
         let stopped = try await #require(throws: RouteStopped.self) {
             try await Executor(insertingThrough: inputMethod)
-                .perform([.insertText(text: "héllo there")], since: .keyUp(.now))
+                .perform([.insertText(text: "héllo there")], following: [], since: .keyUp(.now))
         }
 
         #expect(stopped.cause as? NotYetTaken == late)
@@ -115,7 +130,7 @@ import Testing
         let inputMethod = AnInputMethod { _ in throw why }
         let stopped = try await #require(throws: RouteStopped.self) {
             try await Executor(insertingThrough: inputMethod)
-                .perform([.insertText(text: "héllo there")], since: .keyUp(.now))
+                .perform([.insertText(text: "héllo there")], following: [], since: .keyUp(.now))
         }
 
         #expect(stopped.cause as? Unreachable == why)
@@ -135,7 +150,7 @@ import Testing
             let inputMethod = Self.inserting(into: Self.textEdit)
             let refusal = try await #require(throws: NotAnInsert.self) {
                 try await Executor(insertingThrough: inputMethod)
-                    .perform([.insertText(text: "first"), action], since: .keyUp(.now))
+                    .perform([.insertText(text: "first"), action], following: [], since: .keyUp(.now))
             }
 
             #expect(refusal.action == action)
