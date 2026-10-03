@@ -154,37 +154,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func follow(_ next: RunningConfig) {
         let was = try? config.get()
         running = next
-        switch (was, next.config) {
-        // No config ran before this reading: the loop was held down for want of one, and
-        // comes up the way it does at launch, whose status line says what still stops it -
-        // this reading's refusal among them.
-        case (nil, _):
+        // No config ran before this reading: the loop was held down for want of one, and comes
+        // up the way it does at launch, whose status line says what still stops it - this
+        // reading's refusal among them. A refusal with a config running before it reads as
+        // that config, `.kept`, so it arrives below and moves nothing.
+        guard let was, case .success(let now) = next.config else {
             configLog.notice("config: \(next, privacy: .public)")
             serving?.resume(at: config.map(\.serve))
             Task { await comeUp() }
-        case (.some, .failure):
-            configLog.notice("config: \(next, privacy: .public)")
-        case (let was?, .success(let now)):
-            // [LAW:nothing-unseen] Each moved setting lands on the event with what came of
-            // moving it.
-            let moved = now.settings(changedFrom: was).map { setting in
-                switch setting {
-                case .chords:
-                    if let hotkey = listening?.hotkey {
-                        hotkey.listen(for: now.chords)
-                        if hotkey.isWatching { showHotkeyStatus(listeningStatus) }
-                    }
-                    return "chords \(Hotkey.named(in: now))"
-                case .microphone:
-                    capture.rest(as: now.microphone)
-                    return "microphone \(capture.doing)"
-                case .serve:
-                    serving?.resume(at: config.map(\.serve))
-                    return "server binding"
-                }
-            }
-            configLog.notice("config: \(next, privacy: .public); moved [\(moved.joined(separator: "; "), privacy: .public)]")
+            return
         }
+        // [LAW:nothing-unseen] Each moved setting lands on the event with what came of moving it.
+        let moved = now.settings(changedFrom: was).map { setting in
+            switch setting {
+            case .chords:
+                if let hotkey = listening?.hotkey {
+                    hotkey.listen(for: now.chords)
+                    if hotkey.isWatching { showHotkeyStatus(listeningStatus) }
+                }
+                return "chords \(Hotkey.named(in: now))"
+            case .microphone:
+                capture.rest(as: now.microphone)
+                return "microphone \(capture.doing)"
+            case .serve:
+                serving?.resume(at: config.map(\.serve))
+                return "server binding"
+            }
+        }
+        configLog.notice("config: \(next, privacy: .public); moved [\(moved.joined(separator: "; "), privacy: .public)]")
     }
 
     /// The task following the config file's saves, ended by a quit.
