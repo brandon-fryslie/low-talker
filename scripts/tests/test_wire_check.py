@@ -16,7 +16,7 @@ DEALLOC = "2026-09-29 06:21:25.387 Db LowTalker Dev[64449:7621766] [com.apple.ne
 # The release on macOS 15.0.1 logs the path's agent lookups uncategorised.
 AGENT = ("2026-09-29 14:22:32.354 Db LowTalker Dev[43072:5c902] [com.apple.network:] nw_path_copy_dictionary_for_agent_with_generation "
          "Agent for DEEE13FF-7287-498D-9476-A1A539DDE268 cache miss")
-HEARD = "2026-09-28 22:42:43.012 Df LowTalker Dev[74593:65ec5d0] [ai.promptctl.low-talker.dev:dictation] heard 7 words 657 ms after key-up, 1 actions into com.googlecode.iterm2: <private>"
+HEARD = "2026-09-28 22:42:43.012 Df LowTalker Dev[74593:65ec5d0] [ai.promptctl.low-talker.dev:dictation] heard 7 words in a hold past 0.4 s of quiet 657 ms after key-up (3 passes; nothing displaced), 1 insert into com.googlecode.iterm2: <private>"
 SERVING = ("2026-09-29 00:44:55.277 Df LowTalker Dev Input Method[67215:6c34705] [ai.promptctl.low-talker.dev.inputmethod.dictation:inputmethod] "
            "development serving ai.promptctl.low-talker.dev.inputmethod.dictation_Connection, answering inserts on ai.promptctl.low-talker.dev.inputmethod.dictation.insert")
 INSERT = ("2026-09-28 23:34:45.562 Df LowTalker Dev Input Method[74748:6ad11ca] [ai.promptctl.low-talker.dev.inputmethod.dictation:inputmethod] "
