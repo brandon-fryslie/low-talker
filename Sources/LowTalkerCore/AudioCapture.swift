@@ -112,11 +112,10 @@ public final class AudioCapture {
     private struct Started {
         let watch: Disposal
         let grant: MicrophoneGrant
-        /// What the microphone does whenever no session is open. Fixed for this run of
-        /// capture: it is what capture was started for, and a run started to hold the
-        /// microphone open cannot become one that does not without giving the device up,
-        /// which is `stop()` and a fresh `start()`.
-        let atRest: MicrophoneAtRest
+        /// What the microphone does whenever no session is open. Changed only by
+        /// `rest(as:)`, and read only by `rest()`, so a change reaches the device at the next
+        /// moment no session is open and never cuts one short.
+        var atRest: MicrophoneAtRest
         var engine: Engine
         /// The microphone this run of capture opens, readied but not open. Held across
         /// presses because that is the whole of what makes `shut` affordable: what it
@@ -516,6 +515,16 @@ public final class AudioCapture {
             prepared: readiedInput()
         ))
         rest()
+    }
+
+    /// What the microphone does between presses from now on, for capture that is started.
+    /// With no session open the microphone goes there at once; with one open, the key-up that
+    /// ends it takes it there, so a saved config never cuts a recording short.
+    public func rest(as atRest: MicrophoneAtRest) {
+        guard case .started(var started) = phase, started.atRest != atRest else { return }
+        started.atRest = atRest
+        phase = .started(started)
+        if !started.sessionIsOpen { rest() }
     }
 
     /// Waits for the microphone a press would open to finish being readied.

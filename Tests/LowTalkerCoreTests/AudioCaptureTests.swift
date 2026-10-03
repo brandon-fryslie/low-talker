@@ -442,6 +442,47 @@ private struct Authorized: MicrophoneAuthority {
         #expect(hardware.engines.count == 1)
     }
 
+    /// A saved config that asks for the microphone held opens it at once when nobody is
+    /// pressing, and one that asks for it shut closes it at once.
+    @Test func aRestingModeChangedBetweenPressesTakesEffectAtOnce() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .shut)
+        capture.rest(as: .open)
+        #expect(capture.atRest == .open)
+        #expect(hardware.engines.count == 1)
+        #expect(!hardware.engines[0].disposed)
+        capture.rest(as: .shut)
+        #expect(capture.atRest == .shut)
+        #expect(hardware.engines[0].disposed)
+        #expect(isListening(capture))
+    }
+
+    /// The same change made mid-press waits for the key-up: the press goes on speaking into
+    /// the microphone it opened, keeps every sample, and only then is the device let go.
+    @Test func aRestingModeChangedMidPressWaitsForTheKeyUp() throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .open)
+        let session = try capture.beginSession(at: origin, preRoll: 0)
+        hardware.engines[0].appending([1, 2], origin)
+        capture.rest(as: .shut)
+        #expect(!hardware.engines[0].disposed)
+        #expect(isRunning(capture))
+        hardware.engines[0].appending([3, 4], after(2))
+        #expect(capture.endSession(session) == .whole(AudioClip(samples: [1, 2, 3, 4])))
+        #expect(hardware.engines[0].disposed)
+        #expect(hardware.engines.count == 1)
+    }
+
+    /// Capture that is not started has no microphone to bring anywhere; `start` is what
+    /// names its resting mode.
+    @Test func aRestingModeChangedWhileStoppedIsNotHeld() {
+        let capture = AudioCapture(hardware: FakeHardware())
+        capture.rest(as: .open)
+        #expect(capture.atRest == nil)
+    }
+
     /// A key-down the tap delivered late is the press `unopened` exists to catch, and it is
     /// not one here. A held engine's buffers run continuously, so the next one to arrive
     /// after the key was already being captured when the key went down - its stamp is a

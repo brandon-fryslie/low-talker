@@ -123,6 +123,36 @@ private func ended(_ chord: KeyChord, _ press: PressKind) -> HotkeyDetector.Tran
         #expect(keyboard.detector.phase == .latched(command))
     }
 
+    /// A saved config moves the chord mid-hold: the press open under the old chord is
+    /// neither dropped nor ended, it ends at that chord's release, and the next press is
+    /// heard on the new chord alone.
+    @Test func aHoldOpenWhenTheChordMovesEndsAtItsOwnRelease() {
+        let rightCommand = KeyChord(modifiers: .rightCommand)
+        var keyboard = Keyboard()
+        #expect(keyboard.press(.rightOption, at: 0) == began(rightOption, at: 0))
+        keyboard.detector.listen(for: [rightCommand])
+        #expect(keyboard.detector.phase == .held(rightOption, since: at(0)))
+        #expect(keyboard.release(.rightOption, at: 400) == ended(rightOption, .hold))
+        #expect(keyboard.press(.rightOption, at: 500) == nil)
+        #expect(keyboard.release(.rightOption, at: 900) == nil)
+        #expect(keyboard.press(.rightCommand, at: 1000) == began(rightCommand, at: 1000))
+    }
+
+    /// A tap latched under the old chord stays latched, and is ended by the chord that began
+    /// it - the one the person tapped to start - or by the chord listened for now, the one
+    /// the menu names. Neither leaves the microphone recording with no way to stop it.
+    @Test(arguments: [Modifier.rightOption, .rightCommand])
+    func aTapLatchedWhenTheChordMovesIsEndedByEitherChord(_ ending: Modifier) {
+        let rightCommand = KeyChord(modifiers: .rightCommand)
+        var keyboard = Keyboard()
+        _ = keyboard.press(.rightOption, at: 0)
+        _ = keyboard.release(.rightOption, at: 100)
+        keyboard.detector.listen(for: [rightCommand])
+        #expect(keyboard.detector.phase == .latched(rightOption))
+        #expect(keyboard.press(ending, at: 2000) == ended(rightOption, .tap))
+        #expect(keyboard.detector.phase == .idle)
+    }
+
     /// A lapse ends whatever press is open, a hold or a latched tap, and says that is
     /// what ended it.
     @Test func aLapseEndsWhateverPressIsOpen() {

@@ -60,6 +60,12 @@ public final class Hotkey {
         installed = (dispose, onTransition)
     }
 
+    /// Listens for `chords` from the next press on, without stopping the feed or ending a
+    /// press already open; see `HotkeyDetector.listen(for:)`.
+    public func listen(for chords: Set<KeyChord>) {
+        detector.listen(for: chords)
+    }
+
     /// Stops watching. A press still open is ended here as `.lapsed`, at the handler it
     /// began at: once the feed has stopped its release can never arrive, and a press left open
     /// is a microphone left open with nothing to close it.
