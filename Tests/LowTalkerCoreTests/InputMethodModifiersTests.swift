@@ -1,6 +1,5 @@
 import Dispatch
 import Insertion
-import IOKit.hidsystem
 @testable import LowTalkerCore
 import Testing
 
@@ -158,19 +157,21 @@ private let twoKeys = KeyChord(modifiers: .rightOption, .rightCommand)
     }
 
     /// A key held past `InputMethodModifiers.confirming` is looked for in the session, on
-    /// the port's queue, and the release the input method never told is heard from it: this
-    /// process holds no keys, so the reading lets go of Right Option.
+    /// the port's queue, and the release the input method never told is heard from it, no
+    /// sooner than one interval after the press.
     @MainActor @Test(.timeLimit(.minutes(1)))
     func aHoldOutlastingTheConfirmingIntervalIsReadFromTheSession() async {
         let (moves, heard) = AsyncStream<KeyEvent>.makeStream()
-        let installed = InputMethodModifiers.Installed<Void>(told: ToldModifiers(held: []), hearing: DispatchQueue(label: #function))
+        let installed = InputMethodModifiers.Installed<Void>(told: ToldModifiers(held: []), hearing: DispatchQueue(label: #function),
+                                                             session: { [] })
         installed.open = ((), { heard.yield($0) })
-        installed.heard(HeldModifiers(flags: UInt64(NX_DEVICERALTKEYMASK), uptimeNanoseconds: DispatchTime.now().uptimeNanoseconds))
+        installed.heard(HeldModifiers(flags: Modifier.rightOption.mask, uptimeNanoseconds: DispatchTime.now().uptimeNanoseconds))
         var pressAndRelease: [KeyEvent] = []
         for await move in moves.prefix(2) { pressAndRelease.append(move) }
         installed.open = nil
         #expect(pressAndRelease.map(\.key) == [.rightOption, .rightOption])
         #expect(pressAndRelease.map(\.direction) == [.down, .up])
+        #expect(pressAndRelease[1].time - pressAndRelease[0].time >= .milliseconds(200))
     }
 
     @Test func aStateThatChangedNothingIsNoKeys() {
