@@ -9,8 +9,8 @@ import Testing
         try Config(toml: toml)
     }
 
-    /// Every key in the epic's list at once: the engine choice, chords to modes, a
-    /// mode's vocabulary, and modes to routes with both places text can go.
+    /// Every key at once: the engine choice, the microphone at rest, chords to modes, and a
+    /// mode's vocabulary.
     static let full = """
         model = "base.en"
 
@@ -25,14 +25,10 @@ import Testing
         name = "slack"
         chord = { modifiers = ["leftCommand", "leftShift"] }
         vocabulary = ["Kubernetes", "  Anthropic\\n"]
-        routes = [
-          { when = "always", then = { insert = "focus" } },
-        ]
 
         [[modes]]
         name = "notes"
         chord = { modifiers = ["rightCommand"] }
-        routes = [{ when = "always", then = { insert = "focus" } }]
         """
 
     @Test func aFullFileParses() throws {
@@ -44,12 +40,6 @@ import Testing
         let slack = try #require(config.modes.first { $0.name == "slack" })
         #expect(slack.chord == KeyChord(modifiers: .leftCommand, .leftShift))
         #expect(slack.vocabulary.terms.map(\.text) == ["Kubernetes", "Anthropic"])
-        #expect(slack.router.routes == [
-            Route(when: .always, then: .insertTranscript),
-        ])
-
-        let notes = try #require(config.modes.first { $0.name == "notes" })
-        #expect(notes.router.routes == [Route(when: .always, then: .insertTranscript)])
     }
 
     /// The whole point of defaults: the app runs with no file written at all.
@@ -111,7 +101,6 @@ import Testing
         #expect(Config.default.modes == [Mode.dictation])
         #expect(Mode.dictation.chord == Hotkey.defaultChord)
         #expect(Mode.dictation.vocabulary == .empty)
-        #expect(Mode.dictation.router.routes == [Route.dictation])
     }
 
     /// The chord that started listening picks the mode, and the hotkey is told exactly the
@@ -158,14 +147,6 @@ import Testing
                 chord = { modifiers = ["rightOption"], inputMethod = { modifiers = ["rightOption"] } }
                 """)
         }
-    }
-
-    /// A mode that names no routes dictates: the only thing declaring a chord and a
-    /// vocabulary and nothing else could have meant.
-    @Test func aModeWithoutRoutesDictates() throws {
-        let config = try Self.config(Self.full)
-        let dictation = try #require(config.modes.first)
-        #expect(dictation.router.routes == [Route.dictation])
     }
 
     // MARK: - What a file gets told it did wrong
@@ -268,95 +249,6 @@ import Testing
         }
     }
 
-    @Test func aRouteMatchingOnSomethingElseIsNamed() {
-        #expect(throws: ConfigError.wrongShape(#"modes[0].routes[0].when: "sometimes" is not something a route can match on"#)) {
-            try Self.config(Self.mode(routes: #"[{ when = "sometimes", then = { insert = "focus" } }]"#))
-        }
-    }
-
-    @Test func aTargetThatIsNowhereIsNamed() {
-        #expect(throws: ConfigError.wrongShape(#"modes[0].routes[0].then.insert: "wherever" is not somewhere text can be inserted"#)) {
-            try Self.config(Self.mode(routes: #"[{ when = "always", then = { insert = "wherever" } }]"#))
-        }
-    }
-
-    /// An empty list would be a mode that claims the chord and drops everything it hears.
-    @Test func aModeWithAnEmptyRouteListIsRefused() {
-        #expect(throws: ConfigError.wrongShape("modes[0].routes: an empty list claims nothing; leave routes out to dictate")) {
-            try Self.config(Self.mode(routes: "[]"))
-        }
-    }
-
-    /// A `then` that names nothing would be a route that claims an utterance and drops
-    /// it.
-    @Test func aThenNamingNothingIsRefused() {
-        #expect(throws: ConfigError.wrongShape("modes[0].routes[0].then.insert is missing")) {
-            try Self.config(Self.mode(routes: #"[{ when = "always", then = {} }]"#))
-        }
-    }
-
-    /// A `then` whose one key is misspelled named exactly one thing, so it is told which
-    /// key is absent rather than that it named nothing.
-    @Test func aThenWhoseOnlyKeyIsMisspelledIsToldWhatIsMissing() {
-        #expect(throws: ConfigError.wrongShape("modes[0].routes[0].then.insert is missing")) {
-            try Self.config(Self.mode(routes: #"[{ when = "always", then = { emit = "focus" } }]"#))
-        }
-    }
-
-    /// A misspelling beside a valid `insert` is named, because the decode completes and
-    /// leaves the stray key for strict decoding to find.
-    @Test func aThenWithAKeyBesideInsertNamesIt() {
-        #expect(throws: ConfigError.unknownKeys(["modes[0].routes[0].then.emit"])) {
-            try Self.config(Self.mode(routes: #"[{ when = "always", then = { insert = "focus", emit = "focus" } }]"#))
-        }
-    }
-
-    /// The position has to be counted, not assumed: the fault is in the second route
-    /// of the second mode, so a hardcoded `modes[0].routes[0]` would fail here.
-    @Test func aRouteFaultNamesWhichModeAndWhichRouteItIsIn() {
-        #expect(throws: ConfigError.wrongShape(#"modes[1].routes[1].when: "sometyme" is not something a route can match on"#)) {
-            try Self.config("""
-                [[modes]]
-                name = "dictation"
-                chord = { modifiers = ["rightOption"] }
-
-                [[modes]]
-                name = "slack"
-                chord = { modifiers = ["rightCommand"] }
-                routes = [
-                  { when = "always", then = { insert = "focus" } },
-                  { when = "sometyme", then = { insert = "focus" } },
-                ]
-                """)
-        }
-    }
-
-    /// [LAW:no-silent-failure] Strict decoding reaches into the hand-written decoders
-    /// for `then` and `insert`, so a typo nested that deep is named rather than quietly
-    /// dropped. Pinned by test because the guarantee is TOMLKit's, not this package's.
-    @Test func aTypoBesideAValidInsertIsNamed() {
-        #expect(throws: ConfigError.unknownKeys(["modes[0].routes[0].then.isnert"])) {
-            try Self.config(Self.mode(routes: #"[{ when = "always", then = { insert = "focus", isnert = "y" } }]"#))
-        }
-    }
-
-    /// [LAW:no-silent-failure] The input method reaches only the cursor of the app in
-    /// front, so a route naming an app is refused where the file is read rather than
-    /// accepted and then refused at every press.
-    @Test func aTargetNamingAnAppIsRefused() {
-        #expect(throws: ConfigError.wrongShape(#"modes[0].routes[0].then.insert: insert is the word "focus", the cursor of the app in front: the one place the input method puts text"#)) {
-            try Self.config(Self.mode(routes: #"[{ when = "always", then = { insert = { app = "com.tinyspeck.slackmacgap" } } }]"#))
-        }
-    }
-
-    /// A fault inside a route is placed the way the file writes routes: by position,
-    /// each key named once.
-    @Test func aFaultInsideARouteNamesWhereItIs() {
-        #expect(throws: ConfigError.wrongShape("modes[0].routes[0].when is missing")) {
-            try Self.config(Self.mode(routes: #"[{ then = { insert = "focus" } }]"#))
-        }
-    }
-
     /// Which `[[modes]]` entry is at fault, counted as the file lists them.
     @Test func aMissingKeyNamesTheModeItIsIn() {
         #expect(throws: ConfigError.wrongShape("modes[1].name is missing")) {
@@ -447,15 +339,6 @@ import Testing
         }
         #expect(keys.count == 1)
         #expect(keys.first?.hasSuffix(".chrod") == true)
-    }
-
-    private static func mode(routes: String) -> String {
-        """
-        [[modes]]
-        name = "dictation"
-        chord = { modifiers = ["rightOption"] }
-        routes = \(routes)
-        """
     }
 
     // MARK: - Reading the file

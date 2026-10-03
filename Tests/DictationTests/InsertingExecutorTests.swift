@@ -53,69 +53,77 @@ import Testing
 
     @Test func wordsAtTheFocusAreInsertedAtTheCursor() async throws {
         let inputMethod = Self.inserting(into: Self.textEdit)
-        let performed = try await Executor(insertingThrough: inputMethod)
-            .perform([.insertText(text: "héllo there")], following: [], since: .keyUp(.now))
+        let performed = try #require(await Executor(insertingThrough: inputMethod)
+            .insert(Transcript(typed: "héllo there"), following: [], since: .keyUp(.now)))
 
         #expect(inputMethod.texts == ["héllo there"])
-        #expect(performed.count == 1)
-        #expect(performed[0].into == Self.textEdit)
-        #expect(performed[0].characters == 11)
-        #expect("\(performed[0])".hasPrefix("inserted 11 characters at the cursor in com.apple.TextEdit, key-up to acknowledged "))
+        #expect(performed.into == Self.textEdit)
+        #expect(performed.characters == 11)
+        #expect("\(performed)".hasPrefix("inserted 11 characters at the cursor in com.apple.TextEdit, key-up to acknowledged "))
     }
 
     /// The app the outcome names is the app the input method says it reached, which is not
-    /// always the one this route was decided in front of: the person holds the chord in one
+    /// always the one in front at key-down: the person holds the chord in one
     /// window and is somewhere else by the time the words are ready, and the input method
     /// commits where the cursor is then. [FRAMING:representation]
     @Test func theAppNamedIsTheOneTheInputMethodReached() async throws {
-        let performed = try await Executor(insertingThrough: Self.inserting(into: Self.slack))
-            .perform([.insertText(text: "hi")], following: [], since: .keyUp(.now))
+        let performed = try #require(await Executor(insertingThrough: Self.inserting(into: Self.slack))
+            .insert(Transcript(typed: "hi"), following: [], since: .keyUp(.now)))
 
-        #expect(performed[0].into == Self.slack)
-        #expect("\(performed[0])".hasPrefix("inserted 2 characters at the cursor in com.tinyspeck.slackmacgap, key-up to acknowledged "))
+        #expect(performed.into == Self.slack)
+        #expect("\(performed)".hasPrefix("inserted 2 characters at the cursor in com.tinyspeck.slackmacgap, key-up to acknowledged "))
     }
 
     /// A dictation's first words go to the cursor in front, and each insert after them only
-    /// to the app the one before it reached, within one list and across lists alike.
+    /// to the app the one before it reached.
     @Test func eachInsertIsBoundToTheAppTheOneBeforeItReached() async throws {
         let inputMethod = Self.inserting(into: Self.textEdit)
         let executor = Executor(insertingThrough: inputMethod)
-        let first = try await executor.perform([.insertText(text: "one"), .insertText(text: "two")], following: [], since: .keyDown(.now))
-        _ = try await executor.perform([.insertText(text: "three")], following: first, since: .keyUp(.now))
+        let first = try #require(await executor.insert(Transcript(typed: "one"), following: [], since: .keyDown(.now)))
+        let second = try #require(await executor.insert(Transcript(typed: " two"), following: [first], since: .keyDown(.now)))
+        _ = try await executor.insert(Transcript(typed: " three"), following: [first, second], since: .keyUp(.now))
 
         #expect(inputMethod.destinations == [.cursorInFront, .app(Self.textEdit.rawValue), .app(Self.textEdit.rawValue)])
     }
 
-    /// Every refusal stops the route by name with nothing performed: the words are not at
+    /// Nothing said is nothing inserted: the input method is never asked.
+    @Test func aBlankTranscriptInsertsNothing() async throws {
+        let inputMethod = Self.inserting(into: Self.textEdit)
+        let executor = Executor(insertingThrough: inputMethod)
+        for blank in [Transcript(words: []), Transcript(words: [.init(text: " ", time: 0...0, confidence: 1.0)])] {
+            #expect(try await executor.insert(blank, following: [], since: .keyUp(.now)) == nil)
+        }
+        #expect(inputMethod.texts.isEmpty)
+    }
+
+    /// Every refusal is thrown by its own name with nothing performed: the words are not at
     /// the cursor, and nothing puts them anywhere else. Over every case, so a refusal added
     /// later is covered by the compiler rather than by whoever remembers this file.
     @Test(arguments: Refusal.allCases)
-    func aRefusalStopsTheRouteByName(refusal: Refusal) async throws {
+    func aRefusalIsThrownByName(refusal: Refusal) async throws {
         let inputMethod = AnInputMethod { _ in throw refusal }
-        let stopped = try await #require(throws: RouteStopped.self) {
+        let thrown = try await #require(throws: Refusal.self) {
             try await Executor(insertingThrough: inputMethod)
-                .perform([.insertText(text: "héllo there")], following: [], since: .keyUp(.now))
+                .insert(Transcript(typed: "héllo there"), following: [], since: .keyUp(.now))
         }
 
-        #expect(stopped.cause as? Refusal == refusal)
-        #expect(stopped.performed.isEmpty)
+        #expect(thrown == refusal)
     }
 
-    /// Words an app has not taken yet stop the route by that name, never as a refusal: they
+    /// Words an app has not taken yet are thrown by that name, never as a refusal: they
     /// may still land, and nothing here sends them again.
-    @Test func wordsNotYetTakenStopTheRouteByName() async throws {
+    @Test func wordsNotYetTakenAreThrownByName() async throws {
         let late = NotYetTaken(characters: 11, into: "com.apple.TextEdit")
         let inputMethod = AnInputMethod { _ in throw late }
-        let stopped = try await #require(throws: RouteStopped.self) {
+        let thrown = try await #require(throws: NotYetTaken.self) {
             try await Executor(insertingThrough: inputMethod)
-                .perform([.insertText(text: "héllo there")], following: [], since: .keyUp(.now))
+                .insert(Transcript(typed: "héllo there"), following: [], since: .keyUp(.now))
         }
 
-        #expect(stopped.cause as? NotYetTaken == late)
-        #expect(stopped.performed.isEmpty)
+        #expect(thrown == late)
     }
 
-    /// Every way the channel fails stops the route the same way, by its own name.
+    /// Every way the channel fails is thrown the same way, by its own name.
     @Test(arguments: [
         Unreachable.nothingIsListening(port: Self.port),
         .requestWasNotTaken(port: Self.port, after: .seconds(2)),
@@ -126,35 +134,13 @@ import Testing
         .failed(port: Self.port, status: -1, words: .mayHaveLanded),
         .answerWasNotReadable(port: Self.port, bytes: 42, words: .mayHaveLanded),
     ])
-    func aChannelThatFailsStopsTheRouteByName(why: Unreachable) async throws {
+    func aChannelThatFailsIsThrownByName(why: Unreachable) async throws {
         let inputMethod = AnInputMethod { _ in throw why }
-        let stopped = try await #require(throws: RouteStopped.self) {
+        let thrown = try await #require(throws: Unreachable.self) {
             try await Executor(insertingThrough: inputMethod)
-                .perform([.insertText(text: "héllo there")], following: [], since: .keyUp(.now))
+                .insert(Transcript(typed: "héllo there"), following: [], since: .keyUp(.now))
         }
 
-        #expect(stopped.cause as? Unreachable == why)
-        #expect(stopped.performed.isEmpty)
-    }
-
-    /// Everything that is not text at the cursor is refused before anything is sent, so a
-    /// list with one of them in it inserts nothing.
-    @Test func whatIsNotTextAtTheCursorIsRefusedByNameAndNothingIsSent() async throws {
-        let refused: [Action] = [
-            .activateApp(bundleID: Self.slack),
-            .openURL(url: URL(string: "https://example.com")!),
-            .runShortcut(name: "x", input: nil),
-            .pipe(executable: "/bin/cat", arguments: []),
-        ]
-        for action in refused {
-            let inputMethod = Self.inserting(into: Self.textEdit)
-            let refusal = try await #require(throws: NotAnInsert.self) {
-                try await Executor(insertingThrough: inputMethod)
-                    .perform([.insertText(text: "first"), action], following: [], since: .keyUp(.now))
-            }
-
-            #expect(refusal.action == action)
-            #expect(inputMethod.texts.isEmpty, "\(action) let the text before it through to the input method")
-        }
+        #expect(thrown == why)
     }
 }

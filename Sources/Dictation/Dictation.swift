@@ -5,10 +5,10 @@ import Synchronization
 /// front and opens the microphone, marking where the utterance begins on the ring, and the
 /// engine starts hearing it as it is captured, committing words at the cursor as they are
 /// confirmed; key-up ends it and closes the microphone again; and the rest of the transcript
-/// is routed and inserted while the next press can already begin.
+/// is inserted while the next press can already begin.
 ///
-/// [LAW:decomposition] Presses in, sessions out. The microphone, the engine, the
-/// router and the input method are values it is given, so the whole loop runs in a test
+/// [LAW:decomposition] Presses in, sessions out. The microphone, the engine and the
+/// input method are values it is given, so the whole loop runs in a test
 /// against a fake of each and the app's delegate only hands over the real ones. The
 /// hotkey is not among them: it is fed `press`, and what starts it is not this loop's
 /// concern. [LAW:composability]
@@ -57,7 +57,7 @@ public final class Dictation {
         /// went to, so the first names the one app all of them went to.
         public var description: String {
             let destination = performed.first.map { " into \($0.into.rawValue)" } ?? ""
-            return "heard \(transcript.words.count) words past \(String(format: "%.1f", transcript.quiet)) s of quiet \(Int(keyUpToTranscript / .milliseconds(1))) ms after key-up (\(duringPress); \(displaced)), \(performed.count) actions\(destination)"
+            return "heard \(transcript.words.count) words past \(String(format: "%.1f", transcript.quiet)) s of quiet \(Int(keyUpToTranscript / .milliseconds(1))) ms after key-up (\(duringPress); \(displaced)), \(performed.count) inserts\(destination)"
         }
     }
 
@@ -90,15 +90,10 @@ public final class Dictation {
     ///
     /// What the press showed is read once, at key-up: a pass or a commit that ends after it
     /// changes nothing that is read again.
-    ///
-    /// [LAW:types-are-the-program] A press whose mode waits for the whole transcript is one
-    /// that is stopped from the start: its runs are empty, so it commits nothing, by the same
-    /// path every press takes. [LAW:dataflow-not-control-flow]
     private final class Streaming: Sendable {
-        /// The confirmed words not yet handed out, made into what the mode makes of them.
+        /// The confirmed words not yet handed out.
         struct Run {
-            let actions: [Action]
-            let words: Int
+            let words: Transcript
             let since: Executor.Since
         }
 
@@ -117,8 +112,8 @@ public final class Dictation {
             var keyUp: ContinuousClock.Instant?
             var confirmed: [Transcript.Word] = []
             var cursor = ConfirmedCursor()
-            /// Nil once the press stops committing.
-            var asHeard: (@Sendable (Transcript) -> Action?)?
+            /// False once the press stops committing.
+            var committing = true
             /// Nil until the microphone is open, and for a press refused before it was.
             var hearing: Hearing?
             var performed: [Executor.Performed] = []
@@ -135,9 +130,9 @@ public final class Dictation {
         /// newest is all that is kept, since each run takes every word confirmed so far.
         let wakes: AsyncStream<Void>
 
-        init(since keyDown: HostTime, committing asHeard: (@Sendable (Transcript) -> Action?)?) {
+        init(since keyDown: HostTime) {
             self.keyDown = .now - (HostTime.now - keyDown)
-            state = Mutex(State(asHeard: asHeard))
+            state = Mutex(State())
             (wakes, wake) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
         }
 
@@ -173,23 +168,23 @@ public final class Dictation {
             if let missing = state.withLock({ $0.keyUp == nil ? $0.hearing?.missing : nil }), missing() != nil { stop() }
             return state.withLock { state in
                 let since: Executor.Since = state.keyUp.map { .keyUp($0) } ?? .keyDown(keyDown)
-                guard let asHeard = state.asHeard else { return Run(actions: [], words: 0, since: since) }
-                let run = state.cursor.advance(through: state.confirmed)
-                return Run(actions: asHeard(run).map { [$0] } ?? [], words: run.words.count, since: since)
+                // [LAW:dataflow-not-control-flow] A stopped press takes no words, and a run of
+                // no words inserts nothing, by the same path every run takes.
+                let run = state.cursor.advance(through: state.committing ? state.confirmed : [])
+                return Run(words: run, since: since)
             }
         }
 
-        /// What the transcript holds past every word already handed out as a run: all of it
-        /// for a mode that waits for the whole transcript.
+        /// What the transcript holds past every word already handed out as a run.
         func rest(of transcript: Transcript) -> Transcript {
             state.withLock { $0.cursor.advance(through: transcript.words) }
         }
 
         /// A run landed at the cursor.
-        func landed(_ run: Run, as performed: [Executor.Performed]) {
+        func landed(_ run: Run, as performed: Executor.Performed?) {
             state.withLock { state in
-                state.performed += performed
-                state.words += run.words
+                state.performed += performed.map { [$0] } ?? []
+                state.words += run.words.words.count
             }
         }
 
@@ -202,7 +197,7 @@ public final class Dictation {
         /// decode, which no one will read, stops: the engine goes back to whoever is waiting.
         func stop() {
             let decode = state.withLock { state in
-                state.asHeard = nil
+                state.committing = false
                 return state.hearing?.decode
             }
             decode?.cancel()
@@ -266,7 +261,6 @@ public final class Dictation {
     private let capture: AudioCapture
     private let transcriber: @Sendable @MainActor () async throws -> any Transcriber
     private let turns: EngineTurns
-    private let router: Router
     private let executor: Executor
     private let frontmost: @Sendable @MainActor () throws -> BundleID
     private let report: @Sendable @MainActor (Result<Session, any Error>) -> Void
@@ -286,7 +280,6 @@ public final class Dictation {
         capture: AudioCapture,
         transcriber: @escaping @Sendable @MainActor () async throws -> any Transcriber,
         turns: EngineTurns,
-        router: Router,
         executor: Executor,
         frontmost: @escaping @Sendable @MainActor () throws -> BundleID = TargetApp.frontmost,
         report: @escaping @Sendable @MainActor (Result<Session, any Error>) -> Void
@@ -294,7 +287,6 @@ public final class Dictation {
         self.capture = capture
         self.transcriber = transcriber
         self.turns = turns
-        self.router = router
         self.executor = executor
         self.frontmost = frontmost
         self.report = report
@@ -311,7 +303,7 @@ public final class Dictation {
             // and taken by every press, refused or not: a refused press lets go of it at once,
             // and a heard one when its decode stops. [LAW:dataflow-not-control-flow]
             let hold = turns.hold()
-            let streaming = Streaming(since: moment, committing: router.asHeard)
+            let streaming = Streaming(since: moment)
             do {
                 // The app in front before the microphone, so a reading that throws cannot
                 // leave a microphone open with no session to close it; it is one read of
@@ -368,10 +360,9 @@ public final class Dictation {
                 // never reaches here. The focused element's role is a synchronous call
                 // into another process, up to half a second of it, and this is the main
                 // actor: a press waits on it, and so does every window this app draws.
-                // A route that wants the role reads it off this thread.
                 let ended: Ending = switch (ending, lost) {
                 case (.lapsed, _): .lapsed(chord)
-                case (.released(let kind), nil): .released(Context(chord: chord, press: kind, frontmostApp: down.into, focusedElementRole: nil))
+                case (.released(let kind), nil): .released(Context(chord: chord, press: kind, frontmostApp: down.into))
                 case (.released, let lost?): .lost(chord, lost)
                 }
                 // A press that will not be inserted commits nothing more and has no use for
@@ -458,17 +449,17 @@ public final class Dictation {
         for await _ in streaming.wakes {
             let run = streaming.take()
             do {
-                streaming.landed(run, as: try await executor.perform(run.actions, following: streaming.landed.performed, since: run.since))
+                streaming.landed(run, as: try await executor.insert(run.words, following: streaming.landed.performed, since: run.since))
             } catch {
                 streaming.stop()
                 // A run is one insert, so none of it was done, and what stopped it is the cause.
-                return (error as? RouteStopped)?.cause ?? error
+                return error
             }
         }
         return nil
     }
 
-    /// Waits for the press's commits and its decode, then routes and inserts what was heard
+    /// Waits for the press's commits and its decode, then inserts what was heard
     /// and not yet committed. A press that will not be inserted is reported in its turn
     /// without waiting on its decode, which was told to stop and may still be waiting for
     /// the model to load.
@@ -488,8 +479,8 @@ public final class Dictation {
         do {
             let decoded = await heard.decode.value
             let transcript = try decoded.transcript.get()
-            let performed = try await executor.perform(router.actions(for: heard.streaming.rest(of: transcript), in: context), following: landed.performed, since: .keyUp(keyUp))
-            return Session(context: context, transcript: transcript, duringPress: heard.duringPress, keyUpToTranscript: decoded.at - keyUp, displaced: decoded.displaced, performed: landed.performed + performed)
+            let performed = try await executor.insert(heard.streaming.rest(of: transcript), following: landed.performed, since: .keyUp(keyUp))
+            return Session(context: context, transcript: transcript, duringPress: heard.duringPress, keyUpToTranscript: decoded.at - keyUp, displaced: decoded.displaced, performed: landed.performed + (performed.map { [$0] } ?? []))
         } catch {
             // [LAW:no-silent-failure] Whatever stopped the press, the report says how many of
             // its words are already at the cursor.

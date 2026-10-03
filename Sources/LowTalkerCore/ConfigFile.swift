@@ -137,97 +137,17 @@ private struct MicrophoneEntry: Decodable {
 
 /// One `[[modes]]` table.
 private struct ModeEntry: Decodable {
-    private enum CodingKeys: String, CodingKey { case name, chord, vocabulary, routes }
-
     let name: String
     let chord: KeyChord?
     let vocabulary: [Vocabulary.Term]?
-    let routes: [RouteEntry]?
 
-    /// Hand-written to refuse `routes = []`: a mode that claims the chord and nothing it
-    /// hears drops every utterance, and leaving the key out already says "dictate".
-    /// [LAW:no-silent-failure]
-    init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        name = try container.decode(String.self, forKey: .name)
-        chord = try container.decodeIfPresent(KeyChord.self, forKey: .chord)
-        vocabulary = try container.decodeIfPresent([Vocabulary.Term].self, forKey: .vocabulary)
-        routes = try container.decodeIfPresent([RouteEntry].self, forKey: .routes)
-        guard routes?.isEmpty != true else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .routes,
-                in: container,
-                debugDescription: "an empty list claims nothing; leave routes out to dictate"
-            )
-        }
-    }
-
-    /// [LAW:single-enforcer] The chord, each term, and every route arrived through their
-    /// own decoders, so what each may be is settled where those types live and is not
-    /// restated here.
+    /// [LAW:single-enforcer] The chord and each term arrived through their own decoders, so
+    /// what each may be is settled where those types live and is not restated here.
     ///
     /// [LAW:one-source-of-truth] A mode the file gives no chord listens for the default
     /// one, which is the chord `Config.default` names.
     var mode: Mode {
-        Mode(
-            name: name,
-            chord: chord ?? Hotkey.defaultChord,
-            vocabulary: Vocabulary(vocabulary ?? []),
-            // A mode that names no routes dictates, which is the only thing it could
-            // have meant.
-            router: routes.map { Router(routes: $0.map(\.route)) } ?? .dictation
-        )
-    }
-}
-
-/// One `[[modes.routes]]` table: what claims an utterance, and what becomes of it.
-private struct RouteEntry: Decodable {
-    let when: MatchEntry
-    let then: EmitEntry
-
-    var route: Route { Route(when: when.match, then: then.emit) }
-}
-
-/// `when = "always"`. A word, because a match that carries nothing is a word; a match
-/// that carries something becomes a table, the way `then` already is one.
-private struct MatchEntry: Decodable {
-    let match: Route.Match
-
-    init(from decoder: any Decoder) throws {
-        let name = try decoder.singleValueContainer().decode(String.self)
-        switch name {
-        case "always": match = .always
-        default: throw decoder.fault("\"\(name)\" is not something a route can match on")
-        }
-    }
-}
-
-/// `then = { insert = "focus" }`: a table naming exactly one thing to do. The key is
-/// required and strict decoding refuses any other, so neither asking for none nor
-/// asking for two is representable; command mode adds to this by adding keys.
-private struct EmitEntry: Decodable {
-    let emit: Route.Emit
-
-    private enum CodingKeys: String, CodingKey { case insert }
-
-    init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        emit = try container.decode(InsertEntry.self, forKey: .insert).emit
-    }
-}
-
-/// `insert = "focus"`: the cursor of the app in front, the one place the input method puts
-/// text. Anything else is refused here, where the file is read, so no route reaches a press
-/// it could only refuse.
-/// [LAW:parse-dont-validate]
-private struct InsertEntry: Decodable {
-    let emit = Route.Emit.insertTranscript
-
-    init(from decoder: any Decoder) throws {
-        guard let word = try? decoder.singleValueContainer().decode(String.self) else {
-            throw decoder.fault(#"insert is the word "focus", the cursor of the app in front: the one place the input method puts text"#)
-        }
-        guard word == "focus" else { throw decoder.fault("\"\(word)\" is not somewhere text can be inserted") }
+        Mode(name: name, chord: chord ?? Hotkey.defaultChord, vocabulary: Vocabulary(vocabulary ?? []))
     }
 }
 
