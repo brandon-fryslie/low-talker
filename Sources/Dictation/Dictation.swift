@@ -264,7 +264,10 @@ public final class Dictation {
     private let executor: Executor
     private let frontmost: @Sendable @MainActor () throws -> BundleID
     private let report: @Sendable @MainActor (Result<Session, any Error>) -> Void
+    private let showing: @Sendable @MainActor (Activity) -> Void
     private var press: Press = .up
+    /// Presses ended and not yet reported.
+    private var unreported = 0
     /// The decode of the latest press, which the next press's decode waits out before it
     /// takes the engine. Nil until the first press.
     private var latestDecode: Task<Decoded, Never>?
@@ -275,14 +278,16 @@ public final class Dictation {
     /// this loop has. `turns` is the engine's owner, which every press holds from key-down
     /// until its transcript is out, so served callers wait for the speaker rather than the
     /// speaker for them. [LAW:dataflow-not-control-flow] `report` hears every session's
-    /// outcome on the main actor, in the order the presses came.
+    /// outcome on the main actor, in the order the presses came. `showing` hears the loop's
+    /// activity each time a press begins or ends and each time an outcome is reported.
     public init(
         capture: AudioCapture,
         transcriber: @escaping @Sendable @MainActor () async throws -> any Transcriber,
         turns: EngineTurns,
         executor: Executor,
         frontmost: @escaping @Sendable @MainActor () throws -> BundleID = TargetApp.frontmost,
-        report: @escaping @Sendable @MainActor (Result<Session, any Error>) -> Void
+        report: @escaping @Sendable @MainActor (Result<Session, any Error>) -> Void,
+        showing: @escaping @Sendable @MainActor (Activity) -> Void
     ) {
         self.capture = capture
         self.transcriber = transcriber
@@ -290,6 +295,19 @@ public final class Dictation {
         self.executor = executor
         self.frontmost = frontmost
         self.report = report
+        self.showing = showing
+    }
+
+    private var activity: Activity {
+        if case .down = press { return .listening }
+        return unreported > 0 ? .transcribing : .idle
+    }
+
+    /// Reports a press's outcome, and then shows that it is no longer on its way.
+    private func settle(_ outcome: Result<Session, any Error>) {
+        report(outcome)
+        unreported -= 1
+        showing(activity)
     }
 
     /// The hotkey's handler. The detector pairs every `began` with one `ended`, a lapse
@@ -327,10 +345,13 @@ public final class Dictation {
                 hold.release()
                 press = .refused(error)
             }
+            showing(activity)
         case .ended(let chord, let ending):
             let keyUp = ContinuousClock.now
             let open = press
             press = .up
+            unreported += 1
+            showing(activity)
             // What there is to hear, or the reason there is nothing. One value, so a
             // press that was refused at key-down and one that was heard leave here by
             // the same path: the failure is thrown inside the queued operation, which
@@ -379,21 +400,21 @@ public final class Dictation {
                 // queue that orders the inserts orders the telling of it too, and a
                 // drain that waited for the one has waited for the other.
                 // [LAW:no-ambient-temporal-coupling] [LAW:single-enforcer]
-                try sessions.submit { [report] in
+                try sessions.submit {
                     let outcome: Result<Session, any Error>
                     do {
                         outcome = .success(try await self.hear(heard, since: keyUp))
                     } catch {
                         outcome = .failure(error)
                     }
-                    await report(outcome)
+                    await self.settle(outcome)
                 }
             } catch {
                 // The operation reports its own outcome; only the queue's own refusal
                 // to accept it reaches here, and then nothing will ever read the decode, so
                 // it is stopped and lets go of the engine as it does. [LAW:no-silent-failure]
                 if case .success(let heard) = heard { heard.decode.cancel() }
-                report(.failure(error))
+                settle(.failure(error))
             }
         }
     }

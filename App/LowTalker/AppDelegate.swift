@@ -49,6 +49,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Lazy so it can count from `launched`; only `show(_:)` sets it, which redraws the icon.
     private lazy var engineReadiness: EngineReadiness = .preparing(nil, since: launched)
     private var hotkeyStatus = ""
+    /// What the loop is doing with presses, which the icon shows over the engine's readiness.
+    private var activity: Dictation.Activity = .idle
 
     /// When this process began, which every readout of the engine's wait counts from.
     private let launched = ContinuousClock.now
@@ -66,6 +68,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         engineReadiness = readiness
         drawStatusIcon()
         log.info("model: \(readiness.readout(at: .now), privacy: .public)")
+    }
+
+    private func show(_ activity: Dictation.Activity) {
+        self.activity = activity
+        drawStatusIcon()
+        log.info("activity: \(String(describing: activity), privacy: .public)")
     }
 
     private func showHotkeyStatus(_ status: String) {
@@ -152,8 +160,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func drawStatusIcon() {
         // Named, so the icon can be found by a reader with VoiceOver and by an agent
         // reading the bar over Accessibility.
-        let description = engineReadiness.iconDescription(for: AppIdentity.displayName)
-        switch engineReadiness.statusGlyph() {
+        let description = activity.iconDescription(for: AppIdentity.displayName, over: engineReadiness)
+        switch activity.glyph(over: engineReadiness) {
         case .mark:
             // The asset catalog marks it a template, so the bar tints it like its neighbours.
             // A copy, because the named image is shared and the description is this state's.
@@ -223,7 +231,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // The words cross to the input method, which commits them at the
             // cursor through the text input system.
             executor: Executor(insertingThrough: InputMethodInserter()),
-            report: { [unowned self] in report($0) }
+            report: { [unowned self] in report($0) },
+            showing: { [unowned self] in show($0) }
         )
         listening = Listening(hotkey: hotkey, dictation: dictation)
         // The hotkey goes up only over an input method that installed: a hotkey over one that
@@ -520,6 +529,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // A refused wait is reported and the quit still granted: an app that cannot
             // be quit would be the worse failure of the two. [LAW:no-silent-failure]
             do { try await listening?.dictation.finish() } catch { report(.failure(error)) }
+            // The microphone is let go last, once no session can want it, so a resting mode
+            // that holds it open does not hold it into the exit.
+            capture.stop()
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
