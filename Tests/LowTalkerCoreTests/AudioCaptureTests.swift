@@ -969,6 +969,67 @@ private struct Authorized: MicrophoneAuthority {
         #expect(isListening(capture))
     }
 
+    /// Every device report capture answers, as the cause and a word for what it did, so a
+    /// test can say which report was answered and which was found already answered.
+    @MainActor private final class Reports {
+        private(set) var said: [String] = []
+        func record(_ report: DeviceReport) {
+            let answer = switch report.answer {
+            case .outdated: "outdated"
+            case .leftForTheKeyUp: "left for the key-up"
+            case .alreadyOnIt: "already on it"
+            case .readied: "readied"
+            case .launched(.success): "launched"
+            case .launched(.failure(let error)): "failed: \(error)"
+            }
+            said.append("\(report.cause): \(answer)")
+        }
+    }
+
+    /// One unplug is two reports and one answer, and the log says both: the report that
+    /// readied a microphone on the new default, and the other one finding nothing left to do.
+    /// A recovery that leaves no trace is indistinguishable from one that never came.
+    @Test(arguments: UnplugReports.allCases)
+    func anUnplugWhileIdleReportsOneAnswerAndOneReportFoundAnswered(_ order: UnplugReports) throws {
+        let hardware = FakeHardware()
+        let reports = Reports()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin, reporting: { reports.record($0) })
+        try capture.start(grant, atRest: .shut)
+
+        try unplugTheDefaultInput(hardware, reportedIn: order)
+        switch order {
+        case .defaultFirst: #expect(reports.said == ["defaultInputChanged: readied", "boundDeviceChanged: outdated"])
+        case .deviceFirst: #expect(reports.said == ["boundDeviceChanged: readied", "defaultInputChanged: already on it"])
+        }
+    }
+
+    /// The only device going away under a held microphone is reported as the relaunch that
+    /// failed, and the device that appears after as the relaunch that worked: the outage and
+    /// its end, both in the log.
+    @Test func aHeldMicrophoneThatLostItsOnlyDeviceReportsTheFailureAndTheRecovery() throws {
+        let hardware = FakeHardware(launches: [nil, NoDevice()])
+        let reports = Reports()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin, reporting: { reports.record($0) })
+        try capture.start(grant, atRest: .open)
+
+        hardware.engines[0].input.onStale()
+        try hardware.changeDefaultInput()
+        #expect(reports.said == ["boundDeviceChanged: failed: NoDevice()", "defaultInputChanged: launched"])
+        #expect(isListening(capture))
+    }
+
+    /// A default-input change under a press is reported as left for its key-up, so a press
+    /// that went on recording on the old device says why in the log.
+    @Test func aDefaultInputChangedMidPressIsReportedAsLeftForTheKeyUp() throws {
+        let hardware = FakeHardware()
+        let reports = Reports()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin, reporting: { reports.record($0) })
+        _ = try opened(capture)
+
+        try hardware.changeDefaultInput()
+        #expect(reports.said == ["defaultInputChanged: left for the key-up"])
+    }
+
     /// Quitting gives the device back, however the run was holding it.
     @Test func stopGivesUpAHeldMicrophone() throws {
         let hardware = FakeHardware()
