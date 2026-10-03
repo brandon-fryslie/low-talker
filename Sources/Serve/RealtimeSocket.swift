@@ -150,14 +150,14 @@ struct RealtimeSocket {
             if let open = buffer, open.bytes + bytes.count > held.share {
                 buffer = startOver(open, transcriber: transcriber, &activity, &items)
             }
-            let open = buffer ?? self.open(transcriber, &activity, &items)
+            let open = buffer ?? self.open(after: last?.answered, transcriber, &activity, &items)
             open.append(bytes)
             buffer = open
         }
 
-        /// A new item for appends to go to, heard once the last one committed is answered.
-        private func open(_ transcriber: any Transcriber, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) -> Buffer {
-            let opened = Buffer(transcriber: transcriber, vocabulary: session.vocabulary, outbox: outbox, keeping: held.kept, after: last?.answered)
+        /// A new item for appends to go to, heard once `previous` has ended.
+        private func open(after previous: Task<Void, Never>?, _ transcriber: any Transcriber, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) -> Buffer {
+            let opened = Buffer(transcriber: transcriber, vocabulary: session.vocabulary, outbox: outbox, keeping: held.kept, after: previous)
             activity.items += 1
             let transcript = opened.transcript
             items.addTask {
@@ -170,17 +170,22 @@ struct RealtimeSocket {
         /// audio. No turn the client heard ended in it, since it committed none of it, and a
         /// speaker who began just before is in the audio kept. What the let-go item held
         /// beyond that is free once its transcribe has ended, which cancelling it brings
-        /// about at its next pass, or at once while it waits its turn.
+        /// about at its next pass, or at once while it waits its turn. The new item is heard
+        /// only then, and once the last one committed is answered.
         private func startOver(_ item: Buffer, transcriber: any Transcriber, _ activity: inout RealtimeActivity, _ items: inout DiscardingTaskGroup) -> Buffer {
             let kept = item.letGo()
-            let reopened = open(transcriber, &activity, &items)
-            reopened.append(kept)
-            let (held, freed, transcript) = (held, item.bytes - reopened.bytes, item.transcript)
+            let (held, freed, transcript, previous) = (held, item.bytes - kept.count, item.transcript, last?.answered)
             activity.letGo(seconds: RealtimeAudio.duration(bytes: freed))
-            items.addTask {
+            // [LAW:no-ambient-temporal-coupling] The new item's turn follows the release, so
+            // a transcribe that has started proves what the item before it held is free.
+            let turn = Task {
                 _ = await transcript.result
                 held.release(bytes: freed, items: 0)
+                await previous?.value
             }
+            items.addTask { await turn.value }
+            let reopened = open(after: turn, transcriber, &activity, &items)
+            reopened.append(kept)
             return reopened
         }
 
@@ -276,7 +281,8 @@ private final class Buffer {
     /// What appends carry: PCM16 at 24 kHz.
     private let format: AVAudioFormat
 
-    /// `after` is the item before this one, once it is answered.
+    /// `after` ends when this item's turn comes: the item before it answered, or let go and
+    /// its audio free.
     init(transcriber: any Transcriber, vocabulary: Vocabulary, outbox: Outbox, keeping: Int, after previous: Task<Void, Never>?) {
         newest = Newest(capacity: keeping)
         // [LAW:no-silent-failure] A fixed pair of formats AVFoundation converts between;
