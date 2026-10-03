@@ -1,4 +1,5 @@
 import AppKit
+import Bench
 import Carbon
 import Dictation
 import Identity
@@ -212,7 +213,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let hotkey = Hotkey(listeningFor: config)
         let dictation = Dictation(
             capture: capture,
-            transcriber: { [unowned self] in try await engine.value },
+            // A press asks the bench first: while a run holds the Neural Engine, the press is
+            // refused and says why, so neither is measured against the other.
+            transcriber: { [unowned self] in
+                try benchRuns.admitPress()
+                return try await engine.value
+            },
             turns: turns,
             router: Router(routes: [.dictation]),
             // The words cross to the input method, which commits them at the
@@ -335,6 +341,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openSetUp() {
         setUp.show()
+    }
+
+    // MARK: - the bench
+
+    /// The one bench run at a time, which presses ask before they take the engine. It holds
+    /// the app's turns for a run, so a served request waits for it as for a press.
+    private lazy var benchRuns = BenchRuns(turns: turns)
+
+    private lazy var bench = BenchWindow(runs: benchRuns, carried: ModelStore.carried(by: .main))
+
+    @objc private func openBench() {
+        bench.show()
     }
 
     /// The notices the licenses of everything the bundle ships require, which the build
@@ -637,6 +655,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(readout("Hotkey: \(hotkeyStatus)"))
         for reason in unheard { menu.addItem(readout("    Not heard now: \(reason)")) }
         lastFailure.map { menu.addItem(readout($0)) }
+        if benchRuns.isRunning { menu.addItem(readout("A benchmark is running: presses are refused until it ends")) }
         // Every requirement, met or not, and its step under it as the lines it was
         // written in - one item per line, so nothing here wraps text the requirement
         // already broke. A list that showed only what was missing would leave a reader
@@ -650,6 +669,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let left = readiness.unmet.count
         let stepsLeft = left == 0 ? "" : " (\(left) left)"
         menu.addItem(withTitle: "\(GuidedSetup.title)\(stepsLeft)", action: #selector(openSetUp), keyEquivalent: "")
+        menu.addItem(withTitle: "Benchmark…", action: #selector(openBench), keyEquivalent: "")
         serving.map { serving in
             let item = menu.addItem(withTitle: "Serve Transcription", action: #selector(toggleServing), keyEquivalent: "")
             item.state = serving.chosen ? .on : .off
@@ -677,3 +697,6 @@ struct BundleCarriesNoModel: Error, CustomStringConvertible {
             + "it was built without one. Build it with `make app`, which puts the model in."
     }
 }
+
+/// The refusal says only that a run is going, never a word anyone dictated.
+extension BenchmarkRunning: @retroactive WordFree {}

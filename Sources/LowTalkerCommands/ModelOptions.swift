@@ -53,9 +53,6 @@ extension ModelSource: ExpressibleByArgument {
     public var defaultValueDescription: String { description }
 }
 
-/// [LAW:parse-dont-validate] `--model` is parsed into a name at the command line, so a
-/// value that is not one path step is refused before any path is built from it.
-extension ModelName: ExpressibleByArgument {}
 
 /// What the speaker is expected to say, for every command that hears: the
 /// vocabulary a mode would supply, given by hand.
@@ -96,16 +93,3 @@ struct StandardError: TextOutputStream {
     }
 }
 
-/// [LAW:one-source-of-truth] Every number a command writes to stdout comes through
-/// here, pinned to a locale no machine setting can change, so output diffs across
-/// machines.
-func fixed(_ value: Double, places: Int) -> String {
-    value.formatted(.number.precision(.fractionLength(places)).locale(Locale(identifier: "en_US_POSIX")))
-}
-
-extension Duration {
-    /// Seconds to the millisecond, the resolution a latency table needs.
-    var seconds: String {
-        fixed(Double(components.seconds) + Double(components.attoseconds) / 1e18, places: 3)
-    }
-}

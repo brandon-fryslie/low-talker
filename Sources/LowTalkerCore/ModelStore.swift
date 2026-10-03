@@ -93,6 +93,16 @@ public struct ModelStore: Sendable {
         }
     }
 
+    /// The models whose weights this store has recorded, by name, in order: what a bench can
+    /// ask it for. Whether each is whole is `installedModel`'s to say as it loads. Throws for
+    /// a folder that has never been a store, which has no record to list.
+    public func recordedModels() throws -> [ModelName] {
+        try FileManager.default.contentsOfDirectory(atPath: directory.appending(path: "installed").path)
+            .filter { $0.hasSuffix(".json") }
+            .compactMap { ModelName(rawValue: String($0.dropLast(".json".count))) }
+            .sorted { $0.rawValue < $1.rawValue }
+    }
+
     /// What one part's manifest says about its files.
     package enum Recording {
         case whole(Manifest)

@@ -1,4 +1,5 @@
 import ArgumentParser
+import Bench
 import Foundation
 import LowTalkerCore
 import ModelInstall

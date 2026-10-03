@@ -1,4 +1,5 @@
 import ArgumentParser
+import Bench
 import Foundation
 import LowTalkerCore
 import ModelInstall
@@ -43,64 +44,31 @@ struct BenchCommand: AsyncParsableCommand {
     @OptionGroup var source: SourceOptions
     @OptionGroup var expected: VocabularyOptions
 
-    func validate() throws {
-        guard runs >= 1 else { throw ValidationError("--runs must be at least 1.") }
-    }
-
     func run() async throws {
         let fixtures = try Fixture.load(directory: fixtures)
         let store = try location.store()
-        var stderr = StandardError()
+        let plan = try BenchPlan(models: models, arrivals: arrivals, servings: servings, runs: runs, vocabulary: expected.vocabulary)
         var header = true
-        for model in models {
-            let reporter = PhaseReporter()
-            print("model \(model)", to: &stderr)
-            let report = try await LatencyHarness.measure(fixtures, arrivals: arrivals, servings: servings, reruns: UInt(runs - 1), expecting: expected.vocabulary) {
-                let turns = EngineTurns()
-                let engine = try await WhisperKitTranscriber.load(model, in: store, from: source.source, turns: turns, phase: reporter.report)
-                return LatencyHarness.Engine(dictation: engine, served: engine.served, turns: turns)
-            }
-            for result in report.fixtures {
-                print("  \(result.name) \(result.arrival.rawValue) \(result.serving.rawValue): heard \"\(result.transcript.text)\", \(result.wordErrorRate)", to: &stderr)
-                let row = Self.row(model: model, load: report.load, result: result)
-                // [LAW:one-source-of-truth] The header is the first row's names, so a
-                // column cannot be titled one thing and filled with another.
-                if header { print(row.map(\.name).joined(separator: "\t")) }
+        // [LAW:one-source-of-truth] The loop and the table are the app's bench; only the load,
+        // which may install from a source, and the printing are this command's.
+        try await Bench.measure(fixtures, plan: plan, load: { [source] model in
+            let turns = EngineTurns()
+            let engine = try await WhisperKitTranscriber.load(model, in: store, from: source.source, turns: turns, phase: PhaseReporter().report)
+            return LatencyHarness.Engine(dictation: engine, served: engine.served, turns: turns)
+        }) { event in
+            var stderr = StandardError()
+            switch event {
+            case .loading(let model):
+                print("model \(model)", to: &stderr)
+            case .row(let row):
+                print("  \(row.narration)", to: &stderr)
+                if header { print(row.header) }
                 header = false
-                print(row.map(\.value).joined(separator: "\t"))
-                // A row can be minutes apart from the next; a file watcher sees each as
-                // it lands rather than all of them at exit.
+                print(row.line)
+                // A row can be minutes apart from the next; a file watcher sees each as it
+                // lands rather than all of them at exit.
                 fflush(stdout)
             }
         }
     }
-
-    /// One table row: every number to three places, every duration in seconds.
-    static func row(model: ModelName, load: Duration, result: LatencyReport.FixtureResult) -> [(name: String, value: String)] {
-        let wer = result.wordErrorRate
-        return [
-            ("model", model.description),
-            ("fixture", result.name),
-            ("delivery", result.arrival.rawValue),
-            ("serving", result.serving.rawValue),
-            ("audio_s", fixed(result.audio, places: 3)),
-            ("load_s", load.seconds),
-            ("first_s", result.first.keyUpToTranscript.seconds),
-            ("median_s", result.medianKeyUpToTranscript.seconds),
-            ("partial_s", result.medianHoldToFirstText.seconds),
-            ("wer", fixed(wer.rate, places: 3)),
-            ("substituted", String(wer.substitutions)),
-            ("dropped", String(wer.deletions)),
-            ("added", String(wer.insertions)),
-            ("reference_words", String(wer.referenceCount)),
-            ("served_cancelled", String(result.served.cancelled)),
-            ("served_deferred", String(result.served.deferred)),
-            ("served_changed", String(result.served.changed)),
-        ]
-    }
 }
-
-/// [LAW:parse-dont-validate] `--delivery` is parsed into a case at the command line,
-/// so a spelling that is neither is refused before any hold is simulated.
-extension LatencyHarness.Arrival: ExpressibleByArgument {}
-extension LatencyHarness.Serving: ExpressibleByArgument {}
