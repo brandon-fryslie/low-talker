@@ -64,17 +64,11 @@ jobs:
           status=$(spctl --status)
           [ "$status" = "assessments enabled" ] || { echo "Gatekeeper: $status" >&2; exit 1; }
 
-      # One keychain for the run: it holds the dev identity, the Developer ID identities and
-      # the notary profile.
+      # One keychain for the run: it holds the Developer ID identities and the notary profile.
       - name: Create an unlocked default keychain
         run: |
           keychain=$(scripts/runner-keychain release)
           echo "RELEASE_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
-
-      # The identity project.yml names for every bundle; scripts/sign-release replaces it with
-      # the Developer ID one through SIGNING_IDENTITY.
-      - name: Create the dev signing identity
-        run: make signing-identity
 
       # The certificates were issued by Apple's first Developer ID intermediate, which the
       # runner image does not carry, and a signature has to chain through it. Pinned by hash,

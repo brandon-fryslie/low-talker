@@ -7,9 +7,6 @@ name: Model cache
 on:
   push:
     branches: [master]
-  # A run on a branch saves under that branch, which no tag can restore, so it proves the
-  # steps rather than filling the cache.
-  workflow_dispatch:
 
 permissions:
   contents: read

@@ -128,7 +128,7 @@ variants:
 # This is why `check-docs` is a recipe line here rather than a prerequisite: a
 # prerequisite would run before `swift build`, against a stale CLI or none.
 #
-# Signing last is what makes a test run safe to leave behind. Every link SwiftPM performs
+# Signing straight after the tests is what makes a test run safe to leave behind. Every link SwiftPM performs
 # ad-hoc signs the product, and the CLI's signing identifier is what the Neural Engine keys
 # its compiled model by, so without this a green run leaves the next `lowtalker` paying the
 # minutes-long specialization again. Unconditional, because a recipe cannot see what SwiftPM
@@ -143,8 +143,8 @@ test:
 	swift build
 	$(MAKE) check-docs
 	swift test
-	$(MAKE) check-licenses
 	$(MAKE) cli
+	$(MAKE) check-licenses
 
 # [LAW:one-source-of-truth] The onboarding rows' readings are a vocabulary README.md keeps a
 # copy of: each way macOS can answer for the microphone, and the input method switched on or

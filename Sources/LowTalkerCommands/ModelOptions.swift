@@ -6,9 +6,9 @@ import Synchronization
 
 /// Which store, for every command that touches models.
 ///
-/// [LAW:one-source-of-truth] exception: `model-tool` parses these flags with its own copy,
-/// since an executable cannot import this library; this one goes with the CLI on
-/// low-no-cli-hpk.c0i.
+/// [LAW:one-source-of-truth] exception: `model-tool` keeps its own copy of these options,
+/// the `--from` parser and `PhaseReporter` rather than link this library, which
+/// low-no-cli-hpk.c0i deletes along with this copy.
 ///
 /// [LAW:one-source-of-truth] The default store is the one `make app` copies each bundle's
 /// model out of, so a download from the terminal is what the next build carries. The app
