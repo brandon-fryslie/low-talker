@@ -896,13 +896,13 @@ extension Result {
         let gate = Gate()
         let rig = try Rig(hearing: FakeTranscriber { _ in await gate.wait(); return Transcript(typed: "a") })
         rig.dictation.press(.began(Rig.rightOption, at: rig.now))
-        #expect(rig.shown.activities == [.listening(heard: "")])
+        #expect(rig.shown.activities == [.listening(heard: Transcript(words: []))])
         rig.speak([1, 2, 3])
         rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
-        #expect(rig.shown.activities == [.listening(heard: ""), .transcribing])
+        #expect(rig.shown.activities == [.listening(heard: Transcript(words: [])), .transcribing])
         gate.open()
         _ = try await rig.session()
-        #expect(rig.shown.activities == [.listening(heard: ""), .transcribing, .idle])
+        #expect(rig.shown.activities == [.listening(heard: Transcript(words: [])), .transcribing, .idle])
     }
 
     /// While the key is down, what the press's passes read is shown as they read it, and a
@@ -915,10 +915,10 @@ extension Result {
         rig.speak([2])
         rig.speak([3])
         #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { engine.hearing == [1, 2, 3] })
-        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.shown.activities.last == .listening(heard: "hello") })
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.shown.activities.last == .listening(heard: Transcript(typed: "hello")) })
         rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
         _ = try await rig.session()
-        #expect(rig.shown.activities == [.listening(heard: ""), .listening(heard: "hello"), .transcribing, .idle])
+        #expect(rig.shown.activities == [.listening(heard: Transcript(words: [])), .listening(heard: Transcript(typed: "hello")), .transcribing, .idle])
     }
 
     /// A press refused its microphone is never shown as listening, and its failure, once
@@ -937,22 +937,23 @@ extension Result {
         let rig = try Rig(hearing: FakeTranscriber { _ in await gate.wait(); return Transcript(typed: "a") })
         rig.hold()
         rig.dictation.press(.began(Rig.rightOption, at: rig.now))
-        #expect(rig.shown.activities == [.listening(heard: ""), .transcribing, .listening(heard: "")])
+        #expect(rig.shown.activities == [.listening(heard: Transcript(words: [])), .transcribing, .listening(heard: Transcript(words: []))])
         rig.speak([4, 5])
         rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
         gate.open()
         _ = try await rig.session()
         _ = try await rig.session()
-        #expect(rig.shown.activities == [.listening(heard: ""), .transcribing, .listening(heard: ""), .transcribing, .idle])
+        #expect(rig.shown.activities == [.listening(heard: Transcript(words: [])), .transcribing, .listening(heard: Transcript(words: [])), .transcribing, .idle])
+    }
+
+    /// An activity logs without the words it carries, counting them as the transcript does.
+    @Test func anActivityDescribesItselfWithoutTheWords() {
+        #expect("\(Dictation.Activity.listening(heard: Transcript(typed: "hello there")))" == "listening, 2 words heard")
+        #expect("\(Dictation.Activity.transcribing)" == "transcribing")
     }
 
     /// The icon is the press's while there is one and the engine's otherwise, except that a
     /// press ended before the engine is ready shows the wait it is in.
-    /// An activity logs without the words it carries.
-    @Test func anActivityDescribesItselfWithoutTheWords() {
-        #expect("\(Dictation.Activity.listening(heard: "hello there"))" == "listening, 2 words heard")
-        #expect("\(Dictation.Activity.transcribing)" == "transcribing")
-    }
 
     @Test func theIconIsTheActivityOverTheEnginesReadiness() {
         let ready = EngineReadiness.ready(.default, after: .seconds(2))
@@ -960,8 +961,8 @@ extension Result {
         let failed = EngineReadiness.failed("no model")
         #expect(Dictation.Activity.idle.glyph(over: failed) == failed.statusGlyph())
         #expect(Dictation.Activity.idle.iconDescription(for: "L", over: failed) == failed.iconDescription(for: "L"))
-        #expect(Dictation.Activity.listening(heard: "hi").glyph(over: failed) == .symbol("waveform"))
-        #expect(Dictation.Activity.listening(heard: "hi").iconDescription(for: "L", over: preparing) == "L: listening")
+        #expect(Dictation.Activity.listening(heard: Transcript(typed: "hi")).glyph(over: failed) == .symbol("waveform"))
+        #expect(Dictation.Activity.listening(heard: Transcript(typed: "hi")).iconDescription(for: "L", over: preparing) == "L: listening")
         #expect(Dictation.Activity.transcribing.glyph(over: ready) == .symbol("text.cursor"))
         #expect(Dictation.Activity.transcribing.iconDescription(for: "L", over: ready) == "L: transcribing")
         #expect(Dictation.Activity.transcribing.glyph(over: preparing) == .symbol("hourglass"))

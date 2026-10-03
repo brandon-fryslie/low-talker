@@ -1,5 +1,6 @@
 import AppKit
 import Dictation
+import LowTalkerCore
 
 /// The small panel near the bottom of the screen while a press is on its way: listening,
 /// with what the engine has read of the press so far, then transcribing, then gone once the
@@ -27,6 +28,12 @@ final class HUD {
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.isReleasedWhenClosed = false
+        panel.contentView = background
+        return panel
+    }()
+
+    /// The panel's whole face, laid out at the panel's one width.
+    private lazy var background: NSVisualEffectView = {
         let background = NSVisualEffectView()
         background.material = .hudWindow
         background.blendingMode = .behindWindow
@@ -43,8 +50,7 @@ final class HUD {
             content.bottomAnchor.constraint(equalTo: background.bottomAnchor),
             content.widthAnchor.constraint(equalToConstant: Self.width),
         ])
-        panel.contentView = background
-        return panel
+        return background
     }()
 
     private lazy var content: NSStackView = {
@@ -76,21 +82,24 @@ final class HUD {
         switch activity {
         case .idle:
             panel.orderOut(nil)
-        case .listening(let words):
-            draw(state: "Listening", heard: words)
+        case .listening(let heard):
+            draw(state: "Listening", heard: heard)
         case .transcribing:
-            draw(state: "Transcribing", heard: "")
+            draw(state: "Transcribing", heard: Transcript(words: []))
         }
     }
 
     /// The panel with these lines, centred low on the screen the person is working on.
-    private func draw(state: String, heard: String) {
+    private func draw(state: String, heard: Transcript) {
         self.state.stringValue = state
-        self.heard.stringValue = heard
+        // The first word carries the space the engine put before it, which a line has no use for.
+        self.heard.stringValue = String(heard.text.drop(while: \.isWhitespace))
         // A press with nothing read yet shows only its state, rather than an empty line.
-        self.heard.isHidden = heard.isEmpty
-        let size = content.fittingSize
-        let screen = (NSScreen.main ?? NSScreen.screens[0]).visibleFrame
+        self.heard.isHidden = heard.isBlank
+        // With no display attached there is nowhere for the panel to be.
+        guard let screen = NSScreen.main?.visibleFrame else { return panel.orderOut(nil) }
+        // Measured through the panel's face, whose constraints hold the content to its width.
+        let size = background.fittingSize
         panel.setFrame(NSRect(x: screen.midX - size.width / 2, y: screen.minY + screen.height * 0.12, width: size.width, height: size.height), display: true)
         panel.orderFrontRegardless()
     }

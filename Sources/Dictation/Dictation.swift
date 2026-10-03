@@ -112,7 +112,7 @@ public final class Dictation {
             var keyUp: ContinuousClock.Instant?
             var confirmed: [Transcript.Word] = []
             /// Everything the latest pass read, confirmed then tentative.
-            var text = ""
+            var heard = Transcript(words: [])
             var cursor = ConfirmedCursor()
             /// False once the press stops committing.
             var committing = true
@@ -143,8 +143,8 @@ public final class Dictation {
         }
 
         /// Everything the latest pass read.
-        var text: String {
-            state.withLock { $0.text }
+        var heard: Transcript {
+            state.withLock { $0.heard }
         }
 
         /// The microphone is open and the decode begun.
@@ -159,7 +159,7 @@ public final class Dictation {
                 state.repunctuated = partial.repunctuated
                 state.firstWords = state.firstWords ?? (partial.text.isEmpty ? nil : now - keyDown)
                 state.confirmed = partial.confirmed.words
-                state.text = partial.text
+                state.heard = Transcript(words: partial.confirmed.words + partial.tentative.words)
             }
             wake.yield()
             read.yield()
@@ -317,7 +317,7 @@ public final class Dictation {
     }
 
     private var activity: Activity {
-        if case .down(let open) = press { return .listening(heard: open.streaming.text) }
+        if case .down(let open) = press { return .listening(heard: open.streaming.heard) }
         return unreported > 0 ? .transcribing : .idle
     }
 

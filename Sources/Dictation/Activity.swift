@@ -12,7 +12,7 @@ extension Dictation {
         /// A press's microphone is open, and `heard` is everything the engine has read of it
         /// so far, confirmed then tentative. Wins over `transcribing`: the press being spoken
         /// is the one the person is watching for.
-        case listening(heard: String)
+        case listening(heard: Transcript)
         /// A press has ended and its outcome is not yet reported.
         case transcribing
 
@@ -52,7 +52,7 @@ extension Dictation {
         public var description: String {
             switch self {
             case .idle: "idle"
-            case .listening(let heard): "listening, \(heard.split(whereSeparator: \.isWhitespace).count) words heard"
+            case .listening(let heard): "listening, \(heard.words.count) words heard"
             case .transcribing: "transcribing"
             }
         }

@@ -61,7 +61,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// nobody has open is no way to measure a launch, and no way for an agent to check
     /// what the app is showing without a screen. [LAW:verifiable-goals]
     private let log = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "engine")
-    /// One line per press: what was heard, how long after key-up, and what was inserted.
+    /// Each press's activity as it changes, then one line for its outcome: what was heard, how
+    /// long after key-up, and what was inserted.
     private let sessions = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "dictation")
 
     /// [LAW:one-source-of-truth] Every engine status passes through here, so the
