@@ -36,6 +36,8 @@ final class Rig {
     /// is, this says whether one has come at all - the difference a `finish` that
     /// returned before its session was reported would show.
     let reported = Flag()
+    /// Every activity the loop has shown, in order.
+    let shown = Shown()
 
     init(
         transcriber: @escaping @Sendable @MainActor () async throws -> any Transcriber,
@@ -50,6 +52,7 @@ final class Rig {
         let (stream, feed) = AsyncStream.makeStream(of: Result<Dictation.Session, any Error>.self)
         reports = stream
         let reported = reported
+        let shown = shown
         dictation = Dictation(
             capture: capture,
             transcriber: transcriber,
@@ -59,7 +62,8 @@ final class Rig {
             report: { outcome in
                 reported.raise()
                 feed.yield(outcome)
-            }
+            },
+            showing: { shown.activities.append($0) }
         )
     }
 
@@ -127,6 +131,11 @@ final class Rig {
     func session() async throws -> Dictation.Session {
         try await report().get()
     }
+}
+
+@MainActor
+final class Shown {
+    var activities: [Dictation.Activity] = []
 }
 
 extension Result {
@@ -879,5 +888,62 @@ extension Result {
         rig.hold(speaking: [3, 4])
         #expect(try await rig.session().transcript.text == "a")
         #expect(rig.inputMethod.inserted == ["a"])
+    }
+
+    /// The status item's activity: listening from key-down, transcribing from key-up, and
+    /// idle once the outcome is reported, never before it.
+    @Test func aPressShowsListeningThenTranscribingThenIdleOnceReported() async throws {
+        let gate = Gate()
+        let rig = try Rig(hearing: FakeTranscriber { _ in await gate.wait(); return Transcript(typed: "a") })
+        rig.dictation.press(.began(Rig.rightOption, at: rig.now))
+        #expect(rig.shown.activities == [.listening])
+        rig.speak([1, 2, 3])
+        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        #expect(rig.shown.activities == [.listening, .transcribing])
+        gate.open()
+        _ = try await rig.session()
+        #expect(rig.shown.activities == [.listening, .transcribing, .idle])
+    }
+
+    /// A press refused its microphone is never shown as listening, and its failure, once
+    /// reported, leaves the loop idle.
+    @Test func aRefusedPressIsNeverShownListening() async throws {
+        let rig = try Rig(transcriber: { FakeTranscriber { _ in Transcript(typed: "a") } }) { throw NoApp() }
+        rig.refusedHold()
+        #expect(await rig.report().failure is NoApp)
+        #expect(rig.shown.activities == [.idle, .transcribing, .idle])
+    }
+
+    /// A press made while an earlier one is still on its way is shown listening, and the
+    /// loop stays transcribing until the last outcome is reported.
+    @Test func thePressBeingSpokenIsShownOverOneStillOnItsWay() async throws {
+        let gate = Gate()
+        let rig = try Rig(hearing: FakeTranscriber { _ in await gate.wait(); return Transcript(typed: "a") })
+        rig.hold()
+        rig.dictation.press(.began(Rig.rightOption, at: rig.now))
+        #expect(rig.shown.activities == [.listening, .transcribing, .listening])
+        rig.speak([4, 5])
+        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
+        gate.open()
+        _ = try await rig.session()
+        _ = try await rig.session()
+        #expect(rig.shown.activities == [.listening, .transcribing, .listening, .transcribing, .transcribing, .idle])
+    }
+
+    /// The icon is the press's while there is one and the engine's otherwise, except that a
+    /// press ended before the engine is ready shows the wait it is in.
+    @Test func theIconIsTheActivityOverTheEnginesReadiness() {
+        let ready = EngineReadiness.ready(.default, after: .seconds(2))
+        let preparing = EngineReadiness.preparing(.loading, since: .now)
+        let failed = EngineReadiness.failed("no model")
+        #expect(Dictation.Activity.idle.glyph(over: failed) == failed.statusGlyph())
+        #expect(Dictation.Activity.idle.iconDescription(for: "L", over: failed) == failed.iconDescription(for: "L"))
+        #expect(Dictation.Activity.listening.glyph(over: failed) == .symbol("waveform"))
+        #expect(Dictation.Activity.listening.iconDescription(for: "L", over: preparing) == "L: listening")
+        #expect(Dictation.Activity.transcribing.glyph(over: ready) == .symbol("text.cursor"))
+        #expect(Dictation.Activity.transcribing.iconDescription(for: "L", over: ready) == "L: transcribing")
+        #expect(Dictation.Activity.transcribing.glyph(over: preparing) == .symbol("hourglass"))
+        #expect(Dictation.Activity.transcribing.iconDescription(for: "L", over: preparing) == "L: preparing the model")
+        #expect(Dictation.Activity.transcribing.glyph(over: failed) == failed.statusGlyph())
     }
 }
