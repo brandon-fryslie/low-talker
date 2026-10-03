@@ -171,6 +171,10 @@ public final class AudioCapture {
         /// a microphone that never opened for it at all - and which a held microphone can
         /// arrive at too, by dying quietly rather than by opening late.
         var openedForSession: HostTime?
+        /// Where the open session's audio goes as it lands, once something has asked for
+        /// it with `audio(of:)`. Beside the ring and under its lock, so a buffer reaches
+        /// the ring and the feed together or neither.
+        var feed: AsyncStream<AudioClip>.Continuation?
     }
 
     /// The stream behind a lock, shared between the tap's queue and the main actor.
@@ -398,10 +402,33 @@ public final class AudioCapture {
                 // tail.
                 unopened: openedLate || !open
             )
+            stream.feed?.finish()
+            stream.feed = nil
             return lost.map { .partial(clip, lost: $0) } ?? .whole(clip)
         }
         rest()
         return captured
+    }
+
+    /// The open session's audio as it is captured: what the ring already holds of it, then
+    /// each buffer as it lands, finished by `endSession`. A decoder fed this hears the press
+    /// while it is still going on, and hears the samples `endSession` hands over, in the
+    /// same order. [LAW:one-source-of-truth] The ring is read and the feed attached under
+    /// one lock, so no buffer lands between the two to be missed or heard twice.
+    ///
+    /// Whether what was heard is whole is still `endSession`'s to say: a stream cannot know
+    /// it was spliced or began late, and the `CapturedAudio` it ends with does.
+    public func audio(of session: AudioSession) -> AsyncStream<AudioClip> {
+        guard case .started(let started) = phase, started.sessionIsOpen else {
+            preconditionFailure("a session's audio was asked for with no session open; nothing would ever finish it")
+        }
+        let (audio, feed) = AsyncStream<AudioClip>.makeStream()
+        shared.stream.withLock { stream in
+            precondition(stream.feed == nil, "a session's audio is handed out once")
+            feed.yield(stream.ring.clip(in: session.range(endingAt: stream.ring.end)))
+            stream.feed = feed
+        }
+        return audio
     }
 
     /// Holds the grant, watches the input device, and brings the microphone to its resting
@@ -591,6 +618,7 @@ public final class AudioCapture {
                         $0.timeline.mark($0.ring.end, at: time)
                         $0.openedForSession = $0.openedForSession ?? time
                         $0.ring.append(samples)
+                        $0.feed?.yield(AudioClip(samples: samples))
                     }
                 },
                 onFailure: { [weak self] error in self?.fail(error, from: generation) }

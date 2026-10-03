@@ -378,6 +378,25 @@ private struct Authorized: MicrophoneAuthority {
         #expect(capture.endSession(session) == .whole(AudioClip(samples: [1, 2, 3, 4])))
     }
 
+    /// A session's audio, asked for while it is open, is the look-back the ring already holds
+    /// and then every buffer as it lands, and it ends when the session does: the samples
+    /// `endSession` hands over, heard before the key comes up. Buffers after the end belong
+    /// to no session and do not reach it.
+    @Test func aSessionsAudioArrivesAsItIsCapturedAndEndsWithTheSession() async throws {
+        let hardware = FakeHardware()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin)
+        try capture.start(grant, atRest: .open)
+        hardware.engines[0].appending([1, 2], origin)
+        let session = try capture.beginSession(at: after(2), preRoll: AudioSession.defaultPreRoll)
+        var audio = capture.audio(of: session).makeAsyncIterator()
+        #expect(await audio.next()?.samples == [1, 2])
+        hardware.engines[0].appending([3, 4], after(2))
+        #expect(await audio.next()?.samples == [3, 4])
+        #expect(capture.endSession(session) == .whole(AudioClip(samples: [1, 2, 3, 4])))
+        hardware.engines[0].appending([5, 6], after(4))
+        #expect(await audio.next() == nil)
+    }
+
     /// The key-up does not close a microphone the user asked to have held, and does not
     /// relaunch it either: a relaunch would splice the ring at every release, which is the
     /// look-back being thrown away once per press by the mode that exists to keep it.
