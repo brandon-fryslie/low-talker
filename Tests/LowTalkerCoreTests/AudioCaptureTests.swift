@@ -1051,6 +1051,20 @@ private struct Authorized: MicrophoneAuthority {
         #expect(reports.said == ["defaultInputChanged: left for the key-up", "pressEndedOffTheDefault: \(did)"])
     }
 
+    /// An unplug under a press whose bound device reports first is answered then and there,
+    /// so the default-input report says so rather than promising a key-up that has nothing
+    /// left to do - and the key-up reports nothing.
+    @Test func anUnplugMidPressAnsweredByTheBoundDeviceIsNotLeftForTheKeyUp() throws {
+        let hardware = FakeHardware()
+        let reports = Reports()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin, reporting: { reports.record($0) })
+        let session = try opened(capture)
+
+        try unplugTheDefaultInput(hardware, reportedIn: .deviceFirst)
+        _ = capture.endSession(session)
+        #expect(reports.said == ["boundDeviceChanged: launched", "defaultInputChanged: already on it"])
+    }
+
     /// A default-input change that lands after capture stopped is reported as outdated, the
     /// same as the bound device's report in that stretch.
     @Test func aDefaultInputChangeAfterStopIsReportedOutdated() throws {

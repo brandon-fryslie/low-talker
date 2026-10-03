@@ -612,6 +612,8 @@ public final class AudioCapture {
         // skip it for a failed engine and the next press opens the device that stopped
         // being the default, which is the whole of what this defers. [LAW:no-silent-failure]
         let owed = !started.prepared.isOnTheDefaultInput
+        // Readied, unless the resting mode below launches on the new default.
+        var answer = DeviceReport.Answer.readied
         if owed {
             if case .running(let live) = started.engine {
                 dispose(live)
@@ -633,18 +635,12 @@ public final class AudioCapture {
             case .shut:
                 do { started.engine = .running(try launch(on: started.prepared)) }
                 catch { started.engine = .failed(error, since: .now, on: preparations) }
+                answer = .launched(Self.outcome(of: started.engine))
             }
         }
         phase = .started(started)
-        // The answer `leftForTheKeyUp` promised, given now: what the resting mode left the
-        // microphone on the new default doing. [LAW:nothing-unseen]
-        if owed {
-            let answer: DeviceReport.Answer = switch started.engine {
-            case .shut: .readied
-            case .running, .failed: .launched(Self.outcome(of: started.engine))
-            }
-            reporting(DeviceReport(cause: .pressEndedOffTheDefault, answer: answer))
-        }
+        // The answer `leftForTheKeyUp` promised, given now. [LAW:nothing-unseen]
+        if owed { reporting(DeviceReport(cause: .pressEndedOffTheDefault, answer: answer)) }
     }
 
     /// Books the end of a gap in capture. [LAW:single-enforcer] A device that came back is
@@ -784,6 +780,13 @@ public final class AudioCapture {
         }
         let answer: DeviceReport.Answer
         switch started.engine {
+        // Already answered: the bound device's own report reached here first and readied an
+        // input on the new default. A second answer would give up a microphone on the right
+        // device for an identical one, and under `open` would splice the look-back to do it.
+        // A failed engine is not asked, because a default-input change is also how one tries
+        // a device again. [LAW:no-ambient-temporal-coupling]
+        case .shut where started.prepared.isOnTheDefaultInput, .running where started.prepared.isOnTheDefaultInput:
+            answer = .alreadyOnIt
         // A running engine owns the input it was launched on: the disposal it holds is weak,
         // so `prepared` is the only strong reference to the open input and replacing it under
         // a live press would deinit the device out from under it. That is also the right
@@ -793,13 +796,6 @@ public final class AudioCapture {
         // input whether it is still on the default.
         case .running where started.sessionIsOpen:
             answer = .leftForTheKeyUp
-        // Already answered: the bound device's own report reached here first and readied an
-        // input on the new default. A second answer would give up a microphone on the right
-        // device for an identical one, and under `open` would splice the look-back to do it.
-        // A failed engine is not asked, because a default-input change is also how one tries
-        // a device again. [LAW:no-ambient-temporal-coupling]
-        case .shut where started.prepared.isOnTheDefaultInput, .running where started.prepared.isOnTheDefaultInput:
-            answer = .alreadyOnIt
         // With no session open there is nothing to cut, and the engine is replaced on the new
         // default the same way a device that went away replaces it.
         case .running(let live):
