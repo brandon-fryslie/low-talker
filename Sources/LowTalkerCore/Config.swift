@@ -71,7 +71,7 @@ public struct Config: Hashable, Sendable {
 /// [LAW:one-type-per-behavior] Dictation is not a case in code. It is a Mode like
 /// every other, the one `Config.default` supplies when no file names any.
 public struct Mode: Hashable, Sendable {
-    /// How the mode is spoken of in errors and in `lowtalker config check`.
+    /// How the mode is spoken of in errors.
     public let name: String
     /// The chord that selects this mode. `Context.chord` carries the one that was held, so
     /// which mode is running is settled before a word is heard.

@@ -4,7 +4,7 @@ import WhisperKit
 
 /// The mapping from WhisperKit's result types onto Transcript, exercised with
 /// hand-built results so it runs where no model weights exist. The real engine is
-/// exercised by `lowtalker transcribe` on a Mac that has the weights.
+/// exercised by the app and its bench on a Mac that has the weights.
 @Suite struct WhisperKitTranscriberTests {
     static func word(_ text: String, _ start: Float, _ end: Float, _ probability: Float) -> WordTiming {
         WordTiming(word: text, tokens: [0], start: start, end: end, probability: probability)

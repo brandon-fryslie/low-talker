@@ -49,7 +49,6 @@ Configuration is one TOML file, `.config/low-talker/config.toml` in the app's sa
 ## Shape of the repo
 
 - `LowTalkerCore` is a SwiftPM library with no AppKit UI: audio capture, the `Transcriber` protocol and its engines, the router, actions, and config parsing. It is unit-tested against wav fixtures.
-- `lowtalker` is a CLI that transcribes a file or dry-runs a route. It exercises the whole pipeline without the hotkey, which is how routing gets debugged.
 - `LowTalker.app` is the menu bar agent (`LSUIElement`), generated with XcodeGen so the project file stays diffable.
 
 ## Build order
@@ -60,4 +59,4 @@ Configuration is one TOML file, `.config/low-talker/config.toml` in the app's sa
 
 ## Open questions
 
-Which Whisper model to default to is answered. The latency harness (`lowtalker bench`) measured large-v3-turbo, the distilled models, small.en, and base.en over the same twelve fixtures on an M2 Max, and the default is large-v3-turbo in the whisperkit `_turbo` variant: it heard the same words as the plain variant on every fixture while decoding 25 to 30 percent sooner, and the distilled models mishear proper nouns, only their turbo variant being faster. The numbers are in the README under "The latency harness". Whether tap-to-toggle needs voice activity detection to auto-stop, or whether a second tap is enough, is still open, and gets answered by using milestone 1, not by deciding now.
+Which Whisper model to default to is answered. The latency harness (the bench) measured large-v3-turbo, the distilled models, small.en, and base.en over the same twelve fixtures on an M2 Max, and the default is large-v3-turbo in the whisperkit `_turbo` variant: it heard the same words as the plain variant on every fixture while decoding 25 to 30 percent sooner, and the distilled models mishear proper nouns, only their turbo variant being faster. The numbers are in the README under "The latency harness". Whether tap-to-toggle needs voice activity detection to auto-stop, or whether a second tap is enough, is still open, and gets answered by using milestone 1, not by deciding now.

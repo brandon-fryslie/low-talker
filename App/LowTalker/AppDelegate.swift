@@ -122,7 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// reading, so the two cannot come from different versions of the file. The menu's
     /// names for the chords read it too, so what the menu says to hold is what is heard.
     /// [LAW:one-source-of-truth]
-    private lazy var config = Result { () throws(ConfigError) in try Config.load().config }
+    private lazy var config = Result { () throws(ConfigError) in try Config.load() }
 
     /// The loop that is listening now.
     private struct Listening {
@@ -290,7 +290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - the guided setup
 
-    /// The guided setup, over the one list the menu and `lowtalker onboard` read.
+    /// The guided setup, over the one list the menu reads.
     private lazy var setUp = SetUpWindow(
         read: { [unowned self] in readReadiness() },
         ask: { [unowned self] in await ask($0) },
@@ -595,7 +595,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// exactly when it matters: right after the user gave the grant the menu was telling them
     /// to give. [LAW:no-ambient-temporal-coupling]
     private func readReadiness() -> Readiness {
-        let readiness = OnboardingProbe.readiness(reader: .theApp(microphone: readMicrophone()))
+        let readiness = OnboardingProbe.readiness(microphone: readMicrophone())
         log.notice("onboarding: \(readiness.ready ? "ready" : "not ready", privacy: .public)")
         for requirement in readiness.requirements {
             log.notice("onboarding: \(requirement.name, privacy: .public): \(requirement.reads, privacy: .public)")
