@@ -114,7 +114,8 @@ import Testing
     }
 
     /// The prefix is said without its final punctuation, and its words are dropped
-    /// whether they come back with their punctuation or without it.
+    /// whether they come back with their punctuation or without it; the last one
+    /// takes the punctuation it came back with.
     @Test func thePrefixIsSaidWithoutItsFinalPunctuation() {
         var hearing = Self.hearing()
         let words = [Self.word(" Hi", 0, 0.1), Self.word(" there!'", 0.2, 0.3), Self.word(" hissed", 0.4, 0.5), Self.word(" Lumpy,", 0.6, 0.7)]
@@ -124,7 +125,7 @@ import Testing
         #expect(hearing.saying == " there!' hissed Lumpy")
         hearing.hear([Self.word(" there!'", 0.2, 0.3), Self.word(" hissed", 0.4, 0.5), Self.word(" Lumpy", 0.6, 0.7), Self.word(" filled", 2.5, 2.8)], through: Self.samples(3.5))
         #expect(hearing.tentative.map(\.text) == [" filled"])
-        #expect(hearing.partial.text == " Hi there!' hissed Lumpy, filled")
+        #expect(hearing.partial.text == " Hi there!' hissed Lumpy filled")
     }
 
     /// A prefix read differently is not the prefix: it stays in the reading, visible
@@ -147,5 +148,70 @@ import Testing
         hearing.hear([Self.word(" a", 0, 0.1), Self.word(" b", 0.2, 0.3)], through: Self.samples(3))
         hearing.hear([Self.word(" a", 0, 0.1), Self.word(" b", 0.2, 0.3), Self.word(" c", 2.5, 2.8)], through: Self.samples(4))
         #expect(hearing.transcript.text == " a b c")
+    }
+
+    /// One case seen on studious: the passes a press heard, as (words, seconds read
+    /// through), and the text the transcript reads.
+    struct Revision: Sendable, CustomTestStringConvertible {
+        let passes: [([Transcript.Word], Double)]
+        let reads: String
+        var testDescription: String { reads }
+    }
+
+    static let revisions = [
+        // The settled "7." read again as "7" with ":00." after it.
+        Revision(passes: [
+            ([word(" after", 0.2, 0.5), word(" 7.", 0.6, 0.9)], 2),
+            ([word(" after", 0.2, 0.5), word(" 7.", 0.6, 0.9)], 2.5),
+            ([word(" after", 0.2, 0.5), word(" 7", 0.6, 0.9), word(":00.", 1.0, 1.4)], 3),
+            ([word(" after", 0.2, 0.5), word(" 7", 0.6, 0.9), word(":00.", 1.0, 1.4)], 3.5),
+        ], reads: " after 7:00."),
+        // The settled "years" read again with the period that ends its sentence.
+        Revision(passes: [
+            ([word(" few", 0.2, 0.5), word(" years", 0.6, 0.9)], 2),
+            ([word(" few", 0.2, 0.5), word(" years", 0.6, 0.9)], 2.5),
+            ([word(" few", 0.2, 0.5), word(" years.", 0.6, 0.9), word(" We", 1.0, 1.2)], 3),
+            ([word(" few", 0.2, 0.5), word(" years.", 0.6, 0.9), word(" We", 1.0, 1.2), word(" started", 1.3, 1.6)], 3.5),
+        ], reads: " few years. We started"),
+        // The settled "rain." read again without its period, the sentence going on.
+        Revision(passes: [
+            ([word(" night", 0.2, 0.5), word(" rain.", 0.6, 0.9)], 2),
+            ([word(" night", 0.2, 0.5), word(" rain.", 0.6, 0.9)], 2.5),
+            ([word(" night", 0.2, 0.5), word(" rain", 0.6, 0.9), word(" a", 1.0, 1.2)], 3),
+            ([word(" night", 0.2, 0.5), word(" rain", 0.6, 0.9), word(" a", 1.0, 1.2), word(" conductor", 1.3, 1.8)], 3.5),
+        ], reads: " night rain a conductor"),
+    ]
+
+    /// A later pass revises the last settled word's punctuation, and the text taken from
+    /// the partials as they come, then the rest of the transcript, reads as the transcript
+    /// does: no punctuation doubled, lost or orphaned.
+    @Test(arguments: revisions) func theConfirmedWordsTakenAsTheyComeReadAsTheTranscript(_ revision: Revision) {
+        var hearing = Self.hearing()
+        var cursor = ConfirmedCursor()
+        var committed = ""
+        for (words, through) in revision.passes {
+            hearing.hear(words, through: Self.samples(through))
+            committed += cursor.advance(through: hearing.partial.confirmed.words).text
+        }
+        committed += cursor.advance(through: hearing.transcript.words).text
+        #expect(hearing.transcript.text == revision.reads)
+        #expect(committed == revision.reads)
+        #expect(hearing.partial.repunctuated == 1)
+    }
+
+    /// The last confirmed word is tentative in the partial, since the next pass may still
+    /// punctuate it; once a word settles after it, it is final.
+    @Test func theLastConfirmedWordIsNotFinalInThePartial() {
+        var hearing = Self.hearing()
+        hearing.hear([Self.word(" a", 0, 0.1), Self.word(" b", 0.2, 0.3)], through: Self.samples(2))
+        hearing.hear([Self.word(" a", 0, 0.1), Self.word(" b", 0.2, 0.3)], through: Self.samples(3))
+        #expect(hearing.partial.confirmed.text == " a")
+        #expect(hearing.partial.tentative.text == " b")
+        #expect(hearing.partial.repunctuated == 0)
+        hearing.hear([Self.word(" a", 0, 0.1), Self.word(" b,", 0.2, 0.3), Self.word(" c", 2.5, 2.8)], through: Self.samples(4))
+        hearing.hear([Self.word(" a", 0, 0.1), Self.word(" b,", 0.2, 0.3), Self.word(" c", 2.5, 2.8)], through: Self.samples(4.5))
+        #expect(hearing.partial.confirmed.text == " a b,")
+        #expect(hearing.partial.tentative.text == " c")
+        #expect(hearing.partial.repunctuated == 1)
     }
 }

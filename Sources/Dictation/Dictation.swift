@@ -66,6 +66,8 @@ public final class Dictation {
     /// words already committed at the cursor.
     public struct DuringPress: Sendable, CustomStringConvertible {
         public let passes: Int
+        /// Passes that changed the punctuation of a word two passes had agreed on.
+        public let repunctuated: Int
         /// [LAW:types-are-the-program] Absent when no pass before key-up read a word,
         /// which a short tap or a slow engine leaves - not a zero, which would say the
         /// words were there at once.
@@ -79,7 +81,7 @@ public final class Dictation {
         public var description: String {
             let words = firstWords.map { "first words \(Int($0 / .milliseconds(1))) ms after key-down" } ?? "no words before key-up"
             let committed = firstCommit.map { "\(commits) commits of \(wordsCommitted) words, the first \(Int($0 / .milliseconds(1))) ms after key-down" } ?? "nothing committed before key-up"
-            return "\(passes) passes during the press, \(words), \(committed)"
+            return "\(passes) passes during the press, \(repunctuated) repunctuating a settled word, \(words), \(committed)"
         }
     }
 
@@ -109,6 +111,7 @@ public final class Dictation {
 
         private struct State {
             var passes = 0
+            var repunctuated = 0
             var firstWords: Duration?
             /// Nil while the key is down.
             var keyUp: ContinuousClock.Instant?
@@ -147,6 +150,7 @@ public final class Dictation {
             let now = ContinuousClock.now
             state.withLock { state in
                 state.passes += 1
+                state.repunctuated = partial.repunctuated
                 state.firstWords = state.firstWords ?? (partial.text.isEmpty ? nil : now - keyDown)
                 state.confirmed = partial.confirmed.words
             }
@@ -209,7 +213,7 @@ public final class Dictation {
         func keyUp(at instant: ContinuousClock.Instant) -> DuringPress {
             state.withLock { state in
                 state.keyUp = instant
-                return DuringPress(passes: state.passes, firstWords: state.firstWords, commits: state.performed.count, wordsCommitted: state.words, firstCommit: state.performed.first?.acknowledged)
+                return DuringPress(passes: state.passes, repunctuated: state.repunctuated, firstWords: state.firstWords, commits: state.performed.count, wordsCommitted: state.words, firstCommit: state.performed.first?.acknowledged)
             }
         }
     }

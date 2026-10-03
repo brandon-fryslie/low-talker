@@ -106,18 +106,22 @@ final class FakeTranscriber: Transcriber {
     private let arrived = Mutex<[Float]>([])
     private let reading: @Sendable ([Float]) -> Transcript
     private let confirming: @Sendable ([Float]) -> Transcript
+    private let repunctuating: @Sendable ([Float]) -> Int
     private let answer: @Sendable (AudioClip) async throws -> Transcript
 
     /// `reading` is what a pass makes of the audio so far and `confirming` the words two
-    /// passes have agreed on, which the answer has to begin with; one pass runs per clip as
+    /// passes have agreed on, which the answer has to begin with, and `repunctuating` how
+    /// many passes so far changed a settled word's punctuation; one pass runs per clip as
     /// it arrives, and reads and confirms nothing unless a test says otherwise.
     init(
         reading: @escaping @Sendable ([Float]) -> Transcript = { _ in Transcript(typed: "") },
         confirming: @escaping @Sendable ([Float]) -> Transcript = { _ in Transcript(typed: "") },
+        repunctuating: @escaping @Sendable ([Float]) -> Int = { _ in 0 },
         _ answer: @escaping @Sendable (AudioClip) async throws -> Transcript
     ) {
         self.reading = reading
         self.confirming = confirming
+        self.repunctuating = repunctuating
         self.answer = answer
     }
 
@@ -130,7 +134,7 @@ final class FakeTranscriber: Transcriber {
         var samples: [Float] = []
         for await clip in audio {
             samples += clip.samples
-            partial(Partial(confirmed: confirming(samples), tentative: reading(samples)))
+            partial(Partial(confirmed: confirming(samples), tentative: reading(samples), repunctuated: repunctuating(samples)))
             arrived.withLock { $0 = samples }
         }
         let clip = AudioClip(samples: samples)

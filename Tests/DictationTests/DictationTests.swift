@@ -355,9 +355,10 @@ extension Result {
 
     /// The engine hears a press while it is still going on: the audio reaches it as it is
     /// captured, and what it reads comes back before the key does. The press's line carries
-    /// the passes run by key-up and how long after key-down the first words came.
+    /// the passes run by key-up, how many re-punctuated a settled word, and how long after
+    /// key-down the first words came.
     @Test func aPressIsHeardWhileTheKeyIsStillDown() async throws {
-        let engine = FakeTranscriber(reading: { Transcript(typed: $0.isEmpty ? "" : "hello") }) { _ in Transcript(typed: "hello") }
+        let engine = FakeTranscriber(reading: { Transcript(typed: $0.isEmpty ? "" : "hello") }, repunctuating: { $0.isEmpty ? 0 : 2 }) { _ in Transcript(typed: "hello") }
         let rig = try Rig(hearing: engine)
         let keyDown = HostTime.now
         rig.dictation.press(.began(Rig.rightOption, at: keyDown))
@@ -369,9 +370,10 @@ extension Result {
         let session = try await rig.session()
         #expect(engine.clips.map(\.samples) == [[1, 2]])
         #expect(session.duringPress.passes >= 1)
+        #expect(session.duringPress.repunctuated == 2)
         let firstWords = try #require(session.duringPress.firstWords)
         #expect(firstWords > .zero && firstWords <= read - keyDown)
-        #expect("\(session)".contains("passes during the press, first words \(Int(firstWords / .milliseconds(1))) ms after key-down"))
+        #expect("\(session)".contains("passes during the press, 2 repunctuating a settled word, first words \(Int(firstWords / .milliseconds(1))) ms after key-down"))
         #expect(rig.inputMethod.inserted == ["hello"])
     }
 

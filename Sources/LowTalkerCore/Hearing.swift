@@ -13,6 +13,11 @@
 /// than its end clip; the transcriber pads an utterance shorter than that out to
 /// the floor with silence, and this margin keeps every later pass over speech alone.
 ///
+/// A settled word's trailing punctuation is still the next pass's to revise, since
+/// that pass is told the prefix without it (`saying`). So the last settled word is
+/// final only once a word settles after it: until then the partial shows it as
+/// tentative, and nothing that reads the confirmed words as they come takes it.
+///
 /// [LAW:effects-at-boundaries] A value with no engine and no clock: words come in
 /// with the sample count they were read through, and the engine reads out where
 /// to start next and what to say first. The pass itself is the engine's.
@@ -21,13 +26,15 @@ struct Hearing: Equatable {
     let margin: Int
     /// How many confirmed words a pass starts from.
     let context: Int
-    /// Words no later pass will change: every pass since settled them, and they
-    /// are only ever read again as a pass's prefix.
+    /// Words two passes agreed on, read again only as a pass's prefix. No later pass
+    /// changes them, but for the last one's trailing punctuation.
     private(set) var confirmed: [Transcript.Word] = []
     /// The latest pass's reading of everything after the confirmed words.
     private(set) var tentative: [Transcript.Word] = []
     /// Samples the latest pass read through.
     private(set) var heard = 0
+    /// Passes that changed the last confirmed word's punctuation.
+    private(set) var repunctuated = 0
 
     init(margin: Int, context: Int) {
         precondition(margin >= 0, "a margin reaches back from a pass's end, not forward")
@@ -80,9 +87,16 @@ struct Hearing: Equatable {
 
     /// Takes in a pass that read `words`, from the cut through `end` samples. The
     /// words it read for its prefix come first and are dropped; a prefix read
-    /// differently stays, visible, rather than vanishing.
+    /// differently stays, visible, rather than vanishing. A prefix read the same
+    /// punctuates the last confirmed word as this pass does.
     mutating func hear(_ words: [Transcript.Word], through end: Int) {
-        let fresh = words.dropFirst(zip(prefix, words).prefix { Self.sameWord($0, $1) }.count)
+        let reread = zip(prefix, words).prefix { Self.sameWord($0, $1) }.count
+        if reread == prefix.count, let last = confirmed.last, let reading = words.prefix(reread).last {
+            // The settled reading's time stays: `cut` derives from confirmed times and never moves back.
+            repunctuated += reading.text == last.text ? 0 : 1
+            confirmed[confirmed.count - 1] = Transcript.Word(text: reading.text, time: last.time, confidence: last.confidence)
+        }
+        let fresh = words.dropFirst(reread)
         let agreed = zip(tentative, fresh).prefix { Self.sameWord($0, $1) }.count
         let settled = fresh.prefix(agreed).prefix { AudioClip.sampleCount(for: $0.time.upperBound) <= end - margin }
         confirmed += settled
@@ -90,8 +104,11 @@ struct Hearing: Equatable {
         heard = end
     }
 
+    /// [LAW:types-are-the-program] The partial's confirmed words are the ones whose text
+    /// is final, so a reader can take them as they come: every confirmed word but the
+    /// last, whose punctuation the next pass may still revise.
     var partial: Partial {
-        Partial(confirmed: Transcript(words: confirmed), tentative: Transcript(words: tentative))
+        Partial(confirmed: Transcript(words: confirmed.dropLast()), tentative: Transcript(words: confirmed.suffix(1) + tentative), repunctuated: repunctuated)
     }
 
     /// The utterance as heard so far, which is the transcript once no more audio
