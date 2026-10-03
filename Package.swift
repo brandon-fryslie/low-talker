@@ -16,7 +16,6 @@ let package = Package(
         .library(name: "InputSource", targets: ["InputSource"]),
         .library(name: "Serve", targets: ["Serve"]),
         .library(name: "Bench", targets: ["Bench"]),
-        .executable(name: "lowtalker", targets: ["lowtalker"]),
         .executable(name: "lowtalker-inputmethod", targets: ["lowtalker-inputmethod"]),
     ],
     dependencies: [
@@ -27,7 +26,7 @@ let package = Package(
         .package(url: "https://github.com/LebJe/TOMLKit.git", from: "0.6.0"),
     ],
     targets: [
-        // [LAW:one-way-deps] Core knows nothing of the CLI or the app; both link it.
+        // [LAW:one-way-deps] Core knows nothing of the app; the app links it.
         // The names macOS keys LowTalker by. It depends on nothing, so the input method process and the app's
         // upper layers can both read it without either depending on the other.
         // [LAW:one-way-deps]
@@ -74,8 +73,8 @@ let package = Package(
         // Everything that must hold before low-talker can hear and type, as a list a reader
         // can act on: what was read off this Mac, and the step for whatever is missing. It
         // links the identity, the grants and the input source's switch, and not the core - so
-        // both the CLI and the menu-bar app can show the same words, and the app's guided
-        // setup walks the same list. [LAW:one-source-of-truth] [LAW:one-way-deps]
+        // the menu and the guided setup show the same words off one list.
+        // [LAW:one-source-of-truth] [LAW:one-way-deps]
         .target(name: "Onboarding", dependencies: ["Identity", "Grants", "InputSource"]),
         // The steps are what a person acts on, so they are asserted as values rather
         // than scraped off a terminal.
@@ -113,36 +112,14 @@ let package = Package(
         // The process macOS launches out of the input method bundle. It holds the effects -
         // reading the bundle, opening the port, running the loop - and nothing else.
         .executableTarget(name: "lowtalker-inputmethod", dependencies: ["InputMethod", "Insertion", "Identity"]),
-        // Every command the CLI has, as a library the tests import, with the entry below as
-        // the whole of the executable: the shape the input method already takes, and this
-        // list is the one place the CLI's dependencies are declared. [LAW:one-source-of-truth]
-        .target(
-            name: "LowTalkerCommands",
-            dependencies: [
-                "LowTalkerCore",
-                // `bench`, the same loop and table the app's Benchmark window runs.
-                "Bench",
-                // The loads `transcribe`, `serve` and `bench` make from a source.
-                "ModelInstall",
-                "Grants",
-                "Identity",
-                "Onboarding",
-                "InputSource",
-                "Signals",
-                // `serve`: the endpoint over the engine a terminal loads.
-                "Serve",
-                .product(name: "ArgumentParser", package: "swift-argument-parser"),
-            ]
-        ),
-        .executableTarget(name: "lowtalker", dependencies: ["LowTalkerCommands"]),
         // The bench: its options, flags, table, the folders a person picked for it, and the
-        // one run at a time the app's window and `LowTalker --bench` start. Beneath the app
-        // and the CLI; the engine it loads is the core's, read in place, never installed.
+        // one run at a time the app's window and `LowTalker --bench` start. Beneath the app;
+        // the engine it loads is the core's, read in place, never installed.
         .target(name: "Bench", dependencies: ["LowTalkerCore", .product(name: "ArgumentParser", package: "swift-argument-parser")]),
         .testTarget(name: "BenchTests", dependencies: ["Bench", "LowTalkerCore", "TestProbes"]),
         // The write side of the model store: fetching from huggingface.co or a published
-        // base, copying from another store, packing one to publish. Beneath the CLI and
-        // `model-tool` alone.
+        // base, copying from another store, packing one to publish. Beneath `model-tool`
+        // alone.
         // The app links the core and loads the store its bundle carries, read-only, so the
         // graph and not the call sites is what says the app cannot download;
         // `AppLinksNoInstallerTests` reads this graph for that. [LAW:one-way-deps]
@@ -174,11 +151,6 @@ let package = Package(
                 .product(name: "WhisperKit", package: "argmax-oss-swift"),
             ],
             resources: [.copy("Fixtures")]
-        ),
-        // The CLI's table shape is its contract; this pins column names to fields.
-        .testTarget(
-            name: "lowtalkerTests",
-            dependencies: ["LowTalkerCommands", "LowTalkerCore", "Onboarding", "Identity"]
         ),
     ]
 )

@@ -214,8 +214,8 @@ final class HALInput: PreparedInput {
                 // microphone first, the unit never sits in the state that provokes the swap.
                 //
                 // Only an app meets it - CoreAudio builds that aggregate for clients it offers
-                // voice isolation to - so `lowtalker mic indicator` read dark on the very code
-                // the app was lighting the menu bar with, and the suite, which never builds the
+                // voice isolation to - so a command-line check read dark on the very code the
+                // app was lighting the menu bar with, and the suite, which never builds the
                 // app target, read nothing at all. The check after `AudioUnitInitialize` is
                 // what makes the next difference of that shape fail rather than ship.
                 var disable: UInt32 = 0
@@ -558,11 +558,8 @@ final class HALInput: PreparedInput {
         binding.map { (try? Self.defaultInput()) == $0 } ?? false
     }
 
-    /// Which device a press would open. Nonisolated because reading it touches nothing this
-    /// class owns, and `MicrophoneIndicator` asks the same question off the main actor: what
-    /// the indicator shows is a fact about that device, so the two must not be free to
-    /// disagree about which one it is. [LAW:one-source-of-truth]
-    nonisolated static func defaultInput() throws -> AudioObjectID {
+    /// Which device a press would open.
+    static func defaultInput() throws -> AudioObjectID {
         var device = AudioObjectID(0)
         var size = UInt32(MemoryLayout<AudioObjectID>.size)
         var address = AudioObjectPropertyAddress(
@@ -633,10 +630,10 @@ final class HALInput: PreparedInput {
     /// Whether *this process* has `device` running.
     ///
     /// `kAudioDevicePropertyDeviceIsRunning` answers for the asking process alone, where
-    /// the `...IsRunningSomewhere` that `MicrophoneIndicator` reads answers for the whole
+    /// `...IsRunningSomewhere`, which the menu-bar indicator follows, answers for the whole
     /// Mac. Measured on this Mac with a second process holding the microphone: this reads
     /// 0 and the indicator reads 1. That difference is what lets preparing prove it took no
-    /// device while a call, a recording or another agent's `mic indicator` is running - a
+    /// device while a call, a recording or another app's capture is running - a
     /// check on the indicator would refuse to ready a microphone because something else was
     /// using one. [FRAMING:representation] Two properties, two questions, and this is the
     /// one about us.

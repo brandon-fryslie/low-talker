@@ -16,8 +16,8 @@ public struct Config: Hashable, Sendable {
     /// writer, so a microphone held at rest is one the user asked for in writing.
     /// [LAW:single-enforcer]
     public let microphone: MicrophoneAtRest
-    /// In the order the file declared them, because that is the order `lowtalker
-    /// config check` and any listing should speak of them in.
+    /// In the order the file declared them, because that is the order any listing
+    /// should speak of them in.
     public let modes: [Mode]
     public let serve: ServeBinding
 
@@ -71,7 +71,7 @@ public struct Config: Hashable, Sendable {
 /// [LAW:one-type-per-behavior] Dictation is not a case in code. It is a Mode like
 /// every other, the one `Config.default` supplies when no file names any.
 public struct Mode: Hashable, Sendable {
-    /// How the mode is spoken of in errors and in `lowtalker config check`.
+    /// How the mode is spoken of in errors.
     public let name: String
     /// The chord that selects this mode. `Context.chord` carries the one that was held, so
     /// which mode is running is settled before a word is heard.

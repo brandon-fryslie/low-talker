@@ -10,8 +10,7 @@ import Foundation
 /// way to take the audio of a press without being handed what it is missing.
 ///
 /// [LAW:no-silent-failure] What to do about a partial one is each surface's own
-/// decision - `Dictation` refuses to type a fragment, `lowtalker record` writes the wav
-/// and says what is gone - but neither can make it by accident.
+/// decision - `Dictation` refuses to type a fragment - but none can make it by accident.
 public enum CapturedAudio: Sendable, Equatable {
     /// Every sample the session covered that the microphone ever captured.
     case whole(AudioClip)

@@ -13,8 +13,8 @@ import Foundation
 ///
 /// [LAW:one-way-deps] This is the read side: whether a model is here and whole, and the
 /// proof a load takes. Writing a store - fetching what it lacks, copying from another
-/// store, packing one to publish - is `ModelInstall`'s, a module the CLI links and the
-/// app does not, so a process linking only this one has no way to reach the network for
+/// store, packing one to publish - is `ModelInstall`'s, a module only the build's `model-tool`
+/// links, so a process linking only this one has no way to reach the network for
 /// a model.
 public struct ModelStore: Sendable {
     /// The hub root. A model lives at `models/<org>/<repo>/<variant>` beneath it and

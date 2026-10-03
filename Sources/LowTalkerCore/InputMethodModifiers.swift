@@ -80,7 +80,7 @@ public struct InputMethodModifiers: ModifierFeed {
     }
 
     /// Throws when the hotkey port cannot be hosted - most often because another process
-    /// already hears on it, such as `lowtalker hotkey` run beside the app.
+    /// already hears on it, such as a second copy of the app.
     public func install(handling handle: @escaping @MainActor (KeyEvent) -> Void) throws -> Disposal {
         // What is held as listening begins is read, not assumed to be nothing, so a key
         // already down when this comes up is not heard going down when it next moves.

@@ -19,7 +19,7 @@ configs:
 # Shared by every target. macOS keys the Microphone grant to the signing certificate, so
 # builds carry a self-signed identity that `make signing-identity` creates once per Mac.
 # Ad hoc signing would key the grant to each build's own hash and lose it on every
-# rebuild. scripts/signing-identity reads it for the CLI build outside Xcode.
+# rebuild. scripts/signing-identity reads it for `make signing-identity`.
 #
 # The identity is the one setting a build to hand to someone else changes:
 # scripts/sign-release passes the Developer ID certificate, which Gatekeeper trusts and
@@ -82,8 +82,8 @@ targets:
       # The grants the menu reads, beneath both the core and the setup list.
       - package: low-talker
         product: Grants
-      # The list of what must hold before low-talker can type, which the menu shows and
-      # `lowtalker onboard` prints. One list, two views. [LAW:one-source-of-truth]
+      # The list of what must hold before low-talker can type, which the menu shows and the
+      # guided setup walks. One list, two views. [LAW:one-source-of-truth]
       - package: low-talker
         product: Onboarding
       - package: low-talker
@@ -231,8 +231,8 @@ targets:
         # Adds com.apple.security.network.server to the entitlements written above when
         # ACCEPTS_CONNECTIONS is YES, so the network build's server can listen; the Makefile's
         # VARIANT sets it, and unset it is NO. Routed through a setting only this target
-        # reads, because set on the command line it would reach the input method and the CLI
-        # too, which are the same bytes in both builds.
+        # reads, because set on the command line it would reach the input method
+        # too, which is the same bytes in both builds.
         # [LAW:one-type-per-behavior] The two builds are this one target with one value.
         ENABLE_INCOMING_NETWORK_CONNECTIONS: $(ACCEPTS_CONNECTIONS)
         # No checked-in Info.plist: Xcode synthesises one from these keys.

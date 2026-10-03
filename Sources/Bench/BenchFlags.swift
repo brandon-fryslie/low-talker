@@ -2,9 +2,8 @@ import ArgumentParser
 import Foundation
 import LowTalkerCore
 
-/// `LowTalker --bench`'s flags: every option the Benchmark window has, spelled as
-/// `lowtalker bench` spells them, so a run from the window, from the app's binary and from
-/// the CLI can be asked for alike and their tables compared.
+/// `LowTalker --bench`'s flags: every option the Benchmark window has, so a run from the
+/// window and one from the app's binary can be asked for alike and their tables compared.
 ///
 /// [LAW:one-type-per-behavior] They parse into the `BenchOptions` the window builds, and
 /// nothing else, so the two surfaces cannot drift apart in what they accept.

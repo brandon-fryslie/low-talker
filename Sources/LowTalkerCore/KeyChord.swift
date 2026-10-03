@@ -4,7 +4,7 @@
 /// [LAW:types-are-the-program] Modifiers and nothing else, because the input method is told
 /// only when a modifier key moves: a chord with any other key in it would never complete, so
 /// it cannot be written down.
-public struct KeyChord: Hashable, Codable, Sendable, CustomStringConvertible {
+public struct KeyChord: Hashable, Codable, Sendable {
     public let modifiers: Set<Modifier>
 
     public init(modifiers first: Modifier, _ rest: Modifier...) {
@@ -26,28 +26,15 @@ public struct KeyChord: Hashable, Codable, Sendable, CustomStringConvertible {
         }
         self = chord
     }
-
-    /// The chord as `lowtalker config check` reads it back: `rightCommand+rightOption`.
-    /// Never empty, because a chord never is.
-    ///
-    /// Sorted, because `modifiers` is a Set and a Set has no order: without this, two runs
-    /// over one config could spell one chord two ways. [LAW:one-source-of-truth]
-    public var description: String {
-        modifiers.map(\.description).sorted().joined(separator: "+")
-    }
 }
 
 /// Side-specific, because the hotkey distinguishes Right Option from Left Option.
-public enum Modifier: String, Hashable, Codable, CaseIterable, Sendable, CustomStringConvertible {
+public enum Modifier: String, Hashable, Codable, CaseIterable, Sendable {
     case leftShift, rightShift
     case leftControl, rightControl
     case leftOption, rightOption
     case leftCommand, rightCommand
     case function
-
-    /// The spelling the file uses, so a report reads a chord back in the words its
-    /// author typed rather than in Swift's name for the case.
-    public var description: String { rawValue }
 
     /// [LAW:single-enforcer] Which modifiers exist is this type's rule, so a file that
     /// names another is answered from the cases themselves and never falls out of step

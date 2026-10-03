@@ -5,7 +5,7 @@ import Foundation
 ///
 /// [LAW:parse-dont-validate] A name is one step of a path. Every path the store
 /// builds from a name stays inside the store because a name that could climb out
-/// cannot be made; the CLI refuses such a `--model` before any path exists.
+/// cannot be made.
 public struct ModelName: RawRepresentable, Hashable, Codable, Sendable, ExpressibleByStringLiteral, CustomStringConvertible {
     public let rawValue: String
 
@@ -35,7 +35,7 @@ public struct ModelName: RawRepresentable, Hashable, Codable, Sendable, Expressi
     }
 
     /// Whisper large-v3-turbo (large-v3's encoder with a four-layer decoder) in the
-    /// variant that ships a prefilled decoder context. Chosen by `lowtalker bench`
+    /// variant that ships a prefilled decoder context. Chosen by the bench
     /// on an M2 Max: it heard every bench fixture exactly as the plain 626 MB
     /// variant did and decoded each one sooner, while the distilled models misheard
     /// proper nouns and the small models misheard whole phrases. The numbers are in

@@ -4,7 +4,7 @@ import Testing
 import WhisperKit
 
 /// The row shift that keeps word timings under a prompt, exercised on hand-built
-/// tensors; the seeker over a real decode is exercised by `lowtalker bench` with
+/// tensors; the seeker over a real decode is exercised by the bench with
 /// `--vocabulary`, which is where the timings were lost.
 @Suite struct PromptOffsetSegmentSeekerTests {
     static let specialTokenBegin = 50257

@@ -1,4 +1,4 @@
-import LowTalkerCore
+import TestProbes
 import Testing
 
 /// Every wait here runs on `StepClock`, so what these tests assert is the polling loop's

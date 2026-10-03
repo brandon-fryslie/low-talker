@@ -280,6 +280,13 @@ import Testing
         }
     }
 
+    /// An empty list would be a mode that claims the chord and drops everything it hears.
+    @Test func aModeWithAnEmptyRouteListIsRefused() {
+        #expect(throws: ConfigError.wrongShape("modes[0].routes: an empty list claims nothing; leave routes out to dictate")) {
+            try Self.config(Self.mode(routes: "[]"))
+        }
+    }
+
     /// A `then` that names nothing would be a route that claims an utterance and drops
     /// it.
     @Test func aThenNamingNothingIsRefused() {
@@ -453,29 +460,17 @@ import Testing
 
     // MARK: - Reading the file
 
-    /// No file at all is the one case that yields the defaults - and says it did, so a
-    /// reader is never shown the defaults as though somebody had written them.
+    /// No file at all is the one case that yields the defaults.
     @Test func noFileIsTheDefaults() throws {
         let missing = URL(filePath: NSTemporaryDirectory()).appending(path: "low-talker-\(UUID().uuidString)/config.toml")
-        #expect(try Config.load(missing) == .noFile(at: missing))
-        #expect(try Config.load(missing).config == Config.default)
-    }
-
-    /// A file that says exactly what the defaults say is still a file somebody wrote,
-    /// and the two are told apart by which case they arrive in rather than by comparing
-    /// configs - which could not tell them apart at all.
-    @Test func aFileSayingTheDefaultsIsStillAFile() throws {
-        let url = URL(filePath: NSTemporaryDirectory()).appending(path: "low-talker-\(UUID().uuidString).toml")
-        try "".write(to: url, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: url) }
-        #expect(try Config.load(url) == .file(Config.default, at: url))
+        #expect(try Config.load(missing) == Config.default)
     }
 
     @Test func aFileOnDiskIsWhatTheAppRunsOn() throws {
         let url = URL(filePath: NSTemporaryDirectory()).appending(path: "low-talker-\(UUID().uuidString).toml")
         try Self.full.write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
-        #expect(try Config.load(url) == .file(Self.config(Self.full), at: url))
+        #expect(try Config.load(url) == Self.config(Self.full))
     }
 
     /// [LAW:no-silent-failure] A path that exists but hands back no config text is an

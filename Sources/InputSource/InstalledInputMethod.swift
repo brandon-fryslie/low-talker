@@ -169,7 +169,7 @@ public struct InstalledInputMethod: Sendable {
 
     /// Whether the input method is switched on, read from the text input system
     /// alone. What the switch-on step asks of a person, and nothing about the bundle on disk,
-    /// so it reads the same from the app and from a CLI that carries no input method.
+    /// so it reads the same whatever process asks.
     ///
     /// Read off the input method's own source, whose identifier is its bundle's, and not off
     /// its mode's. Measured on 2026-09-24: registered and never switched on, the input

@@ -8,8 +8,7 @@ public extension Config {
     ///
     /// [LAW:one-source-of-truth] Spelled from the account's own home rather than from
     /// `homeDirectoryForCurrentUser`, which answers the container inside the sandbox and the
-    /// real home outside it. The app and a `lowtalker` run from a terminal would otherwise
-    /// name two files, and `config check` would report on one the app never reads.
+    /// real home outside it, so the path is the app's file whichever process asks.
     static var fileURL: URL {
         URL(filePath: String(cString: getpwuid(getuid()).pointee.pw_dir), directoryHint: .isDirectory)
             .appending(path: "Library/Containers/\(AppIdentity.bundleIdentifier)/Data/\(pathInContainer)")
@@ -56,66 +55,22 @@ public extension Config {
         )
     }
 
-    /// The config the app runs on and where it came from: what the file says, or the
-    /// defaults when there is no file. Absent a path, the app's own file.
+    /// The config the app runs on: what the file says, or the defaults when there is no
+    /// file. Absent a path, the app's own file.
     ///
     /// [LAW:no-silent-failure] Only a file that is not there yields the defaults. One
     /// that exists and cannot be read, or cannot be understood, throws - so a config the
     /// user wrote is never quietly replaced by one they did not.
-    ///
-    /// Only the CLI's `--path` passes a path at all, to read a file that is not the app's
-    /// own.
-    static func load(_ named: URL? = nil) throws(ConfigError) -> Loaded {
-        let url = named ?? fileURL
+    static func load(_ url: URL = fileURL) throws(ConfigError) -> Config {
         let text: String
         do {
             text = try String(contentsOf: url, encoding: .utf8)
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
-            return .noFile(at: url)
+            return .default
         } catch {
             throw ConfigError.unreadable(path: url.path, why: error.localizedDescription)
         }
-        return .file(try Config(toml: text), at: url)
-    }
-
-    /// One reading: what it found, and the file it read.
-    ///
-    /// [LAW:types-are-the-program] A Config cannot tell a file that says exactly what
-    /// the defaults say from no file at all, and `lowtalker config check` has to say
-    /// which - printing the defaults as though someone had written them is a report
-    /// that lies about its own subject. So the two readings are two cases, and a
-    /// `noFile` carrying settings somebody chose is unrepresentable.
-    enum Loaded: Hashable, Sendable, CustomStringConvertible {
-        case file(Config, at: URL)
-        /// No file, so what applies is the defaults.
-        case noFile(at: URL)
-
-        /// What the app runs on either way, which is the only thing most callers want.
-        public var config: Config {
-            switch self {
-            case .file(let config, _): config
-            case .noFile: Config.default
-            }
-        }
-
-        /// The file this was read from, or looked for and did not find. Both cases know
-        /// it, so a caller that wants to read the same file again - a watch, above all -
-        /// takes it from here rather than being handed a path of its own that could name
-        /// somewhere else. [LAW:one-source-of-truth]
-        public var url: URL {
-            switch self {
-            case .file(_, let url), .noFile(let url): url
-            }
-        }
-
-        /// The line a report opens with, naming the file it read or the one it looked
-        /// for.
-        public var description: String {
-            switch self {
-            case .file(_, let url): url.path
-            case .noFile(let url): "no file at \(url.path), so these are the defaults"
-            }
-        }
+        return try Config(toml: text)
     }
 }
 
@@ -182,10 +137,30 @@ private struct MicrophoneEntry: Decodable {
 
 /// One `[[modes]]` table.
 private struct ModeEntry: Decodable {
+    private enum CodingKeys: String, CodingKey { case name, chord, vocabulary, routes }
+
     let name: String
     let chord: KeyChord?
     let vocabulary: [Vocabulary.Term]?
     let routes: [RouteEntry]?
+
+    /// Hand-written to refuse `routes = []`: a mode that claims the chord and nothing it
+    /// hears drops every utterance, and leaving the key out already says "dictate".
+    /// [LAW:no-silent-failure]
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        chord = try container.decodeIfPresent(KeyChord.self, forKey: .chord)
+        vocabulary = try container.decodeIfPresent([Vocabulary.Term].self, forKey: .vocabulary)
+        routes = try container.decodeIfPresent([RouteEntry].self, forKey: .routes)
+        guard routes?.isEmpty != true else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .routes,
+                in: container,
+                debugDescription: "an empty list claims nothing; leave routes out to dictate"
+            )
+        }
+    }
 
     /// [LAW:single-enforcer] The chord, each term, and every route arrived through their
     /// own decoders, so what each may be is settled where those types live and is not
@@ -199,8 +174,7 @@ private struct ModeEntry: Decodable {
             chord: chord ?? Hotkey.defaultChord,
             vocabulary: Vocabulary(vocabulary ?? []),
             // A mode that names no routes dictates, which is the only thing it could
-            // have meant; one that names an empty list claims nothing, and `lowtalker
-            // config check` is where that gap is reported.
+            // have meant.
             router: routes.map { Router(routes: $0.map(\.route)) } ?? .dictation
         )
     }

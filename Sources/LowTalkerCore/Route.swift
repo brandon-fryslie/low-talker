@@ -9,7 +9,7 @@
 /// [LAW:effects-at-boundaries] Routes are data, and routing is a pure function of the
 /// Context and Transcript. Nothing here posts events, types text, or
 /// launches programs; the app's executor does that with the Actions returned.
-public struct Route: Hashable, Sendable, CustomStringConvertible {
+public struct Route: Hashable, Sendable {
     public let when: Match
     public let then: Emit
 
@@ -18,15 +18,12 @@ public struct Route: Hashable, Sendable, CustomStringConvertible {
         self.then = then
     }
 
-    /// The rule as one line, the way `lowtalker config check` lists it under a mode.
-    public var description: String { "\(when) → \(then)" }
-
     /// Any context, any transcript, the words go to whatever has focus.
     public static let dictation = Route(when: .always, then: .insertTranscript)
 
     /// What a route claims. Command mode adds cases here: the chord that started
     /// listening, the frontmost app, a keyword at the start of the transcript.
-    public enum Match: Hashable, Sendable, CustomStringConvertible {
+    public enum Match: Hashable, Sendable {
         case always
 
         public func matches(_ context: Context, _ transcript: Transcript) -> Bool {
@@ -42,19 +39,10 @@ public struct Route: Hashable, Sendable, CustomStringConvertible {
             case .always: true
             }
         }
-
-        /// What this match claims, in a person's words. A case added here has to say
-        /// what it claims before it compiles, so a report can never list a match it
-        /// has no words for.
-        public var description: String {
-            switch self {
-            case .always: "always"
-            }
-        }
     }
 
     /// What a claimed utterance becomes.
-    public enum Emit: Hashable, Sendable, CustomStringConvertible {
+    public enum Emit: Hashable, Sendable {
         /// The transcript's text, inserted at the cursor as one action. A blank
         /// transcript — nothing said — produces no action rather than an action that
         /// does nothing.
@@ -79,19 +67,12 @@ public struct Route: Hashable, Sendable, CustomStringConvertible {
         private static func insert(_ transcript: Transcript) -> Action? {
             transcript.isBlank ? nil : .insertText(text: transcript.text)
         }
-
-        public var description: String {
-            switch self {
-            case .insertTranscript: "insert at the cursor"
-            }
-        }
     }
 }
 
 /// Consults routes in order; the first whose match claims the utterance decides the
 /// actions. An utterance no route claims produces none, which is what "the config
-/// has no route for this" should do at speaking time; `lowtalker config check` is
-/// where such a gap is reported, not here.
+/// has no route for this" should do at speaking time.
 public struct Router: Hashable, Sendable {
     public let routes: [Route]
 

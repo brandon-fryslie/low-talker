@@ -50,7 +50,7 @@ public final class Dictation {
 
         /// The session in numbers, without the words: they are what the user
         /// dictated, and each surface decides for itself whether to show them.
-        /// [LAW:one-source-of-truth] The app's log line and the CLI's are this, and
+        /// [LAW:one-source-of-truth] The app's log line is this, and
         /// where the words went is read off what was performed rather than off the app
         /// that happened to be in front at key-down: the person may have moved before the
         /// first words were ready. Every insert after the first goes only to the app the first

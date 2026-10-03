@@ -3,7 +3,7 @@ import LowTalkerCore
 
 /// What a bench run measures: which models, held which ways, how often, told what to expect.
 /// Everything but where the fixtures and the models are read from, which is the surface's to
-/// say: the app reads them from folders a person picked, the CLI from paths.
+/// say: the app reads them from folders a person picked.
 ///
 /// [LAW:parse-dont-validate] Made only through `init`, which refuses an empty list and a
 /// run count under one, so a plan in hand always measures something.

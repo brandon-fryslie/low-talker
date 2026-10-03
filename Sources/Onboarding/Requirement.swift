@@ -20,7 +20,7 @@ public struct Requirement: Sendable, Hashable {
     /// first.
     public let step: String?
 
-    /// What must hold, in the words the menu, the CLI and the guided setup all use.
+    /// What must hold, in the words the menu and the guided setup both use.
     public var name: String { row.rawValue }
 
     public var met: Bool { step == nil }
@@ -33,13 +33,13 @@ public struct Requirement: Sendable, Hashable {
 }
 
 public extension Requirement {
-    /// Every requirement there is, in the order onboarding prints them and the guided setup
+    /// Every requirement there is, in the order the menu shows them and the guided setup
     /// walks them. Each one stops dictation until it is met: nothing is heard without the
     /// microphone, and nothing reaches the cursor or hears the chord without the input
     /// method.
     ///
-    /// This is the one list of what low-talker asks of a Mac. The CLI prints it, the menu
-    /// shows it, and the guided setup is a walk over it, so a grant added here reaches every
+    /// This is the one list of what low-talker asks of a Mac. The menu shows it and the
+    /// guided setup is a walk over it, so a grant added here reaches every
     /// surface and a grant missing here is missing from all of them. [LAW:one-source-of-truth]
     enum Row: String, Sendable, Hashable, CaseIterable {
         case microphone = "Microphone"
@@ -74,61 +74,35 @@ public extension Requirement {
 
 public extension Requirement {
     /// The step as the lines it was written in, and no lines at all when there is
-    /// nothing to do. Split here so that the menu, which makes one item per line, and
-    /// the CLI, which indents them, are working from one shape rather than each taking a
-    /// string apart its own way. [LAW:one-source-of-truth]
+    /// nothing to do. Split here so that the menu, which makes one item per line, and the
+    /// guided setup work from one shape rather than each taking a string apart its own way.
+    /// [LAW:one-source-of-truth]
     var stepLines: [String] { step.map { $0.components(separatedBy: "\n") } ?? [] }
-}
-
-extension Requirement: CustomStringConvertible {
-    public var description: String {
-        (["\(name): \(reads)"] + stepLines.map { "  \($0)" }).joined(separator: "\n")
-    }
 }
 
 /// Where this Mac stands against everything low-talker needs, as one list.
 ///
-/// This is what `lowtalker onboard` prints, what the menu-bar app shows, and what its guided
-/// setup walks. It is computed rather than printed so a test can read it as a value, and so
-/// every surface says the same words without any of them spelling them a second time.
-/// [LAW:effects-at-boundaries]
-public struct Readiness: Sendable, CustomStringConvertible {
+/// This is what the menu-bar app shows and what its guided setup walks. It is computed
+/// rather than printed so a test can read it as a value, and so every surface says the same
+/// words without any of them spelling them a second time. [LAW:effects-at-boundaries]
+public struct Readiness: Sendable {
+    /// Every requirement, every time, in a fixed order - the met ones included. A list
+    /// that showed only what was wrong would leave a reader unable to tell "checked and
+    /// fine" from "never checked". [LAW:dataflow-not-control-flow]
     public let requirements: [Requirement]
-    /// Rows the setup needs that this reader could not read, because only the app can.
-    /// Named rather than dropped, so a list read from the CLI does not pass for the whole.
-    public let notReadHere: [Requirement.Row]
 
-    public init(_ requirements: [Requirement], notReadHere: [Requirement.Row] = []) {
+    public init(_ requirements: [Requirement]) {
         self.requirements = requirements
-        self.notReadHere = notReadHere
     }
 
-    /// Nothing this reader could read is left for anyone to do.
+    /// Nothing is left for anyone to do.
     public var ready: Bool { requirements.allSatisfy(\.met) }
 
     /// The requirements with something left to do, in the list's order.
     public var unmet: [Requirement] { requirements.filter { !$0.met } }
-
-    /// Every requirement, every time, in a fixed order - the met ones included. A list
-    /// that showed only what was wrong would leave a reader unable to tell "checked and
-    /// fine" from "never checked". [LAW:dataflow-not-control-flow]
-    ///
-    /// The rows this reader could not read sit where the list puts them, so the CLI's
-    /// printout and the app's menu run in one order.
-    public var description: String {
-        let read: [(row: Requirement.Row, text: String)] = requirements.map { (row: $0.row, text: $0.description) }
-        let unread: [(row: Requirement.Row, text: String)] = notReadHere.map {
-            (row: $0, text: "\($0.rawValue): only the app can read this; see Set Up in its menu")
-        }
-        let order = Requirement.Row.allCases
-        let lines: [(row: Requirement.Row, text: String)] = read + unread
-        return lines
-            .sorted { order.firstIndex(of: $0.row)! < order.firstIndex(of: $1.row)! }
-            .map(\.text).joined(separator: "\n")
-    }
 }
 
-// MARK: - what only the app can read
+// MARK: - the privacy grants
 
 /// Where each privacy grant is switched on by hand. Named once, because every step that
 /// sends a reader to one of these panes spells it from here.
@@ -188,7 +162,7 @@ public extension Requirement {
     /// Every reading every row can take, each paired with the row it belongs to.
     ///
     /// README.md lists these for a reader following the runbook by hand. It cannot read a
-    /// Swift enum, so it keeps a copy per row, and `make check-docs` reads this to hold
+    /// Swift enum, so it keeps a copy per row, and `RequirementTests` holds
     /// each copy to it. Derived from the same functions the rows themselves are built from
     /// rather than written out a second time, so a reading added to a row reaches every
     /// reader that quotes the list. [LAW:one-source-of-truth]

@@ -37,11 +37,11 @@ WATCHED = (CONTROL, SETTINGS, PATH, DEALLOC, AGENT, READY, SERVING, HEARD, INSER
 
 
 class WireCheckJudgeTests(unittest.TestCase):
-    def judge(self, *lines, app="LowTalker Dev", input_method="LowTalker Dev Input Method", helpers=("lowtalker",)):
+    def judge(self, *lines, app="LowTalker Dev", input_method="LowTalker Dev Input Method"):
         with tempfile.TemporaryDirectory() as directory:
             capture = Path(directory) / "capture.log"
             capture.write_text("\n".join((HEADER,) + lines) + "\n")
-            return subprocess.run([str(checker), "judge", str(capture), app, input_method, *helpers], capture_output=True, text=True)
+            return subprocess.run([str(checker), "judge", str(capture), app, input_method], capture_output=True, text=True)
 
     def assertFailsQuoting(self, line):
         result = self.judge(*WATCHED, line)
@@ -51,11 +51,8 @@ class WireCheckJudgeTests(unittest.TestCase):
     def test_a_launch_and_dictation_with_path_evaluations_only_passes(self):
         result = self.judge(*WATCHED, PATH, HEARD, INSERT)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("LowTalker Dev and LowTalker Dev Input Method: no network work through a launch of each and 2 dictation(s), "
-                      "nor by the helpers the app starts (lowtalker); 2 path evaluation(s)", result.stdout)
-
-    def test_a_connection_by_a_helper_the_app_starts_fails(self):
-        self.assertFailsQuoting(APP_CONNECTION.replace("LowTalker Dev[", "lowtalker["))
+        self.assertIn("LowTalker Dev and LowTalker Dev Input Method: no network work through a launch of each and 2 dictation(s); "
+                      "2 path evaluation(s)", result.stdout)
 
     def test_a_connection_by_the_app_fails_and_quotes_it(self):
         self.assertFailsQuoting(APP_CONNECTION)

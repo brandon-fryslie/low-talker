@@ -7,7 +7,7 @@ private let repository = URL(fileURLWithPath: #filePath)
 /// Nothing the Xcode project builds - every app and input method that ships - has a way to
 /// fetch a model. Read off the two graphs the build resolves rather than off call sites:
 /// what Xcode links into each target, from the project xcodegen generated, and what each
-/// package target depends on, from SwiftPM's own dump of the manifest. The CLI, which
+/// package target depends on, from SwiftPM's own dump of the manifest. `model-tool`, which
 /// SwiftPM builds and nothing ships, reaches the installer by the same read, so the read
 /// is not blind. [LAW:one-way-deps]
 ///
@@ -21,7 +21,7 @@ private let repository = URL(fileURLWithPath: #filePath)
 /// rewrote the project would do so under whatever build is running in the tree.
 @Suite struct AppLinksNoInstallerTests {
     static let installer = "ModelInstall"
-    static let cli = "lowtalker"
+    static let modelTool = "model-tool"
     static let app = "LowTalker"
 
     /// Package.swift as SwiftPM reads it: each product to the targets it bundles, and each
@@ -127,11 +127,11 @@ private let repository = URL(fileURLWithPath: #filePath)
         }
     }
 
-    /// The same package read finds the installer beneath the CLI, so the read above is not
-    /// blind.
-    @Test func theCLIReachesIt() throws {
+    /// The same package read finds the installer beneath `model-tool`, so the read above is
+    /// not blind.
+    @Test func theModelToolReachesIt() throws {
         let package = try Self.package()
-        let roots = try #require(package.products[Self.cli], "Package.swift exports no \(Self.cli) product")
-        #expect(Self.reach(roots, in: package.targets).contains(Self.installer))
+        try #require(package.targets[Self.modelTool] != nil, "Package.swift declares no \(Self.modelTool) target")
+        #expect(Self.reach([Self.modelTool], in: package.targets).contains(Self.installer))
     }
 }

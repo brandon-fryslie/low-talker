@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Prints the name of the identity that signs dev builds: the app and the CLI alike.
+# Prints the name of the identity that signs dev builds.
 #
 # [LAW:one-source-of-truth] project.yml owns the name, as the project-wide CODE_SIGN_IDENTITY.
-# Everything else that signs reads it from here, so the CLI cannot come to be signed by a
-# different certificate than the app.
+# `make signing-identity` reads it from here, so the identity it creates is the one Xcode
+# signs with.
 set -euo pipefail
 
 xcodegen dump --type json \

@@ -2,8 +2,8 @@ import Bench
 import Foundation
 import LowTalkerCore
 
-/// `LowTalker --bench …` from a terminal: the Benchmark window's run, printed as the
-/// tab-separated table `lowtalker bench` prints, and nothing else. The process never reaches
+/// `LowTalker --bench …` from a terminal: the Benchmark window's run, printed as its
+/// tab-separated table, and nothing else. The process never reaches
 /// NSApplicationMain, so it draws no menu-bar item, registers no hotkey port and talks to no
 /// input method; it loads the models the run asks for and exits when the run ends.
 ///

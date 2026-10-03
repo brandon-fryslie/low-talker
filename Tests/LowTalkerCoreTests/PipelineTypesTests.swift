@@ -2,17 +2,9 @@ import Foundation
 import LowTalkerCore
 import Testing
 
-/// The three pipeline types are data first: a Context arrives as JSON from the dry-run
-/// CLI, and Actions come back as JSON from Pipe programs. Every test here is about
+/// The pipeline types are data first: Actions come back as JSON from Pipe programs. Every test here is about
 /// what survives that trip, not how the types are laid out.
 @Suite struct PipelineTypesTests {
-    static let context = Context(
-        chord: KeyChord(modifiers: .rightOption, .leftShift),
-        press: .hold,
-        frontmostApp: BundleID(rawValue: "com.apple.Safari"),
-        focusedElementRole: AccessibilityRole(rawValue: "AXTextField")
-    )
-
     static let transcript = Transcript(words: [
         .init(text: "Hello,", time: 0.10...0.42, confidence: 0.98),
         .init(text: " world.", time: 0.50...0.91, confidence: 0.87),
@@ -30,10 +22,6 @@ import Testing
 
     private func roundTrip<T: Codable & Equatable>(_ value: T) throws -> T {
         try JSONDecoder().decode(T.self, from: JSONEncoder().encode(value))
-    }
-
-    @Test func contextRoundTripsThroughCodable() throws {
-        #expect(try roundTrip(Self.context) == Self.context)
     }
 
     @Test func transcriptRoundTripsThroughCodable() throws {
@@ -70,21 +58,6 @@ import Testing
             .runShortcut(name: "Toggle Lights", input: nil),
             .pipe(executable: "/usr/bin/env", arguments: ["rewrite"]),
         ])
-    }
-
-    /// The Context shape the dry-run CLI will accept on `--context`.
-    @Test func contextDecodesFromHandWrittenJSON() throws {
-        let json = """
-        {"chord": {"modifiers": ["rightOption"]}, "press": "tap",
-         "frontmostApp": "com.apple.Notes", "focusedElementRole": "AXTextArea"}
-        """
-        let decoded = try JSONDecoder().decode(Context.self, from: Data(json.utf8))
-        #expect(decoded == Context(
-            chord: KeyChord(modifiers: .rightOption),
-            press: .tap,
-            frontmostApp: BundleID(rawValue: "com.apple.Notes"),
-            focusedElementRole: AccessibilityRole(rawValue: "AXTextArea")
-        ))
     }
 
     /// A chord with nothing pressed is not a chord; the decoder refuses it.

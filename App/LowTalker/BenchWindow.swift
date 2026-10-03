@@ -2,7 +2,7 @@ import AppKit
 import Bench
 import LowTalkerCore
 
-/// The Benchmark window: every option `lowtalker bench` takes, a run started and cancelled
+/// The Benchmark window: every option `LowTalker --bench` takes, a run started and cancelled
 /// here, and its table, which copies as the text `LowTalker --bench` prints.
 ///
 /// The IMK rule against windows binds the input method's process, not this one.

@@ -54,7 +54,7 @@ APP := $(PRODUCTS)/LowTalker.app
 INPUT_METHOD := $(PRODUCTS)/LowTalker Input Method.app
 XCODE_RESOLVED_DIR := LowTalker.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
 
-.PHONY: app package install run variants test check-docs cli model-tool sbom check-sbom check-licenses clean signing-identity
+.PHONY: app package install run variants test model-tool sbom check-sbom check-licenses clean signing-identity
 
 # Regeneration is unconditional: xcodegen is idempotent and sub-second, and a
 # timestamp rule cannot see removed sources or in-place rewrites of the project.
@@ -124,15 +124,6 @@ run: install
 variants:
 	@echo $(VARIANTS)
 
-# The build comes first because `check-docs` reads the onboarding readings out of the CLI.
-# This is why `check-docs` is a recipe line here rather than a prerequisite: a
-# prerequisite would run before `swift build`, against a stale CLI or none.
-#
-# Signing straight after the tests is what makes a test run safe to leave behind. Every link SwiftPM performs
-# ad-hoc signs the product, and the CLI's signing identifier is what the Neural Engine keys
-# its compiled model by, so without this a green run leaves the next `lowtalker` paying the
-# minutes-long specialization again. Unconditional, because a recipe cannot see what SwiftPM
-# chose to link. [LAW:dataflow-not-control-flow]
 # Generating first is what lets `InputMethodPlistTests` read the plist xcodegen writes
 # without generating it itself: a test that rewrote LowTalker.xcodeproj and App/Generated
 # would be doing it underneath any build already running in this tree.
@@ -140,58 +131,12 @@ variants:
 # `build_app`, and it is the same command.
 test:
 	xcodegen generate
-	swift build
-	$(MAKE) check-docs
 	swift test
-	$(MAKE) cli
 	$(MAKE) check-licenses
-
-# [LAW:one-source-of-truth] The onboarding rows' readings are a vocabulary README.md keeps a
-# copy of: each way macOS can answer for the microphone, and the input method switched on or
-# off, and the prose lists them for a reader following the runbook by hand. This is what
-# proves the copies still agree.
-#
-# Compared as sets in both directions, so a reading added to the code and a reading left
-# standing in README after the code dropped it both fail. Empty on either side is a broken
-# reader, not agreement, and says so. One loop over the rows rather than one recipe block per
-# row, because the rows differ only in which lines of README hold their copy.
-# [LAW:one-type-per-behavior]
-#
-# Needs `swift build` first; the `test` target runs it before this.
-check-docs:
-	@set -euo pipefail; \
-	readings=$$(.build/debug/lowtalker onboard readings); \
-	[ -n "$$readings" ] || { echo "check-docs: 'lowtalker onboard readings' emits no readings" >&2; exit 1; }; \
-	check_row() { \
-	  emitted=$$(awk -F'\t' -v row="$$1" '$$1==row{print $$2}' <<<"$$readings" | sort -u); \
-	  quoted=$$(awk -v lead="$$2" '$$0 ~ lead{f=1;next} f&&/^- `/{print;seen=1;next} f&&seen{exit}' README.md \
-	    | sed -E 's/^- `([^`]*)`.*/\1/' | sort -u); \
-	  [ -n "$$emitted" ] || { echo "check-docs: 'lowtalker onboard readings' emits nothing for $$1" >&2; exit 1; }; \
-	  [ -n "$$quoted" ] || { echo "check-docs: README.md carries no list of the readings for $$1" >&2; exit 1; }; \
-	  diff <(echo "$$emitted") <(echo "$$quoted") \
-	    || { echo "check-docs: the code and README.md disagree about the readings for $$1 (< code, > README)" >&2; exit 1; }; \
-	  echo "check-docs: README.md names every reading the $$1 row can take"; \
-	}; \
-	check_row "Microphone" '^So the microphone.s row reads one of'; \
-	check_row "Input method" '^So the input method.s row reads one of'
-
-# The CLI for engine work, as this tree builds it, signed with the dev identity under a
-# fixed identifier rather than ad hoc. That identity is what the Neural Engine keys its
-# compiled model by, and `swift build` links a fresh binary every time: unsigned, each
-# rebuild pays the minutes-long specialization again.
-# [LAW:one-source-of-truth] scripts/signing-identity reads the identity name off
-# project.yml; the lookup runs in the recipe (not $(shell), which discards exit status) so a
-# failing tool aborts loudly.
-CLI := .build/debug/lowtalker
-CLI_IDENTIFIER := ai.promptctl.low-talker.cli
-cli:
-	swift build --product lowtalker
-	codesign --force --sign "$$(scripts/signing-identity)" --identifier "$(CLI_IDENTIFIER)" "$(CLI)"
-	@echo "$(CLI)"
 
 # The model store, for the build: the default model's name, the commits `main` names for it,
 # and fetching, checking and packing it. Nothing in it loads a model, so it needs no signing
-# identity; the ad-hoc signature the link leaves is enough. Prints its path, as `cli` does.
+# identity; the ad-hoc signature the link leaves is enough. Prints its path.
 MODEL_TOOL := .build/debug/model-tool
 model-tool:
 	swift build --product model-tool
@@ -229,8 +174,7 @@ check-licenses: check-sbom
 	scripts/check-licenses sbom/lowtalker.cdx.json
 	scripts/notices sbom/lowtalker.cdx.json .build/notices.txt
 
-# Once per Mac. Until it has run, `make app`, `make cli` and `make test` stop with "No
-# certificate matching".
+# Once per Mac. Until it has run, `make app` stops with "No certificate matching".
 signing-identity:
 	scripts/make-signing-identity "$$(scripts/signing-identity)"
 

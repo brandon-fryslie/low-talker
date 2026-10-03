@@ -2,8 +2,8 @@ import Foundation
 import LowTalkerCore
 import WhisperKit
 
-/// Making a store whole: the write side of `ModelStore`, in the module the CLI links and
-/// the app does not.
+/// Making a store whole: the write side of `ModelStore`, in the module only the build's
+/// `model-tool` links.
 ///
 /// [LAW:one-way-deps] The app loads the store its bundle carries, read-only, through
 /// LowTalkerCore alone. Every way of writing a store - fetching from huggingface.co or a
