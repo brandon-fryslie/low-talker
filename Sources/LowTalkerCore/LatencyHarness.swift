@@ -16,9 +16,12 @@ import Synchronization
 /// holds the engine as the app's presses do, and while `Serving.served` other callers
 /// ask the same engine throughout, so a run measures what serving costs dictation.
 ///
-/// [LAW:effects-at-boundaries] The clock ticks here and nowhere below; scoring is
-/// `WordErrorRate`, a pure function, and the engine arrives as a closure so this
-/// harness times whatever stands behind `Transcriber`.
+/// [LAW:effects-at-boundaries] The clock arrives as a parameter and is read here and
+/// nowhere below; scoring is `WordErrorRate`, a pure function, and the engine arrives as
+/// a closure so this harness times whatever stands behind `Transcriber`. A bench run
+/// hands in the wall clock; a test hands in one it moves itself, so what it asserts is
+/// the harness's timeline rather than how fast the machine scheduled it.
+/// [LAW:no-ambient-temporal-coupling]
 public enum LatencyHarness {
     /// How a hold's audio reaches the engine.
     public enum Arrival: String, CaseIterable, Sendable {
@@ -105,18 +108,18 @@ public enum LatencyHarness {
         }
     }
 
-    public static func measure(
+    public static func measure<C: Clock<Duration>>(
         _ fixtures: [Fixture],
         arrivals: [Arrival],
         servings: [Serving],
         reruns: UInt,
         expecting vocabulary: Vocabulary,
+        on clock: C,
         load: () async throws -> Engine
     ) async throws -> LatencyReport {
-        let clock = ContinuousClock()
         let loading = clock.now
         let engine = try await load()
-        let load = clock.now - loading
+        let load = loading.duration(to: clock.now)
         // Each row, and the uploads its holds' served callers read, which are judged once
         // every hold is done.
         var rows: [(uploads: [String], result: (_ changed: Int) -> LatencyReport.FixtureResult)] = []
@@ -165,19 +168,19 @@ public enum LatencyHarness {
     /// hold takes the engine at key-down, each chunk reaches it when its audio would have been
     /// captured, the key comes up with the last, and the transcript is awaited; then the
     /// served requests are awaited too, and the uploads' readings handed back.
-    private static func hold(
+    private static func hold<C: Clock<Duration>>(
         _ chunks: [AudioClip],
         amid requests: [ServedRequest],
         with engine: Engine,
         expecting vocabulary: Vocabulary,
-        clock: ContinuousClock
+        clock: C
     ) async throws -> (LatencyReport.Run, Transcript, uploads: [String]) {
         // [LAW:no-ambient-temporal-coupling] The timeline is the requests' own: key-down
         // comes once the earliest of them has begun.
-        let start = clock.now + .seconds(requests.reduce(0) { max($0, -$1.at) })
+        let start = clock.now.advanced(by: .seconds(requests.reduce(0) { max($0, -$1.at) }))
         let served = requests.map { request in
             Task {
-                let text = try await Self.feed(request.clip.chunks(of: request.arrival.chunk(of: request.clip)), from: start + .seconds(request.at), arriving: request.arrival, clock: clock) { audio in
+                let text = try await Self.feed(request.clip.chunks(of: request.arrival.chunk(of: request.clip)), from: start.advanced(by: .seconds(request.at)), arriving: request.arrival, clock: clock) { audio in
                     try await engine.served.transcribe(audio, expecting: .empty) { _ in }
                 }.text
                 return request.arrival == .batch ? text : nil
@@ -186,14 +189,14 @@ public enum LatencyHarness {
         // A hold that ends by throwing takes its served callers with it, so none is left
         // asking the engine behind the next hold; once they have been awaited this is moot.
         defer { served.forEach { $0.cancel() } }
-        try await clock.sleep(until: start)
+        try await clock.sleep(until: start, tolerance: nil)
         let hold = engine.turns.hold()
-        let firstText = Mutex<ContinuousClock.Instant?>(nil)
+        let firstText = Mutex<C.Instant?>(nil)
         let (audio, feed) = AsyncStream<AudioClip>.makeStream()
         async let transcript = engine.dictation.transcribe(audio, expecting: vocabulary) { partial in
             // A pass over leading quiet reads nothing; the text shown is the first
             // partial with words in it.
-            let shown: ContinuousClock.Instant? = partial.text.isEmpty ? nil : clock.now
+            let shown: C.Instant? = partial.text.isEmpty ? nil : clock.now
             firstText.withLock { $0 = $0 ?? shown }
         }
         var captured: TimeInterval = 0
@@ -201,7 +204,7 @@ public enum LatencyHarness {
             captured += chunk.duration
             // [LAW:no-ambient-temporal-coupling] The sleep is the hold: audio exists
             // only once it has been spoken, and this is the one place that says when.
-            try await clock.sleep(until: start + .seconds(captured))
+            try await clock.sleep(until: start.advanced(by: .seconds(captured)), tolerance: nil)
             feed.yield(chunk)
         }
         let keyUp = clock.now
@@ -218,16 +221,16 @@ public enum LatencyHarness {
         for request in served {
             if let text = try await request.value { uploads.append(text) }
         }
-        return (LatencyReport.Run(keyUpToTranscript: shown - keyUp, holdToFirstText: first - start), final, uploads)
+        return (LatencyReport.Run(keyUpToTranscript: keyUp.duration(to: shown), holdToFirstText: start.duration(to: first)), final, uploads)
     }
 
     /// Hands `chunks` to `hear` as a caller would: a batch whole at `start`, since an upload
     /// was recorded before it was sent, and a stream a chunk at a time as it is captured.
-    private static func feed(
+    private static func feed<C: Clock<Duration>>(
         _ chunks: [AudioClip],
-        from start: ContinuousClock.Instant,
+        from start: C.Instant,
         arriving arrival: Arrival,
-        clock: ContinuousClock,
+        clock: C,
         hear: (AsyncStream<AudioClip>) async throws -> Transcript
     ) async throws -> Transcript {
         let (audio, feed) = AsyncStream<AudioClip>.makeStream()
@@ -236,7 +239,7 @@ public enum LatencyHarness {
             var captured: TimeInterval = 0
             for chunk in chunks {
                 captured += arrival == .batch ? 0 : chunk.duration
-                try await clock.sleep(until: start + .seconds(captured))
+                try await clock.sleep(until: start.advanced(by: .seconds(captured)), tolerance: nil)
                 feed.yield(chunk)
             }
         }()

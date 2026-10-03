@@ -28,7 +28,8 @@ public enum Bench {
             try Task.checkCancellation()
             await emit(.loading(model))
             let report = try await LatencyHarness.measure(
-                fixtures, arrivals: plan.arrivals, servings: plan.servings, reruns: UInt(plan.runs - 1), expecting: plan.vocabulary
+                fixtures, arrivals: plan.arrivals, servings: plan.servings, reruns: UInt(plan.runs - 1), expecting: plan.vocabulary,
+                on: ContinuousClock()
             ) { try await load(model) }
             for result in report.fixtures {
                 await emit(.row(BenchRow(model: model, load: report.load, result: result)))

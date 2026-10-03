@@ -4,7 +4,8 @@
 /// 5 ms sleep can overrun a one-second window, which is a fact about the runner and
 /// not about the loop. [LAW:no-ambient-temporal-coupling]
 ///
-/// Shared by every suite that drives a wait, so there is one clock to get right.
+/// Shared by every suite whose waits need only time to pass, so there is one such clock
+/// to get right; `TestClock` holds a sleeper at an instant while something else runs.
 /// [LAW:one-source-of-truth]
 final class StepClock: Clock, @unchecked Sendable {
     struct Instant: InstantProtocol {
