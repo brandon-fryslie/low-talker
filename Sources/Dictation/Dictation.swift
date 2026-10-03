@@ -114,7 +114,7 @@ public final class Dictation {
     /// optional app, so an end can never find half a beginning.
     private enum Press {
         case up
-        case down(AudioSession, into: BundleID, Task<Decoded, Never>, Partials)
+        case down(AudioCapture.StreamedSession, into: BundleID, Task<Decoded, Never>, Partials)
         case refused(any Error)
     }
 
@@ -183,9 +183,9 @@ public final class Dictation {
                 // marks the ring where the key went down. What it reaches
                 // back over is the resting mode's to say: nothing behind a microphone that
                 // opens here, and the look-back behind one held open since `start()`.
-                let session = try capture.beginSession(at: moment)
+                let session = capture.stream(try capture.beginSession(at: moment))
                 let partials = Partials(since: moment)
-                press = .down(session, into: into, decode(capture.audio(of: session), into: partials, releasing: hold), partials)
+                press = .down(session, into: into, decode(session.audio, into: partials, releasing: hold), partials)
             } catch {
                 hold.release()
                 press = .refused(error)
@@ -213,9 +213,9 @@ public final class Dictation {
                 // ended, so a session left open cannot carry its beginning into the next
                 // press's clip and cannot leave the device held after the key came up.
                 // Its audio ends here too, which is what lets the decode finish.
-                let audio = capture.endSession(session)
+                let lost = capture.endSession(session)
                 // What there was to hear, read once. [LAW:no-silent-failure] A hotkey that
-                // stopped and audio the capture could not hand over whole each leave
+                // stopped and audio the capture could not stream whole each leave
                 // something this loop must not report as an utterance. The lapse is asked
                 // first: a press the hotkey stopped during says so rather than describing the
                 // clip it left behind, which was never the whole utterance anyway. A
@@ -224,11 +224,11 @@ public final class Dictation {
                 // into another process, up to half a second of it, and this is the main
                 // actor: a press waits on it, and so does every window this app draws.
                 // A route that wants the role reads it off this thread.
-                heard = switch (ending, audio) {
+                heard = switch (ending, lost) {
                 case (.lapsed, _): .failure(PressLapsed(chord: chord))
-                case (.released(let kind), .whole):
+                case (.released(let kind), nil):
                     .success(Heard(context: Context(chord: chord, press: kind, frontmostApp: into, focusedElementRole: nil), duringPress: duringPress, decode: decode))
-                case (.released, .partial(_, let lost)): .failure(SpeechLost(chord: chord, lost: lost))
+                case (.released, let lost?): .failure(SpeechLost(chord: chord, lost: lost))
                 }
                 // A press that will not be inserted has no use for the rest of its decode, and
                 // the engine goes back to whoever is waiting as soon as it stops.

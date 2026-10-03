@@ -567,31 +567,16 @@ extension Result {
         #expect(rig.inputMethod.inserted == ["a"])
     }
 
-    /// [LAW:no-silent-failure] The speaker held the key for longer than the ring retains,
-    /// so the first of what they said was overwritten by the last of it before the key
-    /// came up. What is left is a plausible utterance: nothing in the samples says where
-    /// it was cut, and - as the epic's contract test found by losing 0.4 s of speech with
-    /// every assertion over inserted text still passing - nothing in the text says it either.
-    /// So the press is reported rather than inserted, the same answer a lapsed press gets and
-    /// for the same reason: the destination is the user's editor, where a fragment cannot
-    /// be marked as one. The loss is named in samples, which is what makes this an
-    /// assertion and not a hope. [LAW:behavior-not-structure]
-    @Test func aPressTheRingCouldNotHoldWholeIsReportedInsteadOfInsertedAndTheNextPressInserts() async throws {
+    /// The speaker held the key for longer than the ring retains. The ring overwrote the
+    /// first of what was said with the last of it, but the engine had already heard every
+    /// buffer as it landed, so the press is whole and inserts.
+    @Test func aPressLongerThanTheRingRetainsIsHeardWholeAndInserts() async throws {
         let engine = FakeTranscriber { _ in Transcript(typed: "a") }
         let rig = try Rig(hearing: engine, retaining: 0.5)
-
-        rig.hold(speaking: [Float](repeating: 1, count: AudioClip.sampleCount(for: 0.8)))
-        let press = try #require(await rig.report().failure as? SpeechLost)
-        #expect(press.chord == Rig.rightOption)
-        // A 0.8 s hold into a ring that keeps 0.5 s: the missing 0.3 s is the head of the
-        // utterance, and the pre-roll reaching back before the microphone started is not
-        // part of it - there was no audio there to lose.
-        #expect(press.lost.scrolledOff == AudioClip.sampleCount(for: 0.3))
-        #expect(!press.lost.interrupted)
-        #expect(rig.inputMethod.inserted.isEmpty)
-
-        rig.hold(speaking: [2, 3])
+        let said = [Float](repeating: 1, count: AudioClip.sampleCount(for: 0.8))
+        rig.hold(speaking: said)
         #expect(try await rig.session().transcript.text == "a")
+        #expect(engine.clips.last?.samples == said)
         #expect(rig.inputMethod.inserted == ["a"])
     }
 
