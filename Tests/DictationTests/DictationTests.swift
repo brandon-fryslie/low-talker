@@ -39,7 +39,6 @@ final class Rig {
 
     init(
         transcriber: @escaping @Sendable @MainActor () async throws -> any Transcriber,
-        router: Router = Router(routes: [.dictation]),
         retaining: TimeInterval = AudioCapture.defaultRetention,
         atRest: MicrophoneAtRest = .shut,
         frontmost: @escaping @Sendable @MainActor () throws -> BundleID = { textEdit }
@@ -55,7 +54,6 @@ final class Rig {
             capture: capture,
             transcriber: transcriber,
             turns: turns,
-            router: router,
             executor: Executor(insertingThrough: inputMethod),
             frontmost: frontmost,
             report: { outcome in
@@ -250,7 +248,7 @@ extension Result {
         rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
         let stopped = try #require(await rig.report().failure as? PressStopped)
         #expect(stopped.landed == 1)
-        #expect(stopped.causes.last as? Refusal == .dictationIsInAnotherApp)
+        #expect(stopped.cause as? Refusal == .dictationIsInAnotherApp)
         #expect(failureLine(stopped) == "\(Refusal.dictationIsInAnotherApp) 1 words of your dictation were inserted before it; the rest were not.")
         #expect(rig.inputMethod.inserted == ["hello"])
     }
@@ -333,24 +331,6 @@ extension Result {
         #expect("\(lapsed)".hasSuffix("The 2 words already inserted stay; the rest of your dictation was ignored."))
         #expect(failureLine(lapsed) == "\(lapsed)")
         #expect(rig.inputMethod.inserted == ["hello there"])
-    }
-
-    /// A mode whose router cannot act on words before the whole transcript is in commits
-    /// nothing while the press is open. A spoken edit is such a mode; the first emit that
-    /// acts on the whole transcript is the one that makes it, so today the router that
-    /// claims nothing stands for it.
-    @Test func aModeThatActsOnTheWholeTranscriptCommitsNothingWhileThePressIsOpen() async throws {
-        let engine = FakeTranscriber(confirming: { samples in Transcript(typed: samples.isEmpty ? "" : "hello") }) { _ in Transcript(typed: "hello") }
-        let rig = try Rig(transcriber: { engine }, router: Router(routes: []))
-        rig.dictation.press(.began(Rig.rightOption, at: rig.now))
-        rig.speak([1, 2])
-        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { engine.hearing == [1, 2] })
-        rig.dictation.press(.ended(Rig.rightOption, .released(.hold)))
-        let session = try await rig.session()
-        #expect(session.duringPress.commits == 0)
-        #expect(session.duringPress.firstCommit == nil)
-        #expect("\(session)".contains("nothing committed before key-up"))
-        #expect(rig.inputMethod.inserted.isEmpty)
     }
 
     /// The engine hears a press while it is still going on: the audio reaches it as it is
@@ -673,7 +653,7 @@ extension Result {
         let rig = try Rig(hearing: FakeTranscriber { _ in Transcript(typed: "a") })
         rig.inputMethod.reaching(BundleID(rawValue: "com.apple.Safari"))
         rig.hold()
-        #expect(try await rig.session().description.hasSuffix("1 actions into com.apple.Safari"))
+        #expect(try await rig.session().description.hasSuffix("1 insert into com.apple.Safari"))
     }
 
     /// Nothing said is a session that performed nothing, and a destination it never had
@@ -681,7 +661,7 @@ extension Result {
     @Test func aSessionThatPerformedNothingNamesNoDestination() async throws {
         let rig = try Rig(hearing: FakeTranscriber { _ in Transcript(typed: "") })
         rig.hold()
-        #expect(try await rig.session().description.hasSuffix("0 actions"))
+        #expect(try await rig.session().description.hasSuffix("0 inserts"))
     }
 
     @Test func anEngineThatFailsIsReportedAndTheNextPressInserts() async throws {
@@ -708,7 +688,7 @@ extension Result {
         rig.inputMethod.refusing(Refusal.noClientHasFocus)
         rig.hold()
         let stopped = try #require(await rig.report().failure as? PressStopped)
-        #expect(stopped.causes.last as? Refusal == .noClientHasFocus)
+        #expect(stopped.cause as? Refusal == .noClientHasFocus)
         #expect(stopped.landed == 0)
         #expect(failureLine(stopped) == "\(Refusal.noClientHasFocus)")
         rig.inputMethod.refusing(nil)

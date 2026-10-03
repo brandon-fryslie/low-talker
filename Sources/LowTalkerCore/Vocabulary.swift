@@ -1,10 +1,8 @@
 import Foundation
 
 /// What the speaker is expected to say that an engine could not guess the
-/// spelling of: names, jargon, and in command mode the app names and keywords.
-/// Each mode supplies one, and the engine is told it before the utterance begins,
-/// so a small vocabulary matched against a biased transcript takes the place of
-/// spotting keywords in open speech.
+/// spelling of: names and jargon. Each mode supplies one, and the engine is told
+/// it before the utterance begins.
 ///
 /// [LAW:types-are-the-program] A vocabulary is a list of terms and nothing else:
 /// no flag for whether to use it, since the empty one is the one to use when

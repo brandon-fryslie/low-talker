@@ -65,8 +65,8 @@ public struct Config: Hashable, Sendable {
     }
 }
 
-/// One way of speaking: the chords that start it, what the engine is told to expect
-/// before any words arrive, and the routes that turn what was said into actions.
+/// One way of speaking: the chord that starts it, and what the engine is told to expect
+/// before any words arrive.
 ///
 /// [LAW:one-type-per-behavior] Dictation is not a case in code. It is a Mode like
 /// every other, the one `Config.default` supplies when no file names any.
@@ -79,20 +79,18 @@ public struct Mode: Hashable, Sendable {
     /// What the engine is told to expect, so a name it could not have guessed is
     /// spelled the way this mode wants it.
     public let vocabulary: Vocabulary
-    public let router: Router
 
     /// The name arrives trimmed, as a Vocabulary term does, so that two modes cannot
     /// differ by spacing alone.
-    public init(name: String, chord: KeyChord, vocabulary: Vocabulary = .empty, router: Router) {
+    public init(name: String, chord: KeyChord, vocabulary: Vocabulary = .empty) {
         self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         self.chord = chord
         self.vocabulary = vocabulary
-        self.router = router
     }
 
     /// Hold the hotkey, speak, and the words are typed wherever the focus is, on the
     /// default chord.
-    public static let dictation = Mode(name: "dictation", chord: Hotkey.defaultChord, vocabulary: .empty, router: .dictation)
+    public static let dictation = Mode(name: "dictation", chord: Hotkey.defaultChord, vocabulary: .empty)
 }
 
 /// What is wrong with a config, in the words a person editing the file needs.

@@ -2,23 +2,13 @@ import Foundation
 import LowTalkerCore
 import Testing
 
-/// The pipeline types are data first: Actions come back as JSON from Pipe programs. Every test here is about
-/// what survives that trip, not how the types are laid out.
+/// The pipeline types are data first. Every test here is about what survives decoding and
+/// encoding, not how the types are laid out.
 @Suite struct PipelineTypesTests {
     static let transcript = Transcript(words: [
         .init(text: "Hello,", time: 0.10...0.42, confidence: 0.98),
         .init(text: " world.", time: 0.50...0.91, confidence: 0.87),
     ])
-
-    /// One of every Action case, so a payload the encoder cannot carry fails here.
-    static let actions: [Action] = [
-        .insertText(text: "hi"),
-        .activateApp(bundleID: BundleID(rawValue: "com.apple.Safari")),
-        .openURL(url: URL(string: "https://example.com/?q=low%20talker")!),
-        .runShortcut(name: "Append to Journal", input: "hi"),
-        .runShortcut(name: "Toggle Lights", input: nil),
-        .pipe(executable: "/usr/bin/env", arguments: ["rewrite", "--tone", "formal"]),
-    ]
 
     private func roundTrip<T: Codable & Equatable>(_ value: T) throws -> T {
         try JSONDecoder().decode(T.self, from: JSONEncoder().encode(value))
@@ -28,36 +18,20 @@ import Testing
         #expect(try roundTrip(Self.transcript) == Self.transcript)
     }
 
-    @Test func everyActionRoundTripsThroughCodable() throws {
-        #expect(try roundTrip(Self.actions) == Self.actions)
-    }
-
     /// Text is the words as emitted, whitespace and punctuation included.
     @Test func textIsTheWordsConcatenated() {
         #expect(Self.transcript.text == "Hello, world.")
         #expect(Transcript(words: []).text == "")
     }
 
-    /// The JSON a Pipe program writes by hand. If this shape changes, every Pipe script
-    /// in the world breaks, so it is pinned as a literal rather than derived.
-    @Test func pipeProgramsWriteReadableJSON() throws {
-        let json = """
-        [
-          {"insertText": {"text": "hi"}},
-          {"activateApp": {"bundleID": "com.apple.Safari"}},
-          {"openURL": {"url": "https://example.com/"}},
-          {"runShortcut": {"name": "Toggle Lights"}},
-          {"pipe": {"executable": "/usr/bin/env", "arguments": ["rewrite"]}}
-        ]
-        """
-        let decoded = try JSONDecoder().decode([Action].self, from: Data(json.utf8))
-        #expect(decoded == [
-            .insertText(text: "hi"),
-            .activateApp(bundleID: BundleID(rawValue: "com.apple.Safari")),
-            .openURL(url: URL(string: "https://example.com/")!),
-            .runShortcut(name: "Toggle Lights", input: nil),
-            .pipe(executable: "/usr/bin/env", arguments: ["rewrite"]),
-        ])
+    /// A typed transcript splits into engine-shaped words and reads back verbatim.
+    @Test func typedTranscriptSplitsIntoWordsAndReadsBackUnchanged() {
+        let transcript = Transcript(typed: "  Hello,  world. ")
+        #expect(transcript.words.map(\.text) == ["  Hello,", "  world. "])
+        #expect(transcript.text == "  Hello,  world. ")
+        #expect(transcript.words.allSatisfy { $0.time == 0...0 && $0.confidence == 1.0 })
+        #expect(Transcript(typed: "").words.isEmpty)
+        #expect(Transcript(typed: "   ").words.isEmpty)
     }
 
     /// A chord with nothing pressed is not a chord; the decoder refuses it.

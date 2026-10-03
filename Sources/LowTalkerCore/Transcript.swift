@@ -1,7 +1,7 @@
 import Foundation
 
 /// What the engine heard, word by word. Never a bare string: timings and confidence
-/// are what let a route trust, trim, or reject what was said.
+/// are what let a reader trust, trim, or reject what was said.
 ///
 /// [LAW:one-source-of-truth] The words are the transcript; `text` is derived from them
 /// so the two can never disagree.
@@ -38,8 +38,8 @@ public struct Transcript: Hashable, Codable, Sendable {
     /// drops whitespace-only input to no words, but the engine can hand back a lone
     /// whitespace word, so an empty utterance is this predicate — not `text.isEmpty`,
     /// which a whitespace-only word slips past.
-    /// [LAW:one-source-of-truth] one test for "nothing said", so a route that emits nothing
-    /// and the executor that inserts nothing agree on what nothing is.
+    /// [LAW:one-source-of-truth] one test for "nothing said", so the executor inserts
+    /// nothing for exactly what is nothing.
     public var isBlank: Bool {
         !text.contains { !$0.isWhitespace }
     }

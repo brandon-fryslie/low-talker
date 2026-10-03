@@ -220,7 +220,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 return try await engine.value
             },
             turns: turns,
-            router: Router(routes: [.dictation]),
             // The words cross to the input method, which commits them at the
             // cursor through the text input system.
             executor: Executor(insertingThrough: InputMethodInserter()),

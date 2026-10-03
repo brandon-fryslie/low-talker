@@ -1,6 +1,6 @@
 # low-talker
 
-Local push-to-talk dictation for macOS, built so voice commands can grow on top of it without ever making dictation worse.
+Local push-to-talk dictation for macOS.
 
 ## The atom
 
@@ -10,29 +10,24 @@ Everything runs on the machine. Audio never leaves it. The app lives in the menu
 
 ## The one design rule
 
-The chord you hold picks the mode. Your voice supplies the parameter.
+The chord you hold picks the mode. Your voice supplies the words.
 
-Dictation and commands are never told apart by listening for magic words in the transcript. If "switch to Safari" spoken mid-sentence ever switched apps, you would stop trusting the tool for the thing you use it for most. So a command exists only in a mode that a different chord selected. Hold Right Option and everything you say is text. Hold Right Option plus Shift and everything you say is a command. Dictation's reliability is untouched no matter how many commands are added.
-
-This rule is also what gives the recognizer a fair shot at commands. Each mode seeds the model with its own vocabulary: dictation mode with your own words and names, command mode with the names of running apps and the command keywords. A small vocabulary matched against a biased transcript is a much easier problem than spotting commands in open speech. The biasing is measured: told three names, the default model spells all three where it got all three wrong unaided, at about a tenth of a second more per pass, with the other fixtures unchanged (README, "The latency harness").
+Each mode seeds the model with its own vocabulary, your own words and names, so the recognizer is told what to expect before you speak. The biasing is measured: told three names, the default model spells all three where it got all three wrong unaided, at about a tenth of a second more per pass, with the other fixtures unchanged (README, "The latency harness").
 
 ## The pipeline
 
-Every invocation flows through the same three types, whether it is plain dictation or a command:
+Every invocation flows through the same two types:
 
-- **Context** is everything known before you speak: which chord was held, whether it was a tap or a hold, the frontmost app's bundle id, and the role of the focused element from the Accessibility API.
+- **Context** is everything known before you speak: which chord was held, whether it was a tap or a hold, and the frontmost app's bundle id.
 - **Transcript** is what the engine produced, with word timings and confidence attached. It is never a bare string.
-- **Actions** are a small closed set of primitives. `InsertText`, `ActivateApp(bundleId)`, `OpenURL`, `RunShortcut`, and `Pipe`, which hands the transcript to an external program and reads a list of actions back as JSON. Only `InsertText`, at the cursor of the app in front, is performed today; the app refuses the others by name.
 
-A route maps a context and a transcript to actions. Dictation is the default route: any context, any transcript, insert the text at the focus. Everything in the power layer is another route in the config file, not code. Switching apps by voice is command mode plus `ActivateApp` with fuzzy matching over the running apps. A voice-plus-keyboard combination is exactly a chord-selected mode.
+What becomes of a transcript is one thing: its text is inserted at the cursor of the app in front.
 
-`Pipe` is the extensibility escape hatch. It lets a shell script or a local LLM rewrite a transcript or decide the actions, which covers most "I wish it could" requests without building a plugin system. A real plugin story waits until `Pipe` proves too small.
-
-Configuration is one TOML file, `.config/low-talker/config.toml` in the app's sandbox container: chords to modes and modes to routes.
+Configuration is one TOML file, `.config/low-talker/config.toml` in the app's sandbox container: chords to modes, and each mode's vocabulary.
 
 ## Decisions already made
 
-**Native Swift, not a web shell.** Latency, the text input system, and the Accessibility reads of focus all need direct access to the OS, and Electron or Tauri would put a bridge in the hottest path.
+**Native Swift, not a web shell.** Latency and the text input system both need direct access to the OS, and Electron or Tauri would put a bridge in the hottest path.
 
 **The engine sits behind a `Transcriber` protocol, and WhisperKit goes in first.** It runs Whisper on the Neural Engine, streams, and is Swift. NVIDIA Parakeet via FluidAudio goes in second, and it is expected to win for English push-to-talk on both latency and accuracy. Apple's SpeechAnalyzer, present on macOS 26, is the zero-dependency third option. The protocol boundary exists so that switching is a config change.
 
@@ -48,14 +43,13 @@ Configuration is one TOML file, `.config/low-talker/config.toml` in the app's sa
 
 ## Shape of the repo
 
-- `LowTalkerCore` is a SwiftPM library with no AppKit UI: audio capture, the `Transcriber` protocol and its engines, the router, actions, and config parsing. It is unit-tested against wav fixtures.
+- `LowTalkerCore` is a SwiftPM library with no AppKit UI: audio capture, the `Transcriber` protocol and its engines, and config parsing. It is unit-tested against wav fixtures.
 - `LowTalker.app` is the menu bar agent (`LSUIElement`), generated with XcodeGen so the project file stays diffable.
 
 ## Build order
 
-1. **Dictation end to end.** Hotkey, audio, WhisperKit, the input method. The three pipeline types exist from the first commit, with a single default route, so the router is never a retrofit.
+1. **Dictation end to end.** Hotkey, audio, WhisperKit, the input method.
 2. **Parakeet.** Second engine behind the protocol.
-3. **Command mode.** The config-driven router, app switching, and `Pipe`.
 
 ## Open questions
 
