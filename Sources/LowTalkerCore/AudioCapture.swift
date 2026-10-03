@@ -185,6 +185,11 @@ public final class AudioCapture {
 
     private let hardware: any AudioHardware
     private let shared: Shared
+    /// Told every device report and what was done about it, including the ones that changed
+    /// nothing. A device going away is answered here with no press to throw to and no
+    /// session to mark, so this is the only place a recovery - or a recovery that did not
+    /// come - leaves a trace. [LAW:nothing-unseen]
+    private let reporting: @MainActor (DeviceReport) -> Void
     private var phase: Phase = .stopped
     private var generation = 0
     /// Microphones readied since this capture was made. What the staleness callback of each
@@ -224,9 +229,11 @@ public final class AudioCapture {
     public init(
         retaining duration: TimeInterval = defaultRetention,
         hardware: any AudioHardware = SystemAudioHardware(),
-        startingAt origin: HostTime = .now
+        startingAt origin: HostTime = .now,
+        reporting: @escaping @MainActor (DeviceReport) -> Void
     ) {
         self.hardware = hardware
+        self.reporting = reporting
         shared = Shared(Stream(ring: AudioRing(retaining: duration), timeline: AudioTimeline(startingAt: origin)))
     }
 
@@ -604,7 +611,10 @@ public final class AudioCapture {
         // top of a gap nothing had booked. Readying is the half that is owed either way -
         // skip it for a failed engine and the next press opens the device that stopped
         // being the default, which is the whole of what this defers. [LAW:no-silent-failure]
-        if !started.prepared.isOnTheDefaultInput {
+        let owed = !started.prepared.isOnTheDefaultInput
+        // Readied, unless the resting mode below launches on the new default.
+        var answer = DeviceReport.Answer.readied
+        if owed {
             if case .running(let live) = started.engine {
                 dispose(live)
                 started.engine = .shut
@@ -625,9 +635,12 @@ public final class AudioCapture {
             case .shut:
                 do { started.engine = .running(try launch(on: started.prepared)) }
                 catch { started.engine = .failed(error, since: .now, on: preparations) }
+                answer = .launched(Self.outcome(of: started.engine))
             }
         }
         phase = .started(started)
+        // The answer `leftForTheKeyUp` promised, given now. [LAW:nothing-unseen]
+        if owed { reporting(DeviceReport(cause: .pressEndedOffTheDefault, answer: answer)) }
     }
 
     /// Books the end of a gap in capture. [LAW:single-enforcer] A device that came back is
@@ -725,15 +738,24 @@ public final class AudioCapture {
         // Not the microphone a press would open any more, so nothing it says is about one.
         // A notification posted before its input was let go can arrive after, and acting on
         // it would give up an engine running healthily on the input that replaced it.
-        guard case .started(var started) = phase, preparation == preparations else { return }
+        guard case .started(var started) = phase, preparation == preparations else {
+            reporting(DeviceReport(cause: .boundDeviceChanged, answer: .outdated))
+            return
+        }
+        let answer: DeviceReport.Answer
         switch started.engine {
-        case .running(let live): replaceEngine(&started, live)
+        case .running(let live):
+            replaceEngine(&started, live)
+            answer = .launched(Self.outcome(of: started.engine))
         // A failed engine is left failed: it is not this device's turn again until a press
         // or the default-input watch says so, and the input readied here is the one either
         // of them retries on - see `retry`.
-        case .shut, .failed: ready(&started)
+        case .shut, .failed:
+            ready(&started)
+            answer = .readied
         }
         phase = .started(started)
+        reporting(DeviceReport(cause: .boundDeviceChanged, answer: answer))
     }
 
     /// The default input device changed - which device a press should open, not anything
@@ -752,8 +774,19 @@ public final class AudioCapture {
     /// press has no way to notice and no way to recover from, because the `shut` branch of
     /// `beginSession` deliberately records no failure.
     private func recover() {
-        guard case .started(var started) = phase else { return }
+        guard case .started(var started) = phase else {
+            reporting(DeviceReport(cause: .defaultInputChanged, answer: .outdated))
+            return
+        }
+        let answer: DeviceReport.Answer
         switch started.engine {
+        // Already answered: the bound device's own report reached here first and readied an
+        // input on the new default. A second answer would give up a microphone on the right
+        // device for an identical one, and under `open` would splice the look-back to do it.
+        // A failed engine is not asked, because a default-input change is also how one tries
+        // a device again. [LAW:no-ambient-temporal-coupling]
+        case .shut where started.prepared.isOnTheDefaultInput, .running where started.prepared.isOnTheDefaultInput:
+            answer = .alreadyOnIt
         // A running engine owns the input it was launched on: the disposal it holds is weak,
         // so `prepared` is the only strong reference to the open input and replacing it under
         // a live press would deinit the device out from under it. That is also the right
@@ -762,26 +795,34 @@ public final class AudioCapture {
         // leaving it, because `rest()`, the moment "no session is open" becomes true, asks the
         // input whether it is still on the default.
         case .running where started.sessionIsOpen:
-            return
-        // Already answered: the bound device's own report reached here first and readied an
-        // input on the new default. A second answer would give up a microphone on the right
-        // device for an identical one, and under `open` would splice the look-back to do it.
-        // A failed engine is not asked, because a default-input change is also how one tries
-        // a device again. [LAW:no-ambient-temporal-coupling]
-        case .shut where started.prepared.isOnTheDefaultInput, .running where started.prepared.isOnTheDefaultInput:
-            return
+            answer = .leftForTheKeyUp
         // With no session open there is nothing to cut, and the engine is replaced on the new
         // default the same way a device that went away replaces it.
         case .running(let live):
             replaceEngine(&started, live)
+            answer = .launched(Self.outcome(of: started.engine))
         case .shut:
             ready(&started)
+            answer = .readied
         // What a retry that failed again came to is the engine it leaves failed, which is
-        // what the status surface reads; there is no press here to throw it to.
+        // what the status surface reads and what the report carries; there is no press here
+        // to throw it to.
         case .failed(_, let since, let failedOn):
             try? retry(&started, failedOn: failedOn, since: since)
+            answer = .launched(Self.outcome(of: started.engine))
         }
         phase = .started(started)
+        reporting(DeviceReport(cause: .defaultInputChanged, answer: answer))
+    }
+
+    /// What a launch came to, read off the engine it left, by every path that launches on a
+    /// device report rather than each saying it separately. [LAW:one-source-of-truth]
+    private static func outcome(of engine: Engine) -> Result<Void, any Error> {
+        switch engine {
+        case .running: .success(())
+        case .failed(let error, _, _): .failure(error)
+        case .shut: preconditionFailure("a launch left no engine and no failure")
+        }
     }
 
     /// Tries a failed engine again, from a press or from the device watch. [LAW:single-enforcer]
@@ -825,6 +866,48 @@ public final class AudioCapture {
         started.engine = .failed(error, since: .now, on: preparations)
         phase = .started(started)
     }
+}
+
+/// One report from CoreAudio about the microphone's device, and what capture did about it.
+public struct DeviceReport: CustomStringConvertible {
+    public enum Cause: String {
+        /// The system default input moved to another device.
+        case defaultInputChanged = "the default input changed"
+        /// The device a readied microphone is bound to went away or changed shape.
+        case boundDeviceChanged = "the microphone's device went away or changed shape"
+        /// A press ended on a device that stopped being the default while it recorded.
+        case pressEndedOffTheDefault = "a press ended on an input that is no longer the default"
+    }
+
+    public enum Answer: CustomStringConvertible {
+        /// The report is about a microphone already let go, so it spoke for nothing.
+        case outdated
+        /// A press is recording on a device that is still there; its key-up readies the new one.
+        case leftForTheKeyUp
+        /// The other report of the same change got here first.
+        case alreadyOnIt
+        /// A microphone was readied on the device that is now the default, and none was opened.
+        case readied
+        /// An engine was launched on the device that is now the default, and this is what it
+        /// came to: running, or failed with the reason.
+        case launched(Result<Void, any Error>)
+
+        public var description: String {
+            switch self {
+            case .outdated: "nothing: it was about a microphone already let go"
+            case .leftForTheKeyUp: "left the press recording; its key-up readies the new default"
+            case .alreadyOnIt: "nothing: the microphone was already on the new default"
+            case .readied: "readied a microphone on the default input"
+            case .launched(.success): "relaunched the microphone on the default input"
+            case .launched(.failure(let error)): "could not relaunch the microphone: \(error)"
+            }
+        }
+    }
+
+    public let cause: Cause
+    public let answer: Answer
+
+    public var description: String { "\(cause.rawValue); \(answer)" }
 }
 
 /// A press with no microphone behind it, refused at the key rather than heard.

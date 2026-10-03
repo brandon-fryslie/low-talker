@@ -79,7 +79,7 @@ private final class FakeHardware: AudioHardware {
     /// What `watchDefaultInput` does: an error to throw, or nil to watch.
     private let watch: (any Error)?
     private(set) var engines: [Engine] = []
-    private var onDefaultInputChange: (@MainActor () -> Void)?
+    private(set) var onDefaultInputChange: (@MainActor () -> Void)?
     private(set) var watchDisposals = 0
     /// Every microphone readied, in the order they were readied. Kept rather than counted,
     /// because a readied input is watched for its whole life and a test that could only
@@ -137,6 +137,13 @@ private final class FakeHardware: AudioHardware {
     func announceDefaultInput() throws {
         let onChange = try #require(onDefaultInputChange, "nothing is watching the default input")
         onChange()
+    }
+}
+
+extension AudioCapture {
+    /// A capture whose device reports no test here reads; the ones that read them say so.
+    convenience init(retaining duration: TimeInterval = defaultRetention, hardware: any AudioHardware, startingAt origin: HostTime = .now) {
+        self.init(retaining: duration, hardware: hardware, startingAt: origin, reporting: { _ in })
     }
 }
 
@@ -967,6 +974,109 @@ private struct Authorized: MicrophoneAuthority {
         #expect(hardware.prepared == 2)
         #expect(hardware.engines.isEmpty)
         #expect(isListening(capture))
+    }
+
+    /// Every device report capture answers, as the cause and a word for what it did, so a
+    /// test can say which report was answered and which was found already answered.
+    @MainActor private final class Reports {
+        private(set) var said: [String] = []
+        func record(_ report: DeviceReport) {
+            let answer = switch report.answer {
+            case .outdated: "outdated"
+            case .leftForTheKeyUp: "left for the key-up"
+            case .alreadyOnIt: "already on it"
+            case .readied: "readied"
+            case .launched(.success): "launched"
+            case .launched(.failure(let error)): "failed: \(error)"
+            }
+            said.append("\(report.cause): \(answer)")
+        }
+    }
+
+    /// One unplug is two reports and one answer, and the log says both: the report that
+    /// readied a microphone on the new default, and the other one finding nothing left to do.
+    /// A recovery that leaves no trace is indistinguishable from one that never came.
+    @Test(arguments: UnplugReports.allCases)
+    func anUnplugWhileIdleReportsOneAnswerAndOneReportFoundAnswered(_ order: UnplugReports) throws {
+        let hardware = FakeHardware()
+        let reports = Reports()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin, reporting: { reports.record($0) })
+        try capture.start(grant, atRest: .shut)
+
+        try unplugTheDefaultInput(hardware, reportedIn: order)
+        switch order {
+        case .defaultFirst: #expect(reports.said == ["defaultInputChanged: readied", "boundDeviceChanged: outdated"])
+        case .deviceFirst: #expect(reports.said == ["boundDeviceChanged: readied", "defaultInputChanged: already on it"])
+        }
+    }
+
+    /// The only device going away under a held microphone is reported as the relaunch that
+    /// failed, and the device that appears after as the relaunch that worked: the outage and
+    /// its end, both in the log.
+    @Test func aHeldMicrophoneThatLostItsOnlyDeviceReportsTheFailureAndTheRecovery() throws {
+        let hardware = FakeHardware(launches: [nil, NoDevice()])
+        let reports = Reports()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin, reporting: { reports.record($0) })
+        try capture.start(grant, atRest: .open)
+
+        hardware.engines[0].input.onStale()
+        try hardware.changeDefaultInput()
+        #expect(reports.said == ["boundDeviceChanged: failed: NoDevice()", "defaultInputChanged: launched"])
+        #expect(isListening(capture))
+    }
+
+    /// A default-input change under a press is reported as left for its key-up, so a press
+    /// that went on recording on the old device says why in the log.
+    @Test func aDefaultInputChangedMidPressIsReportedAsLeftForTheKeyUp() throws {
+        let hardware = FakeHardware()
+        let reports = Reports()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin, reporting: { reports.record($0) })
+        _ = try opened(capture)
+
+        try hardware.changeDefaultInput()
+        #expect(reports.said == ["defaultInputChanged: left for the key-up"])
+    }
+
+    /// The key-up a mid-press change was left for says what it did about it, so the log
+    /// carries the recovery it promised and not only the promise.
+    @Test(arguments: [(MicrophoneAtRest.shut, "readied"), (.open, "launched")])
+    func theKeyUpAMidPressChangeWasLeftForReportsWhatItDid(atRest: MicrophoneAtRest, did: String) throws {
+        let hardware = FakeHardware()
+        let reports = Reports()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin, reporting: { reports.record($0) })
+        let session = try opened(capture, atRest: atRest)
+
+        try hardware.changeDefaultInput()
+        _ = capture.endSession(session)
+        #expect(reports.said == ["defaultInputChanged: left for the key-up", "pressEndedOffTheDefault: \(did)"])
+    }
+
+    /// An unplug under a press whose bound device reports first is answered then and there,
+    /// so the default-input report says so rather than promising a key-up that has nothing
+    /// left to do - and the key-up reports nothing.
+    @Test func anUnplugMidPressAnsweredByTheBoundDeviceIsNotLeftForTheKeyUp() throws {
+        let hardware = FakeHardware()
+        let reports = Reports()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin, reporting: { reports.record($0) })
+        let session = try opened(capture)
+
+        try unplugTheDefaultInput(hardware, reportedIn: .deviceFirst)
+        _ = capture.endSession(session)
+        #expect(reports.said == ["boundDeviceChanged: launched", "defaultInputChanged: already on it"])
+    }
+
+    /// A default-input change that lands after capture stopped is reported as outdated, the
+    /// same as the bound device's report in that stretch.
+    @Test func aDefaultInputChangeAfterStopIsReportedOutdated() throws {
+        let hardware = FakeHardware()
+        let reports = Reports()
+        let capture = AudioCapture(hardware: hardware, startingAt: origin, reporting: { reports.record($0) })
+        try capture.start(grant, atRest: .shut)
+        let lateNotification = try #require(hardware.onDefaultInputChange)
+
+        capture.stop()
+        lateNotification()
+        #expect(reports.said == ["defaultInputChanged: outdated"])
     }
 
     /// Quitting gives the device back, however the run was holding it.

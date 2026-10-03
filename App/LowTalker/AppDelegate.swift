@@ -8,6 +8,7 @@ import InputSource
 import Insertion
 import LowTalkerCore
 import Onboarding
+import ServiceManagement
 import Serve
 import Signals
 import os
@@ -85,7 +86,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         log.notice("hotkey: \(status, privacy: .public)")
     }
 
-    private let capture = AudioCapture()
+    /// Every device report the microphone answers, and what it is doing after, so a device
+    /// that went away and the recovery that followed - or did not - read in `log show`
+    /// without a press or a menu to show them. [LAW:nothing-unseen]
+    private lazy var capture: AudioCapture = AudioCapture { [unowned self] report in
+        microphoneLog.notice("device: \(report, privacy: .public); now \(self.capture.doing, privacy: .public)")
+    }
+    private let microphoneLog = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "microphone")
 
     /// A signal is a third way to ask the app to go, after the menu item and Cmd-Q, and
     /// it goes the same way they do rather than by the default disposition, which ends
@@ -350,6 +357,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func toggleServing() {
         serving.map { $0.choose(!$0.chosen, at: config.map(\.serve)) }
     }
+
+    /// Opens the app at login, or stops it. An item switched off in System Settings can be
+    /// allowed only there, so that refusal opens the pane at the switch; any other is said in
+    /// an alert, since a click that shows nothing tells a person nothing. [LAW:no-silent-failure]
+    @objc private func toggleOpenAtLogin() {
+        do {
+            let now = try loginItem.toggle()
+            loginLog.notice("open at login: toggled; \(now, privacy: .public)")
+        } catch {
+            loginLog.error("open at login: refused: \(error, privacy: .public)")
+            if error.allowedOnlyInSystemSettings { SMAppService.openSystemSettingsLoginItems() }
+            else { NSAlert(error: error.reason).runModal() }
+        }
+    }
+
+    private let loginItem = LoginItem()
+    private let loginLog = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "login")
 
     @objc private func openSetUp() {
         setUp.show()
@@ -659,6 +683,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let microphone = capture.doing
         log.notice("microphone at rest: \(microphone, privacy: .public)")
         let unheard = unheardBecause()
+        let openAtLogin = loginItem.current
+        loginLog.notice("open at login: \(openAtLogin, privacy: .public)")
 
         menu.removeAllItems()
         menu.addItem(readout("Whisper model: \(engineReadiness.readout(at: .now))"))
@@ -686,6 +712,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let stepsLeft = left == 0 ? "" : " (\(left) left)"
         menu.addItem(withTitle: "\(GuidedSetup.title)\(stepsLeft)", action: #selector(openSetUp), keyEquivalent: "")
         menu.addItem(withTitle: "Benchmark…", action: #selector(openBench), keyEquivalent: "")
+        let login = menu.addItem(withTitle: "Open at Login", action: #selector(toggleOpenAtLogin), keyEquivalent: "")
+        // Mixed while it waits on System Settings: chosen here, not yet allowed there.
+        login.state = switch openAtLogin {
+        case .on: .on
+        case .requiresApproval: .mixed
+        case .off, .unrecognized: .off
+        }
+        // Anything but plainly on or off is said under the item, since a checkmark cannot say it.
+        if openAtLogin != .on, openAtLogin != .off { menu.addItem(readout("    \(openAtLogin)")) }
         serving.map { serving in
             let item = menu.addItem(withTitle: "Serve Transcription", action: #selector(toggleServing), keyEquivalent: "")
             item.state = serving.chosen ? .on : .off
