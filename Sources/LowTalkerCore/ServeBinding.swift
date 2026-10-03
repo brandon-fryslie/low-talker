@@ -22,7 +22,7 @@ public enum ServeBinding: Hashable, Sendable, CustomStringConvertible {
         }
     }
 
-    /// Never the token: this is what the config report and the log print.
+    /// Never the token: this is what the log prints.
     public var description: String {
         switch self {
         case .loopback: "loopback"

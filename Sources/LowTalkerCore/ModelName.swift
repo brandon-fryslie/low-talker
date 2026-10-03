@@ -5,7 +5,7 @@ import Foundation
 ///
 /// [LAW:parse-dont-validate] A name is one step of a path. Every path the store
 /// builds from a name stays inside the store because a name that could climb out
-/// cannot be made; the CLI refuses such a `--model` before any path exists.
+/// cannot be made.
 public struct ModelName: RawRepresentable, Hashable, Codable, Sendable, ExpressibleByStringLiteral, CustomStringConvertible {
     public let rawValue: String
 

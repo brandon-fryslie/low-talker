@@ -558,9 +558,8 @@ final class HALInput: PreparedInput {
         binding.map { (try? Self.defaultInput()) == $0 } ?? false
     }
 
-    /// Which device a press would open. Nonisolated because reading it touches nothing this
-    /// class owns.
-    nonisolated static func defaultInput() throws -> AudioObjectID {
+    /// Which device a press would open.
+    static func defaultInput() throws -> AudioObjectID {
         var device = AudioObjectID(0)
         var size = UInt32(MemoryLayout<AudioObjectID>.size)
         var address = AudioObjectPropertyAddress(

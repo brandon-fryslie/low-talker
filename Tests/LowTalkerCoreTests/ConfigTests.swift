@@ -280,6 +280,13 @@ import Testing
         }
     }
 
+    /// An empty list would be a mode that claims the chord and drops everything it hears.
+    @Test func aModeWithAnEmptyRouteListIsRefused() {
+        #expect(throws: ConfigError.wrongShape("modes[0].routes: an empty list claims nothing; leave routes out to dictate")) {
+            try Self.config(Self.mode(routes: "[]"))
+        }
+    }
+
     /// A `then` that names nothing would be a route that claims an utterance and drops
     /// it.
     @Test func aThenNamingNothingIsRefused() {

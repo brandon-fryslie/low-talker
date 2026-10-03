@@ -72,8 +72,8 @@ import Testing
 }
 
 
-/// Long enough that the runner's own stall cannot spend it: `DirectoryChangesTests` records
-/// a CI machine that freezes this process for seconds at a time, and `InputMethodInserter`
+/// Long enough that the runner's own stall cannot spend it: the macos-15 CI runner has been
+/// measured freezing the test process for 1.6-3.6 s shortly after it starts, and `InputMethodInserter`
 /// hands each of its four phases a quarter of what it is given. Said once, because it is one
 /// fact about the machine rather than five. [LAW:one-source-of-truth] The cases that ARE
 /// timing under test set their own budget and say so.

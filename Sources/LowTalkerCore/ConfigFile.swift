@@ -137,10 +137,30 @@ private struct MicrophoneEntry: Decodable {
 
 /// One `[[modes]]` table.
 private struct ModeEntry: Decodable {
+    private enum CodingKeys: String, CodingKey { case name, chord, vocabulary, routes }
+
     let name: String
     let chord: KeyChord?
     let vocabulary: [Vocabulary.Term]?
     let routes: [RouteEntry]?
+
+    /// Hand-written to refuse `routes = []`: a mode that claims the chord and nothing it
+    /// hears drops every utterance, and leaving the key out already says "dictate".
+    /// [LAW:no-silent-failure]
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        chord = try container.decodeIfPresent(KeyChord.self, forKey: .chord)
+        vocabulary = try container.decodeIfPresent([Vocabulary.Term].self, forKey: .vocabulary)
+        routes = try container.decodeIfPresent([RouteEntry].self, forKey: .routes)
+        guard routes?.isEmpty != true else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .routes,
+                in: container,
+                debugDescription: "an empty list claims nothing; leave routes out to dictate"
+            )
+        }
+    }
 
     /// [LAW:single-enforcer] The chord, each term, and every route arrived through their
     /// own decoders, so what each may be is settled where those types live and is not
@@ -154,8 +174,7 @@ private struct ModeEntry: Decodable {
             chord: chord ?? Hotkey.defaultChord,
             vocabulary: Vocabulary(vocabulary ?? []),
             // A mode that names no routes dictates, which is the only thing it could
-            // have meant; one that names an empty list claims nothing, and `lowtalker
-            // config check` is where that gap is reported.
+            // have meant.
             router: routes.map { Router(routes: $0.map(\.route)) } ?? .dictation
         )
     }

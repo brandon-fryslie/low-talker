@@ -16,8 +16,8 @@ public struct Config: Hashable, Sendable {
     /// writer, so a microphone held at rest is one the user asked for in writing.
     /// [LAW:single-enforcer]
     public let microphone: MicrophoneAtRest
-    /// In the order the file declared them, because that is the order `lowtalker
-    /// config check` and any listing should speak of them in.
+    /// In the order the file declared them, because that is the order any listing
+    /// should speak of them in.
     public let modes: [Mode]
     public let serve: ServeBinding
 

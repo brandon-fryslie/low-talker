@@ -29,16 +29,12 @@ public struct KeyChord: Hashable, Codable, Sendable {
 }
 
 /// Side-specific, because the hotkey distinguishes Right Option from Left Option.
-public enum Modifier: String, Hashable, Codable, CaseIterable, Sendable, CustomStringConvertible {
+public enum Modifier: String, Hashable, Codable, CaseIterable, Sendable {
     case leftShift, rightShift
     case leftControl, rightControl
     case leftOption, rightOption
     case leftCommand, rightCommand
     case function
-
-    /// The spelling the file uses, so a report reads a chord back in the words its
-    /// author typed rather than in Swift's name for the case.
-    public var description: String { rawValue }
 
     /// [LAW:single-enforcer] Which modifiers exist is this type's rule, so a file that
     /// names another is answered from the cases themselves and never falls out of step

@@ -169,7 +169,7 @@ The `[serve]` table is optional too, and without an `interface` the server liste
 
 The menu names a fault, and how it names it depends on how far reading got. A file that is not TOML at all names the line reading stopped on. Anything that is TOML but wrong is named by its path in the document instead, as `modes[1].routes[0].when: "sometyme" is not something a route can match on` or `modes[1].name is missing`, and carries no line number: decoding reports the path it was at, and the TOML library exposes source positions only for a parse error, not for a document that parsed. The path counts `[[modes]]` entries from zero, the way the file writes them, so the entry it names is one the reader can count to.
 
-A mode whose `routes` is an empty list claims nothing: it listens, and nothing it hears becomes anything. A mode with no `routes` key at all dictates instead. The two look almost alike in a file and mean different things.
+A mode with no `routes` key dictates. An empty `routes` list is refused, because a mode that claims its chord and nothing it hears would drop every utterance.
 
 ## The input method
 

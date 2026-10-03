@@ -3,7 +3,7 @@
 passes only if neither did any network work beyond asking whether a route exists.
 
     scripts/wire-check <app bundle> <input method bundle>
-    scripts/wire-check judge <capture> <app process> <input method process> [<helper process>...]
+    scripts/wire-check judge <capture> <app process> <input method process>
 
 The app links WhisperKit and the Hugging Face hub client vendored in argmax-oss-swift, code
 that can reach the network and that nobody here wrote. sbom/rules.json records the revision
@@ -72,10 +72,9 @@ def is_connection(subsystem, category):
     return subsystem.startswith("com.apple.CFNetwork") or (subsystem == "com.apple.network" and category == "connection")
 
 
-def judge(capture, app, input_method, helpers=()):
-    """The verdict on one capture, from its lines alone. Returns the summary of a pass. `helpers`
-    are the executables the app carries and starts, whose network work is the app's too."""
-    watched = (app, input_method, *helpers)
+def judge(capture, app, input_method):
+    """The verdict on one capture, from its lines alone. Returns the summary of a pass."""
+    watched = (app, input_method)
     network, paths, control = [], 0, 0
     ready, dictations, serving, inserts = False, 0, False, 0
     for line in capture.read_text(errors="replace").splitlines():
@@ -115,8 +114,8 @@ def judge(capture, app, input_method, helpers=()):
         fail(f"{capture} never shows {input_method} starting, so its launch was not watched")
     if not inserts:
         fail(f"{capture} never shows {input_method} taking a dictation's text, so it was not watched through one")
-    return (f"{app} and {input_method}: no network work through a launch of each and {dictations} dictation(s), "
-            f"nor by the helpers the app starts ({', '.join(helpers) or 'none carried'}); {paths} path evaluation(s), which open none")
+    return (f"{app} and {input_method}: no network work through a launch of each and {dictations} dictation(s); "
+            f"{paths} path evaluation(s), which open none")
 
 
 def took_text_after_starting(text, input_method):
@@ -195,12 +194,8 @@ def alive(pid):
 def watch(app, input_method_bundle):
     bundle_id, name = bundle_info(app)
     input_method_id, input_method = bundle_info(input_method_bundle)
-    # The executables the app carries to start - the lowtalker command it runs to read its
-    # privacy grants is the one binary in the bundle linking the model installer.
-    carried = app / "Contents" / "Helpers"
-    helpers = sorted(path.name for path in carried.iterdir() if path.is_file() and os.access(path, os.X_OK)) if carried.is_dir() else []
     capture = Path(tempfile.mkdtemp(prefix="wire-check.")) / "capture.log"
-    processes = " OR ".join(f'process == "{process}"' for process in (name, input_method, *helpers, CONTROL))
+    processes = " OR ".join(f'process == "{process}"' for process in (name, input_method, CONTROL))
     predicate = (f'({processes}) AND '
                  f'(subsystem BEGINSWITH "com.apple.network" OR subsystem BEGINSWITH "com.apple.CFNetwork" '
                  f'OR subsystem == "{bundle_id}" OR subsystem == "{input_method_id}")')
@@ -225,18 +220,18 @@ def watch(app, input_method_bundle):
     finally:
         stream.terminate()
         stream.wait()
-    return capture, name, input_method, helpers
+    return capture, name, input_method
 
 
 def main():
-    if len(sys.argv) >= 5 and sys.argv[1] == "judge":
-        capture, app, input_method, helpers = Path(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5:]
+    if len(sys.argv) == 5 and sys.argv[1] == "judge":
+        capture, app, input_method = Path(sys.argv[2]), sys.argv[3], sys.argv[4]
     elif len(sys.argv) == 3:
-        capture, app, input_method, helpers = watch(Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve())
+        capture, app, input_method = watch(Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve())
     else:
         fail("usage: scripts/wire-check <app bundle> <input method bundle> | "
-             "scripts/wire-check judge <capture> <app process> <input method process> [<helper process>...]")
-    print(f"wire-check: {judge(capture, app, input_method, helpers)}; capture at {capture}")
+             "scripts/wire-check judge <capture> <app process> <input method process>")
+    print(f"wire-check: {judge(capture, app, input_method)}; capture at {capture}")
 
 
 main()

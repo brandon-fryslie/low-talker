@@ -1,6 +1,6 @@
 /// Everything known before the user spoke. The router reads it; nothing writes it
 /// after the hotkey goes down.
-public struct Context: Hashable, Codable, Sendable {
+public struct Context: Hashable, Sendable {
     /// The chord that started listening. It selects the mode; the transcript never does.
     public let chord: KeyChord
     public let press: PressKind
@@ -19,13 +19,13 @@ public struct Context: Hashable, Codable, Sendable {
 
 /// A short press toggles listening; a long one is push-to-talk. The threshold belongs
 /// to the hotkey, which resolves it before a Context exists.
-public enum PressKind: String, Hashable, Codable, Sendable {
+public enum PressKind: String, Hashable, Sendable {
     case tap, hold
 }
 
 /// An Accessibility API role string such as `AXTextField`. Apps may define their own
 /// roles, so this is an open set, not an enum.
-public struct AccessibilityRole: RawRepresentable, Hashable, Codable, Sendable {
+public struct AccessibilityRole: RawRepresentable, Hashable, Sendable {
     public let rawValue: String
 
     public init(rawValue: String) {
