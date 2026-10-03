@@ -12,8 +12,9 @@ public enum Destination: Codable, Equatable, Sendable, CustomStringConvertible {
     case cursorInFront
     case app(String)
 
-    /// Whether words bound here may go to a cursor in `application`.
-    public func admits(_ application: String) -> Bool {
+    /// Whether words bound here may go to a cursor in `application`, which is absent when
+    /// no app is in front.
+    public func admits(_ application: String?) -> Bool {
         switch self {
         case .cursorInFront: true
         case .app(let bound): bound == application
@@ -135,7 +136,7 @@ public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, 
         switch self {
         case .noClientHasFocus: "WARNING: No text field has focus. Your dictation was not inserted."
         case .cursorIsInAnotherApp: "WARNING: The cursor is in an app that is not in front. Your dictation was not inserted."
-        case .dictationIsInAnotherApp: "WARNING: You moved to another app while dictating. The rest of your dictation was not inserted."
+        case .dictationIsInAnotherApp: "WARNING: You moved to another app while dictating."
         case .requestWasNotReadable: "WARNING: The input method was asked something it could not read. Nothing was inserted."
         case .secureInputIsOn: "WARNING: An app has secure keyboard entry on, and macOS turns input methods off while it does. Your dictation was not inserted."
         case .senderIsNotThisInstallationsApp:
@@ -227,14 +228,20 @@ enum Wire {
     static let insert: mach_msg_id_t = 2
     static let modifiers: mach_msg_id_t = 3
 
+    /// The first byte of every request, and one no UTF-8 text contains. An input method built
+    /// when a request was its bare text, still running past an install, reads this as bytes
+    /// that are not text and refuses them, rather than typing the request out.
+    static let requestMark: UInt8 = 0xFF
+
     // The encoder cannot fail on these types: every case holds `Codable` primitives and
     // nothing else. Said here, at the one place it is true, rather than as a throw every
     // caller would carry and none could act on.
-    static func request(_ request: InsertRequest) -> Data { try! JSONEncoder().encode(request) }
+    static func request(_ request: InsertRequest) -> Data { Data([requestMark]) + (try! JSONEncoder().encode(request)) }
 
     /// [LAW:parse-dont-validate] A request or nothing at all.
     static func request(of data: Data) -> InsertRequest? {
-        try? JSONDecoder().decode(InsertRequest.self, from: data)
+        guard data.first == requestMark else { return nil }
+        return try? JSONDecoder().decode(InsertRequest.self, from: data.dropFirst())
     }
 
     static func answer(_ answer: InsertionAnswer) -> Data { try! JSONEncoder().encode(answer) }

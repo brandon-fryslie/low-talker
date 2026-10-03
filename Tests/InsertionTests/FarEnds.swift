@@ -128,19 +128,21 @@ private let repository = URL(fileURLWithPath: #filePath)
 /// What a hosted port saw, across the queue it saw it on.
 final class Seen: @unchecked Sendable {
     private let lock = NSLock()
-    private var seen: String?
+    private var seen: InsertRequest?
 
-    func record(_ text: String) {
+    func record(_ request: InsertRequest) {
         lock.lock()
-        seen = text
+        seen = request
         lock.unlock()
     }
 
-    var text: String? {
+    var request: InsertRequest? {
         lock.lock()
         defer { lock.unlock() }
         return seen
     }
+
+    var text: String? { request?.text }
 }
 
 /// What a hosted port read of its sender, across the queue it read it on.

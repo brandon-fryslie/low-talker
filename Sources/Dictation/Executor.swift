@@ -76,8 +76,8 @@ public struct Executor {
         let texts = try actions.map(Self.text(of:))
         let clock = ContinuousClock()
         var performed: [Performed] = []
+        var destination = earlier.last.map { Destination.app($0.into.rawValue) } ?? .cursorInFront
         for text in texts {
-            let destination = (earlier + performed).last.map { Destination.app($0.into.rawValue) } ?? .cursorInFront
             // Awaited, so the round trip runs on a thread of its own: this is the main actor,
             // and `Inserter` says in its own contract that the blocking call must not pump it.
             // [LAW:no-ambient-temporal-coupling] A refusal or a channel failure is thrown on
@@ -87,6 +87,7 @@ public struct Executor {
             let done = Performed(characters: inserted.characters, into: BundleID(rawValue: inserted.into), acknowledged: clock.now - since.instant, since: since.key)
             log.info("\(done.description, privacy: .public)")
             performed.append(done)
+            destination = .app(done.into.rawValue)
         }
         return performed
     }

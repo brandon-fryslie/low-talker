@@ -49,10 +49,10 @@ import Testing
         #expect(throws: Refusal.secureInputIsOn) { try client.cursor(for: .cursorInFront, whileInFrontIs: Self.inFront, secureInputIsOn: true).get() }
     }
 
-    /// Secure input is asked first, so it is the reason given even where another refusal
-    /// also holds: the fix is in the app holding it, and naming the other would send the
-    /// person to click into a text field that cannot help.
-    @Test func secureInputIsTheReasonOverEveryOtherRefusal() {
+    /// Secure input is the reason given even where another refusal about the cursor also
+    /// holds: the fix is in the app holding it, and naming the other would send the person
+    /// to click into a text field that cannot help.
+    @Test func secureInputIsTheReasonOverEveryRefusalAboutTheCursor() {
         #expect(throws: Refusal.secureInputIsOn) { try FocusedClient().cursor(for: .cursorInFront, whileInFrontIs: Self.inFront, secureInputIsOn: true).get() }
         let client = FocusedClient()
         let cursor = Cursor()
@@ -120,6 +120,18 @@ import Testing
         #expect(throws: Refusal.dictationIsInAnotherApp) {
             try client.cursor(for: .app("com.apple.TextEdit"), whileInFrontIs: "com.apple.finder", secureInputIsOn: false).get()
         }
+    }
+
+    /// The person who moved is told they moved, whatever the app they moved to holds: no
+    /// cursor of its own, a cursor still standing in the app they left, or secure input.
+    /// None of those is where the words were going, so none is the thing to fix.
+    @Test func aMoveIsTheReasonOverWhatTheAppMovedToHolds() {
+        let bound = Destination.app("com.apple.TextEdit")
+        #expect(throws: Refusal.dictationIsInAnotherApp) { try FocusedClient().cursor(for: bound, whileInFrontIs: "com.apple.finder", secureInputIsOn: false).get() }
+        let client = FocusedClient()
+        client.took(Cursor(in: "com.apple.TextEdit"))
+        #expect(throws: Refusal.dictationIsInAnotherApp) { try client.cursor(for: bound, whileInFrontIs: "com.apple.finder", secureInputIsOn: false).get() }
+        #expect(throws: Refusal.dictationIsInAnotherApp) { try client.cursor(for: bound, whileInFrontIs: "com.apple.finder", secureInputIsOn: true).get() }
     }
 
     @Test func wordsBoundToTheAppInFrontGoToItsCursor() throws {

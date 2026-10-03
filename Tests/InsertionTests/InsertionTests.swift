@@ -41,6 +41,12 @@ import Testing
         #expect(Wire.request(of: Wire.request(request)) == request)
     }
 
+    /// An input method from before requests were JSON reads a request as UTF-8 text, and
+    /// has to find none, so it refuses the request rather than typing it into the document.
+    @Test func aRequestIsNotTextToAnInputMethodThatReadsText() {
+        #expect(String(data: Wire.request(InsertRequest("hello", into: .app("com.example.editor"))), encoding: .utf8) == nil)
+    }
+
     @Test func bytesThatAreNotARequestAreNotARequest() {
         #expect(Wire.request(of: Data([0xFF, 0xFE, 0xFD])) == nil)
         #expect(Wire.request(of: Data("hello".utf8)) == nil)
@@ -84,13 +90,28 @@ private let anEditor = "com.example.editor"
         let name = aPortNobodyElseUses()
         let seen = Seen()
         let port = try hostInsertion(name: name) { request in
-            seen.record(request.text)
+            seen.record(request)
             return .inserted(characters: request.text.count, into: anEditor)
         }
 
         let answer = try await inserter(name).insert("hello there", into: .cursorInFront)
         #expect(answer == Inserted(characters: 11, into: anEditor))
         #expect(seen.text == "hello there")
+        withExtendedLifetime(port) {}
+    }
+
+    /// Where the words may go reaches the input method as the sender named it, since the
+    /// input method is the one that refuses a dictation's words anywhere else.
+    @Test func theDestinationArrivesWithTheText() async throws {
+        let name = aPortNobodyElseUses()
+        let seen = Seen()
+        let port = try hostInsertion(name: name) { request in
+            seen.record(request)
+            return .inserted(characters: request.text.count, into: anEditor)
+        }
+
+        _ = try await inserter(name).insert("hello", into: .app(anEditor))
+        #expect(seen.request == InsertRequest("hello", into: .app(anEditor)))
         withExtendedLifetime(port) {}
     }
 
@@ -112,9 +133,9 @@ private let anEditor = "com.example.editor"
     }
 
     /// Nothing to say is still something to send. `inserted(characters: 0)` is a modelled
-    /// outcome, and a zero-length payload has to arrive as an empty request rather than as
-    /// no request, or it would be answered `requestWasNotReadable` and the count never reached.
-    @Test func anEmptyRequestCrossesAsAnEmptyRequest() async throws {
+    /// outcome, and empty text has to arrive as a request for empty text, answered with its
+    /// count, rather than be turned away on either end.
+    @Test func emptyTextCrossesAsARequest() async throws {
         let name = aPortNobodyElseUses()
         let port = try hostInsertion(name: name) { .inserted(characters: $0.text.count, into: anEditor) }
 
@@ -153,9 +174,9 @@ private let anEditor = "com.example.editor"
         withExtendedLifetime(port) {}
     }
 
-    /// Bytes that are not text are answered rather than dropped, so a sender learns why
+    /// Bytes that are not a request are answered rather than dropped, so a sender learns why
     /// instead of waiting out its timeout. [LAW:no-silent-failure]
-    @Test func bytesThatAreNotTextAreRefusedByName() async throws {
+    @Test func bytesThatAreNotARequestAreRefusedByName() async throws {
         let name = aPortNobodyElseUses()
         let port = try hostInsertion(name: name) { .inserted(characters: $0.text.count, into: anEditor) }
 
@@ -196,7 +217,7 @@ private let anEditor = "com.example.editor"
         let told = Told()
         let us = try OwnProcess.identity()
         let port = try InsertionPort(portName: name, senders: us, queue: DispatchQueue(label: name), told: told.record) { request in
-            seen.record(request.text)
+            seen.record(request)
             return .inserted(characters: request.text.count, into: anEditor)
         }
 
@@ -220,7 +241,7 @@ private let anEditor = "com.example.editor"
         let port = try InsertionPort(
             portName: name, senders: probe.identity, queue: DispatchQueue(label: name), told: { Issue.record("told \($0)") }
         ) { request in
-            seen.record(request.text)
+            seen.record(request)
             return .inserted(characters: request.text.count, into: anEditor)
         }
 
@@ -257,7 +278,7 @@ private let anEditor = "com.example.editor"
         let name = aPortNobodyElseUses()
         let seen = Seen()
         let port = try hostInsertion(name: name) { request in
-            seen.record(request.text)
+            seen.record(request)
             return .inserted(characters: request.text.count, into: anEditor)
         }
 

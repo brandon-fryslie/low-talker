@@ -107,14 +107,15 @@ public final class FocusedClient {
     /// before it came on is one the text input system has stopped routing to - so no commit
     /// is attempted and the refusal names the thing to fix. [LAW:no-silent-failure]
     ///
-    /// Last, the cursor in front has to be one `destination` admits: words that follow a
+    /// First, the app in front has to be one `destination` admits: words that follow a
     /// dictation's first go only to the app those went to, so a person who moved on mid-press
-    /// is refused rather than typed into.
+    /// is refused rather than typed into, and told that they moved - whatever the app they
+    /// moved to holds, which is not where the words were going anyway.
     public func cursor(for destination: Destination, whileInFrontIs frontmost: String?, secureInputIsOn: Bool) -> Result<any TextCursor, Refusal> {
+        guard destination.admits(frontmost) else { return .failure(.dictationIsInAnotherApp) }
         guard !secureInputIsOn else { return .failure(.secureInputIsOn) }
         guard let focus else { return .failure(.noClientHasFocus) }
         guard focus.application == frontmost else { return .failure(.cursorIsInAnotherApp) }
-        guard destination.admits(focus.application) else { return .failure(.dictationIsInAnotherApp) }
         return .success(focus)
     }
 }
