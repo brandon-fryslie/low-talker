@@ -1,6 +1,6 @@
-import CoreGraphics
 import Foundation
 import Insertion
+import os
 
 /// Every change of the modifier keys a controller is handed, as the keys held once it
 /// happened: what this process tells the app, so the app hears a chord of modifiers alone
@@ -26,6 +26,7 @@ public final class ModifierChanges: Sendable {
     /// that is true. [LAW:no-ambient-temporal-coupling]
     public let changes: AsyncStream<HeldModifiers>
     private let continuation: AsyncStream<HeldModifiers>.Continuation
+    private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "lowtalker-inputmethod", category: "modifiers")
 
     private init() {
         (changes, continuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(64))
@@ -34,8 +35,11 @@ public final class ModifierChanges: Sendable {
     /// A controller was handed a change of the modifier keys, stamped `timestamp` seconds
     /// after the machine came up - `NSEvent.timestamp`, the clock the app's presses are on.
     public func moved(at timestamp: TimeInterval) {
+        let reading = SessionModifiers.read()
+        // [LAW:nothing-unseen] One record per change told: the only window into this process.
+        log.info("modifiers moved at \(timestamp, privacy: .public): \(reading, privacy: .public)")
         continuation.yield(HeldModifiers(
-            flags: CGEventSource.flagsState(.combinedSessionState).rawValue,
+            flags: reading.flags,
             // Rounded: seconds as a double do not land on whole nanoseconds.
             uptimeNanoseconds: UInt64((timestamp * 1_000_000_000).rounded())))
     }

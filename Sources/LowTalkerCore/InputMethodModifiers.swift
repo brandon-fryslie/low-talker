@@ -1,4 +1,3 @@
-import CoreGraphics
 import Dispatch
 import Identity
 import Insertion
@@ -50,7 +49,7 @@ public struct InputMethodModifiers: ModifierFeed {
         }
 
         func heard(_ state: HeldModifiers) {
-            heard(told.take(Modifier.held(in: CGEventFlags(rawValue: state.flags)),
+            heard(told.take(Modifier.held(in: state.flags),
                             at: HostTime(uptime: .nanoseconds(state.uptimeNanoseconds))))
         }
 
@@ -65,7 +64,7 @@ public struct InputMethodModifiers: ModifierFeed {
                                leeway: .milliseconds(50))
                 timer.setEventHandler { [unowned self] in
                     MainActor.assumeIsolated {
-                        heard(told.confirm(session: Modifier.held(in: CGEventSource.flagsState(.combinedSessionState)), at: .now))
+                        heard(told.confirm(session: Modifier.heldInSession(), at: .now))
                     }
                 }
                 timer.resume()
@@ -84,7 +83,7 @@ public struct InputMethodModifiers: ModifierFeed {
     public func install(handling handle: @escaping @MainActor (KeyEvent) -> Void) throws -> Disposal {
         // What is held as listening begins is read, not assumed to be nothing, so a key
         // already down when this comes up is not heard going down when it next moves.
-        let installed = Installed(told: ToldModifiers(held: Modifier.held(in: CGEventSource.flagsState(.combinedSessionState))))
+        let installed = Installed(told: ToldModifiers(held: Modifier.heldInSession()))
         let log = Logger(subsystem: AppIdentity.bundleIdentifier, category: "hotkey")
         // Checked and read off the main thread, where the keys and the menu are, and handed
         // to it in the order the input method sent them: the main queue is first in, first

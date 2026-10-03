@@ -1,5 +1,5 @@
-import CoreGraphics
 import IOKit.hidsystem
+import Insertion
 
 /// Where the hotkey is told each modifier key moving.
 ///
@@ -26,14 +26,20 @@ extension Modifier {
         case .rightOption: UInt64(NX_DEVICERALTKEYMASK)
         case .leftCommand: UInt64(NX_DEVICELCMDKEYMASK)
         case .rightCommand: UInt64(NX_DEVICERCMDKEYMASK)
-        // Also set on the arrow, Home, End, Page and Forward Delete keys, Fn held or
-        // not; telling the Fn key itself apart is low-hotkey-a6m.3.
+        // The Fn key itself in `SessionModifiers.flags`, which is where every reading here
+        // comes from; as the session sets it, the bit also rides on the arrow and navigation
+        // keys.
         case .function: UInt64(NX_SECONDARYFNMASK)
         }
     }
 
     /// The modifiers a set of session flags says are held.
-    static func held(in flags: CGEventFlags) -> Set<Modifier> {
-        Set(allCases.filter { flags.rawValue & $0.mask != 0 })
+    static func held(in flags: UInt64) -> Set<Modifier> {
+        Set(allCases.filter { flags & $0.mask != 0 })
+    }
+
+    /// The modifiers the session holds now.
+    static func heldInSession() -> Set<Modifier> {
+        held(in: SessionModifiers.read().flags)
     }
 }

@@ -1,3 +1,5 @@
+import Carbon.HIToolbox
+import CoreGraphics
 import Darwin
 import DarwinCalls
 import Identity
@@ -14,7 +16,8 @@ import Foundation
 /// is recognisably nothing; a key named as having moved would be neither.
 /// [FRAMING:representation]
 public struct HeldModifiers: Equatable, Sendable {
-    /// The session's modifier flags, device-side bits included: a `CGEventFlags` raw value.
+    /// The session's modifier flags, device-side bits included: a `CGEventFlags` raw value,
+    /// a `SessionModifiers` reading's `flags`.
     public let flags: UInt64
     /// When the change happened, in nanoseconds on the clock the machine has been up on.
     public let uptimeNanoseconds: UInt64
@@ -22,6 +25,41 @@ public struct HeldModifiers: Equatable, Sendable {
     public init(flags: UInt64, uptimeNanoseconds: UInt64) {
         self.flags = flags
         self.uptimeNanoseconds = uptimeNanoseconds
+    }
+}
+
+/// One reading of the window server's session: its modifier flags as it gives them, and
+/// whether the Fn key itself is down. The session sets the secondary-Fn bit
+/// (`NX_SECONDARYFNMASK`) for the arrow, Home, End, Page Up/Down and Forward Delete keys too,
+/// Fn held or not, so `flags` takes that bit from the Fn key's own state, read from the same
+/// session like the rest, with no tally kept of its presses.
+/// [LAW:one-source-of-truth] Both processes read the session through this: the input method
+/// at each change it tells, and the app when it confirms what is still held.
+public struct SessionModifiers: Equatable, Sendable, CustomStringConvertible {
+    public let session: UInt64
+    public let fnKeyDown: Bool
+
+    public init(session: UInt64, fnKeyDown: Bool) {
+        self.session = session
+        self.fnKeyDown = fnKeyDown
+    }
+
+    public static func read() -> SessionModifiers {
+        SessionModifiers(session: CGEventSource.flagsState(.combinedSessionState).rawValue,
+                         fnKeyDown: CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(kVK_Function)))
+    }
+
+    /// The modifiers held: the session's flags, with the secondary-Fn bit the Fn key's.
+    public var flags: UInt64 {
+        let fn = CGEventFlags.maskSecondaryFn.rawValue
+        return session & ~fn | (fnKeyDown ? fn : 0)
+    }
+
+    /// [LAW:nothing-unseen] Both readings, and what was held when the Fn key's state and the
+    /// session's bit disagree, so the log tells an arrow key taken for Fn from Fn unheard.
+    public var description: String {
+        "session 0x\(String(session, radix: 16)), Fn key \(fnKeyDown ? "down" : "up")"
+            + (flags == session ? "" : ", held 0x\(String(flags, radix: 16))")
     }
 }
 

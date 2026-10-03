@@ -176,6 +176,8 @@ While it is the selected input source, macOS hands the input method every change
 
 Hold the chord while you speak, or tap it to start and again to stop: a press released within 250 ms is a tap, and listening stays on until the chord is pressed again. A chord is modifier keys alone, and pressed with another modifier already held it is a different chord.
 
+Fn, the Globe key, can be a chord, written `"function"`. Fn is held only while the Fn key itself is down. macOS also marks the arrow, Home, End, Page Up, Page Down and Forward Delete keys as Fn, and those do not count. Set System Settings › Keyboard › "Press 🌐 key to" to Do Nothing, or macOS runs its own action on every press as well. That action might start Dictation, show Emoji & Symbols, or change the input source away from LowTalker. While a chord holds Fn and that setting is anything else, the menu says so under its Hotkey line and names the setting.
+
 An installation from before the input method was the only way still holds its old answers in its defaults, under `inputMethod` and `hotkeySource`. Nothing reads them now, so it comes up on the input method with no question asked. Such an installation also still holds the keyboard helper it registered as a background item. v0.1.0-alpha.5 unregisters it at launch. A build under App Sandbox is not permitted to (`SMAppService` answers `Operation not permitted`), so an installation that goes straight from alpha.4 or earlier to a sandboxed build keeps a job whose program is gone; `sudo launchctl bootout system/ai.promptctl.low-talker.keyboardd` (and `com.lowtalker.keyboardd`, `.dev` for what was the development copy) drops it.
 
 ## Dictation
