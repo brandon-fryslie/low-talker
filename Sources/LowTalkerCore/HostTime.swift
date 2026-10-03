@@ -34,3 +34,12 @@ public struct HostTime: Hashable, Comparable, Sendable {
         moment.uptime < later.uptime
     }
 }
+
+extension ContinuousClock.Instant {
+    /// `moment` on the clock every latency here is timed by. The host clock stops while
+    /// the machine sleeps and this one does not, so the two differ by every sleep since
+    /// startup; what carries across is `moment`'s age, read on its own clock now.
+    public init(_ moment: HostTime) {
+        self = .now - (HostTime.now - moment)
+    }
+}

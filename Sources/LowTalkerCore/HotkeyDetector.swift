@@ -59,11 +59,13 @@ public struct HotkeyDetector: Sendable {
     /// they shared a value - "that was the whole utterance" and "that is as much of it
     /// as reached us". Only a release carries a press kind, because a tap and a hold
     /// are told apart by how long the key was down and only a release has the key-up
-    /// that measures it. `began` carries the moment its event was stamped with for the
-    /// same reason: an ending with no event behind it could only invent one.
+    /// that measures it. Only a release carries a moment, the stamp of the event that
+    /// ended it, for the same reason `began` carries one: an ending with no event behind
+    /// it could only invent one.
     public enum Ending: Hashable, Sendable, CustomStringConvertible {
-        /// The key came up on a hold, or the chord went down again on a latched tap.
-        case released(PressKind)
+        /// The key came up on a hold, or the chord went down again on a latched tap, at
+        /// this moment.
+        case released(PressKind, at: HostTime)
         /// The hotkey stopped hearing while the press was open. Nothing was heard past the
         /// last event it was told, and whether the speaker had even finished is unknown.
         case lapsed
@@ -72,7 +74,7 @@ public struct HotkeyDetector: Sendable {
         /// it compiles, so nothing prints an ending it has no word for.
         public var description: String {
             switch self {
-            case .released(let kind): kind.rawValue
+            case .released(let kind, _): kind.rawValue
             case .lapsed: "lapsed"
             }
         }
@@ -120,7 +122,7 @@ public struct HotkeyDetector: Sendable {
         // began it, so a chord moved by `listen(for:)` mid-latch still ends what it started.
         case (.latched(let chord), _) where completed != nil || chord.isCompleted(by: event.key, holding: event.modifiers):
             phase = .idle
-            return .ended(chord, .released(.tap))
+            return .ended(chord, .released(.tap, at: event.time))
         case (.held, _), (.latched, _), (.idle, nil):
             return nil
         }
@@ -136,7 +138,7 @@ public struct HotkeyDetector: Sendable {
                 return nil
             case .hold:
                 phase = .idle
-                return .ended(chord, .released(.hold))
+                return .ended(chord, .released(.hold, at: event.time))
             }
         case .held, .latched, .idle:
             return nil

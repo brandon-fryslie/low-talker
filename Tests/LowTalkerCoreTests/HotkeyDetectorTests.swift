@@ -29,14 +29,14 @@ private struct Keyboard {
 private func at(_ ms: Int64) -> HostTime { HostTime(uptime: .milliseconds(ms)) }
 
 private func began(_ chord: KeyChord, at ms: Int64) -> HotkeyDetector.Transition { .began(chord, at: at(ms)) }
-private func ended(_ chord: KeyChord, _ press: PressKind) -> HotkeyDetector.Transition { .ended(chord, .released(press)) }
+private func ended(_ chord: KeyChord, _ press: PressKind, at ms: Int64) -> HotkeyDetector.Transition { .ended(chord, .released(press, at: at(ms))) }
 
 @Suite struct HotkeyDetectorTests {
     @Test func aPressReleasedAfterTheThresholdIsAHold() {
         var keyboard = Keyboard()
         #expect(keyboard.press(.rightOption, at: 0) == began(rightOption, at: 0))
         #expect(keyboard.detector.phase == .held(rightOption, since: at(0)))
-        #expect(keyboard.release(.rightOption, at: 400) == ended(rightOption, .hold))
+        #expect(keyboard.release(.rightOption, at: 400) == ended(rightOption, .hold, at: 400))
         #expect(keyboard.detector.phase == .idle)
     }
 
@@ -47,7 +47,7 @@ private func ended(_ chord: KeyChord, _ press: PressKind) -> HotkeyDetector.Tran
         #expect(keyboard.press(.rightOption, at: 0) == began(rightOption, at: 0))
         #expect(keyboard.release(.rightOption, at: 100) == nil)
         #expect(keyboard.detector.phase == .latched(rightOption))
-        #expect(keyboard.press(.rightOption, at: 5000) == ended(rightOption, .tap))
+        #expect(keyboard.press(.rightOption, at: 5000) == ended(rightOption, .tap, at: 5000))
         #expect(keyboard.detector.phase == .idle)
         #expect(keyboard.release(.rightOption, at: 6000) == nil)
         #expect(keyboard.detector.phase == .idle)
@@ -56,13 +56,13 @@ private func ended(_ chord: KeyChord, _ press: PressKind) -> HotkeyDetector.Tran
     @Test func aPressExactlyAtTheThresholdIsAHold() {
         var keyboard = Keyboard()
         _ = keyboard.press(.rightOption, at: 10)
-        #expect(keyboard.release(.rightOption, at: 260) == ended(rightOption, .hold))
+        #expect(keyboard.release(.rightOption, at: 260) == ended(rightOption, .hold, at: 260))
     }
 
     @Test func theThresholdIsTheDetectorsToSet() {
         var keyboard = Keyboard(tapThreshold: .milliseconds(50))
         _ = keyboard.press(.rightOption, at: 0)
-        #expect(keyboard.release(.rightOption, at: 100) == ended(rightOption, .hold))
+        #expect(keyboard.release(.rightOption, at: 100) == ended(rightOption, .hold, at: 100))
     }
 
     /// Modifiers that are not the chord's change nothing, whatever the phase.
@@ -98,7 +98,7 @@ private func ended(_ chord: KeyChord, _ press: PressKind) -> HotkeyDetector.Tran
         #expect(keyboard.press(.leftShift, at: 100) == nil)
         #expect(keyboard.detector.phase == .held(rightOption, since: at(0)))
         #expect(keyboard.release(.leftShift, at: 200) == nil)
-        #expect(keyboard.release(.rightOption, at: 400) == ended(rightOption, .hold))
+        #expect(keyboard.release(.rightOption, at: 400) == ended(rightOption, .hold, at: 400))
     }
 
     /// Shift first, then Right Option, is the two-key chord, and releasing either ends
@@ -107,7 +107,7 @@ private func ended(_ chord: KeyChord, _ press: PressKind) -> HotkeyDetector.Tran
         var keyboard = Keyboard(chords: [rightOption, command])
         #expect(keyboard.press(.leftShift, at: 0) == nil)
         #expect(keyboard.press(.rightOption, at: 10) == began(command, at: 10))
-        #expect(keyboard.release(.leftShift, at: 400) == ended(command, .hold))
+        #expect(keyboard.release(.leftShift, at: 400) == ended(command, .hold, at: 400))
         #expect(keyboard.detector.phase == .idle)
         #expect(keyboard.release(.rightOption, at: 410) == nil)
     }
@@ -132,7 +132,7 @@ private func ended(_ chord: KeyChord, _ press: PressKind) -> HotkeyDetector.Tran
         #expect(keyboard.press(.rightOption, at: 0) == began(rightOption, at: 0))
         keyboard.detector.listen(for: [rightCommand])
         #expect(keyboard.detector.phase == .held(rightOption, since: at(0)))
-        #expect(keyboard.release(.rightOption, at: 400) == ended(rightOption, .hold))
+        #expect(keyboard.release(.rightOption, at: 400) == ended(rightOption, .hold, at: 400))
         #expect(keyboard.press(.rightOption, at: 500) == nil)
         #expect(keyboard.release(.rightOption, at: 900) == nil)
         #expect(keyboard.press(.rightCommand, at: 1000) == began(rightCommand, at: 1000))
@@ -149,7 +149,7 @@ private func ended(_ chord: KeyChord, _ press: PressKind) -> HotkeyDetector.Tran
         _ = keyboard.release(.rightOption, at: 100)
         keyboard.detector.listen(for: [rightCommand])
         #expect(keyboard.detector.phase == .latched(rightOption))
-        #expect(keyboard.press(ending, at: 2000) == ended(rightOption, .tap))
+        #expect(keyboard.press(ending, at: 2000) == ended(rightOption, .tap, at: 2000))
         #expect(keyboard.detector.phase == .idle)
     }
 
@@ -180,7 +180,7 @@ private func ended(_ chord: KeyChord, _ press: PressKind) -> HotkeyDetector.Tran
         let released = releasing.release(.rightOption, at: 400)
 
         #expect(lapsed == .ended(rightOption, .lapsed))
-        #expect(released == .ended(rightOption, .released(.hold)))
+        #expect(released == .ended(rightOption, .released(.hold, at: at(400))))
         #expect(lapsed != released)
     }
 
@@ -191,6 +191,6 @@ private func ended(_ chord: KeyChord, _ press: PressKind) -> HotkeyDetector.Tran
         _ = keyboard.press(.rightOption, at: 0)
         _ = keyboard.release(.rightOption, at: 100)
         _ = keyboard.press(.leftShift, at: 1000)
-        #expect(keyboard.press(.rightOption, at: 1010) == ended(rightOption, .tap))
+        #expect(keyboard.press(.rightOption, at: 1010) == ended(rightOption, .tap, at: 1010))
     }
 }
