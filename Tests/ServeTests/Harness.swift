@@ -27,7 +27,7 @@ final class Stub: Transcriber {
         for await clip in audio {
             seconds += clip.duration
             let confirmed = min(words.count / 2, Int(seconds / 0.5))
-            partial(Partial(confirmed: Transcript(words: Array(words.prefix(confirmed))), tentative: Transcript(words: [])))
+            partial(Partial(confirmed: Transcript(words: Array(words.prefix(confirmed))), tentative: Transcript(words: []), repunctuated: 0))
         }
         heard.withLock { $0.append((seconds, vocabulary, Task.isCancelled)) }
         return try answer.get()

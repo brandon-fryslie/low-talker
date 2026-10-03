@@ -196,6 +196,7 @@ import Testing
         committed += cursor.advance(through: hearing.transcript.words).text
         #expect(hearing.transcript.text == revision.reads)
         #expect(committed == revision.reads)
+        #expect(hearing.partial.repunctuated == 1)
     }
 
     /// The last confirmed word is tentative in the partial, since the next pass may still
@@ -206,9 +207,11 @@ import Testing
         hearing.hear([Self.word(" a", 0, 0.1), Self.word(" b", 0.2, 0.3)], through: Self.samples(3))
         #expect(hearing.partial.confirmed.text == " a")
         #expect(hearing.partial.tentative.text == " b")
+        #expect(hearing.partial.repunctuated == 0)
         hearing.hear([Self.word(" a", 0, 0.1), Self.word(" b,", 0.2, 0.3), Self.word(" c", 2.5, 2.8)], through: Self.samples(4))
         hearing.hear([Self.word(" a", 0, 0.1), Self.word(" b,", 0.2, 0.3), Self.word(" c", 2.5, 2.8)], through: Self.samples(4.5))
         #expect(hearing.partial.confirmed.text == " a b,")
         #expect(hearing.partial.tentative.text == " c")
+        #expect(hearing.partial.repunctuated == 1)
     }
 }

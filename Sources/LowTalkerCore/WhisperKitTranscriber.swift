@@ -69,9 +69,10 @@ public struct WhisperKitTranscriber: Transcriber {
     /// Hears the utterance in passes as its audio arrives. Whisper decodes a whole
     /// window at a time, so streaming is re-reading: each pass decodes from a few
     /// confirmed words back to the audio so far, and words two passes agree on are
-    /// confirmed and never read again. A pass runs whenever the engine is free and
-    /// speech has arrived since the last one, so the partials are as fresh as the
-    /// engine allows; the pass that covers the last of the speech is the last pass,
+    /// confirmed, read again only as a later pass's prefix, which may re-punctuate
+    /// the last of them. A pass runs whenever the engine is free and speech has
+    /// arrived since the last one, so the partials are as fresh as the engine
+    /// allows; the pass that covers the last of the speech is the last pass,
     /// whether the key is still down when it starts or has already come up.
     public func transcribe(
         _ audio: some AsyncSequence<AudioClip, Never> & Sendable,

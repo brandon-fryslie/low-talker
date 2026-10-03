@@ -33,6 +33,8 @@ struct Hearing: Equatable {
     private(set) var tentative: [Transcript.Word] = []
     /// Samples the latest pass read through.
     private(set) var heard = 0
+    /// Passes that changed the last confirmed word's punctuation.
+    private(set) var repunctuated = 0
 
     init(margin: Int, context: Int) {
         precondition(margin >= 0, "a margin reaches back from a pass's end, not forward")
@@ -88,11 +90,13 @@ struct Hearing: Equatable {
     /// differently stays, visible, rather than vanishing. A prefix read the same
     /// punctuates the last confirmed word as this pass does.
     mutating func hear(_ words: [Transcript.Word], through end: Int) {
-        let reread = zip(prefix, words).prefix { Self.sameWord($0, $1) }.map(\.1)
-        if reread.count == prefix.count, let last = confirmed.last, let reading = reread.last {
+        let reread = zip(prefix, words).prefix { Self.sameWord($0, $1) }.count
+        if reread == prefix.count, let last = confirmed.last, let reading = words.prefix(reread).last {
+            // The settled reading's time stays: `cut` derives from confirmed times and never moves back.
+            repunctuated += reading.text == last.text ? 0 : 1
             confirmed[confirmed.count - 1] = Transcript.Word(text: reading.text, time: last.time, confidence: last.confidence)
         }
-        let fresh = words.dropFirst(reread.count)
+        let fresh = words.dropFirst(reread)
         let agreed = zip(tentative, fresh).prefix { Self.sameWord($0, $1) }.count
         let settled = fresh.prefix(agreed).prefix { AudioClip.sampleCount(for: $0.time.upperBound) <= end - margin }
         confirmed += settled
@@ -104,7 +108,7 @@ struct Hearing: Equatable {
     /// is final, so a reader can take them as they come: every confirmed word but the
     /// last, whose punctuation the next pass may still revise.
     var partial: Partial {
-        Partial(confirmed: Transcript(words: confirmed.dropLast()), tentative: Transcript(words: confirmed.suffix(1) + tentative))
+        Partial(confirmed: Transcript(words: confirmed.dropLast()), tentative: Transcript(words: confirmed.suffix(1) + tentative), repunctuated: repunctuated)
     }
 
     /// The utterance as heard so far, which is the transcript once no more audio

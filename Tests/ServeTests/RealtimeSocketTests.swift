@@ -214,9 +214,9 @@ private func update(_ input: [String: Any]) -> [String: Any] {
     @Test func anItemLetGoSendsNoMoreDeltas() async {
         let sent = await deltas { outbox in
             let item = Deltas(item: "item_a", outbox: outbox)
-            item.heard(Partial(confirmed: timed(2), tentative: Transcript(words: [])))
+            item.heard(Partial(confirmed: timed(2), tentative: Transcript(words: []), repunctuated: 0))
             item.letGo()
-            item.heard(Partial(confirmed: timed(4), tentative: Transcript(words: [])))
+            item.heard(Partial(confirmed: timed(4), tentative: Transcript(words: []), repunctuated: 0))
         }
         #expect(sent == [" w1 w2"])
     }

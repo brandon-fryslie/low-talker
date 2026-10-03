@@ -48,10 +48,13 @@ extension Transcriber {
 public struct Partial: Hashable, Sendable {
     public let confirmed: Transcript
     public let tentative: Transcript
+    /// Passes so far that changed the punctuation of a word two passes had agreed on.
+    public let repunctuated: Int
 
-    public init(confirmed: Transcript, tentative: Transcript) {
+    public init(confirmed: Transcript, tentative: Transcript, repunctuated: Int) {
         self.confirmed = confirmed
         self.tentative = tentative
+        self.repunctuated = repunctuated
     }
 
     /// Everything heard so far, confirmed then tentative, as one line of text.
