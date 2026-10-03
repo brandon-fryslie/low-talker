@@ -44,11 +44,12 @@ private let rightOptionHeld = HeldModifiers(flags: 0x80140, uptimeNanoseconds: 1
     }
 
     /// A reading is dated by the session's last change, unless that change came after the
-    /// keys were read, or the session reports one from before the machine came up.
-    @Test func aReadingIsDatedBetweenTheMachineComingUpAndTheRead() {
-        #expect(SessionModifiers.date(lastChange: 7_000.4, readAt: 7_000.5) == 7_000.4)
-        #expect(SessionModifiers.date(lastChange: 7_000.6, readAt: 7_000.5) == 7_000.5)
-        #expect(SessionModifiers.date(lastChange: 7_000.5 - 1.8e10, readAt: 7_000.5) == 0)
+    /// keys were read, or the session reports one from before the event it answers.
+    @Test func aReadingIsDatedBetweenItsEventAndTheRead() {
+        #expect(SessionModifiers.date(lastChange: 7_000.4, after: 7_000.1, readAt: 7_000.5) == 7_000.4)
+        #expect(SessionModifiers.date(lastChange: 7_000.6, after: 7_000.1, readAt: 7_000.5) == 7_000.5)
+        #expect(SessionModifiers.date(lastChange: 7_000.5 - 1.8e10, after: 7_000.1, readAt: 7_000.5) == 7_000.1)
+        #expect(SessionModifiers.date(lastChange: 7_000.5 - 1.8e10, after: 0, readAt: 7_000.5) == 0)
     }
 
     /// A reading from the session now is dated no later than it was taken.

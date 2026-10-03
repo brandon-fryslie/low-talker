@@ -47,7 +47,7 @@ public final class DictationInputController: IMKInputController {
     /// activate trapped on the implicitly unwrapped event the inherited signature has). Such a
     /// call changed no key, so it tells nothing: the next change carries the whole state.
     override public func handle(_ event: NSEvent?, client sender: Any!) -> Bool {
-        event.map { ModifierChanges.shared.moved(at: $0.timestamp, reading: .read()) }
+        event.map { ModifierChanges.shared.moved(at: $0.timestamp, reading: .read(after: $0.timestamp)) }
         return false
     }
 

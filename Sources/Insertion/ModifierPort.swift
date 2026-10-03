@@ -46,7 +46,7 @@ public struct SessionModifiers: Equatable, Sendable, CustomStringConvertible {
     public let session: UInt64
     public let fnKeyDown: Bool
     /// Since when the keys it shows have been held: the session's last change of a modifier
-    /// key, as `date(lastChange:readAt:)` bounds it, in seconds since the machine came up -
+    /// key, as `date(lastChange:after:readAt:)` bounds it, in seconds since the machine came up -
     /// `NSEvent.timestamp`'s clock. Measured on studious, 2026-10-03: for keys pressed through
     /// vhid it lands 1.5-9 ms after each one was sent.
     public let changedAt: TimeInterval
@@ -57,23 +57,25 @@ public struct SessionModifiers: Equatable, Sendable, CustomStringConvertible {
         self.changedAt = changedAt
     }
 
-    public static func read() -> SessionModifiers {
+    /// The session now, read in answer to a change that happened at `event`, or to none.
+    public static func read(after event: TimeInterval = 0) -> SessionModifiers {
         let readAt = ProcessInfo.processInfo.systemUptime
         let session = CGEventSource.flagsState(.combinedSessionState).rawValue
         let fnKeyDown = CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(kVK_Function))
         let since = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .flagsChanged)
         return SessionModifiers(session: session, fnKeyDown: fnKeyDown,
-                                changedAt: date(lastChange: ProcessInfo.processInfo.systemUptime - since, readAt: readAt))
+                                changedAt: date(lastChange: ProcessInfo.processInfo.systemUptime - since, after: event, readAt: readAt))
     }
 
     /// When a reading taken at `readAt` has held its keys since, given the session's last
-    /// change: not before the machine came up, and not after the reading. The session's last
+    /// change: not before the event it answers - it shows that change or a later one - and
+    /// not after the reading. The session's last
     /// change is asked for after the keys are read, so it can be one the reading does not
     /// show; dated by it, a reading the app's confirm has already overtaken would arrive
     /// looking newer than the confirm and press a released key again.
     /// [LAW:no-ambient-temporal-coupling]
-    static func date(lastChange: TimeInterval, readAt: TimeInterval) -> TimeInterval {
-        min(max(lastChange, 0), readAt)
+    static func date(lastChange: TimeInterval, after event: TimeInterval, readAt: TimeInterval) -> TimeInterval {
+        min(max(lastChange, event), readAt)
     }
 
     /// The modifiers held: the session's flags, with the secondary-Fn bit the Fn key's.
