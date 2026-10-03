@@ -47,6 +47,13 @@ import Testing
         #expect(String(data: Wire.request(InsertRequest("hello", into: .app("com.example.editor"))), encoding: .utf8) == nil)
     }
 
+    /// The refusal that input method answers is one this app reads as a refusal, so the
+    /// person is told nothing was inserted rather than that their words may have landed.
+    /// Pinned to the bytes, because those bytes are what a build from then sends.
+    @Test func theRefusalOfAnInputMethodThatReadsTextIsARefusal() {
+        #expect(Wire.answer(of: Data(#"{"refused":{"_0":"requestWasNotText"}}"#.utf8)) == .refused(.requestWasNotReadable))
+    }
+
     @Test func bytesThatAreNotARequestAreNotARequest() {
         #expect(Wire.request(of: Data([0xFF, 0xFE, 0xFD])) == nil)
         #expect(Wire.request(of: Data("hello".utf8)) == nil)

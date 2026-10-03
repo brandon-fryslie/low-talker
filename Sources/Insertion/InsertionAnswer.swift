@@ -112,8 +112,10 @@ public enum Refusal: String, Error, Codable, CaseIterable, Equatable, Sendable, 
     case dictationIsInAnotherApp
     /// The bytes that arrived were not a request. Answered rather than dropped, because a
     /// sender that hears nothing waits out its whole timeout and learns nothing.
-    /// [LAW:no-silent-failure]
-    case requestWasNotReadable
+    /// [LAW:no-silent-failure] Spelled on the wire as it was when a request was bare text,
+    /// because that is how an input method from then refuses a request it cannot read, and
+    /// the app has to read that refusal as one rather than as an answer it cannot read.
+    case requestWasNotReadable = "requestWasNotText"
     /// Some app holds Secure Event Input - Secure Keyboard Entry in Terminal or iTerm2, or a
     /// password field - and while it does, macOS switches every input method off. Its own
     /// reason and not `noClientHasFocus`, because it is fixed somewhere else entirely: not
