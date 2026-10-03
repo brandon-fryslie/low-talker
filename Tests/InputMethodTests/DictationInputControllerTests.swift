@@ -1,5 +1,6 @@
 import AppKit
 import InputMethod
+import Insertion
 import Testing
 
 /// The controller hands back every key it is offered.
@@ -13,7 +14,10 @@ import Testing
 /// concurrently. Building those off the main thread is not promised to work, and what an
 /// unpromised thing does is fail on some runs and not others.
 /// [LAW:no-ambient-temporal-coupling]
-@Suite @MainActor struct DictationInputControllerTests {
+///
+/// Serialized because the changes told are one stream with one reader at a time: two cases
+/// waiting on it at once each take changes the other is waiting for.
+@Suite(.serialized) @MainActor struct DictationInputControllerTests {
     /// A key as something that can be carried into a test case. `NSEvent` itself cannot -
     /// it is explicitly not `Sendable` - so what travels is the description of the press and
     /// the event is built where it is used.
@@ -55,18 +59,30 @@ import Testing
         #expect(controller.recognizedEvents(nil) == Int(NSEvent.EventTypeMask.flagsChanged.rawValue))
     }
 
-    /// A change of the modifier keys is handed back like every key, and told, stamped with
-    /// the moment the event carries.
+    /// A change of the modifier keys is handed back like every key, and told as the session
+    /// holds it.
     @Test(.timeLimit(.minutes(1))) func aChangeOfTheModifierKeysIsHandedBackAndTold() async throws {
         let controller = try #require(DictationInputController(server: nil, delegate: nil, client: nil))
         let moved = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 61, keyDown: true))
         moved.type = .flagsChanged
         moved.flags = .maskAlternate
-        moved.timestamp = 4_242_000_000
         let event = try #require(NSEvent(cgEvent: moved))
+        let held = SessionModifiers.read().flags
         #expect(controller.handle(event, client: nil) == false, "Right Option was claimed by the input method")
-        let told = await ModifierChanges.shared.changes.first { @Sendable held in held.uptimeNanoseconds == 4_242_000_000 }
-        #expect(told != nil)
+        let handled = UInt64((ProcessInfo.processInfo.systemUptime * 1_000_000_000).rounded())
+        let told = await ModifierChanges.shared.changes.first { @Sendable in $0.flags == held }
+        #expect(try #require(told).uptimeNanoseconds <= handled, "told as changed after it was read")
+    }
+
+    /// Right Option down at 0, Shift down at 100 ms, Right Option up at 400 ms, and the Shift
+    /// event handled at 500 ms: the reading already shows Right Option up, and the release is
+    /// told at 400 ms. Dated by the event, it would be told at 100 ms, and a 400 ms hold would
+    /// be heard as a tap.
+    @Test(.timeLimit(.minutes(1))) func aReadingAheadOfItsEventIsDatedByTheChangeItShows() async {
+        let shiftAloneSinceTheRelease = SessionModifiers(session: 0x20102, fnKeyDown: false, changedAt: 7_000.4)
+        ModifierChanges.shared.moved(at: 7_000.1, reading: shiftAloneSinceTheRelease)
+        let told = await ModifierChanges.shared.changes.first { @Sendable in $0.flags == 0x20102 }
+        #expect(told?.uptimeNanoseconds == 7_000_400_000_000)
     }
 
     /// A call carrying no event, which IMK makes, is handed back rather than trapping and

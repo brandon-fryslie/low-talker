@@ -34,13 +34,28 @@ private let rightOptionHeld = HeldModifiers(flags: 0x80140, uptimeNanoseconds: 1
     /// The log line says what was held whenever that is not the session's flags as given.
     @Test func theFnBitIsTheFnKeyItself() {
         let fn: UInt64 = 0x800000
-        let anArrowWithRightOption = SessionModifiers(session: 0x80140 | fn, fnKeyDown: false)
+        let anArrowWithRightOption = SessionModifiers(session: 0x80140 | fn, fnKeyDown: false, changedAt: 2.5)
         #expect(anArrowWithRightOption.flags == 0x80140)
-        #expect(anArrowWithRightOption.description == "session 0x880140, Fn key up, held 0x80140")
-        let fnAlone = SessionModifiers(session: 0x100 | fn, fnKeyDown: true)
+        #expect(anArrowWithRightOption.description == "session 0x880140, Fn key up, held 0x80140, changed at 2.5")
+        let fnAlone = SessionModifiers(session: 0x100 | fn, fnKeyDown: true, changedAt: 2.5)
         #expect(fnAlone.flags == 0x100 | fn)
-        #expect(fnAlone.description == "session 0x800100, Fn key down")
-        #expect(SessionModifiers(session: 0x80140, fnKeyDown: true).flags == 0x80140 | fn)
+        #expect(fnAlone.description == "session 0x800100, Fn key down, changed at 2.5")
+        #expect(SessionModifiers(session: 0x80140, fnKeyDown: true, changedAt: 2.5).flags == 0x80140 | fn)
+    }
+
+    /// A reading is dated by the session's last change, unless that change came after the
+    /// keys were read, or the session reports one from before the event it answers.
+    @Test func aReadingIsDatedBetweenItsEventAndTheRead() {
+        #expect(SessionModifiers.date(lastChange: 7_000.4, after: 7_000.1, readAt: 7_000.5) == 7_000.4)
+        #expect(SessionModifiers.date(lastChange: 7_000.6, after: 7_000.1, readAt: 7_000.5) == 7_000.5)
+        #expect(SessionModifiers.date(lastChange: 7_000.5 - 1.8e10, after: 7_000.1, readAt: 7_000.5) == 7_000.1)
+        #expect(SessionModifiers.date(lastChange: 7_000.5 - 1.8e10, after: 0, readAt: 7_000.5) == 0)
+    }
+
+    /// A reading from the session now is dated no later than it was taken.
+    @Test func aLiveReadingIsDatedNoLaterThanItIsTaken() {
+        let reading = SessionModifiers.read()
+        #expect(0...ProcessInfo.processInfo.systemUptime ~= reading.changedAt)
     }
 
     @Test func heldModifiersSurviveTheWire() {

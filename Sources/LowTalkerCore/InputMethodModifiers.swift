@@ -114,8 +114,8 @@ public struct InputMethodModifiers: ModifierFeed {
 /// The modifier keys the detector has been told are held: what each state heard next is the
 /// difference from.
 ///
-/// Two readings reach it. The input method's, which can press and let go, stamped when its
-/// event happened and arriving in that order; and the app's own of the session, which only
+/// Two readings reach it. The input method's, which can press and let go, stamped no later
+/// than it read the session and arriving in that order; and the app's own of the session, which only
 /// confirms what is still down and so can only let go. What the session let go of is kept
 /// per key with when it was read, because a message from the input method stamped before
 /// then can still be on its way holding that key, and must not press it again - while
