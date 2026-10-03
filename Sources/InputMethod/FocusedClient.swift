@@ -106,10 +106,15 @@ public final class FocusedClient {
     /// Secure Event Input macOS hands no input method a client, and a cursor still held from
     /// before it came on is one the text input system has stopped routing to - so no commit
     /// is attempted and the refusal names the thing to fix. [LAW:no-silent-failure]
-    public func cursor(whileInFrontIs frontmost: String?, secureInputIsOn: Bool) -> Result<any TextCursor, Refusal> {
+    ///
+    /// Last, the cursor in front has to be one `destination` admits: words that follow a
+    /// dictation's first go only to the app those went to, so a person who moved on mid-press
+    /// is refused rather than typed into.
+    public func cursor(for destination: Destination, whileInFrontIs frontmost: String?, secureInputIsOn: Bool) -> Result<any TextCursor, Refusal> {
         guard !secureInputIsOn else { return .failure(.secureInputIsOn) }
         guard let focus else { return .failure(.noClientHasFocus) }
         guard focus.application == frontmost else { return .failure(.cursorIsInAnotherApp) }
+        guard destination.admits(focus.application) else { return .failure(.dictationIsInAnotherApp) }
         return .success(focus)
     }
 }

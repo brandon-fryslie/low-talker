@@ -82,7 +82,7 @@ let insertions: InsertionPort? = {
     do {
         return try InsertionPort(queue: DispatchQueue(label: AppIdentity.inputMethodPortName), told: { event in
             logger.error("\(String(describing: event), privacy: .public)")
-        }) { text in
+        }) { request in
             // Read on the main actor, where the effects are, and handed to the decision as
             // values. [LAW:effects-at-boundaries] Asked within the committer's bound, like
             // the commit, so the whole answer is one this process keeps.
@@ -90,10 +90,10 @@ let insertions: InsertionPort? = {
                 MainActor.assumeIsolated {
                     let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
                     let securing = secureInputHolder()
-                    return (frontmost: frontmost, securing: securing, cursor: FocusedClient.shared.cursor(whileInFrontIs: frontmost, secureInputIsOn: securing != nil))
+                    return (frontmost: frontmost, securing: securing, cursor: FocusedClient.shared.cursor(for: request.destination, whileInFrontIs: frontmost, secureInputIsOn: securing != nil))
                 }
             }
-            let answer = committer.answer(text, at: seen?.cursor)
+            let answer = committer.answer(request.text, at: seen?.cursor)
             // The app in front is named because the refusal that matters here is the one
             // where it is not the app holding the cursor, and a line saying only the outcome
             // leaves a reader with the question it was written to answer. A main thread that
@@ -103,7 +103,7 @@ let insertions: InsertionPort? = {
                 "with \(seen.frontmost ?? "nothing") in front" + (seen.securing.map { ", secure input held by \($0)" } ?? "")
             } ?? "without knowing what is in front, since the main thread did not look in time"
             logger.notice("""
-                insert of \(text.count, privacy: .public) characters: \
+                insert of \(request.text.count, privacy: .public) characters into \(request.destination, privacy: .public): \
                 \(String(describing: answer), privacy: .public), \(context, privacy: .public)
                 """)
             return answer

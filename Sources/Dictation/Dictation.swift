@@ -456,7 +456,7 @@ public final class Dictation {
         for await _ in streaming.wakes {
             let run = streaming.take()
             do {
-                streaming.landed(run, as: try await executor.perform(run.actions, since: run.since))
+                streaming.landed(run, as: try await executor.perform(run.actions, following: streaming.landed.performed, since: run.since))
             } catch {
                 streaming.stop()
                 // A run is one insert, so none of it was done, and what stopped it is the cause.
@@ -486,7 +486,7 @@ public final class Dictation {
         do {
             let decoded = await heard.decode.value
             let transcript = try decoded.transcript.get()
-            let performed = try await executor.perform(router.actions(for: heard.streaming.rest(of: transcript), in: context), since: .keyUp(keyUp))
+            let performed = try await executor.perform(router.actions(for: heard.streaming.rest(of: transcript), in: context), following: landed.performed, since: .keyUp(keyUp))
             return Session(context: context, transcript: transcript, duringPress: heard.duringPress, keyUpToTranscript: decoded.at - keyUp, displaced: decoded.displaced, performed: landed.performed + performed)
         } catch {
             // [LAW:no-silent-failure] Whatever stopped the press, the report says how many of

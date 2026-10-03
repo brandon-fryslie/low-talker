@@ -51,7 +51,7 @@ public struct Executor {
         public let characters: Int
         /// The app whose cursor took the words, as the input method names it - not
         /// necessarily the one in front at key-down: the person can move between the chord
-        /// and the words being ready, and the input method commits where the cursor is then.
+        /// and the dictation's first words being ready, and those go where the cursor is then.
         /// [FRAMING:representation]
         public let into: BundleID
         public let acknowledged: Duration
@@ -66,18 +66,24 @@ public struct Executor {
     /// done. Throws `NotAnInsert` before the first insert when any action is not text at the
     /// focus; throws `RouteStopped` from the insert that stopped, carrying the earlier ones,
     /// which are done.
+    ///
+    /// `earlier` is what the same dictation already inserted. Each insert goes only to the
+    /// app the one before it went to, so a dictation's words all land in one app, and the
+    /// first goes to the cursor in front. [LAW:one-source-of-truth] Derived here from what
+    /// landed, the one record of where that was.
     @discardableResult
-    public func perform(_ actions: [Action], since: Since) async throws -> [Performed] {
+    public func perform(_ actions: [Action], following earlier: [Performed], since: Since) async throws -> [Performed] {
         let texts = try actions.map(Self.text(of:))
         let clock = ContinuousClock()
         var performed: [Performed] = []
         for text in texts {
+            let destination = (earlier + performed).last.map { Destination.app($0.into.rawValue) } ?? .cursorInFront
             // Awaited, so the round trip runs on a thread of its own: this is the main actor,
             // and `Inserter` says in its own contract that the blocking call must not pump it.
             // [LAW:no-ambient-temporal-coupling] A refusal or a channel failure is thrown on
             // as it is, and stops the route by name.
             let inserted: Inserted
-            do { inserted = try await inserter.insert(text) } catch { throw RouteStopped(performed: performed, cause: error) }
+            do { inserted = try await inserter.insert(text, into: destination) } catch { throw RouteStopped(performed: performed, cause: error) }
             let done = Performed(characters: inserted.characters, into: BundleID(rawValue: inserted.into), acknowledged: clock.now - since.instant, since: since.key)
             log.info("\(done.description, privacy: .public)")
             performed.append(done)

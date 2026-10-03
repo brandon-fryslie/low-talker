@@ -13,7 +13,7 @@ import Testing
 /// boundary and a port serviced by the sender's own thread cannot show what that costs: a
 /// handler that takes too long would hold the very thread that is supposed to notice it
 /// took too long, and the timeout under test could never fire. [LAW:behavior-not-structure]
-func hostInsertion(name: String, answer: @escaping @Sendable (String) -> InsertionAnswer) throws -> InsertionPort {
+func hostInsertion(name: String, answer: @escaping @Sendable (InsertRequest) -> InsertionAnswer) throws -> InsertionPort {
     try InsertionPort(
         portName: name, senders: try OwnProcess.identity(), queue: DispatchQueue(label: name),
         told: { Issue.record("the port was told \($0)") }, answer: answer)

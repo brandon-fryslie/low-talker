@@ -35,7 +35,7 @@ import Testing
         let cursor = Cursor()
         client.took(cursor)
 
-        #expect(try client.cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false).get() === cursor)
+        #expect(try client.cursor(for: .cursorInFront, whileInFrontIs: Self.inFront, secureInputIsOn: false).get() === cursor)
     }
 
     /// A cursor held from before secure input came on is not committed into: macOS has
@@ -46,23 +46,23 @@ import Testing
         let cursor = Cursor()
         client.took(cursor)
 
-        #expect(throws: Refusal.secureInputIsOn) { try client.cursor(whileInFrontIs: Self.inFront, secureInputIsOn: true).get() }
+        #expect(throws: Refusal.secureInputIsOn) { try client.cursor(for: .cursorInFront, whileInFrontIs: Self.inFront, secureInputIsOn: true).get() }
     }
 
     /// Secure input is asked first, so it is the reason given even where another refusal
     /// also holds: the fix is in the app holding it, and naming the other would send the
     /// person to click into a text field that cannot help.
     @Test func secureInputIsTheReasonOverEveryOtherRefusal() {
-        #expect(throws: Refusal.secureInputIsOn) { try FocusedClient().cursor(whileInFrontIs: Self.inFront, secureInputIsOn: true).get() }
+        #expect(throws: Refusal.secureInputIsOn) { try FocusedClient().cursor(for: .cursorInFront, whileInFrontIs: Self.inFront, secureInputIsOn: true).get() }
         let client = FocusedClient()
         let cursor = Cursor()
         client.took(cursor)
-        #expect(throws: Refusal.secureInputIsOn) { try client.cursor(whileInFrontIs: "com.example.elsewhere", secureInputIsOn: true).get() }
+        #expect(throws: Refusal.secureInputIsOn) { try client.cursor(for: .cursorInFront, whileInFrontIs: "com.example.elsewhere", secureInputIsOn: true).get() }
     }
 
     /// Nothing in front is an answer, not a failure, and it is said by name.
     @Test func nothingInFrontIsRefusedByName() {
-        #expect(throws: Refusal.noClientHasFocus) { try FocusedClient().cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false).get() }
+        #expect(throws: Refusal.noClientHasFocus) { try FocusedClient().cursor(for: .cursorInFront, whileInFrontIs: Self.inFront, secureInputIsOn: false).get() }
     }
 
     /// A cursor does not outlive the app it belongs to. Without this the person could
@@ -75,7 +75,7 @@ import Testing
         client.took(cursor)
         client.applicationQuit("com.apple.TextEdit")
 
-        #expect(throws: Refusal.noClientHasFocus) { try client.cursor(whileInFrontIs: "com.apple.TextEdit", secureInputIsOn: false).get() }
+        #expect(throws: Refusal.noClientHasFocus) { try client.cursor(for: .cursorInFront, whileInFrontIs: "com.apple.TextEdit", secureInputIsOn: false).get() }
     }
 
     /// Some other app quitting is not this cursor's business.
@@ -85,7 +85,7 @@ import Testing
         client.took(cursor)
         client.applicationQuit("com.apple.Safari")
 
-        #expect(try client.cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false).get() === cursor)
+        #expect(try client.cursor(for: .cursorInFront, whileInFrontIs: Self.inFront, secureInputIsOn: false).get() === cursor)
     }
 
     @Test func aCursorThatLeavesTakesTheFocusWithIt() {
@@ -94,7 +94,7 @@ import Testing
         client.took(cursor)
         client.left(cursor)
 
-        #expect(throws: Refusal.noClientHasFocus) { try client.cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false).get() }
+        #expect(throws: Refusal.noClientHasFocus) { try client.cursor(for: .cursorInFront, whileInFrontIs: Self.inFront, secureInputIsOn: false).get() }
     }
 
     /// Committing into a window the person has left is the one outcome worse than
@@ -107,7 +107,27 @@ import Testing
         let cursor = Cursor(in: "com.apple.TextEdit")
         client.took(cursor)
 
-        #expect(throws: Refusal.cursorIsInAnotherApp) { try client.cursor(whileInFrontIs: "com.apple.finder", secureInputIsOn: false).get() }
+        #expect(throws: Refusal.cursorIsInAnotherApp) { try client.cursor(for: .cursorInFront, whileInFrontIs: "com.apple.finder", secureInputIsOn: false).get() }
+    }
+
+    /// A dictation's later words go only to the app its first went to. The person who moved
+    /// to the Finder mid-press is refused there - the case measured on studious, where the
+    /// Finder presents a client and took the rest of a TextEdit dictation.
+    @Test func wordsBoundToAnotherAppAreRefusedAtTheCursorInFront() {
+        let client = FocusedClient()
+        client.took(Cursor(in: "com.apple.finder"))
+
+        #expect(throws: Refusal.dictationIsInAnotherApp) {
+            try client.cursor(for: .app("com.apple.TextEdit"), whileInFrontIs: "com.apple.finder", secureInputIsOn: false).get()
+        }
+    }
+
+    @Test func wordsBoundToTheAppInFrontGoToItsCursor() throws {
+        let client = FocusedClient()
+        let cursor = Cursor(in: "com.apple.TextEdit")
+        client.took(cursor)
+
+        #expect(try client.cursor(for: .app("com.apple.TextEdit"), whileInFrontIs: "com.apple.TextEdit", secureInputIsOn: false).get() === cursor)
     }
 
     /// The one that matters: focus can move by activating the new client before
@@ -122,6 +142,6 @@ import Testing
         client.took(new)
         client.left(old)
 
-        #expect(try client.cursor(whileInFrontIs: Self.inFront, secureInputIsOn: false).get() === new)
+        #expect(try client.cursor(for: .cursorInFront, whileInFrontIs: Self.inFront, secureInputIsOn: false).get() === new)
     }
 }
