@@ -308,16 +308,13 @@ private func update(_ input: [String: Any]) -> [String: Any] {
     @Test func aClientThatDoesNotReadIsNotRead() async throws {
         let running = try await Running.start(.ready(Stub()))
         defer { running.server.stop() }
-        let client = try RawSocket(port: running.server.port.rawValue)
-        try client.upgrade()
-        let refused = Self.masked(Data(#"{"type":"x"}"#.utf8))
-        let batch = Data((0..<1_000).flatMap { _ in refused })
-        var sent = 0
-        while try client.send(batch) {
-            sent += batch.count
-            try #require(sent < 64 << 20, "the server read 64 MB from a client that read nothing")
+        let port = running.server.port.rawValue
+        let batch = Data((0..<1_000).flatMap { _ in masked(0x1, Data(#"{"type":"x"}"#.utf8)) })
+        // Blocking socket calls, so off the cooperative pool the server runs on.
+        let sent = try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global().async { continuation.resume(with: Result { try NonReadingClient.flood(port: port, with: batch) }) }
         }
-        client.close()
+        try #require(sent < NonReadingClient.most, "the server read \(sent) bytes from a client that read nothing")
         let event = try await running.nextEvent()
         let realtime = try #require(event.realtime)
         #expect(realtime.backpressureWaits >= 1)
@@ -354,12 +351,6 @@ private func update(_ input: [String: Any]) -> [String: Any] {
 }
 
 @Suite struct WebSocketTests {
-    /// A client frame: masked, as every client frame is.
-    private func masked(_ opcode: UInt8, _ payload: Data, final: Bool = true) -> Data {
-        let mask: [UInt8] = [1, 2, 3, 4]
-        return Data([(final ? 0x80 : 0) | opcode, 0x80 | UInt8(payload.count)] + mask) + Data(payload.enumerated().map { $0.element ^ mask[$0.offset % 4] })
-    }
-
     @Test func aFrameNotYetWholeIsNothingYet() throws {
         let frame = masked(0x1, Data("hello".utf8))
         #expect(try WebSocket.parse(frame.prefix(frame.count - 1), limit: 100) == nil)
@@ -408,61 +399,75 @@ private func update(_ input: [String: Any]) -> [String: Any] {
     }
 }
 
-/// A client frame, masked as every client frame is, of a payload under 126 bytes.
-extension RealtimeSocketTests {
-    static func masked(_ payload: Data) -> Data {
-        let mask: [UInt8] = [1, 2, 3, 4]
-        return Data([0x81, 0x80 | UInt8(payload.count)] + mask) + Data(payload.enumerated().map { $0.element ^ mask[$0.offset % 4] })
-    }
-}
+/// A client that upgrades and then only sends. Upgraded with RFC 6455's own example key.
+private enum NonReadingClient {
+    /// The most bytes it sends before giving up on the server ever stopping reading.
+    static let most = 64 << 20
+    /// How long the server takes nothing before it counts as having stopped reading: past
+    /// the few seconds a CI runner can freeze the test process for.
+    static let stall: Int32 = 6_000
 
-/// A TCP connection to the server that reads only when asked to, so a test can be a client
-/// that stops reading. Upgraded with RFC 6455's own example key.
-private final class RawSocket {
-    private let descriptor: Int32
-
-    init(port: UInt16) throws {
-        descriptor = socket(AF_INET, SOCK_STREAM, 0)
+    /// Sends `batch` over and over until the server stalls or `most` bytes have gone, then
+    /// closes with what it was sent unread, which resets the connection. Returns the bytes
+    /// sent.
+    static func flood(port: UInt16, with batch: Data) throws -> Int {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { throw failure() }
+        defer { close(descriptor) }
+        // A write after the server resets fails with EPIPE rather than killing the process.
+        var on: Int32 = 1
+        setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        var timeout = timeval(tv_sec: 10, tv_usec: 0)
+        setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         var address = sockaddr_in(sin_len: UInt8(MemoryLayout<sockaddr_in>.size), sin_family: sa_family_t(AF_INET), sin_port: port.bigEndian, sin_addr: in_addr(s_addr: inet_addr("127.0.0.1")), sin_zero: (0, 0, 0, 0, 0, 0, 0, 0))
         let connected = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
-        guard connected == 0 else { throw POSIXError(.init(rawValue: errno)!) }
+        guard connected == 0 else { throw failure() }
+        try upgrade(descriptor)
+        _ = fcntl(descriptor, F_SETFL, fcntl(descriptor, F_GETFL) | O_NONBLOCK)
+        var sent = 0
+        while sent < most, try send(batch, descriptor) { sent += batch.count }
+        return sent
     }
 
     /// Sends the upgrade and reads up to the end of the 101, and nothing after it.
-    func upgrade() throws {
+    private static func upgrade(_ descriptor: Int32) throws {
         let request = "GET /v1/realtime?intent=transcription HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
-        _ = try Data(request.utf8).withUnsafeBytes { bytes in
-            guard write(descriptor, bytes.baseAddress, bytes.count) == bytes.count else { throw POSIXError(.init(rawValue: errno)!) }
+        try Data(request.utf8).withUnsafeBytes { bytes in
+            guard write(descriptor, bytes.baseAddress, bytes.count) == bytes.count else { throw failure() }
         }
         var head = Data()
         var byte: UInt8 = 0
         while !head.suffix(4).elementsEqual(Data("\r\n\r\n".utf8)) {
-            guard read(descriptor, &byte, 1) == 1 else { throw POSIXError(.ECONNRESET) }
+            guard read(descriptor, &byte, 1) == 1 else { throw failure() }
             head.append(byte)
         }
         guard String(decoding: head, as: UTF8.self).hasPrefix("HTTP/1.1 101 ") else { throw POSIXError(.EPROTO) }
-        _ = fcntl(descriptor, F_SETFL, fcntl(descriptor, F_GETFL) | O_NONBLOCK)
     }
 
-    /// Sends all of `bytes`; false when the server has taken nothing for two seconds.
-    func send(_ bytes: Data) throws -> Bool {
+    /// Sends all of `bytes`; false when the server has taken nothing for `stall`.
+    private static func send(_ bytes: Data, _ descriptor: Int32) throws -> Bool {
         try bytes.withUnsafeBytes { bytes in
             var offset = 0
             while offset < bytes.count {
                 let wrote = write(descriptor, bytes.baseAddress! + offset, bytes.count - offset)
                 if wrote > 0 { offset += wrote; continue }
-                guard errno == EAGAIN else { throw POSIXError(.init(rawValue: errno)!) }
+                guard errno == EAGAIN else { throw failure() }
                 var writable = pollfd(fd: descriptor, events: Int16(POLLOUT), revents: 0)
-                if poll(&writable, 1, 2_000) == 0 { return false }
+                if poll(&writable, 1, stall) == 0 { return false }
             }
             return true
         }
     }
 
-    /// Closes with what the server sent still unread, which resets the connection.
-    func close() {
-        Darwin.close(descriptor)
+    private static func failure() -> POSIXError {
+        POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }
+}
+
+/// A client frame: masked, as every client frame is, of a payload under 126 bytes.
+private func masked(_ opcode: UInt8, _ payload: Data, final: Bool = true) -> Data {
+    let mask: [UInt8] = [1, 2, 3, 4]
+    return Data([(final ? 0x80 : 0) | opcode, 0x80 | UInt8(payload.count)] + mask) + Data(payload.enumerated().map { $0.element ^ mask[$0.offset % 4] })
 }
 
 /// `count` words, `w1` onward, each a second long.

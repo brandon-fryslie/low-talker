@@ -497,6 +497,13 @@ final class Outbox: Sendable {
         var waits = 0
         /// The reader, while it waits for room.
         var waiter: CheckedContinuation<Void, Never>?
+
+        /// Queues `queued` and counts it unsent, unless the outbox is closed.
+        mutating func put(_ queued: Queued) {
+            guard case .enqueued = frames.yield(queued) else { return }
+            unsent += queued.bytes.count
+            mostUnsent = max(mostUnsent, unsent)
+        }
     }
 
     init() {
@@ -512,11 +519,7 @@ final class Outbox: Sendable {
     /// `frame` bound for the client, or dropped once the outbox is closed.
     func put(_ frame: Outgoing) {
         let queued = Queued(frame)
-        state.withLock { state in
-            guard case .enqueued = state.frames.yield(queued) else { return }
-            state.unsent += queued.bytes.count
-            state.mostUnsent = max(state.mostUnsent, state.unsent)
-        }
+        state.withLock { $0.put(queued) }
     }
 
     /// `bytes` of frames have gone to the client.
@@ -543,7 +546,7 @@ final class Outbox: Sendable {
     /// `last` is the final frame sent; nothing put after it is.
     func close(_ last: Data?) {
         state.withLock { state in
-            if let last { state.frames.yield(Queued(.control(last))) }
+            if let last { state.put(Queued(.control(last))) }
             state.frames.finish()
             state.closed = true
             return state.waiter.take()
