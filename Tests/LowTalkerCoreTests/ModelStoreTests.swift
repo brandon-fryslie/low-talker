@@ -88,8 +88,7 @@ import Testing
 
     /// A folder standing where a file belongs is its own kind of fault, not a size:
     /// a 0-byte file is a legitimate recording, so no size may stand in for "none".
-    /// The repair removes the folder rather than leaving the hub client to trust it.
-    @Test func folderInAFilesPlaceIsAFaultTheRepairEvicts() throws {
+    @Test func folderInAFilesPlaceIsAFault() throws {
         let scratch = try ScratchStore(files: ScratchStore.files.merging(["empty.txt": ""]) { _, new in new })
         let store = ModelStore(directory: scratch.root)
         try scratch.record()
@@ -102,7 +101,6 @@ import Testing
             return
         }
         #expect(faults == [.init(path: "empty.txt", kind: .notAFile)])
-        #expect(try presence.evictions.map(\.standardizedFileURL) == [empty.standardizedFileURL])
     }
 
     /// The menu bar and the log both show the phase's own words, so the words are
@@ -156,7 +154,6 @@ import Testing
             return
         }
         #expect(faults == [.init(path: "config.json", kind: .missing)])
-        #expect(try presence.evictions.isEmpty, "a file that is already gone needs no eviction")
     }
 
     /// A folder this process may not search is not damage a download would repair,
@@ -173,16 +170,6 @@ import Testing
         }
     }
 
-    /// The hub client never re-fetches a file that exists, so a repair must start by
-    /// removing the files the manifest rejects.
-    @Test func truncatedFileIsEvictedByARepair() throws {
-        let scratch = try ScratchStore(files: ScratchStore.files)
-        let store = ModelStore(directory: scratch.root)
-        try scratch.record()
-        try "{".write(to: scratch.folder.appending(path: "config.json"), atomically: true, encoding: .utf8)
-        #expect(try store.presence(of: "test").evictions.map(\.standardizedFileURL) == [scratch.folder.appending(path: "config.json").standardizedFileURL])
-    }
-
     @Test func storeWithAnUnreadableManifestIsDamaged() throws {
         let scratch = try ScratchStore(files: ScratchStore.files)
         let url = try scratch.writeManifest("not json")
@@ -192,9 +179,6 @@ import Testing
             return
         }
         #expect(manifest == url)
-        #expect(throws: ModelStoreError.self, "with no manifest to name faults, no repair is offered") {
-            try presence.evictions
-        }
     }
 
     /// A manifest this process may not read is not a corrupt one: telling the user
@@ -284,9 +268,8 @@ import Testing
     }
 
     /// A store written before the tokenizer had a manifest has whole weights and no
-    /// record of the tokenizer: it is not installed, and nothing in it is evicted,
-    /// since the repair only has to record a tokenizer the hub folder already holds.
-    @Test func storeWithWeightsButNoTokenizerManifestIsDamagedWithNothingToEvict() throws {
+    /// record of the tokenizer: it is not installed.
+    @Test func storeWithWeightsButNoTokenizerManifestIsDamaged() throws {
         let scratch = try ScratchStore(files: ScratchStore.files)
         try Manifest(recording: scratch.folder, relativeTo: scratch.root).write(to: scratch.manifestURL)
         let presence = try ModelStore(directory: scratch.root).presence(of: "test")
@@ -294,21 +277,20 @@ import Testing
             Issue.record("weights without a tokenizer must not count as installed")
             return
         }
-        #expect(try presence.evictions.isEmpty)
         #expect("\(damages[0])" == "the tokenizer is not installed")
     }
 
-    /// Both parts are judged, so a damaged tokenizer is evicted in the same repair as
-    /// damaged weights.
-    @Test func damageInBothPartsIsReportedAndEvictedTogether() throws {
+    /// Both parts are judged, so a damaged tokenizer is reported beside damaged weights.
+    @Test func damageInBothPartsIsReportedTogether() throws {
         let scratch = try ScratchStore(files: ScratchStore.files)
         try scratch.record()
         try "{".write(to: scratch.folder.appending(path: "config.json"), atomically: true, encoding: .utf8)
         try "{".write(to: scratch.tokenizer.appending(path: "tokenizer.json"), atomically: true, encoding: .utf8)
         let presence = try ModelStore(directory: scratch.root).presence(of: "test")
-        #expect(try presence.evictions.map(\.standardizedFileURL) == [
-            scratch.folder.appending(path: "config.json").standardizedFileURL,
-            scratch.tokenizer.appending(path: "tokenizer.json").standardizedFileURL,
-        ])
+        guard case .damaged(let damages) = presence, damages.count == 2 else {
+            Issue.record("damage in both parts must be reported as two damages")
+            return
+        }
+        #expect(damages.map(\.description) == ["config.json is 1 bytes, expected 2", "tokenizer.json is 1 bytes, expected 13"])
     }
 }

@@ -32,17 +32,21 @@ import Testing
         #expect("\(WhisperKitTranscriber.InstallingLoadPhase.loading)" == "\(WhisperKitTranscriber.LoadPhase.loading)")
     }
 
-    /// A repair over an unreadable manifest would certify whatever is on disk, so
-    /// the refusal comes before any download.
-    @Test func installRefusesToRepairAnUnreadableManifest() async throws {
-        let scratch = try ScratchStore(files: ScratchStore.files)
-        let url = try scratch.writeManifest("not json")
-        await #expect {
-            try await ModelStore(directory: scratch.root).install("test", from: .huggingFace(nil)) { _ in }
-        } throws: { error in
-            guard case ModelStoreError.manifestUnreadable(let manifest, .weights, _) = error else { return false }
-            return manifest == url
+    /// An unreadable manifest names no files, so the part is taken whole from the
+    /// source and recorded with the source's manifest.
+    @Test func installRepairsAPartWhoseManifestIsUnreadable() async throws {
+        let source = try ScratchStore(files: ScratchStore.files)
+        try source.record()
+        let destination = try ScratchStore(files: ScratchStore.files)
+        try destination.record()
+        try "not json".write(to: destination.tokenizerManifestURL, atomically: true, encoding: .utf8)
+        let store = ModelStore(directory: destination.root)
+        _ = try await store.install("test", from: .store(ModelStore(directory: source.root))) { _ in }
+        guard case .installed = try store.presence(of: "test") else {
+            Issue.record("a part with an unreadable manifest must be repaired from the source")
+            return
         }
+        #expect(try Manifest(contentsOf: destination.tokenizerManifestURL) == Manifest(contentsOf: source.tokenizerManifestURL))
     }
 
     /// Two `model-tool download`s share one store: the second installer waits for the
@@ -149,20 +153,6 @@ import Testing
             return
         }
         #expect(!FileManager.default.fileExists(atPath: unpacked.appending(components: "models", "argmaxinc", "whisperkit-coreml", "openai_whisper-test", "extra.metadata").path))
-    }
-
-    /// The repair instruction names the folder the unreadable manifest covered, so a
-    /// corrupt tokenizer manifest never sends anyone to delete healthy weights.
-    @Test func unreadableTokenizerManifestNamesTheTokenizerFolder() async throws {
-        let scratch = try ScratchStore(files: ScratchStore.files)
-        try scratch.record()
-        try "not json".write(to: scratch.tokenizerManifestURL, atomically: true, encoding: .utf8)
-        await #expect {
-            try await ModelStore(directory: scratch.root).install("test", from: .huggingFace(nil)) { _ in }
-        } throws: { error in
-            guard case ModelStoreError.manifestUnreadable(_, .tokenizer, _) = error else { return false }
-            return "\(error)".contains("tokenizer's folder under models/openai")
-        }
     }
 
     /// A copy that fails part way leaves no hidden partial file behind, since nothing

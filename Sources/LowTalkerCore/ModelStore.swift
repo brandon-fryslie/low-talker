@@ -7,7 +7,7 @@ import Foundation
 /// [LAW:one-source-of-truth] "Is the model here and whole?" has one answer: the
 /// manifests the store wrote after each part last arrived complete, one for the
 /// weights and one for the tokenizer they decode with. The hub's own sidecar files
-/// only record which commit a file came from; a manifest records what arrived, and
+/// only record which commit a file came from; a manifest records what the part is, and
 /// proves the *set* is complete, which the sidecars cannot, since a download stopped
 /// between files leaves no trace of the files it never started.
 ///
@@ -144,16 +144,6 @@ public struct ModelStore: Sendable {
         /// Some of it was installed once, but the model is no longer proven whole.
         /// Never empty.
         case damaged([Damage])
-
-        /// The files a repair must remove before a source will provide them again.
-        public var evictions: [URL] {
-            get throws {
-                switch self {
-                case .installed, .missing: []
-                case .damaged(let damages): try damages.flatMap { try $0.evictions }
-                }
-            }
-        }
     }
 
     public enum Damage: Sendable, CustomStringConvertible {
@@ -165,27 +155,6 @@ public struct ModelStore: Sendable {
         /// This part has no manifest while the other has one: a store written before
         /// the tokenizer had a manifest of its own reads this way.
         case unrecorded(ModelPart)
-
-        /// A missing file is the one fault that needs no eviction: it is already what
-        /// a source must fill. An unreadable manifest names no files, so no file can
-        /// be trusted and no repair is offered: a manifest recorded over what a
-        /// download left would certify whatever was already there.
-        public var evictions: [URL] {
-            get throws {
-                switch self {
-                case .manifestUnreadable(let manifest, let part, let reason):
-                    throw ModelStoreError.manifestUnreadable(manifest: manifest, part: part, reason: reason)
-                case .files(let folder, let faults):
-                    faults.compactMap { fault in
-                        switch fault.kind {
-                        case .missing: nil
-                        case .wrongSize, .notAFile: folder.appending(path: fault.path)
-                        }
-                    }
-                case .unrecorded: []
-                }
-            }
-        }
 
         public var description: String {
             switch self {
@@ -206,28 +175,15 @@ public enum ModelPart: String, Sendable, CustomStringConvertible {
     case tokenizer
 
     public var description: String { rawValue }
-
-    /// Where this part's files live in a store, in the words a repair instruction uses.
-    var folderDescription: String {
-        switch self {
-        case .weights: "model's folder under models/argmaxinc/whisperkit-coreml"
-        case .tokenizer: "tokenizer's folder under models/openai"
-        }
-    }
 }
 
 public enum ModelStoreError: Error, Equatable, CustomStringConvertible {
-    case manifestUnreadable(manifest: URL, part: ModelPart, reason: String)
     /// A store that does not hold the model whole, with no source to make it whole from:
     /// the app's read-only carried store, verified in place. [LAW:no-silent-failure]
     case storeLacksModel(store: URL, model: ModelName, reason: String)
 
     public var description: String {
         switch self {
-        case .manifestUnreadable(let manifest, let part, let reason):
-            // The folder a manifest covered is named by the manifest, which is what
-            // cannot be read, so the instruction names where that part lives.
-            "manifest \(manifest.path) cannot be read (\(reason)); delete it and the \(part.folderDescription), then download again"
         case .storeLacksModel(let store, let model, let reason):
             "\(store.path) does not hold \(model) whole: \(reason)"
         }
@@ -251,13 +207,15 @@ public struct InstalledModel: Sendable {
     }
 }
 
-/// The set of files a complete download produced, with their sizes: a snapshot of
-/// what "whole" means for one model, written once and checked on every launch.
+/// The files one part of a model is, with their sizes: what "whole" means for that
+/// part, written once and checked on every launch. An install from huggingface.co
+/// takes the sizes the hub lists for the revision, never the ones on disk, so a file
+/// the download did not write whole cannot be certified.
 ///
 /// Never empty, and every path is relative and stays under whatever root it is
-/// appended to: `init(recording:)` cuts its paths from real URLs beneath the root,
-/// and decoding refuses any other shape, so a `Manifest` in hand cannot reach
-/// outside a store or certify nothing.
+/// appended to: every way of making one passes through `init(folder:files:)`, which
+/// refuses any other shape, so a `Manifest` in hand cannot reach outside a store or
+/// certify nothing.
 public struct Manifest: Codable, Equatable, Sendable {
     /// The model folder, relative to the store root.
     public let folder: String
@@ -273,6 +231,27 @@ public struct Manifest: Codable, Equatable, Sendable {
         }
     }
 
+    /// [LAW:parse-dont-validate] The checkpoint every manifest passes through, decoded,
+    /// recorded, or listed by a hub.
+    public init(folder: String, files: [File]) throws {
+        for path in [folder] + files.map(\.path) where !path.split(separator: "/", omittingEmptySubsequences: false).allSatisfy(\.isPathStep) {
+            throw ManifestError.pathEscapes(path)
+        }
+        guard !files.isEmpty else { throw ManifestError.noFiles(folder: folder) }
+        self.folder = folder
+        self.files = files.sorted { $0.path < $1.path }
+    }
+
+    /// `folder`'s path relative to `root`, which must hold it.
+    public static func folder(_ folder: URL, relativeTo root: URL) throws -> String {
+        let rootPath = root.standardizedFileURL.path
+        let folderPath = folder.standardizedFileURL.path
+        guard folderPath.hasPrefix(rootPath + "/") else {
+            throw ManifestError.folderOutsideRoot(folder: folder, root: root)
+        }
+        return String(folderPath.dropFirst(rootPath.count + 1))
+    }
+
     /// Records every regular file under `folder`, in path order so two recordings of
     /// the same folder are equal. Hidden files are not the model: the hub client keeps
     /// its sidecars in a `.cache` folder inside a tokenizer repo, and a copy lands under
@@ -282,12 +261,8 @@ public struct Manifest: Codable, Equatable, Sendable {
     /// the result: a manifest of the files seen before a folder refused to list
     /// would certify the model without them.
     public init(recording folder: URL, relativeTo root: URL) throws {
-        let rootPath = root.standardizedFileURL.path
+        let relative = try Manifest.folder(folder, relativeTo: root)
         let folderPath = folder.standardizedFileURL.path
-        guard folderPath.hasPrefix(rootPath + "/") else {
-            throw ManifestError.folderOutsideRoot(folder: folder, root: root)
-        }
-        self.folder = String(folderPath.dropFirst(rootPath.count + 1))
 
         var failure: ManifestError?
         let enumerator = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey], options: .skipsHiddenFiles) { url, error in
@@ -305,20 +280,12 @@ public struct Manifest: Codable, Equatable, Sendable {
             files.append(File(path: String(path.dropFirst(folderPath.count + 1)), size: Int64(size)))
         }
         if let failure { throw failure }
-        guard !files.isEmpty else { throw ManifestError.noFiles(folder: self.folder) }
-        self.files = files.sorted { $0.path < $1.path }
+        try self.init(folder: relative, files: files)
     }
 
-    /// [LAW:parse-dont-validate] The read-side checkpoint: the one door every decoded
-    /// manifest passes through, whether from `init(contentsOf:)` or a bare decoder.
     public init(from decoder: any Decoder) throws {
         let keys = try decoder.container(keyedBy: CodingKeys.self)
-        folder = try keys.decode(String.self, forKey: .folder)
-        files = try keys.decode([File].self, forKey: .files)
-        for path in [folder] + files.map(\.path) where !path.split(separator: "/", omittingEmptySubsequences: false).allSatisfy(\.isPathStep) {
-            throw ManifestError.pathEscapes(path)
-        }
-        guard !files.isEmpty else { throw ManifestError.noFiles(folder: folder) }
+        try self.init(folder: keys.decode(String.self, forKey: .folder), files: keys.decode([File].self, forKey: .files))
     }
 
     private enum CodingKeys: CodingKey {

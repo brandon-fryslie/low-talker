@@ -25,15 +25,7 @@ extension ModelStore {
         phase: @escaping @Sendable (InstallPhase) -> Void
     ) async throws -> InstalledModel {
         try await InstallLock.holding(directory, waiting: { phase(.waitingForAnotherInstall) }) {
-            let presence = try presence(of: model)
-            if case .installed(let installed) = presence { return installed }
-            // [LAW:single-enforcer] The hub client trusts its own sidecar once a file
-            // exists and never hashes the file, so a truncated file would come back as
-            // "already downloaded". The manifest is the one judge of whole; the files it
-            // rejects are removed first so no source has anything to trust.
-            for url in try presence.evictions {
-                try FileManager.default.removeItem(at: url)
-            }
+            if case .installed(let installed) = try presence(of: model) { return installed }
             return try await OpenSource.with(source, model, beside: self, phase: phase) { source in
                 // [LAW:one-source-of-truth] The host `upstream(of:)` named the revision on,
                 // rather than HF_ENDPOINT, which the client would read otherwise.
@@ -43,13 +35,14 @@ extension ModelStore {
                     case .huggingFace(let revision):
                         phase(.downloading(fractionCompleted: 0))
                         let repo = HubApiWrapper.Repo(id: ModelRevision.weightsRepo)
-                        let variant = try await ModelRevision.variantFolder(of: model, among: hub.getFilenames(from: repo, revision: revision.weights.description))
-                        let root = try await hub.snapshot(from: repo, revision: revision.weights.description, matching: ["\(variant)/*"]) { phase(.downloading(fractionCompleted: $0.fractionCompleted)) }
-                        // [LAW:no-silent-failure] The hub client answers cancellation by
-                        // returning the folder as far as it got, without throwing. A
-                        // manifest over that folder would certify a partial model as whole.
-                        try Task.checkCancellation()
-                        return try Manifest(recording: root.appending(path: variant), relativeTo: directory)
+                        let listing = try await Hub.Revision.asking(Hub.get, for: revision.weights.description, of: repo.id)
+                        let variant = try ModelRevision.variantFolder(of: model, among: listing.files.map(\.path))
+                        let manifest = try listing.manifest(of: hub.localRepoLocation(repo).appending(path: variant), in: directory) { path in
+                            path.hasPrefix("\(variant)/") ? String(path.dropFirst(variant.count + 1)) : nil
+                        }
+                        return try await fetched(manifest, phase: phase) {
+                            _ = try await hub.snapshot(from: repo, revision: revision.weights.description, matching: ["\(variant)/*"]) { phase(.downloading(fractionCompleted: $0.fractionCompleted)) }
+                        }
                     case .store(let store):
                         phase(.copying)
                         return try copy(.weights, of: model, from: store)
@@ -67,9 +60,13 @@ extension ModelStore {
                         // load takes (`Hub.loadConfig` in ArgmaxCore, internal), fetched
                         // here at the revision, which the load cannot be given.
                         let variant = try ModelVariant(modelConfig: Data(contentsOf: folder.appending(path: "config.json")))
-                        let root = try await hub.snapshot(from: HubApiWrapper.Repo(id: variant.tokenizerRepo), revision: revision.tokenizer.description, matching: ["config.json", "tokenizer_config.json", "chat_template.jinja", "chat_template.json", "tokenizer.json"])
-                        try Task.checkCancellation()
-                        return try Manifest(recording: root, relativeTo: directory)
+                        let repo = HubApiWrapper.Repo(id: variant.tokenizerRepo)
+                        let tokenizerFiles: Set = ["config.json", "tokenizer_config.json", "chat_template.jinja", "chat_template.json", "tokenizer.json"]
+                        let listing = try await Hub.Revision.asking(Hub.get, for: revision.tokenizer.description, of: repo.id)
+                        let manifest = try listing.manifest(of: hub.localRepoLocation(repo), in: directory) { tokenizerFiles.contains($0) ? $0 : nil }
+                        return try await fetched(manifest, phase: phase) {
+                            _ = try await hub.snapshot(from: repo, revision: revision.tokenizer.description, matching: Array(tokenizerFiles))
+                        }
                     case .store(let store):
                         phase(.copying)
                         return try copy(.tokenizer, of: model, from: store)
@@ -105,6 +102,30 @@ extension ModelStore {
         if case .whole(let manifest) = try recording(part, of: model) { return manifest }
         let manifest = try await fetch()
         try manifest.write(to: manifestURL(for: model, part))
+        return manifest
+    }
+
+    /// `manifest`, once `download` has laid its files down here at the sizes it lists.
+    ///
+    /// [LAW:single-enforcer] The hub client trusts its own sidecar once a file exists
+    /// and never hashes the file, so a truncated file would come back as "already
+    /// downloaded". The manifest the hub's listing made is the one judge of whole: the
+    /// files it rejects are removed before the download so the client has nothing to
+    /// trust, and anything still rejected after it fails the install.
+    func fetched(_ manifest: Manifest, phase: @Sendable (InstallPhase) -> Void, download: () async throws -> Void) async throws -> Manifest {
+        let folder = directory.appending(path: manifest.folder)
+        let evictions = try manifest.faults(in: folder).filter { $0.kind != .missing }.map(\.path)
+        if !evictions.isEmpty { phase(.evicting(evictions)) }
+        for path in evictions {
+            try FileManager.default.removeItem(at: folder.appending(path: path))
+        }
+        try await download()
+        // [LAW:no-silent-failure] The hub client answers cancellation by returning the
+        // folder as far as it got, without throwing; that is a cancellation, not a
+        // download that came up short.
+        try Task.checkCancellation()
+        let faults = try manifest.faults(in: folder)
+        guard faults.isEmpty else { throw ModelInstallError.downloadIncomplete(folder: folder, faults: faults) }
         return manifest
     }
 
@@ -160,6 +181,9 @@ extension ModelStore {
         case unpacking
         /// Files are being copied in from another store.
         case copying
+        /// Files here that are not the size the hub lists are being removed, so the
+        /// download takes them again.
+        case evicting([String])
 
         public var description: String {
             switch self {
@@ -167,6 +191,7 @@ extension ModelStore {
             case .downloading(let fraction): "downloading \(Int(fraction * 100))%"
             case .unpacking: "unpacking model"
             case .copying: "copying model"
+            case .evicting(let paths): "removing \(paths.count) damaged file\(paths.count == 1 ? "" : "s"): \(paths.joined(separator: ", "))"
             }
         }
     }
@@ -218,6 +243,8 @@ public enum ModelInstallError: Error, Equatable, CustomStringConvertible {
     case noVariantFolder(model: ModelName, matches: [String])
     case dittoFailed(arguments: [String], status: Int32, message: String)
     case renameFailed(from: URL, to: URL, errno: Int32)
+    /// A download finished without laying down every file the hub lists, at its size.
+    case downloadIncomplete(folder: URL, faults: [Manifest.Fault])
 
     public var description: String {
         switch self {
@@ -233,6 +260,8 @@ public enum ModelInstallError: Error, Equatable, CustomStringConvertible {
             "ditto \(arguments.joined(separator: " ")) exited \(status): \(message)"
         case .renameFailed(let from, let to, let errno):
             "cannot move \(from.path) to \(to.path): \(String(cString: strerror(errno)))"
+        case .downloadIncomplete(let folder, let faults):
+            "the download into \(folder.path) came up short: \(faults.map(\.description).joined(separator: "; "))"
         }
     }
 }
