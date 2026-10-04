@@ -33,9 +33,9 @@ private struct Client {
         received.compactMap { $0["type"] as? String }
     }
 
-    /// `seconds` of a 440 Hz tone at 24 kHz, as appends of 100 ms each.
-    func append(seconds: Double) async throws {
-        let samples = (0..<Int(seconds * 24_000)).map { Int16(8_000 * sin(Double($0) * 2 * .pi * 440 / 24_000)) }
+    /// `seconds` of a 440 Hz tone at 24 kHz peaking at `peak`, as appends of 100 ms each.
+    func append(seconds: Double, peak: Double = 8_000) async throws {
+        let samples = (0..<Int(seconds * 24_000)).map { Int16(peak * sin(Double($0) * 2 * .pi * 440 / 24_000)) }
         for chunk in stride(from: 0, to: samples.count, by: 2_400) {
             let bytes = samples[chunk..<min(chunk + 2_400, samples.count)].withUnsafeBytes { Data($0) }
             try await send(["type": "input_audio_buffer.append", "audio": bytes.base64EncodedString()])
@@ -67,6 +67,29 @@ private func update(_ input: [String: Any]) -> [String: Any] {
         let completed = try await client.until("conversation.item.input_audio_transcription.completed")
         #expect(completed["transcript"] as? String == "Hello world, this is LowTalker.")
         client.task.cancel(with: .normalClosure, reason: nil)
+    }
+
+    /// A committed turn no sample of which reached the audible floor is answered as OpenAI
+    /// answers a turn with nothing said in it: completed, with an empty transcript, and never
+    /// failed (low-serve-7t8). The socket's event counts it.
+    @Test func aSilentTurnIsCompletedWithNothingSaid() async throws {
+        let running = try await Running.start(.ready(Stub()))
+        defer { running.server.stop() }
+        var client = Client(running)
+        // 100 of 32767, about -50 dBFS: a quiet room, under the -40 dBFS floor.
+        try await client.append(seconds: 1, peak: 100)
+        try await client.send(["type": "input_audio_buffer.commit"])
+        let completed = try await client.until("conversation.item.input_audio_transcription.completed")
+        #expect(completed["transcript"] as? String == "")
+        #expect(completed["usage"] as? [String: AnyHashable] == ["type": "duration", "seconds": 1])
+        #expect(!client.types().contains("conversation.item.input_audio_transcription.failed"))
+        #expect(!client.types().contains("conversation.item.input_audio_transcription.delta"))
+        client.task.cancel(with: .normalClosure, reason: nil)
+        let realtime = try #require(try await running.nextEvent().realtime)
+        #expect(realtime.sent.completed == 1 && realtime.sent.failed == 0 && realtime.sent.nothingSpoken == 1)
+        // The 100 appended, as the 16 kHz audio the engine is handed peaks at it.
+        #expect(abs(try #require(realtime.sent.nothingSpokenPeak) - 100.0 / 32_767) < 0.0002)
+        #expect(abs(realtime.sent.quietSeconds - 1) < 0.01)
     }
 
     /// An engine failure fails its item, not the session: no `error` event, which Pipecat

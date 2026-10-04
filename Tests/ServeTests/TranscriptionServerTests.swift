@@ -35,7 +35,7 @@ import TestProbes
         let running = try await Running.start(.ready(Stub()))
         defer { running.server.stop() }
         let results = try await running.conformance()
-        #expect(results.count == 10, "\(results)")
+        #expect(results.count == 12, "\(results)")
         for result in results {
             #expect(["pass", "skip"].contains(result["outcome"] as? String), "\(result)")
         }
@@ -51,7 +51,7 @@ import TestProbes
         defer { running.server.stop() }
         #expect(running.base == "http://\(try lanAddress()):\(running.server.port.rawValue)/v1")
         let results = try await running.conformance(token: "sk-lan-token")
-        #expect(results.count == 10, "\(results)")
+        #expect(results.count == 12, "\(results)")
         for result in results {
             #expect(result["outcome"] as? String == "pass", "\(result)")
         }
@@ -108,7 +108,28 @@ import TestProbes
         #expect(seconds > 2.2 && seconds < 2.6)
         let event = try await running.nextEvent()
         #expect(event.status == 200 && event.words == 5 && event.model == "gpt-transcribe" && event.error == nil)
-        #expect(event.quietSeconds == 1.5)
+        #expect(event.quietSeconds == 1.5 && event.nothingSpokenPeak == nil)
+    }
+
+    /// An upload no sample of which reached the audible floor, a push-to-talk hold where
+    /// nothing was said, is answered as OpenAI answers one: 200 with empty text, in either
+    /// format, never 500 (low-serve-7t8). Its event carries the peak that decided it.
+    @Test(arguments: [("json", Data(#"{"text":"","usage":{"seconds":3,"type":"duration"}}"#.utf8)), ("text", Data("\n".utf8))])
+    func anUploadWithNothingSpokenIsEmptyText(format: String, answer: Data) async throws {
+        let running = try await Running.start(.ready(Stub()))
+        defer { running.server.stop() }
+        // 0.0025, about -52 dBFS: a quiet room's hold, under the -40 dBFS floor.
+        let (response, body) = try await running.post([
+            ("model", nil, Data("m".utf8)), ("response_format", nil, Data(format.utf8)), ("file", "audio.wav", wav(seconds: 2.5, peak: 0.0025)),
+        ])
+        #expect(response.statusCode == 200)
+        #expect(body == answer, "\(String(decoding: body, as: UTF8.self))")
+        let event = try await running.nextEvent()
+        #expect(event.status == 200 && event.error == nil && event.words == 0)
+        #expect(event.quietSeconds == 2.5)
+        let peak = try #require(event.nothingSpokenPeak)
+        // Within a 16-bit step of the peak written.
+        #expect(abs(peak - 0.0025) < 0.0001)
     }
 
     /// A request that asks while the speaker holds the engine waits for the hold, and its
