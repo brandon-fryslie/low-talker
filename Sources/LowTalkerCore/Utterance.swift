@@ -210,8 +210,9 @@ struct Timeline: Sendable {
 }
 
 /// [LAW:no-silent-failure] The one way an utterance yields no transcript: named, with
-/// the measurement that decided it, so a quiet file or a silent hold is never an
-/// empty answer.
+/// the measurement that decided it, so a quiet file or a silent hold is never decoded
+/// into words Whisper read into the quiet. What the caller answers it with is the
+/// caller's: the transcription server answers it as nothing said.
 public enum UtteranceError: Error, Equatable, CustomStringConvertible {
     /// No clip reached the audible floor; `peak` is the loudest sample heard.
     case nothingSpoken(peak: Float)

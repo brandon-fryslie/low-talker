@@ -434,20 +434,18 @@ private struct Answering: Sendable {
         event.vocabularyTerms = request.vocabulary.terms.count
         let clip = try request.upload.clip(longest: limits.audio)
         event.audioSeconds = clip.duration
-        let transcript: Transcript
+        let heard: Heard
         do {
-            transcript = try await transcriber.transcribe(clip, expecting: request.vocabulary)
-        } catch UtteranceError.nothingSpoken(let peak) {
-            event.nothingSpokenPeak = Double(peak)
-            transcript = Transcript(nothingSpokenIn: clip.duration)
+            heard = try await Heard(seconds: clip.duration) { try await transcriber.transcribe(clip, expecting: request.vocabulary) }
         } catch let refusal as VocabularyError {
             throw APIError.promptRefused("\(refusal)")
         } catch {
             throw APIError.engineFailed("\(error)")
         }
-        event.words = transcript.words.count
-        event.quietSeconds = transcript.quiet
-        return request.format.response(transcript, heard: clip)
+        event.words = heard.transcript.words.count
+        event.quietSeconds = heard.transcript.quiet
+        event.nothingSpokenPeak = heard.nothingSpokenPeak.map(Double.init)
+        return request.format.response(heard.transcript, heard: clip)
     }
 }
 

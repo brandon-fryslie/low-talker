@@ -62,7 +62,8 @@ REALTIME_FIXTURE = FIXTURES / "realtime.jsonl"
 SPOKEN = ("hello", "world")
 TIMEOUT = 60.0
 # A quiet room, as a microphone hears it when nobody speaks into a push-to-talk hold: Gaussian
-# noise peaking at -52 dBFS. OpenAI hears nothing said in it, and answers so.
+# noise peaking at -52 dBFS. Nothing is said in it, and OpenAI's answer to audio with nothing
+# said is empty text. Not captured: whether OpenAI's own Whisper reads words into it is unknown.
 ROOM_DBFS = -52
 
 
@@ -322,10 +323,14 @@ def wav(samples, rate):
     return file.getvalue()
 
 
-def dbfs(samples):
-    """The peak of PCM16 samples in dBFS; silence is -inf."""
-    peak = max(map(abs, samples), default=0)
-    return 20 * math.log10(peak / 32767) if peak else float("-inf")
+def peak(samples):
+    """The loudest of PCM16 samples, as a magnitude."""
+    return max(map(abs, samples), default=0)
+
+
+def dbfs(magnitude):
+    """A PCM16 magnitude in dBFS; silence is -inf."""
+    return 20 * math.log10(magnitude / 32767) if magnitude else float("-inf")
 
 
 # ---------------------------------------------------------------------------------------
@@ -717,18 +722,21 @@ CAPTURED_SESSION = {"type": "transcription", "object": "realtime.transcription_s
                     "include": None}
 CAPTURED_TRANSCRIPT = "Hello world, this is Lo Talker."
 ITEM = "item_reference"
-# The quietest peak the reference hears speech in; under it, as in a quiet room, it hears
-# nothing said and answers with empty text.
+# The reference's own line between the room and speech: any level between ROOM_DBFS and the
+# fixture's speech would do. Under it the reference hears nothing said and answers empty text.
 HEARD_DBFS = -40
 
 
-def heard_in(samples):
-    return dbfs(samples) >= HEARD_DBFS
+def audible(loudest):
+    return dbfs(loudest) >= HEARD_DBFS
 
 
 def wav_samples(data):
-    """A PCM16 mono wav's samples and its rate."""
+    """A PCM16 mono wav's samples and its rate; any other audio is refused by name, since the
+    reference reads no other, rather than read as the wrong number of samples."""
     with wave.open(io.BytesIO(data)) as reader:
+        if (reader.getnchannels(), reader.getsampwidth()) != (1, 2):
+            raise ValueError(f"the reference reads PCM16 mono wav, not {reader.getnchannels()} channels of {8 * reader.getsampwidth()}-bit")
         return array("h", reader.readframes(reader.getnframes())), reader.getframerate()
 
 
@@ -792,7 +800,7 @@ class Reference:
             status, content_type, body = 400, "application/json", rest_error_body("The audio file is empty.", "file", "empty_file")
         elif response_format in ("json", "text"):
             samples, rate = wav_samples(fields["file"])
-            answer = CAPTURED_REST if heard_in(samples) else heard_nothing(samples, rate)
+            answer = CAPTURED_REST if audible(peak(samples)) else heard_nothing(samples, rate)
             status, content_type, body = 200, *(
                 ("application/json", answer) if response_format == "json" else ("text/plain; charset=utf-8", answer["text"] + "\n"))
         else:
@@ -823,7 +831,8 @@ class Reference:
         await socket.send(json.dumps({"type": "session.created", "event_id": "event_reference", "session": CAPTURED_SESSION}))
         words = re.findall(r" \S+", " " + CAPTURED_TRANSCRIPT)
         appended = streamed = 0
-        audio = array("h")
+        # The turn's audio and its peak, kept as appends arrive so no append rescans the turn.
+        audio, loudest = array("h"), 0
 
         async def delta(word):
             await socket.send(json.dumps({"type": "conversation.item.input_audio_transcription.delta", "event_id": "event_reference",
@@ -839,9 +848,11 @@ class Reference:
                 await socket.send(json.dumps({"type": "session.updated", "event_id": "event_reference", "session": session}))
             elif event["type"] == "input_audio_buffer.append":
                 appended += 1
-                audio.frombytes(base64.b64decode(event["audio"]))
+                chunk = array("h", base64.b64decode(event["audio"]))
+                audio.extend(chunk)
+                loudest = max(loudest, peak(chunk))
                 # The first half of the words stream while audio still arrives, as OpenAI's did.
-                if streamed < len(words) // 2 and heard_in(audio):
+                if streamed < len(words) // 2 and audible(loudest):
                     await delta(words[streamed])
                     streamed += 1
             elif event["type"] == "input_audio_buffer.commit" and not appended:
@@ -854,7 +865,7 @@ class Reference:
                               {"type": "conversation.item.done", "previous_item_id": None, "item": item}):
                     await socket.send(json.dumps({**reply, "event_id": "event_reference"}))
                 answer = {"transcript": CAPTURED_TRANSCRIPT, "usage": {"type": "duration", "seconds": 4}}
-                if heard_in(audio):
+                if audible(loudest):
                     for word in words[streamed:]:
                         await delta(word)
                 else:
@@ -863,7 +874,7 @@ class Reference:
                 await socket.send(json.dumps({"type": "conversation.item.input_audio_transcription.completed", "event_id": "event_reference",
                                               "item_id": ITEM, "content_index": 0, **answer}))
                 appended = streamed = 0
-                audio = array("h")
+                audio, loudest = array("h"), 0
         await socket.close()
 
 

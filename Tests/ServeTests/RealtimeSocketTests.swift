@@ -87,6 +87,8 @@ private func update(_ input: [String: Any]) -> [String: Any] {
         client.task.cancel(with: .normalClosure, reason: nil)
         let realtime = try #require(try await running.nextEvent().realtime)
         #expect(realtime.sent.completed == 1 && realtime.sent.failed == 0 && realtime.sent.nothingSpoken == 1)
+        // The 100 appended, as the 16 kHz audio the engine is handed peaks at it.
+        #expect(abs(try #require(realtime.sent.nothingSpokenPeak) - 100.0 / 32_767) < 0.0002)
         #expect(abs(realtime.sent.quietSeconds - 1) < 0.01)
     }
 

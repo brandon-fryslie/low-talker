@@ -206,7 +206,7 @@ struct RealtimeSocket {
             let answered = Task {
                 let result = await transcript.result
                 held.release(bytes: bytes, items: 1)
-                deltas.settle(result, heard: heard)
+                await deltas.settle(result, heard: heard)
             }
             last = (buffer.id, answered)
             items.addTask { await answered.value }
@@ -461,18 +461,14 @@ final class Deltas: Sendable {
 
     /// Answers the item, `seconds` of audio, with what it was heard as: the words not yet
     /// sent, then the transcript, or the reason there is none.
-    func settle(_ transcript: Result<Transcript, any Error>, heard seconds: TimeInterval) {
-        let usage = Usage(heard: seconds)
-        switch transcript {
-        case .success(let heard):
-            send(heard.words)
-            outbox.emit(.completed(item: item, transcript: heard.served, usage: usage, quiet: heard.quiet, nothingSpoken: false))
-        case .failure(UtteranceError.nothingSpoken):
-            let heard = Transcript(nothingSpokenIn: seconds)
-            outbox.emit(.completed(item: item, transcript: heard.served, usage: usage, quiet: heard.quiet, nothingSpoken: true))
-        case .failure(let refusal as VocabularyError):
+    func settle(_ transcript: Result<Transcript, any Error>, heard seconds: TimeInterval) async {
+        do {
+            let heard = try await Heard(seconds: seconds) { try transcript.get() }
+            send(heard.transcript.words)
+            outbox.emit(.completed(item: item, heard: heard, usage: Usage(heard: seconds)))
+        } catch let refusal as VocabularyError {
             outbox.emit(.failed(item: item, .promptRefused("\(refusal)")))
-        case .failure(let error):
+        } catch {
             outbox.emit(.failed(item: item, .engineFailed("\(error)")))
         }
     }
@@ -646,17 +642,22 @@ public struct RealtimeActivity: Sendable, Codable, Equatable {
         public internal(set) var other = 0
         /// Seconds of the completed items' quiet the engine was not handed.
         public internal(set) var quietSeconds: Double = 0
-        /// Completed items no clip of which reached the audible floor, answered as nothing said.
+        /// Completed items no clip of which reached the audible floor, answered as nothing said,
+        /// and the loudest sample any of them held: how near the floor a quiet microphone came.
         public internal(set) var nothingSpoken = 0
+        public internal(set) var nothingSpokenPeak: Double?
 
         mutating func count(_ frame: Outgoing) {
             guard case .event(let event) = frame else { return }
             switch event {
             case .delta: deltas += 1
-            case .completed(_, _, _, let quiet, let nothingSpoken):
+            case .completed(_, let heard, _):
                 completed += 1
-                quietSeconds += quiet
-                self.nothingSpoken += nothingSpoken ? 1 : 0
+                quietSeconds += heard.transcript.quiet
+                if let peak = heard.nothingSpokenPeak {
+                    nothingSpoken += 1
+                    nothingSpokenPeak = max(nothingSpokenPeak ?? 0, Double(peak))
+                }
             case .failed: failed += 1
             case .error: errors += 1
             case .sessionCreated, .sessionUpdated, .committed, .itemAdded, .itemDone: other += 1
