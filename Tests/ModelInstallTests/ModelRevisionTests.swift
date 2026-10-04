@@ -79,7 +79,7 @@ import Testing
         }
     }
 
-    /// The weights' manifest is the variant folder's files, at the sizes the hub lists,
+    /// The weights' manifest is every file under the variant folder, at the sizes the hub lists,
     /// under paths relative to that folder.
     @Test func manifestTakesTheHubSizesOfTheSelectedFiles() throws {
         let listing = try JSONDecoder().decode(Hub.Revision.self, from: Data("""
@@ -89,12 +89,27 @@ import Testing
               {"rfilename": "openai_whisper-test/AudioEncoder.mlmodelc/weights/weight.bin", "size": 421968768}]}
             """.utf8))
         let store = URL(filePath: "/store")
-        let manifest = try listing.manifest(of: store.appending(path: "models/argmaxinc/whisperkit-coreml/openai_whisper-test"), in: store) { path in
-            path.hasPrefix("openai_whisper-test/") ? String(path.dropFirst("openai_whisper-test/".count)) : nil
-        }
+        let manifest = try listing.manifest(of: "openai_whisper-test", in: store.appending(path: "models/argmaxinc/whisperkit-coreml"), store: store, matching: ["*"])
         #expect(manifest == (try Manifest(folder: "models/argmaxinc/whisperkit-coreml/openai_whisper-test", files: [
             .init(path: "AudioEncoder.mlmodelc/weights/weight.bin", size: 421968768),
             .init(path: "config.json", size: 2244),
+        ])))
+    }
+
+    /// The tokenizer's manifest is the named files at the repo's top, whichever of
+    /// them the revision holds.
+    @Test func manifestTakesTheNamedFilesAtTheRepoTop() throws {
+        let listing = try JSONDecoder().decode(Hub.Revision.self, from: Data("""
+            {"sha": "\(Self.tokenizer)", "siblings": [
+              {"rfilename": "model.safetensors", "size": 9},
+              {"rfilename": "tokenizer.json", "size": 2480617},
+              {"rfilename": "config.json", "size": 1272}]}
+            """.utf8))
+        let store = URL(filePath: "/store")
+        let manifest = try listing.manifest(of: nil, in: store.appending(path: "models/openai/whisper-test"), store: store, matching: ["config.json", "tokenizer.json", "chat_template.json"])
+        #expect(manifest == (try Manifest(folder: "models/openai/whisper-test", files: [
+            .init(path: "config.json", size: 1272),
+            .init(path: "tokenizer.json", size: 2480617),
         ])))
     }
 }

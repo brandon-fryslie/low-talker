@@ -29,6 +29,7 @@ import Testing
         #expect("\(WhisperKitTranscriber.InstallingLoadPhase.installing(.downloading(fractionCompleted: 0.426)))" == "downloading 42%")
         #expect("\(WhisperKitTranscriber.InstallingLoadPhase.installing(.unpacking))" == "unpacking model")
         #expect("\(WhisperKitTranscriber.InstallingLoadPhase.installing(.copying))" == "copying model")
+        #expect("\(WhisperKitTranscriber.InstallingLoadPhase.installing(.evicting(["a.bin"])))" == "removing 1 damaged file: a.bin")
         #expect("\(WhisperKitTranscriber.InstallingLoadPhase.loading)" == "\(WhisperKitTranscriber.LoadPhase.loading)")
     }
 
@@ -47,6 +48,27 @@ import Testing
             return
         }
         #expect(try Manifest(contentsOf: destination.tokenizerManifestURL) == Manifest(contentsOf: source.tokenizerManifestURL))
+    }
+
+    /// A folder standing where a listed file belongs is removed before the copy, so
+    /// the copy can be renamed into its place and the store is repaired.
+    @Test func installFromAStoreReplacesAFolderInAFilesPlace() async throws {
+        let files = ScratchStore.files.merging(["empty.txt": ""]) { _, new in new }
+        let source = try ScratchStore(files: files)
+        try source.record()
+        let destination = try ScratchStore(files: files)
+        try destination.record()
+        let empty = destination.folder.appending(path: "empty.txt")
+        try FileManager.default.removeItem(at: empty)
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: false)
+        let store = ModelStore(directory: destination.root)
+        let phases = Mutex<[ModelStore.InstallPhase]>([])
+        _ = try await store.install("test", from: .store(ModelStore(directory: source.root))) { phase in phases.withLock { $0.append(phase) } }
+        guard case .installed = try store.presence(of: "test") else {
+            Issue.record("a folder in a listed file's place must be repaired from the source")
+            return
+        }
+        #expect(phases.withLock { $0 } == [.evicting(["empty.txt"]), .copying])
     }
 
     /// Two `model-tool download`s share one store: the second installer waits for the
@@ -121,7 +143,7 @@ import Testing
         let store = ModelStore(directory: destination.root)
         _ = try await store.install("test", from: .store(ModelStore(directory: source.root))) { phase in phases.withLock { $0.append(phase) } }
         #expect(try Data(contentsOf: destination.folder.appending(path: "AudioEncoder.mlmodelc/weights/weight.bin")) == Data("0123456789".utf8))
-        #expect(phases.withLock { $0 } == [.copying])
+        #expect(phases.withLock { $0 } == [.evicting(["AudioEncoder.mlmodelc/weights/weight.bin"]), .copying])
     }
 
     /// A source that does not hold the model whole has nothing to give, and says

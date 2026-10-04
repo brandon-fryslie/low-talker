@@ -95,11 +95,15 @@ enum Hub {
             files = try container.decode([Sibling].self, forKey: .siblings).map { Manifest.File(path: $0.rfilename, size: $0.size) }
         }
 
-        /// The manifest of the files `select` keeps, each under the path it returns, for
-        /// `folder` in `store`.
-        func manifest(of folder: URL, in store: URL, selecting select: (String) -> String?) throws -> Manifest {
-            try Manifest(folder: Manifest.folder(folder, relativeTo: store), files: files.compactMap { file in
-                select(file.path).map { Manifest.File(path: $0, size: file.size) }
+        /// The manifest of the files in `folder`, or the repo's top when it is nil,
+        /// that one of `globs` matches the way the hub client matches them (`fnmatch`,
+        /// so `*` crosses `/`), for that folder of `repo`, the repo's copy in `store`.
+        func manifest(of folder: String?, in repo: URL, store: URL, matching globs: [String]) throws -> Manifest {
+            let prefix = folder.map { "\($0)/" } ?? ""
+            return try Manifest(folder: Manifest.folder(folder.map { repo.appending(path: $0) } ?? repo, relativeTo: store), files: files.compactMap { file in
+                guard file.path.hasPrefix(prefix) else { return nil }
+                let path = String(file.path.dropFirst(prefix.count))
+                return globs.contains { fnmatch($0, path, 0) == 0 } ? Manifest.File(path: path, size: file.size) : nil
             })
         }
 

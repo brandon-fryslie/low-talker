@@ -33,19 +33,11 @@ extension ModelStore {
                 let weights = try await whole(.weights, of: model) {
                     switch source {
                     case .huggingFace(let revision):
-                        phase(.downloading(fractionCompleted: 0))
-                        let repo = HubApiWrapper.Repo(id: ModelRevision.weightsRepo)
-                        let listing = try await Hub.Revision.asking(Hub.get, for: revision.weights.description, of: repo.id)
-                        let variant = try ModelRevision.variantFolder(of: model, among: listing.files.map(\.path))
-                        let manifest = try listing.manifest(of: hub.localRepoLocation(repo).appending(path: variant), in: directory) { path in
-                            path.hasPrefix("\(variant)/") ? String(path.dropFirst(variant.count + 1)) : nil
-                        }
-                        return try await fetched(manifest, phase: phase) {
-                            _ = try await hub.snapshot(from: repo, revision: revision.weights.description, matching: ["\(variant)/*"]) { phase(.downloading(fractionCompleted: $0.fractionCompleted)) }
+                        return try await fromHub(ModelRevision.weightsRepo, at: revision.weights, through: hub, phase: phase) { listing in
+                            (try ModelRevision.variantFolder(of: model, among: listing.files.map(\.path)), ["*"])
                         }
                     case .store(let store):
-                        phase(.copying)
-                        return try copy(.weights, of: model, from: store)
+                        return try await copy(.weights, of: model, from: store, phase: phase)
                     }
                 }
                 let folder = directory.appending(path: weights.folder)
@@ -60,16 +52,11 @@ extension ModelStore {
                         // load takes (`Hub.loadConfig` in ArgmaxCore, internal), fetched
                         // here at the revision, which the load cannot be given.
                         let variant = try ModelVariant(modelConfig: Data(contentsOf: folder.appending(path: "config.json")))
-                        let repo = HubApiWrapper.Repo(id: variant.tokenizerRepo)
-                        let tokenizerFiles: Set = ["config.json", "tokenizer_config.json", "chat_template.jinja", "chat_template.json", "tokenizer.json"]
-                        let listing = try await Hub.Revision.asking(Hub.get, for: revision.tokenizer.description, of: repo.id)
-                        let manifest = try listing.manifest(of: hub.localRepoLocation(repo), in: directory) { tokenizerFiles.contains($0) ? $0 : nil }
-                        return try await fetched(manifest, phase: phase) {
-                            _ = try await hub.snapshot(from: repo, revision: revision.tokenizer.description, matching: Array(tokenizerFiles))
+                        return try await fromHub(variant.tokenizerRepo, at: revision.tokenizer, through: hub, phase: phase) { _ in
+                            (nil, ["config.json", "tokenizer_config.json", "chat_template.jinja", "chat_template.json", "tokenizer.json"])
                         }
                     case .store(let store):
-                        phase(.copying)
-                        return try copy(.tokenizer, of: model, from: store)
+                        return try await copy(.tokenizer, of: model, from: store, phase: phase)
                     }
                 }
                 return InstalledModel(model: model, folder: folder, hub: directory)
@@ -105,37 +92,63 @@ extension ModelStore {
         return manifest
     }
 
-    /// `manifest`, once `download` has laid its files down here at the sizes it lists.
+    /// The part `repo` holds at `revision`: the files `globs` match, as the hub client
+    /// matches them, in the folder of the repo `locate` names from its listing, or the
+    /// repo's top when it names none.
     ///
-    /// [LAW:single-enforcer] The hub client trusts its own sidecar once a file exists
-    /// and never hashes the file, so a truncated file would come back as "already
-    /// downloaded". The manifest the hub's listing made is the one judge of whole: the
-    /// files it rejects are removed before the download so the client has nothing to
-    /// trust, and anything still rejected after it fails the install.
-    func fetched(_ manifest: Manifest, phase: @Sendable (InstallPhase) -> Void, download: () async throws -> Void) async throws -> Manifest {
+    /// [LAW:one-source-of-truth] The globs that choose what the client downloads also
+    /// choose what the manifest lists, so the two cannot name different files.
+    private func fromHub(
+        _ repo: String,
+        at revision: ModelRevision.Commit,
+        through hub: HubApiWrapper,
+        phase: @escaping @Sendable (InstallPhase) -> Void,
+        locate: (Hub.Revision) throws -> (folder: String?, globs: [String])
+    ) async throws -> Manifest {
+        let listing = try await Hub.Revision.asking(Hub.get, for: revision.description, of: repo)
+        let (folder, globs) = try locate(listing)
+        let local = hub.localRepoLocation(HubApiWrapper.Repo(id: repo))
+        let manifest = try listing.manifest(of: folder, in: local, store: directory, matching: globs)
+        return try await filled(manifest, phase: phase) {
+            phase(.downloading(fractionCompleted: 0))
+            _ = try await hub.snapshot(from: HubApiWrapper.Repo(id: repo), revision: revision.description, matching: globs.map { [folder, $0].compactMap(\.self).joined(separator: "/") }) {
+                phase(.downloading(fractionCompleted: $0.fractionCompleted))
+            }
+            // [LAW:no-silent-failure] The hub client answers cancellation by returning
+            // the folder as far as it got, without throwing; that is a cancellation,
+            // not a download that came up short.
+            try Task.checkCancellation()
+        }
+    }
+
+    /// `manifest`, once `fill` has put its files here at the sizes it lists.
+    ///
+    /// [LAW:single-enforcer] The one judge of whole for every source. The hub client
+    /// trusts its own sidecar once a file exists and never hashes the file, so a
+    /// truncated file would come back as "already downloaded", and a copy cannot be
+    /// renamed over a folder. Every file the manifest rejects is removed before `fill`
+    /// runs, so nothing is trusted and nothing is in the way, and anything still
+    /// rejected after it fails the install.
+    func filled(_ manifest: Manifest, phase: (InstallPhase) -> Void, by fill: () async throws -> Void) async throws -> Manifest {
         let folder = directory.appending(path: manifest.folder)
         let evictions = try manifest.faults(in: folder).filter { $0.kind != .missing }.map(\.path)
         if !evictions.isEmpty { phase(.evicting(evictions)) }
         for path in evictions {
             try FileManager.default.removeItem(at: folder.appending(path: path))
         }
-        try await download()
-        // [LAW:no-silent-failure] The hub client answers cancellation by returning the
-        // folder as far as it got, without throwing; that is a cancellation, not a
-        // download that came up short.
-        try Task.checkCancellation()
+        try await fill()
         let faults = try manifest.faults(in: folder)
-        guard faults.isEmpty else { throw ModelInstallError.downloadIncomplete(folder: folder, faults: faults) }
+        guard faults.isEmpty else { throw ModelInstallError.incomplete(folder: folder, faults: faults) }
         return manifest
     }
 
     /// Copies the files `source`'s manifest lists for the part to the same paths
     /// here, and hands back that manifest once the copies verify against it.
     ///
-    /// Each file lands under a temporary name and is renamed over its place, so a
-    /// tokenizer another model shares is never absent while it is replaced. Only the
-    /// listed files are copied: a sidecar beside them in the source is not the model.
-    private func copy(_ part: ModelPart, of model: ModelName, from source: ModelStore) throws -> Manifest {
+    /// Each file lands under a temporary name and is renamed into place, so a copy
+    /// stopped part way leaves no listed file half written. Only the listed files are
+    /// copied: a sidecar beside them in the source is not the model.
+    private func copy(_ part: ModelPart, of model: ModelName, from source: ModelStore, phase: (InstallPhase) -> Void) async throws -> Manifest {
         let manifest: Manifest
         switch try source.recording(part, of: model) {
         case .whole(let whole): manifest = whole
@@ -144,29 +157,27 @@ extension ModelStore {
         }
         let from = source.directory.appending(path: manifest.folder)
         let to = directory.appending(path: manifest.folder)
-        for file in manifest.files {
-            let destination = to.appending(path: file.path)
-            let incoming = destination.deletingLastPathComponent().appending(path: ".\(destination.lastPathComponent).\(UUID().uuidString)")
-            try FileManager.default.createDirectory(at: incoming.deletingLastPathComponent(), withIntermediateDirectories: true)
-            do {
-                try FileManager.default.copyItem(at: from.appending(path: file.path), to: incoming)
-                guard rename(incoming.path, destination.path) == 0 else {
-                    throw ModelInstallError.renameFailed(from: incoming, to: destination, errno: errno)
+        return try await filled(manifest, phase: phase) {
+            phase(.copying)
+            for file in manifest.files {
+                let destination = to.appending(path: file.path)
+                let incoming = destination.deletingLastPathComponent().appending(path: ".\(destination.lastPathComponent).\(UUID().uuidString)")
+                try FileManager.default.createDirectory(at: incoming.deletingLastPathComponent(), withIntermediateDirectories: true)
+                do {
+                    try FileManager.default.copyItem(at: from.appending(path: file.path), to: incoming)
+                    guard rename(incoming.path, destination.path) == 0 else {
+                        throw ModelInstallError.renameFailed(from: incoming, to: destination, errno: errno)
+                    }
+                } catch {
+                    // A hidden name is never recorded or evicted, so a partial copy left
+                    // here would outlive every retry. [LAW:no-silent-failure] exception:
+                    // the copy's own error is the one the caller needs; a failed removal
+                    // of what may never have been created adds nothing to it.
+                    try? FileManager.default.removeItem(at: incoming)
+                    throw error
                 }
-            } catch {
-                // A hidden name is never recorded or evicted, so a partial copy left
-                // here would outlive every retry. [LAW:no-silent-failure] exception:
-                // the copy's own error is the one the caller needs; a failed removal
-                // of what may never have been created adds nothing to it.
-                try? FileManager.default.removeItem(at: incoming)
-                throw error
             }
         }
-        let faults = try manifest.faults(in: to)
-        guard faults.isEmpty else {
-            throw ModelInstallError.sourceLacks(source: source.directory, model: model, part: part, reason: "copied, but \(faults.map(\.description).joined(separator: "; "))")
-        }
-        return manifest
     }
 
     /// What `install` is doing now. `waitingForAnotherInstall` is reported once,
@@ -243,8 +254,9 @@ public enum ModelInstallError: Error, Equatable, CustomStringConvertible {
     case noVariantFolder(model: ModelName, matches: [String])
     case dittoFailed(arguments: [String], status: Int32, message: String)
     case renameFailed(from: URL, to: URL, errno: Int32)
-    /// A download finished without laying down every file the hub lists, at its size.
-    case downloadIncomplete(folder: URL, faults: [Manifest.Fault])
+    /// A download or copy finished without putting every file its manifest lists in place,
+    /// at its size.
+    case incomplete(folder: URL, faults: [Manifest.Fault])
 
     public var description: String {
         switch self {
@@ -260,8 +272,8 @@ public enum ModelInstallError: Error, Equatable, CustomStringConvertible {
             "ditto \(arguments.joined(separator: " ")) exited \(status): \(message)"
         case .renameFailed(let from, let to, let errno):
             "cannot move \(from.path) to \(to.path): \(String(cString: strerror(errno)))"
-        case .downloadIncomplete(let folder, let faults):
-            "the download into \(folder.path) came up short: \(faults.map(\.description).joined(separator: "; "))"
+        case .incomplete(let folder, let faults):
+            "\(folder.path) came up short after the install: \(faults.map(\.description).joined(separator: "; "))"
         }
     }
 }
