@@ -455,12 +455,17 @@ async def rest_room_noise(context):
 def verbose_segments(response, where):
     """The segments of a 200 verbose_json body, each with the two scores a client reads."""
     expect_status(response, 200)
+    if media_type(response)[0] != "application/json":
+        raise Refused(f"{where}'s content-type is {response.headers.get('content-type')!r}, not application/json")
     body = response.json()
     missing = [key for key in ("task", "language", "duration", "text", "segments") if not isinstance(body, dict) or key not in body]
     if missing:
         raise Refused(f"{where} was answered {response.body[:300]!r}, without {', '.join(missing)}")
+    if not isinstance(body["segments"], list):
+        raise Refused(f"{where}'s segments are {body['segments']!r}, not a list")
     for segment in body["segments"]:
-        if not all(isinstance(segment.get(key), (int, float)) for key in ("avg_logprob", "compression_ratio")):
+        if not isinstance(segment, dict) or not all(
+                isinstance(segment.get(key), (int, float)) and not isinstance(segment[key], bool) for key in ("avg_logprob", "compression_ratio")):
             raise Refused(f"{where} has a segment without a numeric avg_logprob and compression_ratio: {segment!r}")
     return body["segments"]
 
@@ -474,10 +479,10 @@ async def rest_verbose_scores(context):
     if not okay or any(map(dropped, okay)):
         raise Refused(f"spoken okay was read as {okay!r}, which a client would drop")
     for seed in NOISE_SEEDS:
-        noisy = verbose_segments(await transcribe(context, file=wav(noise(3, 16_000, NOISE_DBFS, seed), 16_000), prompt=PRIMED,
-                                                  response_format=b"verbose_json"), f"noise seed {seed}")
-        if not all(map(dropped, noisy)):
-            raise Refused(f"primed noise (seed {seed}) was read as {noisy!r}, which a client would keep as speech")
+        segments = verbose_segments(await transcribe(context, file=wav(noise(3, 16_000, NOISE_DBFS, seed), 16_000), prompt=PRIMED,
+                                                     response_format=b"verbose_json"), f"noise seed {seed}")
+        if not all(map(dropped, segments)):
+            raise Refused(f"primed noise (seed {seed}) was read as {segments!r}, which a client would keep as speech")
 
 
 async def rest_empty_file(context):

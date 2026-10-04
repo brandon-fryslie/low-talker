@@ -445,9 +445,9 @@ private struct Answering: Sendable {
         event.words = heard.transcript.words.count
         event.quietSeconds = heard.transcript.quiet
         event.nothingSpokenPeak = heard.nothingSpokenPeak.map(Double.init)
-        let segment = Segment(heard.transcript)
+        let segment = try Segment(heard.transcript)
         (event.avgLogprob, event.compressionRatio) = (segment?.avgLogprob, segment?.compressionRatio)
-        return request.format.response(heard.transcript, heard: clip)
+        return request.format.response(heard.transcript, segment, heard: clip)
     }
 }
 

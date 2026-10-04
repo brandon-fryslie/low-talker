@@ -25,6 +25,7 @@ enum APIError: Error, Equatable, Sendable {
     case uploadNotStored(String)
     case notResident(String)
     case engineFailed(String)
+    case unscored(String)
 
     var status: Status {
         switch self {
@@ -35,7 +36,7 @@ enum APIError: Error, Equatable, Sendable {
         case .notFound: .notFound
         case .busy: .tooManyRequests
         case .notResident: .serviceUnavailable
-        case .uploadNotStored, .engineFailed: .internalServerError
+        case .uploadNotStored, .engineFailed, .unscored: .internalServerError
         }
     }
 
@@ -60,6 +61,7 @@ enum APIError: Error, Equatable, Sendable {
         case .uploadNotStored(let reason): "The upload could not be stored for reading: \(reason)."
         case .notResident(let reason): "The model is not ready: \(reason)."
         case .engineFailed(let reason): "Transcription failed: \(reason)."
+        case .unscored(let reason): "The transcript could not be scored: \(reason)."
         }
     }
 
@@ -68,7 +70,7 @@ enum APIError: Error, Equatable, Sendable {
         case .missing(let field), .repeated(let field), .unsupportedParameter(let field), .unsupportedValue(let field, _, _): field
         case .promptRefused: "prompt"
         case .emptyFile, .unreadableAudio, .silentFile, .audioTooLong: "file"
-        case .malformed, .invalidAPIKey, .lengthRequired, .tooLarge, .notFound, .uploadNotStored, .notResident, .engineFailed, .busy: nil
+        case .malformed, .invalidAPIKey, .lengthRequired, .tooLarge, .notFound, .uploadNotStored, .notResident, .engineFailed, .unscored, .busy: nil
         }
     }
 
@@ -92,6 +94,7 @@ enum APIError: Error, Equatable, Sendable {
         case .uploadNotStored: "upload_not_stored"
         case .notResident: "model_not_ready"
         case .engineFailed: "transcription_failed"
+        case .unscored: "scoring_failed"
         }
     }
 

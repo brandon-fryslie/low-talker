@@ -108,8 +108,8 @@ extension Transcript {
 
 /// What was heard as one segment of OpenAI's verbose_json: the words from the first one's
 /// start to the last one's end, and Whisper's two scores for a reading to be dropped on.
-/// Only the fields this server can know; tokens and no_speech_prob are left out rather than
-/// made up.
+/// Only the fields this server can know; seek, tokens, temperature and no_speech_prob are
+/// left out rather than made up.
 struct Segment: Encodable, Sendable {
     let id = 0
     let start: TimeInterval
@@ -126,21 +126,23 @@ struct Segment: Encodable, Sendable {
 
     /// The transcript's one segment, or none when nothing was said.
     /// [LAW:one-source-of-truth] The answer's scores and the event's are both read off this.
-    init?(_ transcript: Transcript) {
+    init?(_ transcript: Transcript) throws(APIError) {
         guard !transcript.isBlank, let first = transcript.words.first, let last = transcript.words.last else { return nil }
         start = first.time.lowerBound
         end = last.time.upperBound
         text = transcript.served
         avgLogprob = transcript.words.map(\.confidence.logProbability).reduce(0, +) / Double(transcript.words.count)
-        compressionRatio = Self.compressionRatio(text)
+        compressionRatio = try Self.compressionRatio(text)
     }
 
-    private static func compressionRatio(_ text: String) -> Double {
+    private static func compressionRatio(_ text: String) throws(APIError) -> Double {
         let bytes = Array(text.utf8)
         var compressedCount = compressBound(uLong(bytes.count))
         var compressed = [UInt8](repeating: 0, count: Int(compressedCount))
-        // [LAW:no-silent-failure] compress fails only on a buffer under compressBound's.
-        precondition(compress(&compressed, &compressedCount, bytes, uLong(bytes.count)) == Z_OK, "zlib refused a buffer of its own bound")
+        // [LAW:no-silent-failure] The buffer is compressBound's, so what fails is zlib's own
+        // allocation, and that fails this request, not the app holding dictation.
+        let status = compress(&compressed, &compressedCount, bytes, uLong(bytes.count))
+        guard status == Z_OK else { throw .unscored("zlib's compress returned \(status)") }
         return Double(bytes.count) / Double(compressedCount)
     }
 
@@ -168,7 +170,7 @@ enum ResponseFormat: String, Sendable, Codable, CaseIterable {
     /// The answer as OpenAI gives it (epic low-serve-axq): json is the text and its usage;
     /// text is the transcript and a newline; verbose_json adds the duration and the
     /// segments, none when nothing was said.
-    func response(_ transcript: Transcript, heard audio: AudioClip) -> HTTPResponse {
+    func response(_ transcript: Transcript, _ segment: Segment?, heard audio: AudioClip) -> HTTPResponse {
         let text = transcript.served
         let usage = Usage(heard: audio.duration)
         switch self {
@@ -177,7 +179,7 @@ enum ResponseFormat: String, Sendable, Codable, CaseIterable {
         case .text:
             return HTTPResponse(status: .ok, contentType: "text/plain; charset=utf-8", body: Data((text + "\n").utf8))
         case .verboseJSON:
-            return .json(VerboseJSONBody(duration: audio.duration, text: text, segments: Segment(transcript).map { [$0] } ?? [], usage: usage))
+            return .json(VerboseJSONBody(duration: audio.duration, text: text, segments: segment.map { [$0] } ?? [], usage: usage))
         }
     }
 
