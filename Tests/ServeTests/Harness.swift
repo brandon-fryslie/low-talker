@@ -1,5 +1,5 @@
 import Foundation
-import LowTalkerCore
+@testable import LowTalkerCore
 import Network
 @testable import Serve
 import Synchronization
@@ -8,7 +8,8 @@ import Testing
 /// An engine that hears the conformance fixture's words in whatever it is given, and keeps
 /// what it was given. While audio streams in it confirms a word per half second heard, up
 /// to half the words, so a streamed utterance has words confirmed before it ends and
-/// words left for the final transcript.
+/// words left for the final transcript. Audio that never reaches the engine's audible floor
+/// it refuses as nothing spoken, as the engine does.
 final class Stub: Transcriber {
     let heard = Mutex<[(seconds: TimeInterval, vocabulary: Vocabulary, cancelled: Bool)]>([])
     let answer: Result<Transcript, any Error>
@@ -24,12 +25,15 @@ final class Stub: Transcriber {
     ) async throws -> Transcript {
         let words = (try? answer.get())?.words ?? []
         var seconds: TimeInterval = 0
+        var loudest: Float = 0
         for await clip in audio {
             seconds += clip.duration
-            let confirmed = min(words.count / 2, Int(seconds / 0.5))
+            loudest = max(loudest, clip.peak)
+            let confirmed = loudest < Utterance.audible ? 0 : min(words.count / 2, Int(seconds / 0.5))
             partial(Partial(confirmed: Transcript(words: Array(words.prefix(confirmed))), tentative: Transcript(words: []), repunctuated: 0))
         }
         heard.withLock { $0.append((seconds, vocabulary, Task.isCancelled)) }
+        guard loudest >= Utterance.audible else { throw UtteranceError.nothingSpoken(peak: loudest) }
         return try answer.get()
     }
 }
@@ -167,6 +171,15 @@ struct NoLANAddress: Error, CustomStringConvertible {
 
 func fixture(_ name: String) throws -> Data {
     try Data(contentsOf: #require(Bundle.module.url(forResource: name, withExtension: nil, subdirectory: "Fixtures")))
+}
+
+/// `seconds` of 16 kHz audio peaking at `peak`, as the wav file an upload carries.
+func wav(seconds: TimeInterval, peak: Float) throws -> Data {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("lowtalker-test-\(UUID().uuidString).wav")
+    defer { try? FileManager.default.removeItem(at: url) }
+    let count = AudioClip.sampleCount(for: seconds)
+    try AudioClip(samples: (0..<count).map { peak * Float(sin(Double($0) * 2 * .pi * 440 / 16_000)) }).write(to: url)
+    return try Data(contentsOf: url)
 }
 
 func error(_ body: Data) throws -> [String: Any] {

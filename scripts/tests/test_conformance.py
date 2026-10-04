@@ -1,5 +1,6 @@
 """scripts/conformance judged against a server that answers 200 {"text": ""} to everything,
-which a suite that passed would pass anything, and against its own reference endpoint, which
+which passes only the check that a quiet room is heard as nothing said, since a suite that
+passed would pass anything, and against its own reference endpoint, which
 answers as OpenAI did and must pass every check. Its passing against api.openai.com needs the
 funded key, so it is run by hand (low-serve-axq.50m)."""
 import json
@@ -43,18 +44,22 @@ class ConformanceTests(unittest.TestCase):
         return subprocess.run([str(suite), "check", self.url, *args], capture_output=True, text=True,
                               timeout=120, env={**os.environ, **(env or {})})
 
-    def test_every_check_fails_against_a_server_that_hears_nothing(self):
+    def test_every_check_but_the_quiet_room_fails_against_a_server_that_hears_nothing(self):
         result = self.run_suite("--token-env", "CONFORMANCE_TOKEN", env={"CONFORMANCE_TOKEN": "sk-test"})
         self.assertEqual(result.returncode, 1, result.stderr)
         *lines, summary = result.stdout.splitlines()
         summary = json.loads(summary)
-        self.assertEqual(summary["counts"], {"pass": 0, "fail": 10, "skip": 0})
-        reasons = {r["check"]: r["reason"] for r in summary["results"]}
+        self.assertEqual(summary["counts"], {"pass": 1, "fail": 11, "skip": 0})
+        passed = [r["check"] for r in summary["results"] if r["outcome"] == "pass"]
+        self.assertEqual(passed, ["rest quiet room is 200 with empty text"])
+        reasons = {r["check"]: r["reason"] for r in summary["results"] if r["outcome"] == "fail"}
         self.assertIn("does not have hello, world", reasons["rest json"])
         self.assertIn("answered 200, not 400", reasons["rest empty file is 400"])
         self.assertIn("answered 200, not 401", reasons["rest no token is 401"])
         self.assertIn("answered 200, not 101", reasons["realtime exchange"])
-        self.assertEqual(lines, [f"fail  {name}: {reason}" for name, reason in reasons.items()])
+        self.assertIn("answered 200, not 101", reasons["realtime quiet room turn is completed with an empty transcript"])
+        self.assertEqual(lines, [f"{r['outcome']:4}  {r['check']}" + (f": {r['reason']}" if r["reason"] else "")
+                                 for r in summary["results"]])
 
     def test_without_a_token_the_token_checks_are_skipped_and_said(self):
         summary = json.loads(self.run_suite().stdout.splitlines()[-1])
@@ -73,7 +78,7 @@ class ConformanceTests(unittest.TestCase):
         result = subprocess.run([str(suite), "check", url, "--token-env", "CONFORMANCE_TOKEN"], capture_output=True,
                                 text=True, timeout=120, env=env)
         summary = json.loads(result.stdout.splitlines()[-1])
-        self.assertEqual(summary["counts"], {"pass": 10, "fail": 0, "skip": 0}, result.stdout)
+        self.assertEqual(summary["counts"], {"pass": 12, "fail": 0, "skip": 0}, result.stdout)
         self.assertEqual(result.returncode, 0)
 
     def test_a_base_url_that_is_not_http_stops_the_run(self):

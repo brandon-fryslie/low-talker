@@ -77,6 +77,14 @@ struct Usage: Encodable, Sendable {
 }
 
 extension Transcript {
+    /// What an utterance the engine refused as nothing spoken is answered with: no words, and
+    /// every second of it quiet. OpenAI answers audio with nothing said in it 200 with empty
+    /// text, so a push-to-talk hold where nothing was said is an answer, not a failure.
+    /// [LAW:one-source-of-truth] The upload and the Realtime item answer nothing spoken alike.
+    init(nothingSpokenIn seconds: TimeInterval) {
+        self.init(words: [], quiet: seconds)
+    }
+
     /// The transcript as OpenAI writes it. The engine's words carry their leading space,
     /// which OpenAI's text does not.
     var served: String {

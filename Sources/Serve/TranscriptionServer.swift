@@ -437,6 +437,9 @@ private struct Answering: Sendable {
         let transcript: Transcript
         do {
             transcript = try await transcriber.transcribe(clip, expecting: request.vocabulary)
+        } catch UtteranceError.nothingSpoken(let peak) {
+            event.nothingSpokenPeak = Double(peak)
+            transcript = Transcript(nothingSpokenIn: clip.duration)
         } catch let refusal as VocabularyError {
             throw APIError.promptRefused("\(refusal)")
         } catch {
@@ -574,6 +577,9 @@ public struct ServedRequest: Sendable, Codable, Equatable {
     public internal(set) var words: Int?
     /// Seconds of the upload's quiet the engine was not handed.
     public internal(set) var quietSeconds: Double?
+    /// The loudest sample of an upload no clip of which reached the audible floor, which was
+    /// answered as nothing said.
+    public internal(set) var nothingSpokenPeak: Double?
     /// What happened on a Realtime socket, for a request that upgraded to one.
     public internal(set) var realtime: RealtimeActivity?
     /// What dictation did to the request: its decodes a hold cancelled and ran again, and
