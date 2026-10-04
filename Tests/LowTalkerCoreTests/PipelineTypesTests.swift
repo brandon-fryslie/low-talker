@@ -53,6 +53,14 @@ import Testing
         }
     }
 
+    /// A confidence's log is finite at zero, where the probability is below what an engine's
+    /// Float holds, so a served score can always be written as JSON.
+    @Test func confidenceLogProbabilityIsFiniteAtZero() {
+        #expect((1.0 as Confidence).logProbability == 0)
+        #expect((0.5 as Confidence).logProbability == log(0.5))
+        #expect((0.0 as Confidence).logProbability == log(Double(Float.leastNonzeroMagnitude)))
+    }
+
     /// An end before a start is not a word timing; the decoder refuses it.
     @Test func wordTimingRejectsEndBeforeStart() {
         let json = Data(#"{"text": "x", "time": [1.0, 0.5], "confidence": 1}"#.utf8)

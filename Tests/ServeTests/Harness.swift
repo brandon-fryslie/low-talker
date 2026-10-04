@@ -9,7 +9,7 @@ import Testing
 /// what it was given. While audio streams in it confirms a word per half second heard, up
 /// to half the words, so a streamed utterance has words confirmed before it ends and
 /// words left for the final transcript. Audio that never reaches the engine's audible floor
-/// it refuses as nothing spoken, as the engine does.
+/// it refuses as nothing spoken, as the engine does, and noise it hears its words in doubtfully.
 final class Stub: Transcriber {
     let heard = Mutex<[(seconds: TimeInterval, vocabulary: Vocabulary, cancelled: Bool)]>([])
     let answer: Result<Transcript, any Error>
@@ -26,16 +26,29 @@ final class Stub: Transcriber {
         let words = (try? answer.get())?.words ?? []
         var seconds: TimeInterval = 0
         var loudest: Float = 0
+        var crossings = 0, samples = 0, last: Float = 0
         for await clip in audio {
             seconds += clip.duration
             loudest = max(loudest, clip.peak)
+            for sample in clip.samples {
+                crossings += (sample < 0) != (last < 0) ? 1 : 0
+                last = sample
+            }
+            samples += clip.samples.count
             let confirmed = loudest < Utterance.audible ? 0 : min(words.count / 2, Int(seconds / 0.5))
             partial(Partial(confirmed: Transcript(words: Array(words.prefix(confirmed))), tentative: Transcript(words: []), repunctuated: 0))
         }
         heard.withLock { $0.append((seconds, vocabulary, Task.isCancelled)) }
         guard loudest >= Utterance.audible else { throw UtteranceError.nothingSpoken(peak: loudest) }
-        return try answer.get()
+        let transcript = try answer.get()
+        // White noise changes sign on about half its samples, speech and a tone on far fewer.
+        // Noise is read as the engine reads a primed hallucination over it: words, barely believed.
+        guard Double(crossings) / Double(samples) > 0.3 else { return transcript }
+        return Transcript(words: transcript.words.map { Transcript.Word(text: $0.text, time: $0.time, confidence: Self.doubted) }, quiet: transcript.quiet)
     }
+
+    /// The probability the stub gives every word it reads into noise.
+    static let doubted: Confidence = 0.05
 }
 
 /// The stub, heard as a served caller of `turns`, as the app's engine is.
