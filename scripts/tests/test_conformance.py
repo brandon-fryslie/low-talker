@@ -49,12 +49,13 @@ class ConformanceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stderr)
         *lines, summary = result.stdout.splitlines()
         summary = json.loads(summary)
-        self.assertEqual(summary["counts"], {"pass": 1, "fail": 11, "skip": 0})
+        self.assertEqual(summary["counts"], {"pass": 1, "fail": 12, "skip": 0})
         passed = [r["check"] for r in summary["results"] if r["outcome"] == "pass"]
         self.assertEqual(passed, ["rest quiet room is 200 with empty text"])
         reasons = {r["check"]: r["reason"] for r in summary["results"] if r["outcome"] == "fail"}
         self.assertIn("does not have hello, world", reasons["rest json"])
         self.assertIn("answered 200, not 400", reasons["rest empty file is 400"])
+        self.assertIn("without task, language, duration, segments", reasons["rest verbose_json scores primed noise apart from speech"])
         self.assertIn("answered 200, not 401", reasons["rest no token is 401"])
         self.assertIn("answered 200, not 101", reasons["realtime exchange"])
         self.assertIn("answered 200, not 101", reasons["realtime quiet room turn is completed with an empty transcript"])
@@ -78,7 +79,7 @@ class ConformanceTests(unittest.TestCase):
         result = subprocess.run([str(suite), "check", url, "--token-env", "CONFORMANCE_TOKEN"], capture_output=True,
                                 text=True, timeout=120, env=env)
         summary = json.loads(result.stdout.splitlines()[-1])
-        self.assertEqual(summary["counts"], {"pass": 12, "fail": 0, "skip": 0}, result.stdout)
+        self.assertEqual(summary["counts"], {"pass": 13, "fail": 0, "skip": 0}, result.stdout)
         self.assertEqual(result.returncode, 0)
 
     def test_a_base_url_that_is_not_http_stops_the_run(self):

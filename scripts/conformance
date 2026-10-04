@@ -65,6 +65,17 @@ TIMEOUT = 60.0
 # noise peaking at -52 dBFS. Nothing is said in it, and OpenAI's answer to audio with nothing
 # said is empty text. Not captured: whether OpenAI's own Whisper reads words into it is unknown.
 ROOM_DBFS = -52
+# A push-to-talk hold primed with a vocabulary, as cc-hands primes every one (low-serve-4a9).
+PRIMED = b"whisper, vocabulary, pipeline, turnstop, master, cc-hands, low-talker"
+# Spoken "okay" (`say`, 16 kHz), normalised to a -25 dBFS peak.
+OKAY_FILE = FIXTURES / "okay.wav"
+# Gaussian noise peaking at -30 dBFS, which LowTalker read primed (2026-10-04) as two kinds of
+# hallucination: seed 1 as "and slow-talking." at avg_logprob -2.87, seed 3 as "a little bit of"
+# repeated to the end of the window at avg_logprob -0.24, surer than "okay" at -0.89.
+NOISE_DBFS, NOISE_SEEDS = -30, (1, 3)
+# The scores a client drops a reading on: avg_logprob under cc-hands' -1.5, or a
+# compression_ratio over Whisper's 2.4, which catches the repetition avg_logprob misses.
+LOGPROB_FLOOR, COMPRESSION_CEILING = -1.5, 2.4
 
 
 class Refused(Exception):
@@ -441,6 +452,39 @@ async def rest_room_noise(context):
         raise Refused(f"a quiet room was answered {response.body[:300]!r}, not 200 with empty text")
 
 
+def verbose_segments(response, where):
+    """The segments of a 200 verbose_json body, each with the two scores a client reads."""
+    expect_status(response, 200)
+    if media_type(response)[0] != "application/json":
+        raise Refused(f"{where}'s content-type is {response.headers.get('content-type')!r}, not application/json")
+    body = response.json()
+    missing = [key for key in ("task", "language", "duration", "text", "segments") if not isinstance(body, dict) or key not in body]
+    if missing:
+        raise Refused(f"{where} was answered {response.body[:300]!r}, without {', '.join(missing)}")
+    if not isinstance(body["segments"], list):
+        raise Refused(f"{where}'s segments are {body['segments']!r}, not a list")
+    for segment in body["segments"]:
+        if not isinstance(segment, dict) or not all(
+                isinstance(segment.get(key), (int, float)) and not isinstance(segment[key], bool) for key in ("avg_logprob", "compression_ratio")):
+            raise Refused(f"{where} has a segment without a numeric avg_logprob and compression_ratio: {segment!r}")
+    return body["segments"]
+
+
+def dropped(segment):
+    return segment["avg_logprob"] < LOGPROB_FLOOR or segment["compression_ratio"] > COMPRESSION_CEILING
+
+
+async def rest_verbose_scores(context):
+    okay = verbose_segments(await transcribe(context, file=OKAY_FILE.read_bytes(), prompt=PRIMED, response_format=b"verbose_json"), "spoken okay")
+    if not okay or any(map(dropped, okay)):
+        raise Refused(f"spoken okay was read as {okay!r}, which a client would drop")
+    for seed in NOISE_SEEDS:
+        segments = verbose_segments(await transcribe(context, file=wav(noise(3, 16_000, NOISE_DBFS, seed), 16_000), prompt=PRIMED,
+                                                     response_format=b"verbose_json"), f"noise seed {seed}")
+        if not all(map(dropped, segments)):
+            raise Refused(f"primed noise (seed {seed}) was read as {segments!r}, which a client would keep as speech")
+
+
 async def rest_empty_file(context):
     rest_error(await transcribe(context, file=b""), 400)
 
@@ -659,6 +703,7 @@ CHECKS = [
     ("rest text", rest_text, False),
     ("rest prompt", rest_prompt, False),
     ("rest quiet room is 200 with empty text", rest_room_noise, False),
+    ("rest verbose_json scores primed noise apart from speech", rest_verbose_scores, False),
     ("rest empty file is 400", rest_empty_file, False),
     ("rest unsupported response_format is 400", rest_unsupported_format, False),
     ("rest no token is 401", rest_no_token, True),
@@ -725,6 +770,12 @@ ITEM = "item_reference"
 # The reference's own line between the room and speech: any level between ROOM_DBFS and the
 # fixture's speech would do. Under it the reference hears nothing said and answers empty text.
 HEARD_DBFS = -40
+# The reference's own line between noise and speech: white noise changes sign on about half its
+# samples, speech on far fewer. Over it the reference answers what LowTalker read primed noise as.
+NOISE_CROSSINGS = 0.3
+NOISE_READING = {"text": "and slow-talking.", "avg_logprob": -2.87}
+# LowTalker's score for the okay fixture, given to whatever the reference hears as speech.
+SPEECH_LOGPROB = -0.89
 
 
 def audible(loudest):
@@ -738,6 +789,20 @@ def wav_samples(data):
         if (reader.getnchannels(), reader.getsampwidth()) != (1, 2):
             raise ValueError(f"the reference reads PCM16 mono wav, not {reader.getnchannels()} channels of {8 * reader.getsampwidth()}-bit")
         return array("h", reader.readframes(reader.getnframes())), reader.getframerate()
+
+
+def noisy(samples):
+    crossings = sum((a < 0) != (b < 0) for a, b in zip(samples, samples[1:]))
+    return crossings / max(len(samples) - 1, 1) > NOISE_CROSSINGS
+
+
+def verbose(answer, samples, rate, avg_logprob):
+    """`answer` as verbose_json: one segment with its scores, none when nothing was said."""
+    text = answer["text"].encode()
+    segments = [{"id": 0, "start": 0.0, "end": len(samples) / rate, "text": answer["text"], "avg_logprob": avg_logprob,
+                 "compression_ratio": len(text) / len(zlib.compress(text))}] if text else []
+    return {"task": "transcribe", "language": "english", "duration": len(samples) / rate, "text": answer["text"],
+            "segments": segments, "usage": answer["usage"]}
 
 
 def heard_nothing(samples, rate):
@@ -798,11 +863,18 @@ class Reference:
             status, content_type, body = 401, "application/json", rest_error_body("Incorrect API key provided.", None, "invalid_api_key")
         elif not fields.get("file"):
             status, content_type, body = 400, "application/json", rest_error_body("The audio file is empty.", "file", "empty_file")
-        elif response_format in ("json", "text"):
+        elif response_format in ("json", "text", "verbose_json"):
             samples, rate = wav_samples(fields["file"])
-            answer = CAPTURED_REST if audible(peak(samples)) else heard_nothing(samples, rate)
-            status, content_type, body = 200, *(
-                ("application/json", answer) if response_format == "json" else ("text/plain; charset=utf-8", answer["text"] + "\n"))
+            if not audible(peak(samples)):
+                answer, avg_logprob = heard_nothing(samples, rate), None
+            elif noisy(samples):
+                answer, avg_logprob = {"text": NOISE_READING["text"], "usage": heard_nothing(samples, rate)["usage"]}, NOISE_READING["avg_logprob"]
+            else:
+                answer, avg_logprob = CAPTURED_REST, SPEECH_LOGPROB
+            status, content_type, body = 200, *{
+                "json": ("application/json", answer),
+                "text": ("text/plain; charset=utf-8", answer["text"] + "\n"),
+                "verbose_json": ("application/json", verbose(answer, samples, rate, avg_logprob))}[response_format]
         else:
             status, content_type, body = 400, "application/json", rest_error_body(
                 f"Unsupported response_format {response_format}.", "response_format", "unsupported_value")

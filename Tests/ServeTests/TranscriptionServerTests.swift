@@ -35,7 +35,7 @@ import TestProbes
         let running = try await Running.start(.ready(Stub()))
         defer { running.server.stop() }
         let results = try await running.conformance()
-        #expect(results.count == 12, "\(results)")
+        #expect(results.count == 13, "\(results)")
         for result in results {
             #expect(["pass", "skip"].contains(result["outcome"] as? String), "\(result)")
         }
@@ -51,7 +51,7 @@ import TestProbes
         defer { running.server.stop() }
         #expect(running.base == "http://\(try lanAddress()):\(running.server.port.rawValue)/v1")
         let results = try await running.conformance(token: "sk-lan-token")
-        #expect(results.count == 12, "\(results)")
+        #expect(results.count == 13, "\(results)")
         for result in results {
             #expect(result["outcome"] as? String == "pass", "\(result)")
         }
@@ -114,7 +114,11 @@ import TestProbes
     /// An upload no sample of which reached the audible floor, a push-to-talk hold where
     /// nothing was said, is answered as OpenAI answers one: 200 with empty text, in either
     /// format, never 500 (low-serve-7t8). Its event carries the peak that decided it.
-    @Test(arguments: [("json", Data(#"{"text":"","usage":{"seconds":3,"type":"duration"}}"#.utf8)), ("text", Data("\n".utf8))])
+    @Test(arguments: [
+        ("json", Data(#"{"text":"","usage":{"seconds":3,"type":"duration"}}"#.utf8)),
+        ("text", Data("\n".utf8)),
+        ("verbose_json", Data(#"{"duration":2.5,"language":"english","segments":[],"task":"transcribe","text":"","usage":{"seconds":3,"type":"duration"}}"#.utf8)),
+    ])
     func anUploadWithNothingSpokenIsEmptyText(format: String, answer: Data) async throws {
         let running = try await Running.start(.ready(Stub()))
         defer { running.server.stop() }
@@ -130,6 +134,40 @@ import TestProbes
         let peak = try #require(event.nothingSpokenPeak)
         // Within a 16-bit step of the peak written.
         #expect(abs(peak - 0.0025) < 0.0001)
+        #expect(event.avgLogprob == nil && event.compressionRatio == nil)
+    }
+
+    /// verbose_json serves what the engine was sure of where an OpenAI client reads it
+    /// (low-serve-4a9): one segment spanning the words, its avg_logprob the mean of their log
+    /// probabilities and its compression_ratio as Whisper measures it (zlib's, as Python's
+    /// zlib.compress gives it). The event carries the same scores.
+    @Test func verboseJSONServesTheSegmentsAverageLogProbability() async throws {
+        let stub = Stub(.success(Transcript(words: [
+            Transcript.Word(text: " Okay,", time: 0.25...0.5, confidence: 0.5),
+            Transcript.Word(text: " now.", time: 0.5...0.75, confidence: 0.25),
+        ])))
+        let running = try await Running.start(.ready(stub))
+        defer { running.server.stop() }
+        let (response, body) = try await running.post([
+            ("model", nil, Data("m".utf8)), ("response_format", nil, Data("verbose_json".utf8)), ("file", "audio.wav", wav(seconds: 1, peak: 0.5)),
+        ])
+        #expect(response.statusCode == 200)
+        #expect(response.value(forHTTPHeaderField: "content-type") == "application/json")
+        let answer = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let segments = try #require(answer["segments"] as? [[String: Any]])
+        let score = (log(0.5) + log(0.25)) / 2
+        #expect(segments.count == 1)
+        #expect(try abs(#require(segments.first?["avg_logprob"] as? Double) - score) < 1e-12)
+        #expect(segments.first?.filter { $0.key != "avg_logprob" } as NSDictionary? == [
+            "id": 0, "start": 0.25, "end": 0.75, "text": "Okay, now.", "compression_ratio": 10.0 / 18,
+        ])
+        #expect(answer.filter { $0.key != "segments" } as NSDictionary == [
+            "task": "transcribe", "language": "english", "duration": 1, "text": "Okay, now.", "usage": ["type": "duration", "seconds": 1],
+        ])
+        let event = try await running.nextEvent()
+        #expect(event.format == "verbose_json")
+        #expect(try abs(#require(event.avgLogprob) - score) < 1e-12)
+        #expect(event.compressionRatio == 10.0 / 18)
     }
 
     /// A request that asks while the speaker holds the engine waits for the hold, and its

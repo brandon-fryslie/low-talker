@@ -93,6 +93,13 @@ public struct Confidence: Hashable, Codable, Sendable, Comparable, ExpressibleBy
         try container.encode(value)
     }
 
+    /// The probability's natural log, the quantity Whisper's avg_logprob averages. Engines
+    /// hand probabilities over as Float, so a zero is one below the least a Float holds and
+    /// is read as that least, which keeps every log finite (about -103.3).
+    public var logProbability: Double {
+        log(max(value, Double(Float.leastNonzeroMagnitude)))
+    }
+
     public static func < (lhs: Self, rhs: Self) -> Bool {
         lhs.value < rhs.value
     }

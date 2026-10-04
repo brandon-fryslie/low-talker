@@ -445,7 +445,9 @@ private struct Answering: Sendable {
         event.words = heard.transcript.words.count
         event.quietSeconds = heard.transcript.quiet
         event.nothingSpokenPeak = heard.nothingSpokenPeak.map(Double.init)
-        return request.format.response(heard.transcript, heard: clip)
+        let segment = try Segment(heard.transcript)
+        (event.avgLogprob, event.compressionRatio) = (segment?.avgLogprob, segment?.compressionRatio)
+        return request.format.response(heard.transcript, segment, heard: clip)
     }
 }
 
@@ -578,6 +580,10 @@ public struct ServedRequest: Sendable, Codable, Equatable {
     /// The loudest sample of an upload no clip of which reached the audible floor, which was
     /// answered as nothing said.
     public internal(set) var nothingSpokenPeak: Double?
+    /// The upload's scores as verbose_json serves them, whatever format was asked for; nil
+    /// when nothing was said.
+    public internal(set) var avgLogprob: Double?
+    public internal(set) var compressionRatio: Double?
     /// What happened on a Realtime socket, for a request that upgraded to one.
     public internal(set) var realtime: RealtimeActivity?
     /// What dictation did to the request: its decodes a hold cancelled and ran again, and

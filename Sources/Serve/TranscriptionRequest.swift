@@ -1,5 +1,6 @@
 import Foundation
 import LowTalkerCore
+import zlib
 
 /// `POST /v1/audio/transcriptions`, parsed: the fields OpenAI's spec defines that this
 /// server honors, and nothing else.
@@ -105,33 +106,103 @@ extension Transcript {
     }
 }
 
-/// The two answers a transcription can take. [LAW:types-are-the-program] Any other
+/// What was heard as one segment of OpenAI's verbose_json: the words from the first one's
+/// start to the last one's end, and Whisper's two scores for a reading to be dropped on.
+/// Only the fields this server can know; seek, tokens, temperature and no_speech_prob are
+/// left out rather than made up.
+struct Segment: Encodable, Sendable {
+    let id = 0
+    let start: TimeInterval
+    let end: TimeInterval
+    let text: String
+    /// The mean over the words of each word's log probability. Whisper's own avg_logprob is
+    /// the mean over tokens; WhisperKit's word probability is the exp of its tokens' mean log
+    /// probability and keeps no count of them, so this is the same mean weighted by word.
+    let avgLogprob: Double
+    /// The text's UTF-8 length over its zlib-compressed length, as Whisper measures it. A
+    /// decoder caught repeating itself reads back sure of every word, so avg_logprob cannot
+    /// tell it from speech; its text compresses far better than speech does.
+    let compressionRatio: Double
+
+    /// The transcript's one segment, or none when nothing was said.
+    /// [LAW:one-source-of-truth] The answer's scores and the event's are both read off this.
+    init?(_ transcript: Transcript) throws(APIError) {
+        guard !transcript.isBlank, let first = transcript.words.first, let last = transcript.words.last else { return nil }
+        start = first.time.lowerBound
+        end = last.time.upperBound
+        text = transcript.served
+        avgLogprob = transcript.words.map(\.confidence.logProbability).reduce(0, +) / Double(transcript.words.count)
+        compressionRatio = try Self.compressionRatio(text)
+    }
+
+    private static func compressionRatio(_ text: String) throws(APIError) -> Double {
+        let bytes = Array(text.utf8)
+        var compressedCount = compressBound(uLong(bytes.count))
+        var compressed = [UInt8](repeating: 0, count: Int(compressedCount))
+        // [LAW:no-silent-failure] The buffer is compressBound's, so what fails is zlib's own
+        // allocation, and that fails this request, not the app holding dictation.
+        let status = compress(&compressed, &compressedCount, bytes, uLong(bytes.count))
+        guard status == Z_OK else { throw .unscored("zlib's compress returned \(status)") }
+        return Double(bytes.count) / Double(compressedCount)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, start, end, text
+        case avgLogprob = "avg_logprob"
+        case compressionRatio = "compression_ratio"
+    }
+}
+
+/// The answers a transcription can take. [LAW:types-are-the-program] Any other
 /// `response_format` is refused at parse, so rendering cannot meet one.
-enum ResponseFormat: String, Sendable, Codable {
+enum ResponseFormat: String, Sendable, Codable, CaseIterable {
     case json
     case text
+    case verboseJSON = "verbose_json"
 
     static func parse(_ value: String) throws(APIError) -> ResponseFormat {
-        guard let format = ResponseFormat(rawValue: value) else { throw .unsupportedValue(field: "response_format", value: value, accepted: "json or text") }
+        guard let format = ResponseFormat(rawValue: value) else {
+            throw .unsupportedValue(field: "response_format", value: value, accepted: allCases.map(\.rawValue).joined(separator: " or "))
+        }
         return format
     }
 
     /// The answer as OpenAI gives it (epic low-serve-axq): json is the text and its usage;
-    /// text is the transcript and a newline.
-    func response(_ transcript: Transcript, heard audio: AudioClip) -> HTTPResponse {
+    /// text is the transcript and a newline; verbose_json adds the duration and the
+    /// segments, none when nothing was said.
+    func response(_ transcript: Transcript, _ segment: Segment?, heard audio: AudioClip) -> HTTPResponse {
         let text = transcript.served
+        let usage = Usage(heard: audio.duration)
         switch self {
         case .json:
-            let body = JSONBody(text: text, usage: Usage(heard: audio.duration))
-            return HTTPResponse(status: .ok, contentType: "application/json", body: JSONEncoder.served.encodeAlways(body))
+            return .json(JSONBody(text: text, usage: usage))
         case .text:
             return HTTPResponse(status: .ok, contentType: "text/plain; charset=utf-8", body: Data((text + "\n").utf8))
+        case .verboseJSON:
+            return .json(VerboseJSONBody(duration: audio.duration, text: text, segments: segment.map { [$0] } ?? [], usage: usage))
         }
     }
 
     private struct JSONBody: Encodable {
         let text: String
         let usage: Usage
+    }
+
+    private struct VerboseJSONBody: Encodable {
+        let task = "transcribe"
+        /// verbose_json names the language in full, and the engine hears only English.
+        let language = Language.english.name
+        let duration: TimeInterval
+        let text: String
+        let segments: [Segment]
+        let usage: Usage
+    }
+}
+
+extension HTTPResponse {
+    /// A 200 carrying `body` as JSON.
+    fileprivate static func json(_ body: some Encodable) -> HTTPResponse {
+        HTTPResponse(status: .ok, contentType: "application/json", body: JSONEncoder.served.encodeAlways(body))
     }
 }
 
@@ -144,6 +215,13 @@ enum Language: String, Sendable, CaseIterable {
 
     /// The names a request may give, as a refusal lists them.
     static var accepted: String { allCases.map(\.rawValue).joined(separator: " or ") }
+
+    /// The language as verbose_json names it.
+    var name: String {
+        switch self {
+        case .english: "english"
+        }
+    }
 
     static func parse(_ value: String) throws(APIError) -> Language {
         guard let language = Language(rawValue: value) else { throw .unsupportedValue(field: "language", value: value, accepted: accepted) }
