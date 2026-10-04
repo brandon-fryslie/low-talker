@@ -49,10 +49,10 @@ public struct ModelRevision: Hashable, Sendable, LosslessStringConvertible {
     /// [LAW:effects-at-boundaries] The questions and what is made of the answers, with
     /// the asking handed in, so the answers can be ones captured from the hub.
     static func upstream(of model: ModelName, asking get: (URL) async throws -> Data) async throws -> ModelRevision {
-        let weights = try await JSONDecoder().decode(Hub.Revision.self, from: get(Hub.main(of: weightsRepo)))
-        let folder = try variantFolder(of: model, among: weights.files)
+        let weights = try await Hub.Revision.asking(get, for: "main", of: weightsRepo)
+        let folder = try variantFolder(of: model, among: weights.files.map(\.path))
         let config = try await get(Hub.file("\(folder)/config.json", in: weightsRepo, at: weights.commit))
-        let tokenizer = try await JSONDecoder().decode(Hub.Revision.self, from: get(Hub.main(of: ModelVariant(modelConfig: config).tokenizerRepo)))
+        let tokenizer = try await Hub.Revision.asking(get, for: "main", of: ModelVariant(modelConfig: config).tokenizerRepo)
         return ModelRevision(weights: weights.commit, tokenizer: tokenizer.commit)
     }
 
@@ -76,13 +76,14 @@ public struct ModelRevision: Hashable, Sendable, LosslessStringConvertible {
 
 /// The questions `upstream(of:)` asks, over the endpoint WhisperKit fetches from.
 enum Hub {
-    /// The commit a ref points at, and the files it holds.
+    /// The commit a ref points at, and the files it holds with the sizes the hub gives
+    /// them: each file's path in the repo, so `Manifest.File` carries it unchanged.
     struct Revision: Decodable {
         let commit: ModelRevision.Commit
-        let files: [String]
+        let files: [Manifest.File]
 
         private enum CodingKeys: String, CodingKey { case sha, siblings }
-        private struct Sibling: Decodable { let rfilename: String }
+        private struct Sibling: Decodable { let rfilename: String; let size: Int64 }
 
         init(from decoder: any Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -91,15 +92,32 @@ enum Hub {
                 throw DecodingError.dataCorruptedError(forKey: .sha, in: container, debugDescription: "not a commit: \(sha)")
             }
             self.commit = commit
-            files = try container.decode([Sibling].self, forKey: .siblings).map(\.rfilename)
+            files = try container.decode([Sibling].self, forKey: .siblings).map { Manifest.File(path: $0.rfilename, size: $0.size) }
+        }
+
+        /// The manifest of the files in `folder`, or the repo's top when it is nil,
+        /// that one of `globs` matches the way the hub client matches them (`fnmatch`,
+        /// so `*` crosses `/`), for that folder of `repo`, the repo's copy in `store`.
+        func manifest(of folder: String?, in repo: URL, store: URL, matching globs: [String]) throws -> Manifest {
+            let prefix = folder.map { "\($0)/" } ?? ""
+            return try Manifest(folder: Manifest.folder(folder.map { repo.appending(path: $0) } ?? repo, relativeTo: store), files: files.compactMap { file in
+                guard file.path.hasPrefix(prefix) else { return nil }
+                let path = String(file.path.dropFirst(prefix.count))
+                return globs.contains { fnmatch($0, path, 0) == 0 } ? Manifest.File(path: path, size: file.size) : nil
+            })
+        }
+
+        static func asking(_ get: (URL) async throws -> Data, for ref: String, of repo: String) async throws -> Revision {
+            try await JSONDecoder().decode(Revision.self, from: get(Hub.revision(ref, of: repo)))
         }
     }
 
     static let endpoint = URL(string: Constants.defaultRemoteEndpoint)!
 
-    /// Answered by the commit `main` names in `repo`, and the files it holds.
-    static func main(of repo: String) -> URL {
-        endpoint.appending(path: "api/models/\(repo)/revision/main")
+    /// Answered by the commit `ref` names in `repo`, and the files it holds; `blobs`
+    /// asks for each file's size beside its name.
+    static func revision(_ ref: String, of repo: String) -> URL {
+        endpoint.appending(path: "api/models/\(repo)/revision/\(ref)").appending(queryItems: [URLQueryItem(name: "blobs", value: "true")])
     }
 
     static func file(_ path: String, in repo: String, at commit: ModelRevision.Commit) -> URL {
