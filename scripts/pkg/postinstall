@@ -168,13 +168,27 @@ done
 # from disk and asks the person. So every cache goes, for every person, logged in or not, since
 # the folder outlives a session, and each process rebuilds its own on its next read. After the
 # bundles are registered and the switched-on lists cut back, so no rebuild predates either.
-# Deleted as that person, with their rights and not root's, in a folder they own.
+# Deleted as that person, with their rights and not root's, in a folder they own. Some
+# sandbox caches in it are closed even to their owner (on u2 2026-10-15: WebKit's, Shortcuts',
+# Quick Look's), and find fails on each with "Operation not permitted". Those are said and
+# passed over, since nothing here can open them; anything else find says fails the step.
 for uid in $(dscl . -list /Users UniqueID | awk '$2 >= 501 { print $2 }'); do
-  if cache=$(sudo -u "#$uid" getconf DARWIN_USER_CACHE_DIR) &&
-    caches=$(sudo -u "#$uid" find "$cache" -maxdepth 2 -type f -name 'com.apple.IntlDataCache.le*' -delete -print); then
-    say "removed $(lines "$caches") input source caches for uid $uid"
-  else
-    say "could not remove the input source caches for uid $uid"; failed=1
+  if ! cache=$(sudo -u "#$uid" getconf DARWIN_USER_CACHE_DIR); then
+    say "could not find the cache folder of uid $uid"; failed=1; continue
+  fi
+  cache=${cache%/}
+  errors=$(mktemp)
+  status=0
+  caches=$(sudo -u "#$uid" find "$cache" -maxdepth 2 -type f -name 'com.apple.IntlDataCache.le*' -delete -print 2>"$errors") || status=$?
+  # shellcheck disable=SC2016 # $0 is awk's, not the shell's
+  is_closed='index($0, p) == 1 && substr($0, length($0) - length(s) + 1) == s'
+  closed=$(awk -v p="find: $cache/" -v s=": Operation not permitted" "$is_closed" "$errors")
+  complaints=$(awk -v p="find: $cache/" -v s=": Operation not permitted" "!($is_closed)" "$errors")
+  rm -f "$errors"
+  say "removed $(lines "$caches") input source caches for uid $uid"
+  [ -z "$closed" ] || say "passed over $(lines "$closed") folders closed to uid $uid:"$'\n'"$closed"
+  if [ -n "$complaints" ] || { [ "$status" -ne 0 ] && [ -z "$closed" ]; }; then
+    say "could not remove the input source caches for uid $uid (find exited $status)${complaints:+:$'\n'$complaints}"; failed=1
   fi
 done
 
