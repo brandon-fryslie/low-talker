@@ -168,13 +168,35 @@ done
 # from disk and asks the person. So every cache goes, for every person, logged in or not, since
 # the folder outlives a session, and each process rebuilds its own on its next read. After the
 # bundles are registered and the switched-on lists cut back, so no rebuild predates either.
-# Deleted as that person, with their rights and not root's, in a folder they own.
+# Deleted as that person, with their rights and not root's, in a folder they own. Some
+# sandbox caches in it are closed even to their owner (on u2 2026-10-15: WebKit's, Shortcuts',
+# Quick Look's), and find fails on each with "Operation not permitted". Those are said and
+# passed over, since their owner is who this runs as; anything else find says fails the step.
 for uid in $(dscl . -list /Users UniqueID | awk '$2 >= 501 { print $2 }'); do
-  if cache=$(sudo -u "#$uid" getconf DARWIN_USER_CACHE_DIR) &&
-    caches=$(sudo -u "#$uid" find "$cache" -maxdepth 2 -type f -name 'com.apple.IntlDataCache.le*' -delete -print); then
+  if ! cache=$(sudo -u "#$uid" getconf DARWIN_USER_CACHE_DIR); then
+    say "could not find the cache folder of uid $uid"; failed=1; continue
+  fi
+  cache=${cache%/}
+  errors=$(mktemp) || { say "could not make a file for what find says for uid $uid"; failed=1; continue; }
+  status=0
+  caches=$(sudo -u "#$uid" find "$cache" -maxdepth 2 -type f -name 'com.apple.IntlDataCache.le*' -delete -print 2>"$errors") || status=$?
+  closed='' complaints=''
+  while IFS= read -r line; do
+    case $line in
+      "find: $cache/"*": Operation not permitted") closed+=$line$'\n' ;;
+      *) complaints+=$line$'\n' ;;
+    esac
+  done <"$errors"
+  rm -f "$errors"
+  closed=${closed%$'\n'} complaints=${complaints%$'\n'}
+  [ -z "$closed" ] || say "passed over $(lines "$closed") folders closed to uid $uid:"$'\n'"$closed"
+  # find exits 1 for a folder it could not open, and 0 for a file -delete could not remove,
+  # which it still prints and only its complaint names. So the step passes when find said
+  # nothing but closed folders and exited as those alone make it.
+  if [ -z "$complaints" ] && [ "$status" -eq $((${#closed} > 0)) ]; then
     say "removed $(lines "$caches") input source caches for uid $uid"
   else
-    say "could not remove the input source caches for uid $uid"; failed=1
+    say "could not remove the input source caches for uid $uid (find exited $status)${complaints:+:$'\n'$complaints}"; failed=1
   fi
 done
 
