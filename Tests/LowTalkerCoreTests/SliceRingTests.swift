@@ -1,0 +1,174 @@
+import AVFoundation
+import CoreAudio
+@testable import LowTalkerCore
+import Synchronization
+import Testing
+
+/// The way a render's audio leaves CoreAudio's IO thread: pushed into a ring without waiting,
+/// popped and handed over by a thread that may wait. The contract is that every slice arrives
+/// once, in order, with its own samples and stamp, and that one the ring had no room for is
+/// counted and reported rather than lost quietly.
+@Suite struct SliceRingTests {
+    /// Computed, not stored: the macOS 15 SDK does not mark AVAudioFormat Sendable. The
+    /// pipeline's own format, so the converter hands the samples back as they went in.
+    static var format: AVAudioFormat { AudioClip.format }
+
+    /// `frames` frames counting up from `first`, one channel.
+    static func slice(from first: Int, frames: Int) -> AVAudioPCMBuffer {
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames))!
+        buffer.frameLength = AVAudioFrameCount(frames)
+        for i in 0..<frames { buffer.floatChannelData![0][i] = Float(first + i) }
+        return buffer
+    }
+
+    static func stamp(_ ticks: UInt64, valid: Bool = true) -> AudioTimeStamp {
+        var stamp = AudioTimeStamp()
+        stamp.mHostTime = ticks
+        stamp.mFlags = valid ? .hostTimeValid : []
+        return stamp
+    }
+
+    static func push(_ ring: SliceRing, from first: Int, frames: Int, at ticks: UInt64) {
+        let buffer = slice(from: first, frames: frames)
+        ring.push(UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList), frames: frames, stamp: stamp(ticks))
+    }
+
+    static func deliver(_ delivery: SliceDelivery, from first: Int, frames: Int, at stamp: AudioTimeStamp) {
+        let buffer = slice(from: first, frames: frames)
+        delivery.deliver(UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList), frames: frames, stamp: stamp)
+    }
+
+    /// The next entry as a slice's stamp and samples, or nil when it is anything else.
+    static func popSlice(_ ring: SliceRing, into buffer: AVAudioPCMBuffer) -> (ticks: UInt64, samples: [Float])? {
+        guard case .slice(let frames, let stamp) = ring.pop(into: buffer) else { return nil }
+        #expect(frames == Int(buffer.frameLength))
+        return (stamp.mHostTime, Array(UnsafeBufferPointer(start: buffer.floatChannelData![0], count: frames)))
+    }
+
+    /// Slices come out in the order they went in, each with its own frames and stamp, and
+    /// the frames that wrap past the end of the ring come out whole.
+    @Test func slicesPopInOrderAcrossTheWrap() throws {
+        let ring = SliceRing(channels: 1, frames: 100, entries: 4)
+        let popped = AVAudioPCMBuffer(pcmFormat: Self.format, frameCapacity: 100)!
+        var first = 0
+        for round in 0..<5 {
+            Self.push(ring, from: first, frames: 30, at: UInt64(round))
+            Self.push(ring, from: first + 30, frames: 40, at: UInt64(round) + 100)
+            for (offset, frames, ticks) in [(0, 30, UInt64(round)), (30, 40, UInt64(round) + 100)] {
+                let slice = try #require(Self.popSlice(ring, into: popped))
+                #expect(slice.ticks == ticks)
+                #expect(slice.samples == (first + offset..<first + offset + frames).map(Float.init))
+            }
+            first += 70
+        }
+        #expect(ring.pop(into: popped) == nil)
+        #expect(ring.dropped == 0)
+    }
+
+    /// A push that finds no room drops its slice and counts it, and the slices already in the
+    /// ring are untouched - by a full ring of frames, and by a full ring of entries.
+    @Test func aFullRingDropsAndCounts() throws {
+        let ring = SliceRing(channels: 1, frames: 100, entries: 2)
+        let popped = AVAudioPCMBuffer(pcmFormat: Self.format, frameCapacity: 100)!
+        Self.push(ring, from: 0, frames: 60, at: 1)
+        Self.push(ring, from: 60, frames: 60, at: 2)  // 120 frames will not fit in 100.
+        Self.push(ring, from: 120, frames: 40, at: 3)
+        Self.push(ring, from: 160, frames: 1, at: 4)  // Both entries are taken.
+        ring.push(.renderFailed(-1))
+        #expect(ring.dropped == 3)
+        let first = try #require(Self.popSlice(ring, into: popped))
+        #expect(first.ticks == 1)
+        #expect(first.samples == (0..<60).map(Float.init))
+        let second = try #require(Self.popSlice(ring, into: popped))
+        #expect(second.ticks == 3)
+        #expect(second.samples == (120..<160).map(Float.init))
+        #expect(ring.pop(into: popped) == nil)
+    }
+
+    /// A fault takes its place in the order the IO thread met it.
+    @Test func faultsKeepTheirPlace() throws {
+        let ring = SliceRing(channels: 1, frames: 100, entries: 4)
+        let popped = AVAudioPCMBuffer(pcmFormat: Self.format, frameCapacity: 100)!
+        Self.push(ring, from: 0, frames: 10, at: 1)
+        ring.push(.overlongSlice(frames: 200, capacity: 100))
+        Self.push(ring, from: 10, frames: 10, at: 2)
+        #expect(try #require(Self.popSlice(ring, into: popped)).ticks == 1)
+        #expect(ring.pop(into: popped) == .fault(.overlongSlice(frames: 200, capacity: 100)))
+        let last = try #require(Self.popSlice(ring, into: popped))
+        #expect(last.ticks == 2)
+        #expect(last.samples == (10..<20).map(Float.init))
+    }
+
+    /// What a delivery hands over and reports, collected from its thread.
+    final class Collected: Sendable {
+        let appended = Mutex<[([Float], HostTime)]>([])
+        let failures = Mutex<[String]>([])
+
+        func delivery(_ ring: SliceRing, slice: Int) throws -> SliceDelivery {
+            try SliceDelivery(
+                ring,
+                slice: slice,
+                format: SliceRingTests.format,
+                converter: AudioClip.Converter(from: SliceRingTests.format),
+                appending: { samples, time in self.appended.withLock { $0.append((samples, time)) } },
+                onFailure: { error in self.failures.withLock { $0.append("\(error)") } }
+            )
+        }
+    }
+
+    /// Slices pushed from another thread are converted and handed over in order, dated by
+    /// their stamps, and `finish` returns only once the last of them has been.
+    @Test func deliveryHandsOverEverySliceBeforeFinishing() throws {
+        let collected = Collected()
+        let delivery = try collected.delivery(SliceRing(channels: 1, frames: 16_000, entries: 64), slice: 160)
+        let produced = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInteractive).async {
+            for index in 0..<50 {
+                Self.deliver(delivery, from: index * 160, frames: 160, at: Self.stamp(UInt64(1_000 + index)))
+            }
+            produced.signal()
+        }
+        produced.wait()
+        delivery.finish()
+
+        let appended = collected.appended.withLock { $0 }
+        #expect(collected.failures.withLock { $0 } == [])
+        #expect(appended.map(\.1) == (0..<50).map { try! HostTime(Self.stamp(UInt64(1_000 + $0))) })
+        let samples = appended.flatMap(\.0)
+        #expect(samples == (0..<50 * 160).map(Float.init))
+    }
+
+    /// A slice whose stamp has no host time behind it cannot be placed, and says so; a fault
+    /// the IO thread met is reported as itself; and audio the ring had no room for is reported
+    /// as lost.
+    @Test func deliveryReportsWhatItCouldNotHandOver() throws {
+        let collected = Collected()
+        let delivery = try collected.delivery(SliceRing(channels: 1, frames: 100, entries: 8), slice: 100)
+        Self.deliver(delivery, from: 0, frames: 10, at: Self.stamp(5, valid: false))
+        delivery.deliver(.renderFailed(-50))
+        // More than the whole ring holds, so it is dropped however far the thread has got.
+        Self.deliver(delivery, from: 0, frames: 150, at: Self.stamp(6))
+        delivery.finish()
+
+        #expect(collected.appended.withLock { $0 }.isEmpty)
+        let failures = collected.failures.withLock { $0 }
+        // As a set: a drop is reported at the end of whichever drain first sees it, which can
+        // come before the entry pushed just ahead of it.
+        #expect(failures.count == 3)
+        #expect(Set(failures) == [
+            "\(AudioHardwareError.bufferWithoutTime)",
+            "\(AudioHardwareError.renderFailed(-50))",
+            "\(AudioHardwareError.deliveryFellBehind(dropped: 1))",
+        ])
+    }
+}
+
+extension SliceRing.Entry: Equatable {
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.slice(let a, let x), .slice(let b, let y)): a == b && x.mHostTime == y.mHostTime
+        case (.fault(let a), .fault(let b)): a == b
+        default: false
+        }
+    }
+}

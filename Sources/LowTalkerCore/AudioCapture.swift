@@ -156,8 +156,8 @@ public final class AudioCapture {
         /// The generation whose buffers this stream is the audio of. A render already under
         /// way when `dispose()` begins still delivers its buffer, and that buffer belongs
         /// to a press the speaker has already let go of; appending it would move the
-        /// positions the next press begins from. Read on the audio thread, which cannot ask
-        /// the main actor, so the answer lives here beside the samples it admits.
+        /// positions the next press begins from. Read on the input's delivery thread, which
+        /// does not ask the main actor, so the answer lives here beside the samples it admits.
         /// [LAW:no-ambient-temporal-coupling]
         var accepting: Int?
         /// When the first sample delivered since the open session began was captured, and
@@ -176,7 +176,9 @@ public final class AudioCapture {
         var feed: AsyncStream<AudioClip>.Continuation?
     }
 
-    /// The stream behind a lock, shared between the audio thread and the main actor.
+    /// The stream behind a lock, shared between the input's delivery thread and the main
+    /// actor. Never CoreAudio's IO thread: the main actor holds this while it copies a whole
+    /// session out at key-up, and a render that waited for it would miss its deadline.
     private final class Shared: Sendable {
         let stream: Mutex<Stream>
         init(_ stream: Stream) { self.stream = Mutex(stream) }
