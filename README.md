@@ -1,6 +1,4 @@
-<p align="center">
-  <img src="docs/images/low-talker.jpg" alt="Black-and-white illustration of a man in a ruffled shirt, one hand pressed to his forehead" width="320">
-</p>
+<img align="right" src="docs/images/low-talker.svg" alt="A man in a ruffled shirt pressing a hand to his forehead, level bars pulsing beside him, and the name LOW TALKER" width="300">
 
 # LowTalker
 
@@ -22,7 +20,7 @@ The text goes in wherever the cursor is, in any app that accepts typing: TextEdi
 
 You need macOS 15 or later.
 
-1. Download `LowTalker-offline.pkg` from the [latest release](https://github.com/promptctl/low-talker/releases) and open it. The package is Developer ID signed and notarized.
+1. Install it with Homebrew, `brew install --cask promptctl/tap/low-talker`, or download `LowTalker-offline.pkg` from the [latest release](https://github.com/promptctl/low-talker/releases) and open it. The package is Developer ID signed and notarized.
 2. Open LowTalker. It walks you through the two things it needs: permission to use the microphone, and switching on its input method.
 3. Wait for the first launch to finish preparing the model. The menu bar icon is an hourglass until then. macOS compiles the model for your Neural Engine once, which took 1.5 to 4.5 minutes in our measurements, and launches after that take a few seconds, until an app update or a macOS update makes it compile again.
 
@@ -37,6 +35,8 @@ The release also offers `LowTalker-network.pkg`. It is identical except that it 
 ## Speed
 
 On an M2 Max with the default model, the transcript lands 0.3 to 0.6 seconds after release when you stop speaking before you let go of the key, and 0.6 to 0.9 seconds when speech runs right up to the release. The [engineering notes](docs/engineering.md#the-latency-harness) hold the full table, the models compared, and what the bench measures. The target is under 300 ms for a short utterance. Whisper's encoder puts a floor of about 0.4 seconds under any pass, so reaching it takes a different engine; Parakeet is planned as the second one.
+
+<br clear="right">
 
 ## Configuration
 
