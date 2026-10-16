@@ -93,8 +93,17 @@ public struct SessionModifiers: Equatable, Sendable, CustomStringConvertible {
     }
 }
 
-/// The app's end of the hotkey port: the named port the input method tells each change of
-/// the modifier keys to.
+/// What the input method tells the app unasked: the modifier keys it was just handed, which
+/// the app hears its hotkey from, or a cursor it was just given focus in, which is the moment
+/// words no cursor took can be offered again.
+public enum Notice: Equatable, Sendable {
+    case modifiersMoved(HeldModifiers)
+    case cursorArrived
+}
+
+/// The app's end of the hotkey port: the named port the input method tells each `Notice` to.
+/// One port for both, because the input method is sandboxed and this is the one name its
+/// entitlements let it look up.
 ///
 /// **Only this installation's input method is heard.** The name is one anyone can compute,
 /// and a change heard from anyone else is a press anyone can fake, which opens the
@@ -108,7 +117,7 @@ public struct SessionModifiers: Equatable, Sendable, CustomStringConvertible {
 /// Held for as long as the app listens. Released, the name is free before the release
 /// returns, because the app hosts it again straight away each time it rebuilds its hotkey;
 /// so it is released off `queue`, which it waits for.
-public final class ModifierPort {
+public final class NoticePort {
     private let port: NamedPort
 
     deinit { port.close() }
@@ -117,7 +126,7 @@ public final class ModifierPort {
     public enum Event: CustomStringConvertible {
         /// A message from a process `senders` does not admit.
         case turnedAway(pid: pid_t, because: PeerIdentity.NotAdmitted, required: PeerIdentity)
-        /// A message from the input method that is not held modifiers.
+        /// A message from the input method that is not a notice.
         case notUnderstood(id: mach_msg_id_t, bytes: Int?)
         /// Taking a message off the port failed for a reason of the kernel's.
         case receiveFailed(kern_return_t)
@@ -125,9 +134,9 @@ public final class ModifierPort {
         public var description: String {
             switch self {
             case let .turnedAway(pid, because, required):
-                "ignored modifier keys told by pid \(pid): \(because), and only \(required) is heard"
+                "ignored a notice told by pid \(pid): \(because), and only \(required) is heard"
             case let .notUnderstood(id, bytes):
-                "the input method sent message \(id) of \(bytes.map { "\($0) bytes" } ?? "an unreadable shape"), which is not held modifiers"
+                "the input method sent message \(id) of \(bytes.map { "\($0) bytes" } ?? "an unreadable shape"), which is not a notice"
             case .receiveFailed(let status):
                 "a message could not be taken off the hotkey port: \(Mach.describe(status))"
             }
@@ -138,7 +147,7 @@ public final class ModifierPort {
     /// `heard` and `told` run on `queue`, one message at a time, in the order they were sent.
     public convenience init(
         queue: DispatchQueue,
-        told: @escaping @Sendable (Event) -> Void, heard: @escaping @Sendable (HeldModifiers) -> Void
+        told: @escaping @Sendable (Event) -> Void, heard: @escaping @Sendable (Notice) -> Void
     ) throws(PortNotHosted) {
         let senders: PeerIdentity
         do throws(PeerIdentity.Unreadable) {
@@ -151,7 +160,7 @@ public final class ModifierPort {
     /// without being the app. [LAW:decomposition]
     init(
         portName: String, senders: PeerIdentity, queue: DispatchQueue,
-        told: @escaping @Sendable (Event) -> Void, heard: @escaping @Sendable (HeldModifiers) -> Void
+        told: @escaping @Sendable (Event) -> Void, heard: @escaping @Sendable (Notice) -> Void
     ) throws(PortNotHosted) {
         port = try NamedPort(name: portName, queue: queue, received: { message in
             message.discardReply()
@@ -161,13 +170,13 @@ public final class ModifierPort {
                 told(.turnedAway(pid: message.sender.pid, because: error, required: senders))
                 return
             }
-            // [LAW:parse-dont-validate] The border: past it there are held modifiers, and
-            // anything else is said by name rather than dropped. [LAW:no-silent-failure]
-            guard message.id == Wire.modifiers, let held = message.payload.flatMap(Wire.heldModifiers(of:)) else {
+            // [LAW:parse-dont-validate] The border: past it there is a notice, and anything
+            // else is said by name rather than dropped. [LAW:no-silent-failure]
+            guard let notice = Wire.notice(id: message.id, payload: message.payload) else {
                 told(.notUnderstood(id: message.id, bytes: message.payload?.count))
                 return
             }
-            heard(held)
+            heard(notice)
         }, failed: { told(.receiveFailed($0)) })
     }
 }
@@ -178,11 +187,12 @@ public final class ModifierPort {
 /// for nothing: the app's queue is either taking messages or it is not. A change the app was
 /// too busy to take is corrected by the next, since each carries the whole state, or - for a
 /// release, which may have no next - by the app reading the session itself while a key is held.
+/// A cursor arrival it missed costs only the wait for the next.
 ///
 /// Nothing asks who holds the name before telling it. What crosses is which modifier keys
-/// are down, and the app is the one side that has something to protect - its microphone -
-/// so it is the side that checks. [LAW:single-enforcer]
-public struct ModifierSender: Sendable {
+/// are down and that a cursor arrived, and the app is the one side that has something to
+/// protect - its microphone - so it is the side that checks. [LAW:single-enforcer]
+public struct NoticeSender: Sendable {
     private let portName: String
 
     /// How a message fared, said so the input method can log a change in it.
@@ -206,10 +216,10 @@ public struct ModifierSender: Sendable {
 
         public var description: String {
             switch self {
-            case .told: "the app hears the modifier keys"
-            case .nobodyIsListening(let port): "nothing is listening on \(port), so the app does not hear the modifier keys from here"
-            case .notTaken(let port): "the app on \(port) did not take a change of the modifier keys at once, so it missed that one"
-            case let .failed(port, status): "a change of the modifier keys could not be sent to \(port): \(Mach.describe(status))"
+            case .told: "the app hears this input method's notices"
+            case .nobodyIsListening(let port): "nothing is listening on \(port), so the app does not hear this input method's notices"
+            case .notTaken(let port): "the app on \(port) did not take a notice at once, so it missed that one"
+            case let .failed(port, status): "a notice could not be sent to \(port): \(Mach.describe(status))"
             }
         }
     }
@@ -222,12 +232,13 @@ public struct ModifierSender: Sendable {
         self.portName = portName
     }
 
-    public func tell(_ held: HeldModifiers) -> Told {
+    public func tell(_ notice: Notice) -> Told {
         var remote = mach_port_t()
         guard lt_bootstrap_look_up(portName, &remote) == KERN_SUCCESS else { return .nobodyIsListening(port: portName) }
         defer { mach_port_deallocate(mach_task_self_, remote) }
+        let (id, payload) = Wire.notice(notice)
         let sent = Mach.send(
-            Wire.modifiers(held), id: Wire.modifiers, to: remote, disposition: mach_msg_type_name_t(MACH_MSG_TYPE_COPY_SEND),
+            payload, id: id, to: remote, disposition: mach_msg_type_name_t(MACH_MSG_TYPE_COPY_SEND),
             replyTo: Mach.noPort, timeout: .zero)
         return switch sent {
         case MACH_MSG_SUCCESS: .told

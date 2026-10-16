@@ -17,8 +17,15 @@ import os
 /// until the next change happened to arrive; so while anything is held, the app reads the
 /// session's modifier keys itself - a reading that needs no grant - and lets go of what is no
 /// longer down. [LAW:no-silent-failure]
+///
+/// The input method tells a cursor arriving on the same port, since it is the one name its
+/// sandbox lets it reach the app on; that notice is no key, and goes to `cursorArrived`.
 public struct InputMethodModifiers: ModifierFeed {
-    public init() {}
+    private let cursorArrived: @MainActor () -> Void
+
+    public init(cursorArrived: @escaping @MainActor () -> Void) {
+        self.cursorArrived = cursorArrived
+    }
 
     /// How often a held key is looked for in the session: how late, at most, a release the
     /// input method never told is heard.
@@ -54,6 +61,11 @@ public struct InputMethodModifiers: ModifierFeed {
         func heard(_ moves: [KeyEvent]) {
             open.map { open in moves.forEach(open.handle) }
             settleConfirming()
+        }
+
+        /// A cursor arrived, which only a feed still open passes on.
+        func heard(cursorArrivedTo arrived: @MainActor () -> Void) {
+            open.map { _ in arrived() }
         }
 
         func heard(_ state: HeldModifiers) {
@@ -103,16 +115,25 @@ public struct InputMethodModifiers: ModifierFeed {
         // What is held as listening begins is read, not assumed to be nothing, so a key
         // already down when this comes up is not heard going down when it next moves.
         let hearing = DispatchQueue(label: AppIdentity.hotkeyPortName)
-        let installed = Installed<ModifierPort>(told: ToldModifiers(held: Modifier.heldInSession()), hearing: hearing,
+        let installed = Installed<NoticePort>(told: ToldModifiers(held: Modifier.heldInSession()), hearing: hearing,
                                                 session: Modifier.heldInSession)
         let log = Logger(subsystem: AppIdentity.bundleIdentifier, category: "hotkey")
         // Checked and read off the main thread, where the keys and the menu are, and handed
         // to it in the order the input method sent them: the main queue is first in, first
         // out, which keeps a key's down ahead of its up. [LAW:no-ambient-temporal-coupling]
-        let port = try ModifierPort(
+        let port = try NoticePort(
             queue: hearing,
             told: { event in log.error("\(event.description, privacy: .public)") },
-            heard: { state in DispatchQueue.main.async { MainActor.assumeIsolated { installed.heard(state) } } })
+            heard: { [cursorArrived] notice in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        switch notice {
+                        case .modifiersMoved(let state): installed.heard(state)
+                        case .cursorArrived: installed.heard(cursorArrivedTo: cursorArrived)
+                        }
+                    }
+                }
+            })
         installed.open = (port, handle)
         // Closed here and now, so a hotkey rebuilt straight after hosts the name again.
         return { installed.open = nil }
