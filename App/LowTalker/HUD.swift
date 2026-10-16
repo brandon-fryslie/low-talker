@@ -10,18 +10,16 @@ import LowTalkerCore
 ///
 /// It never takes focus from the app the words are going to. A borderless panel cannot become
 /// key, and a non-activating one is ordered in without activating this app, so a click on the
-/// circle leaves the person where they were. Every click goes through it to whatever is under
-/// it, except while it holds words and has the circle to click.
+/// circle leaves the person where they were. Every click on the face goes through it to
+/// whatever is under it, so the text field it asks for is clickable even beneath it.
 ///
 /// [LAW:one-source-of-truth] It draws `Dictation.Activity` and `Held` and keeps nothing of its own.
 @MainActor
 final class HUD {
     private static let width: CGFloat = 440
     private static let cornerRadius: CGFloat = 12
-    /// How far the dismiss circle reaches past the face's top-left corner. The panel is that
-    /// much larger than the face on those two sides, always, so the face stays put whether the
-    /// circle shows or not. [LAW:dataflow-not-control-flow]
-    private static let overhang: CGFloat = 8
+    /// The side of the circle's panel, which is centred on the circle.
+    private static let circleSide: CGFloat = 24
 
     private let dismiss: @MainActor () -> Void
 
@@ -30,8 +28,26 @@ final class HUD {
     }
 
     private lazy var panel: NSPanel = {
+        let panel = Self.floating(width: Self.width, height: 60)
+        panel.ignoresMouseEvents = true
+        panel.hasShadow = true
+        panel.contentView = face
+        return panel
+    }()
+
+    /// The circle, in a panel of its own: a window takes every click on its face whatever its
+    /// views answer, so a circle inside the face's panel would make the whole face take clicks.
+    /// Its own panel also lets it hang past the corner the face's rounded clip would cut away.
+    private lazy var corner: NSPanel = {
+        let corner = Self.floating(width: Self.circleSide, height: Self.circleSide)
+        corner.contentView = close
+        return corner
+    }()
+
+    /// A panel that floats over every app on every Space and is never key.
+    private static func floating(width: CGFloat, height: CGFloat) -> NSPanel {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: Self.width + Self.overhang, height: 60),
+            contentRect: NSRect(x: 0, y: 0, width: width, height: height),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
@@ -39,32 +55,9 @@ final class HUD {
         panel.hidesOnDeactivate = false
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
         panel.isReleasedWhenClosed = false
-        panel.contentView = area
         return panel
-    }()
-
-    /// The panel's whole area: the face, and the circle hanging off its corner, which the
-    /// face's rounded clip would cut away if it were inside it.
-    private lazy var area: NSView = {
-        let area = NSView()
-        face.translatesAutoresizingMaskIntoConstraints = false
-        close.translatesAutoresizingMaskIntoConstraints = false
-        area.addSubview(face)
-        area.addSubview(close)
-        // The circle's centre sits on the corner's arc, as a Notification Center banner's does.
-        let onTheArc = Self.cornerRadius * (1 - 1 / 2.squareRoot())
-        NSLayoutConstraint.activate([
-            face.leadingAnchor.constraint(equalTo: area.leadingAnchor, constant: Self.overhang),
-            face.trailingAnchor.constraint(equalTo: area.trailingAnchor),
-            face.topAnchor.constraint(equalTo: area.topAnchor, constant: Self.overhang),
-            face.bottomAnchor.constraint(equalTo: area.bottomAnchor),
-            close.centerXAnchor.constraint(equalTo: face.leadingAnchor, constant: onTheArc),
-            close.centerYAnchor.constraint(equalTo: face.topAnchor, constant: onTheArc),
-        ])
-        return area
-    }()
+    }
 
     /// The panel's face, laid out at the panel's one width.
     private lazy var face: NSVisualEffectView = {
@@ -134,8 +127,13 @@ final class HUD {
         case .listening(let heard): ("Listening", heard, "")
         case .transcribing: ("Transcribing", held?.words ?? Transcript(words: []), "")
         }
-        guard shown.state != nil || held != nil else { return panel.orderOut(nil) }
+        guard shown.state != nil || held != nil else { return hide() }
         draw(state: shown.state, held: held, words: shown.words, offer: shown.words.isBlank ? "" : shown.offer)
+    }
+
+    private func hide() {
+        panel.orderOut(nil)
+        corner.orderOut(nil)
     }
 
     /// The panel with these lines, centred low on the screen the person is working on.
@@ -159,15 +157,21 @@ final class HUD {
         heard.stringValue = String(words.text.drop(while: \.isWhitespace))
         // A press with nothing read yet shows only its state, rather than an empty line.
         heard.isHidden = words.isBlank
-        // The circle is there, and the panel takes clicks, only while there is something to dismiss.
-        close.isHidden = held == nil
-        panel.ignoresMouseEvents = held == nil
         // With no display attached there is nowhere for the panel to be.
-        guard let screen = NSScreen.main?.visibleFrame else { return panel.orderOut(nil) }
-        // Measured through the panel's area, whose constraints hold the content to its width.
-        let size = area.fittingSize
-        panel.setFrame(NSRect(x: screen.midX - Self.width / 2 - Self.overhang, y: screen.minY + screen.height * 0.12, width: size.width, height: size.height), display: true)
+        guard let screen = NSScreen.main?.visibleFrame else { return hide() }
+        // Measured through the panel's face, whose constraints hold the content to its width.
+        let size = face.fittingSize
+        let frame = NSRect(x: screen.midX - size.width / 2, y: screen.minY + screen.height * 0.12, width: size.width, height: size.height)
+        panel.setFrame(frame, display: true)
         panel.orderFrontRegardless()
+        // The circle's centre sits on the face's top-left arc, as a Notification Center
+        // banner's does, and it is there only while there is something to dismiss.
+        let onTheArc = Self.cornerRadius * (1 - 1 / 2.squareRoot())
+        corner.setFrameOrigin(NSPoint(x: frame.minX + onTheArc - Self.circleSide / 2, y: frame.maxY - onTheArc - Self.circleSide / 2))
+        switch held {
+        case nil: corner.orderOut(nil)
+        case .some: corner.orderFrontRegardless()
+        }
     }
 }
 

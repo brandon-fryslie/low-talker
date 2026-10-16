@@ -577,11 +577,13 @@ public final class Dictation {
     /// An open press has its commits on the queue and not yet what key-up inserts, so an offer
     /// queued now could land between them: one that arrives then is queued behind the press's
     /// key-up, whose own insert carries what is held, so the offer is for a press that ends
-    /// placing nothing.
+    /// placing nothing. It is for words held when the cursor arrived: the cursor a person
+    /// moves to mid-press arrives before the words refused there for it, and those are not
+    /// typed into the app they moved to unless a cursor arrives after they are held.
     public func cursorArrived() {
         let arrived = ContinuousClock.now
         switch press {
-        case .down: arrivedDuringPress = arrived
+        case .down: arrivedDuringPress = hold.held.map { _ in arrived } ?? arrivedDuringPress
         case .up, .refused: offer(since: arrived)
         }
     }

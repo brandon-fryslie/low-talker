@@ -274,13 +274,16 @@ let insertFailures: [InsertFailure] = Refusal.allCases.map { InsertFailure(error
         rig.dictation.press(.began(Rig.rightOption, at: rig.now))
         rig.speak([1, 2])
         #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.inputMethod.inserted == ["hello"] })
+        // The move is a cursor arriving in the Finder, which the input method tells the app.
         rig.inputMethod.reaching(BundleID(rawValue: "com.apple.finder"))
+        rig.dictation.cursorArrived()
         rig.speak([3, 4])
         #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { engine.hearing == [1, 2, 3, 4] })
         rig.keyUp()
         let stopped = try #require(await rig.report().failure as? PressStopped)
         #expect(stopped.landed == 1)
         #expect(stopped.cause as? Refusal == .dictationIsInAnotherApp)
+        try await rig.dictation.finish()
         #expect(rig.inputMethod.inserted == ["hello"])
         #expect(rig.hold.held?.words == Transcript(typed: " there friend"))
     }
