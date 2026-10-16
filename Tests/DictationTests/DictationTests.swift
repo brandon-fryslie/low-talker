@@ -321,7 +321,9 @@ let insertFailures: [InsertFailure] = Refusal.allCases.map { InsertFailure(error
         #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.hold.held?.words == Transcript(typed: "hello there") })
         rig.inputMethod.refusing(nil)
         rig.speak([5, 6])
-        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.inputMethod.inserted == ["hello there my"] })
+        // The hold empties on the main actor in the step that counts the words, after the
+        // input method has them.
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.inputMethod.inserted == ["hello there my"] && rig.hold.held == nil })
         rig.keyUp()
         let session = try await rig.session()
         #expect(rig.inputMethod.inserted == ["hello there my", " friend"])
@@ -868,6 +870,26 @@ let insertFailures: [InsertFailure] = Refusal.allCases.map { InsertFailure(error
         #expect(rig.hold.held == .unaccounted(warning: "\(notYetTaken)"))
     }
 
+    /// A later failure whose words went nowhere is held beside a warning that stands, and
+    /// when its words land the warning still stands.
+    @Test func aWarningThatStandsOutlivesALaterRefusalAndItsLanding() async throws {
+        let rig = try Rig(hearing: FakeTranscriber { clip in Transcript(typed: clip.samples == [1, 2, 3] ? "a" : " b") })
+        let notYetTaken = NotYetTaken(characters: 1, into: "com.apple.TextEdit")
+        rig.inputMethod.refusing(notYetTaken)
+        rig.hold()
+        _ = await rig.report()
+        rig.inputMethod.refusing(Refusal.noClientHasFocus)
+        rig.hold(speaking: [4])
+        _ = await rig.report()
+        #expect(rig.hold.held == .unplaced(Transcript(typed: " b"), warning: "\(Refusal.noClientHasFocus)", unaccounted: "\(notYetTaken)"))
+        #expect(rig.hold.held?.warnings == ["\(notYetTaken)", "\(Refusal.noClientHasFocus)"])
+        rig.inputMethod.refusing(nil)
+        rig.dictation.cursorArrived()
+        try await rig.dictation.finish()
+        #expect(rig.inputMethod.inserted == [" b"])
+        #expect(rig.hold.held == .unaccounted(warning: "\(notYetTaken)"))
+    }
+
     /// A cursor that arrives while a press is open is offered what is held once that press
     /// ends, when the press placed nothing of its own.
     @Test func aCursorArrivingDuringAPressThatLapsesIsOfferedTheHeldWordsAfterIt() async throws {
@@ -893,7 +915,7 @@ let insertFailures: [InsertFailure] = Refusal.allCases.map { InsertFailure(error
         rig.inputMethod.refusing(Carrying())
         rig.hold()
         _ = await rig.report()
-        let warning = try #require(rig.hold.held?.warning)
+        let warning = try #require(rig.hold.held?.warnings.last)
         #expect(warning.contains("Carrying"))
         #expect(!warning.contains("hello"))
     }

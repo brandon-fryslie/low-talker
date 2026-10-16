@@ -60,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var hold: Hold = Hold { [unowned self] held in
         hud.show(activity, held: held)
         // [LAW:nothing-unseen] Counted, never the words themselves: they are what the user dictated.
-        sessions.notice("held: \(held.map { "\($0.words.words.count) words, \($0.warning)" } ?? "nothing", privacy: .public)")
+        sessions.notice("held: \(held.map { "\($0.words.words.count) words, \($0.warnings.joined(separator: " "))" } ?? "nothing", privacy: .public)")
     }
 
     /// When this process began, which every readout of the engine's wait counts from.

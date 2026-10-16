@@ -127,28 +127,31 @@ final class HUD {
     }()
 
     func show(_ activity: Dictation.Activity, held: Held?) {
-        let shown: (state: String?, words: Transcript) = switch activity {
-        case .idle: (nil, held?.words ?? Transcript(words: []))
-        case .listening(let heard): ("Listening", heard)
-        case .transcribing: ("Transcribing", held?.words ?? Transcript(words: []))
+        // A press on its way carries what is held in its own insert, so only a panel with no
+        // press asks for a click.
+        let shown: (state: String?, words: Transcript, offer: String) = switch activity {
+        case .idle: (nil, held?.words ?? Transcript(words: []), " Click into a text field to insert these words.")
+        case .listening(let heard): ("Listening", heard, "")
+        case .transcribing: ("Transcribing", held?.words ?? Transcript(words: []), "")
         }
         guard shown.state != nil || held != nil else { return panel.orderOut(nil) }
-        draw(state: shown.state, held: held, words: shown.words)
+        draw(state: shown.state, held: held, words: shown.words, offer: shown.words.isBlank ? "" : shown.offer)
     }
 
     /// The panel with these lines, centred low on the screen the person is working on.
-    private func draw(state: String?, held: Held?, words: Transcript) {
+    private func draw(state: String?, held: Held?, words: Transcript, offer: String) {
         self.state.stringValue = state ?? ""
         self.state.isHidden = state == nil
-        // The symbol says it is a warning, so the text drops the word.
-        let reason = held.map { String($0.warning.trimmingPrefix("WARNING: ")) }
-        let offer = held.map { $0.words.isBlank ? "" : " Click into a text field to insert these words." } ?? ""
+        // One line per warning, each after the symbol, which says it is a warning, so the text
+        // drops the word. The offer ends the last.
+        let reasons = (held?.warnings ?? []).map { String($0.trimmingPrefix("WARNING: ")) }
         let warned = NSMutableAttributedString()
-        if let reason {
+        for (index, reason) in reasons.enumerated() {
             let symbol = NSTextAttachment()
             symbol.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: "Warning")
+            warned.append(NSAttributedString(string: index == 0 ? "" : "\n"))
             warned.append(NSAttributedString(attachment: symbol))
-            warned.append(NSAttributedString(string: " \(reason)\(offer)"))
+            warned.append(NSAttributedString(string: " \(reason)\(index == reasons.count - 1 ? offer : "")"))
         }
         warning.attributedStringValue = warned
         warning.isHidden = held == nil
