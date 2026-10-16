@@ -118,6 +118,9 @@ final class HUD {
         return heard
     }()
 
+    /// Lays text out as `heard` does, away from the panel, so measuring never shows on it.
+    private lazy var measure = heard.cell!.copy() as! NSCell
+
     /// How tall `heardLines` lines of what was heard stand.
     private lazy var heardHeight = height(Array(repeating: "…", count: Self.heardLines).joined(separator: "\n"))
 
@@ -160,7 +163,7 @@ final class HUD {
         }
         warning.attributedStringValue = warned
         warning.isHidden = held == nil
-        heard.stringValue = newest(words)
+        heard.stringValue = words.truncatingHead { height($0) <= heardHeight }
         // A press with nothing read yet shows only its state, rather than an empty line.
         heard.isHidden = words.isBlank
         // With no display attached there is nowhere for the panel to be.
@@ -180,26 +183,10 @@ final class HUD {
         }
     }
 
-    /// The newest of these words that fill `heardLines` lines, behind an ellipsis where older
-    /// words gave way to them.
-    private func newest(_ words: Transcript) -> String {
-        // The first word shown carries the space the engine put before it, which a line has no use for.
-        let from = { (first: Int) in String(words.words[first...].map(\.text).joined().drop(while: \.isWhitespace)) }
-        guard height(from(0)) > heardHeight else { return from(0) }
-        // Binary search for the fewest words dropped that leave the rest fitting, since dropping
-        // more never takes more lines.
-        var (fewest, most) = (1, words.words.count)
-        while fewest < most {
-            let dropped = (fewest + most) / 2
-            if height("…" + from(dropped)) > heardHeight { fewest = dropped + 1 } else { most = dropped }
-        }
-        return "…" + from(fewest)
-    }
-
     /// How tall this text stands, wrapped as what was heard is.
     private func height(_ text: String) -> CGFloat {
-        heard.stringValue = text
-        return heard.sizeThatFits(NSSize(width: Self.lineWidth, height: .greatestFiniteMagnitude)).height
+        measure.stringValue = text
+        return measure.cellSize(forBounds: NSRect(x: 0, y: 0, width: Self.lineWidth, height: .greatestFiniteMagnitude)).height
     }
 }
 
