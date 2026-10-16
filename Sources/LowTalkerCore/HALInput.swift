@@ -176,10 +176,9 @@ final class HALInput: PreparedInput {
     /// Isolated to nothing, because it is made on the readying queue and can be let go of
     /// there too: an input replaced while its reaching was under way is dropped by the queue
     /// when that reaching finishes. Nothing in it needs a particular thread - the CoreAudio
-    /// calls are safe from any, the watches deliver on the main queue whoever registered
-    /// them, and giving it all back was measured for low-privacy-o1z.68i from the queue while
-    /// the main thread waited on that queue and had a notification for the same listener
-    /// already posted to it, which neither deadlocked nor lost the notification.
+    /// calls are safe from any, the watches reach the main actor whoever registered them,
+    /// and giving them back from the queue while the main thread waits on it cannot hang,
+    /// because a removal waits on `listen`'s own queue and never on main.
     /// [LAW:no-ambient-temporal-coupling]
     ///
     /// [LAW:types-are-the-program] exception: `@unchecked` because an `AudioUnit` is a
@@ -640,15 +639,11 @@ final class HALInput: PreparedInput {
         )
         return {
             let status = remove()
-            // Removal is matched on the block the listener was added with, which `listen`
-            // keeps. The two statuses tolerated here were read off this Mac for
-            // low-privacy-o1z.pr2. A device destroyed under a live listener does not take
-            // the listener with it: removing one answers `noErr`, as does removing the same
-            // block twice and removing one that was never added. `kAudioHardwareBadObjectError`
-            // never came back from a removal at all - it is what a destroyed device answers
-            // a property *read*, alongside `kAudioHardwareUnknownPropertyError`, which is
-            // reason enough to keep tolerating it here: the id this passes can be one
-            // CoreAudio has already torn down.
+            // The two statuses tolerated here were read off this Mac for low-audio-fr3. On
+            // a live device a removal answers `noErr`, matched or not. Once a device is torn
+            // down, as a destroyed aggregate device was, a removal answers
+            // `kAudioHardwareBadObjectError`, whether its block was registered, removed
+            // already, or never added.
             //
             // A precondition where the stop in `close()` is a report, and the two are one
             // judgment rather than two: what an unremoved listener leaves behind is already
