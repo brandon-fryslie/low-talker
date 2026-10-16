@@ -153,8 +153,8 @@ public final class AudioCapture {
         /// running, and positions advance only on capture, so the audio on either side
         /// of the break is spliced together with no seam in the samples to find it by.
         var continuousSince = 0
-        /// The generation whose buffers this stream is the audio of. An engine's render
-        /// callback can deliver once more after `dispose()` returns, and that buffer belongs
+        /// The generation whose buffers this stream is the audio of. A render already under
+        /// way when `dispose()` begins still delivers its buffer, and that buffer belongs
         /// to a press the speaker has already let go of; appending it would move the
         /// positions the next press begins from. Read on the audio thread, which cannot ask
         /// the main actor, so the answer lives here beside the samples it admits.
@@ -559,16 +559,15 @@ public final class AudioCapture {
 
     /// Retires an engine: the stream stops accepting what it delivers, and then its input
     /// closes. Every path that lets an engine go comes through here, because one that
-    /// retired an engine without telling the stream would leave a closed input's render
-    /// callback a buffer's reach into the audio the next press begins from.
-    /// [LAW:single-enforcer]
+    /// retired an engine without telling the stream would leave a render already under way
+    /// a buffer's reach into the audio the next press begins from. [LAW:single-enforcer]
     ///
     /// [LAW:no-ambient-temporal-coupling] The order is the whole of it. Closing the input
     /// first leaves a window in which a buffer already on its way can take the lock
     /// before the clearing does, read the generation it was formed for, and be admitted -
     /// so the guard would hold only as often as it won a race. Clearing first closes it
     /// from both sides: nothing sets `accepting` again until the next `launch()`, so a
-    /// straggler is refused whether it arrives before `dispose()` returns or after.
+    /// straggler is refused however its render interleaves with the close.
     private func dispose(_ live: Live) {
         shared.stream.withLock { $0.accepting = nil }
         live.dispose()

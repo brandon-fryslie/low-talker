@@ -25,8 +25,8 @@ public typealias Disposal = @MainActor () -> Void
 @MainActor
 public protocol PreparedInput {
     /// Opens the device. Every buffer it captures arrives at `appending` as pipeline
-    /// samples with the host time its first sample was captured at, on the audio service
-    /// queue, and `onFailure` reports on the main actor when one could not be converted or
+    /// samples with the host time its first sample was captured at, on the audio thread,
+    /// and `onFailure` reports on the main actor when one could not be converted or
     /// placed in time. Throws when the device cannot feed the pipeline - including when
     /// there was nothing to prepare, which is the one moment that matters and the one place
     /// every caller already answers it. [LAW:single-enforcer]
