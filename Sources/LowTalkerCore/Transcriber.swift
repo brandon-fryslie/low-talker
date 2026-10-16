@@ -17,13 +17,39 @@ public protocol Transcriber: Sendable {
     /// biases every reading of it.
     ///
     /// [LAW:types-are-the-program] One final and any number of partials: the final
-    /// is the return value, so a caller cannot miss it or receive two. Words heard leave
-    /// only that way, never inside what it throws, so a log may carry a failure whole.
+    /// is the return value, so a caller cannot miss it or receive two.
     func transcribe(
         _ audio: some AsyncSequence<AudioClip, Never> & Sendable,
         expecting vocabulary: Vocabulary,
         partial: @escaping @Sendable (Partial) -> Void
-    ) async throws -> Transcript
+    ) async throws(TranscriptionFailure) -> Transcript
+}
+
+/// Why an utterance has no transcript. A closed set, so whoever reports one decides what
+/// each case may say - the dictation log keeps the words a reading carries private - and a
+/// new way to fail has to be named here before an engine can throw it.
+/// [LAW:types-are-the-program]
+public enum TranscriptionFailure: Error, CustomStringConvertible {
+    /// The caller stopped waiting for the engine before its turn came.
+    case cancelled
+    /// No clip reached the audible floor; `peak` is the loudest sample heard.
+    case nothingSpoken(peak: Float)
+    case vocabulary(VocabularyError)
+    /// The engine read the audio and its reading could not become a transcript.
+    case unreadable(WhisperKitTranscriberError)
+    /// The engine's own library failed: a model, a decoder, a buffer. Its errors are its own
+    /// fixed messages, never a transcript.
+    case engine(any Error)
+
+    public var description: String {
+        switch self {
+        case .cancelled: "the decode was cancelled before the engine took it"
+        case .nothingSpoken(let peak): "nothing spoken: the loudest sample was \(peak), under the audible floor \(Utterance.audible)"
+        case .vocabulary(let refusal): "\(refusal)"
+        case .unreadable(let reading): "\(reading)"
+        case .engine(let error): "\(error)"
+        }
+    }
 }
 
 extension Transcriber {
@@ -32,7 +58,7 @@ extension Transcriber {
     ///
     /// [LAW:one-type-per-behavior] Batch decoding is the one-clip utterance, not a
     /// second path through the engine.
-    public func transcribe(_ clip: AudioClip, expecting vocabulary: Vocabulary) async throws -> Transcript {
+    public func transcribe(_ clip: AudioClip, expecting vocabulary: Vocabulary) async throws(TranscriptionFailure) -> Transcript {
         try await transcribe(AsyncStream { continuation in
             continuation.yield(clip)
             continuation.finish()

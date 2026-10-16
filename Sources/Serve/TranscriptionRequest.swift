@@ -91,7 +91,7 @@ struct Heard: Sendable {
         do {
             transcript = try await transcribing()
             nothingSpokenPeak = nil
-        } catch UtteranceError.nothingSpoken(let peak) {
+        } catch TranscriptionFailure.nothingSpoken(let peak) {
             transcript = Transcript(words: [], quiet: seconds)
             nothingSpokenPeak = peak
         }

@@ -437,7 +437,7 @@ private struct Answering: Sendable {
         let heard: Heard
         do {
             heard = try await Heard(seconds: clip.duration) { try await transcriber.transcribe(clip, expecting: request.vocabulary) }
-        } catch let refusal as VocabularyError {
+        } catch TranscriptionFailure.vocabulary(let refusal) {
             throw APIError.promptRefused("\(refusal)")
         } catch {
             throw APIError.engineFailed("\(error)")

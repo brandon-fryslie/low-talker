@@ -146,11 +146,12 @@ extension Hearing {
         _ audio: some AsyncSequence<AudioClip, Never> & Sendable,
         margin: Int,
         context: Int,
-        pass: (Pass) async throws -> [Transcript.Word],
+        pass: (Pass) async throws(TranscriptionFailure) -> [Transcript.Word],
         partial: (Partial) -> Void
-    ) async throws -> Transcript {
+    ) async throws(TranscriptionFailure) -> Transcript {
         let utterance = Utterance()
-        async let fed: Void = utterance.fill(from: audio)
+        // A value, because an `async let` throws untyped.
+        async let fed = Result { () async throws(TranscriptionFailure) in try await utterance.fill(from: audio) }
         var hearing = Hearing(margin: margin, context: context)
         var heard = await utterance.audio(beyond: hearing.passable)
         while heard.samples.count > hearing.heard {
@@ -160,7 +161,7 @@ extension Hearing {
             partial(heard.timeline.place(hearing.partial))
             heard = await utterance.audio(beyond: hearing.passable)
         }
-        try await fed
+        try await fed.get()
         // Timed from the audio's first sample, not from the quiet the utterance let go.
         return heard.timeline.place(hearing.transcript)
     }

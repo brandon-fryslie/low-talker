@@ -172,7 +172,7 @@ private final class FixedEar: Transcriber {
         (clipsHeard, clipHeard) = AsyncStream.makeStream()
     }
 
-    func transcribe(_ audio: some AsyncSequence<AudioClip, Never> & Sendable, expecting vocabulary: Vocabulary, partial: @escaping @Sendable (Partial) -> Void) async throws -> Transcript {
+    func transcribe(_ audio: some AsyncSequence<AudioClip, Never> & Sendable, expecting vocabulary: Vocabulary, partial: @escaping @Sendable (Partial) -> Void) async throws(TranscriptionFailure) -> Transcript {
         var clips = 0
         for await _ in audio {
             clips += 1

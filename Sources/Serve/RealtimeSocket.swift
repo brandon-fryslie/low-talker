@@ -466,7 +466,7 @@ final class Deltas: Sendable {
             let heard = try await Heard(seconds: seconds) { try transcript.get() }
             send(heard.transcript.words)
             outbox.emit(.completed(item: item, heard: heard, usage: Usage(heard: seconds)))
-        } catch let refusal as VocabularyError {
+        } catch TranscriptionFailure.vocabulary(let refusal) {
             outbox.emit(.failed(item: item, .promptRefused("\(refusal)")))
         } catch {
             outbox.emit(.failed(item: item, .engineFailed("\(error)")))

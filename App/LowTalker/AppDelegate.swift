@@ -288,9 +288,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             capture: capture,
             // A press asks the bench first: while a run holds the Neural Engine, the press is
             // refused and says why, so neither is measured against the other.
-            transcriber: { [unowned self] in
-                try benchRuns.admitPress()
-                return try await engine.value
+            transcriber: { [unowned self] () async throws(EngineUnavailable) in
+                do {
+                    try benchRuns.admitPress()
+                    return try await engine.value
+                } catch {
+                    throw EngineUnavailable(error)
+                }
             },
             turns: turns,
             // The words cross to the input method, which commits them at the
@@ -682,9 +686,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // [LAW:no-silent-failure] The words went nowhere, or only some of them did, so the
             // menu says why.
             lastFailure = failureLine(failed.failure)
-            // As readable as a dictation that happened: everything but words dictated, which
-            // the failure's own type has declared. [LAW:nothing-unseen]
-            sessions.error("session failed: \(failed.logged, privacy: .public)")
+            // [LAW:nothing-unseen] A dictation that did not happen is as readable here as one
+            // that did: the facts in the clear and any words it carries private, as its type
+            // declares them.
+            let account = failed.failure.account
+            switch account.dictated {
+            case nil:
+                sessions.error("session failed: \(failed.kind, privacy: .public) — \(account.facts, privacy: .public)")
+            case let dictated?:
+                sessions.error("session failed: \(failed.kind, privacy: .public) — \(account.facts, privacy: .public); dictated: \(dictated, privacy: .private)")
+            }
         }
     }
 

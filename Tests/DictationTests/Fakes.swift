@@ -107,7 +107,7 @@ final class FakeTranscriber: Transcriber {
     private let reading: @Sendable ([Float]) -> Transcript
     private let confirming: @Sendable ([Float]) -> Transcript
     private let repunctuating: @Sendable ([Float]) -> Int
-    private let answer: @Sendable (AudioClip) async throws -> Transcript
+    private let answer: @Sendable (AudioClip) async throws(TranscriptionFailure) -> Transcript
 
     /// `reading` is what a pass makes of the audio so far and `confirming` the words two
     /// passes have agreed on, which the answer has to begin with, and `repunctuating` how
@@ -117,7 +117,7 @@ final class FakeTranscriber: Transcriber {
         reading: @escaping @Sendable ([Float]) -> Transcript = { _ in Transcript(typed: "") },
         confirming: @escaping @Sendable ([Float]) -> Transcript = { _ in Transcript(typed: "") },
         repunctuating: @escaping @Sendable ([Float]) -> Int = { _ in 0 },
-        _ answer: @escaping @Sendable (AudioClip) async throws -> Transcript
+        _ answer: @escaping @Sendable (AudioClip) async throws(TranscriptionFailure) -> Transcript
     ) {
         self.reading = reading
         self.confirming = confirming
@@ -130,7 +130,7 @@ final class FakeTranscriber: Transcriber {
     /// The audio of the utterance being heard, as far as it has arrived and been read.
     var hearing: [Float] { arrived.withLock { $0 } }
 
-    func transcribe(_ audio: some AsyncSequence<AudioClip, Never> & Sendable, expecting vocabulary: Vocabulary, partial: @escaping @Sendable (Partial) -> Void) async throws -> Transcript {
+    func transcribe(_ audio: some AsyncSequence<AudioClip, Never> & Sendable, expecting vocabulary: Vocabulary, partial: @escaping @Sendable (Partial) -> Void) async throws(TranscriptionFailure) -> Transcript {
         var samples: [Float] = []
         for await clip in audio {
             samples += clip.samples

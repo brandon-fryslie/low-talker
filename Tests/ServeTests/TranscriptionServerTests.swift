@@ -298,7 +298,7 @@ import TestProbes
 
     /// A prompt the engine cannot take is the client's to fix, so it is a 400 naming it.
     @Test func aPromptTheEngineRefusesIs400() async throws {
-        let running = try await Running.start(.ready(Stub(.failure(VocabularyError.tooLong(tokens: 300, limit: 224)))))
+        let running = try await Running.start(.ready(Stub(.failure(.vocabulary(.tooLong(tokens: 300, limit: 224))))))
         defer { running.server.stop() }
         let (response, body) = try await running.post([
             ("model", nil, Data("m".utf8)), ("prompt", nil, Data("a long paragraph".utf8)), ("file", "audio.mp3", fixture("hello-16k-mono.mp3")),
@@ -357,7 +357,7 @@ import TestProbes
     }
 
     @Test func anEngineFailureIs500WithTheReason() async throws {
-        let running = try await Running.start(.ready(Stub(.failure(StubFailure()))))
+        let running = try await Running.start(.ready(Stub(.failure(.engine(StubFailure())))))
         defer { running.server.stop() }
         let (response, body) = try await running.post([("model", nil, Data("m".utf8)), ("file", "audio.mp3", fixture("hello-16k-mono.mp3"))])
         #expect(response.statusCode == 500)

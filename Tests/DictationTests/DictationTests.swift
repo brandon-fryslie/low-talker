@@ -41,7 +41,7 @@ final class Rig {
     let hold: Hold
 
     init(
-        transcriber: @escaping @Sendable @MainActor () async throws -> any Transcriber,
+        transcriber: @escaping @Sendable @MainActor () async throws(EngineUnavailable) -> any Transcriber,
         retaining: TimeInterval = AudioCapture.defaultRetention,
         atRest: MicrophoneAtRest = .shut,
         frontmost: @escaping @Sendable @MainActor () throws(FrontmostUnknown) -> BundleID = { textEdit }
@@ -149,9 +149,15 @@ final class Shown {
     var held: [Held?] = []
 }
 
+/// Whether `cause` is the engine's own library failing with an error of type `error`.
+private func engineFailed(_ cause: any Accounted, with error: any Error.Type) -> Bool {
+    guard case .engine(let thrown)? = cause as? TranscriptionFailure else { return false }
+    return type(of: thrown) == error
+}
+
 extension Result<Dictation.Session, Dictation.Failed> {
     /// What failed, when the press did.
-    var failure: (any SessionFailure)? {
+    var failure: (any Accounted)? {
         if case .failure(let failed) = self { return failed.failure }
         return nil
     }
@@ -355,14 +361,14 @@ let failedInserts: [FailedInsert] = Refusal.allCases.map { FailedInsert(failure:
     /// A decode that fails after words were committed says how many are at the cursor
     /// rather than that nothing was placed.
     @Test func aDecodeThatFailsAfterCommitsSaysHowManyLanded() async throws {
-        let engine = FakeTranscriber(confirming: { samples in Transcript(typed: samples.count >= 2 ? "hello there" : "") }) { _ in throw NoEngine() }
+        let engine = FakeTranscriber(confirming: { samples in Transcript(typed: samples.count >= 2 ? "hello there" : "") }) { _ throws(TranscriptionFailure) in throw .engine(NoEngine()) }
         let rig = try Rig(hearing: engine)
         rig.dictation.press(.began(Rig.rightOption, at: rig.now))
         rig.speak([1, 2])
         #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.inputMethod.inserted == ["hello there"] })
         rig.keyUp()
         let stopped = try #require(await rig.report().failure as? PressStopped)
-        #expect((stopped.cause as? TranscriptionFailed)?.error is NoEngine)
+        #expect(engineFailed(stopped.cause, with: NoEngine.self))
         #expect(stopped.landed == 2)
         #expect(failureLine(stopped) == "Your last dictation stopped: NoEngine() 2 words of your dictation were inserted before it; the rest were not.")
     }
@@ -755,13 +761,13 @@ let failedInserts: [FailedInsert] = Refusal.allCases.map { FailedInsert(failure:
 
     @Test func anEngineThatFailsIsReportedAndTheNextPressInserts() async throws {
         let failing = Mutex(true)
-        let rig = try Rig(hearing: FakeTranscriber { _ in
-            if failing.withLock({ $0 }) { throw NoEngine() }
+        let rig = try Rig(hearing: FakeTranscriber { _ throws(TranscriptionFailure) in
+            if failing.withLock({ $0 }) { throw .engine(NoEngine()) }
             return Transcript(typed: "a")
         })
         rig.hold()
         let stopped = try #require(await rig.report().failure as? PressStopped)
-        #expect((stopped.cause as? TranscriptionFailed)?.error is NoEngine)
+        #expect(engineFailed(stopped.cause, with: NoEngine.self))
         #expect(stopped.landed == 0)
         #expect(failureLine(stopped) == "Your last dictation was not placed: NoEngine()")
         failing.withLock { $0 = false }
@@ -912,26 +918,14 @@ let failedInserts: [FailedInsert] = Refusal.allCases.map { FailedInsert(failure:
         #expect(rig.hold.held == nil)
     }
 
-    /// A failed press is logged with its cause in full, its kind beside it, and how many of its
-    /// words landed: as readable as a dictation that happened.
-    @Test func aFailedPressIsLoggedWithItsCauseInFull() async throws {
-        let rig = try Rig(hearing: FakeTranscriber { _ in throw NoEngine() })
+    /// A failed press is reported by its kind and with its cause in the clear: as readable in
+    /// the log as a dictation that happened.
+    @Test func aFailedPressIsReportedByKindWithItsCauseInTheClear() async throws {
+        let rig = try Rig(hearing: FakeTranscriber { _ throws(TranscriptionFailure) in throw .engine(NoEngine()) })
         rig.hold()
         guard case .failure(let failed) = await rig.report() else { Issue.record("expected the press to fail"); return }
-        #expect(failed.logged == "PressStopped — NoEngine()")
-    }
-
-    /// A failure that can carry the words dictated is logged as its type declares, without
-    /// them, and the person still reads it whole.
-    @Test func aFailureCarryingWordsIsLoggedWithoutThem() {
-        struct Quoting: SessionFailure {
-            let words: String
-            var description: String { "could not place \"\(words)\"" }
-            var publicAccount: String { "could not place \(words.count) characters" }
-        }
-        let failed = Dictation.Failed(Quoting(words: "hello there"))
-        #expect(failed.logged == "Quoting — could not place 11 characters")
-        #expect(failureLine(failed.failure).contains("hello there"))
+        #expect(failed.kind == "PressStopped")
+        #expect(failed.failure.account == Account(facts: "NoEngine()"))
     }
 
     /// The hold is the app's, not the loop's: a loop rebuilt over a new config offers what
@@ -967,13 +961,13 @@ let failedInserts: [FailedInsert] = Refusal.allCases.map { FailedInsert(failure:
     /// is waiting rather than finishing words nobody will read, and the next press is heard.
     @Test func aPressThatWillNotBeInsertedStopsItsDecode() async throws {
         let stopped = Flag()
-        let engine = FakeTranscriber { clip in
+        let engine = FakeTranscriber { clip throws(TranscriptionFailure) in
             guard clip.samples == [1, 2, 3] else { return Transcript(typed: "a") }
             do {
                 try await Task.sleep(for: .seconds(3600))
             } catch {
                 stopped.raise()
-                throw error
+                throw .cancelled
             }
             return Transcript(typed: "never")
         }

@@ -195,9 +195,11 @@ import Testing
             continuation.yield(AudioClip(samples: [0.005, -0.008]))
             continuation.finish()
         }
-        await #expect(throws: UtteranceError.nothingSpoken(peak: 0.008)) {
+        let refusal = await #expect(throws: TranscriptionFailure.self) {
             try await utterance.fill(from: clips)
         }
+        guard case .nothingSpoken(let peak)? = refusal else { Issue.record("refused as \(String(describing: refusal))"); return }
+        #expect(peak == 0.008)
     }
 
     /// Speech is judged against the utterance's own loudest clip, not a level: a

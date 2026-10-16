@@ -71,7 +71,8 @@ public final class EngineTurns: Sendable {
     private struct Waiter {
         let id: Int
         let caller: Caller
-        let go: CheckedContinuation<Void, any Error>
+        /// Resumed true when the engine is the waiter's, false when it stopped waiting.
+        let go: CheckedContinuation<Bool, Never>
     }
 
     private struct Decoding {
@@ -92,7 +93,7 @@ public final class EngineTurns: Sendable {
         /// The next waiter to decode, taken off the queue and made the one decoding, when
         /// the engine is free: the first dictation decode, or else the first served one if
         /// no hold is open.
-        mutating func admit() -> CheckedContinuation<Void, any Error>? {
+        mutating func admit() -> CheckedContinuation<Bool, Never>? {
             guard decoding == nil,
                   let next = waiting.firstIndex(where: { $0.caller == .dictation })
                     ?? (reading.holds == 0 ? waiting.indices.first : nil)
@@ -138,27 +139,27 @@ public final class EngineTurns: Sendable {
             let waiting = state.waiting.count { $0.caller == .served }
             return (state.admit(), waiting)
         }
-        next?.resume()
+        next?.resume(returning: true)
         return waiting
     }
 
     /// Runs `decode` on the engine when `caller`'s turn comes, and again from the start if a
     /// hold cancelled it; its outcome is the last run's. Cancelling the caller cancels the
     /// decode, whether it is waiting or running.
-    public func decode<T: Sendable>(as caller: Caller, _ decode: @escaping @Sendable () async throws -> T) async throws -> T {
+    public func decode<T: Sendable>(as caller: Caller, _ decode: @escaping @Sendable () async throws(TranscriptionFailure) -> T) async throws(TranscriptionFailure) -> T {
         let ledger = Self.ledger
         var rerun = false
         while true {
             let id = try await turn(caller, rerun: rerun, ledger: ledger)
             // A task of its own, so that a hold can cancel the decode without cancelling the
             // caller, who is still owed its outcome.
-            let task = Task { try await decode() }
+            let task = Task { await Result(catching: decode) }
             let preemptedBeforeStart = state.withLock { state in
                 state.decoding?.cancel = { task.cancel() }
                 return state.decoding?.preempted == true
             }
             if preemptedBeforeStart { task.cancel() }
-            let result = await withTaskCancellationHandler { await task.result } onCancel: { task.cancel() }
+            let result = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
             let (preempted, next) = state.withLock { state in
                 precondition(state.decoding?.id == id, "the engine ran a decode that was not the one admitted")
                 let preempted = state.decoding?.preempted == true
@@ -166,7 +167,7 @@ public final class EngineTurns: Sendable {
                 state.sync()
                 return (preempted, state.admit())
             }
-            next?.resume()
+            next?.resume(returning: true)
             // A decode a hold cancelled failed because of the hold, so it is owed another run;
             // one that finished anyway keeps its result, and was not cancelled.
             guard preempted, !Task.isCancelled, case .failure = result else { return try result.get() }
@@ -178,14 +179,14 @@ public final class EngineTurns: Sendable {
 
     /// Waits until the engine is `caller`'s. A decode run again after a hold goes first among
     /// served decodes, since it has already had its turn once.
-    private func turn(_ caller: Caller, rerun: Bool, ledger: Ledger?) async throws -> Int {
+    private func turn(_ caller: Caller, rerun: Bool, ledger: Ledger?) async throws(TranscriptionFailure) -> Int {
         let id = state.withLock { state in
             state.ids += 1
             return state.ids
         }
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (go: CheckedContinuation<Void, any Error>) in
-                let (admitted, refused) = state.withLock { state -> (CheckedContinuation<Void, any Error>?, Bool) in
+        let admitted = await withTaskCancellationHandler {
+            await withCheckedContinuation { (go: CheckedContinuation<Bool, Never>) in
+                let (admitted, refused) = state.withLock { state -> (CheckedContinuation<Bool, Never>?, Bool) in
                     // Under the lock the cancellation handler also takes, so a cancel either
                     // lands before this and is seen here, or after and finds the waiter.
                     guard !Task.isCancelled else { return (nil, true) }
@@ -199,16 +200,17 @@ public final class EngineTurns: Sendable {
                     state.sync()
                     return (state.admit(), false)
                 }
-                if refused { go.resume(throwing: CancellationError()) }
-                admitted?.resume()
+                if refused { go.resume(returning: false) }
+                admitted?.resume(returning: true)
             }
         } onCancel: {
-            state.withLock { state -> CheckedContinuation<Void, any Error>? in
+            state.withLock { state -> CheckedContinuation<Bool, Never>? in
                 guard let index = state.waiting.firstIndex(where: { $0.id == id }) else { return nil }
                 defer { state.sync() }
                 return state.waiting.remove(at: index).go
-            }?.resume(throwing: CancellationError())
+            }?.resume(returning: false)
         }
+        guard admitted else { throw .cancelled }
         return id
     }
 }

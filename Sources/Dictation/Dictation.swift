@@ -255,7 +255,7 @@ public final class Dictation {
     /// press's hold put off. The hold is let go inside it the moment the transcript is out,
     /// so served callers wait for this press's engine and not for an earlier press's insert.
     private struct Decoded: Sendable {
-        let transcript: Result<Transcript, TranscriptionFailed>
+        let transcript: Result<Transcript, Failed>
         let at: ContinuousClock.Instant
         let displaced: EngineHold.Displaced
     }
@@ -306,7 +306,7 @@ public final class Dictation {
     }
 
     private let capture: AudioCapture
-    private let transcriber: @Sendable @MainActor () async throws -> any Transcriber
+    private let transcriber: @Sendable @MainActor () async throws(EngineUnavailable) -> any Transcriber
     private let turns: EngineTurns
     private let executor: Executor
     private let hold: Hold
@@ -336,7 +336,7 @@ public final class Dictation {
     /// press, an outcome reported.
     public init(
         capture: AudioCapture,
-        transcriber: @escaping @Sendable @MainActor () async throws -> any Transcriber,
+        transcriber: @escaping @Sendable @MainActor () async throws(EngineUnavailable) -> any Transcriber,
         turns: EngineTurns,
         executor: Executor,
         hold: Hold,
@@ -526,11 +526,12 @@ public final class Dictation {
         let before = latestDecode
         let decode = Task { [transcriber] in
             _ = await before?.value
-            let transcript: Result<Transcript, TranscriptionFailed>
-            do {
-                transcript = .success(try await transcriber().transcribe(audio, expecting: .empty) { streaming.heard($0) })
-            } catch {
-                transcript = .failure(TranscriptionFailed(error))
+            let transcript = await Result { () async throws(Failed) in
+                let engine: any Transcriber
+                do throws(EngineUnavailable) { engine = try await transcriber() } catch { throw Failed(error) }
+                do throws(TranscriptionFailure) {
+                    return try await engine.transcribe(audio, expecting: .empty) { streaming.heard($0) }
+                } catch { throw Failed(error) }
             }
             streaming.decoded()
             return Decoded(transcript: transcript, at: .now, displaced: hold.release())
@@ -615,7 +616,7 @@ public final class Dictation {
         let landed = heard.streaming.landed
         // [LAW:no-silent-failure] Whatever stopped the press, the report says how many of its
         // words are already at the cursor.
-        func stopped(_ cause: any SessionFailure) -> Failed { Failed(PressStopped(landed: landed.words, cause: cause)) }
+        func stopped(_ cause: any Accounted) -> Failed { Failed(PressStopped(landed: landed.words, cause: cause)) }
         let context: Context
         let keyUp: ContinuousClock.Instant
         let delivery: Duration
@@ -631,7 +632,7 @@ public final class Dictation {
         let transcript: Transcript
         switch decoded.transcript {
         case .success(let decodedTranscript): transcript = decodedTranscript
-        case .failure(let failed): throw stopped(failed)
+        case .failure(let failed): throw stopped(failed.failure)
         }
         let placed: Placed
         do throws(InsertFailure) {
@@ -687,40 +688,30 @@ public struct SpeechLost: WordFree {
 /// left at key-up would not go in. The words before it are at the cursor, and the ones an
 /// insert failed on are held until a cursor takes them. [LAW:no-silent-failure]
 ///
-/// What a log may carry of it is what its cause allows.
-public struct PressStopped: SessionFailure {
+public struct PressStopped: Accounted {
     /// The words committed before it stopped.
     public let landed: Int
-    public let cause: any SessionFailure
+    public let cause: any Accounted
 
     public var description: String { "\(cause)" + insertedBefore(landed) }
-    public var publicAccount: String { cause.publicAccount + insertedBefore(landed) }
-}
-
-/// The engine failed to hear a press: it could not be had, or its decode threw.
-///
-/// Word-free because an engine that failed has no transcript to tell, and what it throws
-/// is about the engine; `Transcriber` holds every implementation to that.
-public struct TranscriptionFailed: WordFree {
-    public let error: any Error
-
-    init(_ error: any Error) { self.error = error }
-
-    public var description: String { "\(error)" }
+    /// The cause's account, and what it left at the cursor, which is a count.
+    public var account: Account {
+        Account(facts: cause.account.facts + insertedBefore(landed), dictated: cause.account.dictated)
+    }
 }
 
 extension Dictation {
     /// A press that failed, as the loop reports it.
     ///
-    /// [LAW:types-are-the-program] Made only from a `SessionFailure`, so every failure the
-    /// loop can report has declared what a public log may carry of it before it compiles.
+    /// [LAW:types-are-the-program] Made only from an `Accounted`, so every failure the loop
+    /// can report has declared which part of its account is words dictated before it compiles.
     public struct Failed: Error {
-        public let failure: any SessionFailure
+        public let failure: any Accounted
 
-        public init(_ failure: any SessionFailure) { self.failure = failure }
+        public init(_ failure: any Accounted) { self.failure = failure }
 
-        /// The failure as a public log tells it: its kind, then its account.
-        public var logged: String { "\(type(of: failure)) — \(failure.publicAccount)" }
+        /// Which failure it is, by its type's name.
+        public var kind: String { String(describing: type(of: failure)) }
     }
 }
 
@@ -728,7 +719,7 @@ extension Dictation {
 /// in full, since only they read it, and how many of their words it left at the cursor.
 /// A failure written as fact then consequence opens with WARNING and carries its own framing;
 /// any other is a bare technical line, so it is told what it is.
-public func failureLine(_ failure: any SessionFailure) -> String {
+public func failureLine(_ failure: any Accounted) -> String {
     let root = "\((failure as? PressStopped)?.cause ?? failure)"
     let landed = (failure as? PressStopped)?.landed ?? 0
     let framed = root.hasPrefix("WARNING:") ? root : "Your last dictation \(landed == 0 ? "was not placed" : "stopped"): \(root)"
