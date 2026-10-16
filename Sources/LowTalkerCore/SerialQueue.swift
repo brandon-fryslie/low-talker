@@ -32,10 +32,10 @@ public final class SerialQueue: Sendable {
     /// but cannot yet be seen to hold it. [LAW:no-ambient-temporal-coupling]
     ///
     /// What the operation holds is let go of on the actor that submitted it.
-    @discardableResult
     ///
     /// The operation does not throw: what it can fail with is part of what it hands back, so
     /// the only failure here is the queue's own refusal. [LAW:types-are-the-program]
+    @discardableResult
     public func submit<T: Sendable>(
         isolation: isolated (any Actor)? = #isolation,
         _ operation: @escaping @Sendable () async -> T

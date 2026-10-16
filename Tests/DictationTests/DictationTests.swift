@@ -370,7 +370,7 @@ let failedInserts: [FailedInsert] = Refusal.allCases.map { FailedInsert(failure:
         let stopped = try #require(await rig.report().failure as? PressStopped)
         #expect(engineFailed(stopped.cause, with: NoEngine.self))
         #expect(stopped.landed == 2)
-        #expect(failureLine(stopped) == "Your last dictation stopped: NoEngine() 2 words of your dictation were inserted before it; the rest were not.")
+        #expect(failureLine(stopped) == "Your last dictation stopped: NoEngine(). 2 words of your dictation were inserted before it; the rest were not.")
     }
 
     /// [LAW:no-silent-failure] A press whose microphone opened after the words it was pressed
@@ -769,7 +769,7 @@ let failedInserts: [FailedInsert] = Refusal.allCases.map { FailedInsert(failure:
         let stopped = try #require(await rig.report().failure as? PressStopped)
         #expect(engineFailed(stopped.cause, with: NoEngine.self))
         #expect(stopped.landed == 0)
-        #expect(failureLine(stopped) == "Your last dictation was not placed: NoEngine()")
+        #expect(failureLine(stopped) == "Your last dictation was not placed: NoEngine().")
         failing.withLock { $0 = false }
         rig.hold()
         _ = try await rig.session()
@@ -925,7 +925,7 @@ let failedInserts: [FailedInsert] = Refusal.allCases.map { FailedInsert(failure:
         rig.hold()
         guard case .failure(let failed) = await rig.report() else { Issue.record("expected the press to fail"); return }
         #expect(failed.kind == "PressStopped")
-        #expect(failed.failure.account == Account(facts: "NoEngine()"))
+        #expect(failed.failure.account == Account(facts: "0 words inserted before: NoEngine()"))
     }
 
     /// The hold is the app's, not the loop's: a loop rebuilt over a new config offers what

@@ -71,9 +71,9 @@ public final class BenchRuns {
                 }
                 ending = .finished
             } catch {
-                // A load or a decode cancelled midway may throw its own error rather than
+                // A load or a decode cancelled midway throws its own error, not
                 // CancellationError; cancelled is what the person did, so it is what is said.
-                ending = Task.isCancelled || error is CancellationError ? .cancelled : .failed("\(error)")
+                ending = Task.isCancelled ? .cancelled : .failed("\(error)")
             }
             let displaced = hold.release()
             log("bench: \(Self.describe(ending, rows: rows)); \(displaced)")

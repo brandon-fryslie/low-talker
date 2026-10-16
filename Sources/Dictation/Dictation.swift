@@ -688,15 +688,17 @@ public struct SpeechLost: WordFree {
 /// left at key-up would not go in. The words before it are at the cursor, and the ones an
 /// insert failed on are held until a cursor takes them. [LAW:no-silent-failure]
 ///
+/// Its description is the person's, and carries any words its cause read; the log reads its
+/// account.
 public struct PressStopped: Accounted {
     /// The words committed before it stopped.
     public let landed: Int
     public let cause: any Accounted
 
     public var description: String { "\(cause)" + insertedBefore(landed) }
-    /// The cause's account, and what it left at the cursor, which is a count.
+    /// What it left at the cursor, which is a count, and then the cause's account.
     public var account: Account {
-        Account(facts: cause.account.facts + insertedBefore(landed), dictated: cause.account.dictated)
+        Account(facts: "\(landed) words inserted before: \(cause.account.facts)", dictated: cause.account.dictated)
     }
 }
 
@@ -718,11 +720,11 @@ extension Dictation {
 /// What the menu tells the person who dictated about a press that failed: what stopped it,
 /// in full, since only they read it, and how many of their words it left at the cursor.
 /// A failure written as fact then consequence opens with WARNING and carries its own framing;
-/// any other is a bare technical line, so it is told what it is.
+/// any other is a bare technical line, so it is told what it is and ended as a sentence.
 public func failureLine(_ failure: any Accounted) -> String {
     let root = "\((failure as? PressStopped)?.cause ?? failure)"
     let landed = (failure as? PressStopped)?.landed ?? 0
-    let framed = root.hasPrefix("WARNING:") ? root : "Your last dictation \(landed == 0 ? "was not placed" : "stopped"): \(root)"
+    let framed = root.hasPrefix("WARNING:") ? root : "Your last dictation \(landed == 0 ? "was not placed" : "stopped"): \(root)."
     return framed + insertedBefore(landed)
 }
 

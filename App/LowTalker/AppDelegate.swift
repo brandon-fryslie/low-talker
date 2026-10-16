@@ -837,6 +837,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 struct BundleCarriesNoModel: Error, CustomStringConvertible {
     var description: String {
         "this build carries no model in Contents/Resources/\(ModelStore.carriedResourceName); "
-            + "it was built without one. Build it with `make app`, which puts the model in."
+            + "it was built without one. Build it with `make app`, which puts the model in"
     }
 }

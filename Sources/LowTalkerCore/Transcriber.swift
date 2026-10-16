@@ -37,8 +37,8 @@ public enum TranscriptionFailure: Error, CustomStringConvertible {
     case vocabulary(VocabularyError)
     /// The engine read the audio and its reading could not become a transcript.
     case unreadable(WhisperKitTranscriberError)
-    /// The engine's own library failed: a model, a decoder, a buffer. Its errors are its own
-    /// fixed messages, never a transcript.
+    /// The engine's own library failed: a model, a decoder, a buffer. WhisperKit's errors
+    /// (`WhisperError`) name a stage or a file, never what it read.
     case engine(any Error)
 
     public var description: String {

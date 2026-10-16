@@ -24,7 +24,7 @@ import TestProbes
         let stopped = try #require(await rig.report().failure as? PressStopped)
 
         #expect(stopped.account == Account(
-            facts: "WhisperKit returned a segment of \(said.count) characters without word timings 2 words of your dictation were inserted before it; the rest were not.",
+            facts: "2 words inserted before: WhisperKit returned a segment of \(said.count) characters without word timings",
             dictated: said))
     }
 
