@@ -38,41 +38,54 @@ import Synchronization
 /// a test controls and on a CI machine with no microphone at all.
 @MainActor
 final class HALInput: PreparedInput {
-    /// What the render callback reaches, and the only things touched on the audio thread.
+    /// What the render callback reaches, and the only things touched on the IO thread.
     ///
     /// A class because the callback is a C function pointer that cannot capture: it is
     /// handed this by address, which is also why it must outlive every render, and why
     /// the unit is stopped before it is let go. [LAW:no-ambient-temporal-coupling]
+    ///
+    /// The IO thread renders under a hard deadline, so what it does here is render into memory
+    /// the press allocated and copy the slice into the press's ring - no allocation, and no
+    /// waiting on a lock. Converting and handing over is `SliceDelivery`'s, on a thread of its
+    /// own.
     private final class Sink: @unchecked Sendable {
-        /// Where a running unit's samples go. Empty between presses: the unit is stopped
-        /// then, and a render that was already in flight has nowhere to put audio the
-        /// speaker has let go of.
-        private let target = Mutex<Target?>(nil)
-        /// Touched on the audio thread, one render at a time - and by the main actor only
-        /// while the unit is stopped, which is where `open()` resets the converter for the
-        /// press it is about to begin. `AudioOutputUnitStop` returns with the IO thread
-        /// quiesced, so the two never overlap; a lock here would put an acquisition in the
-        /// render path to guard a call that cannot race it.
+        /// The delivery thread's while a press runs, and the main actor's in `begin` once the
+        /// last press's delivery has finished.
         nonisolated(unsafe) let converter: AudioClip.Converter
         nonisolated(unsafe) var unit: AudioUnit?
+        /// The press the unit is rendering for, and nil between presses. A render only ever
+        /// tries this lock, and renders nothing when the main actor holds it to begin or end a
+        /// press. So a press is never let go under a render - not even one a stop that failed
+        /// left running - and the IO thread never waits. [LAW:no-ambient-temporal-coupling]
+        private let press = Mutex<Press?>(nil)
 
-        struct Target {
-            /// What a render fills, sized at the press rather than at the preparation: the
-            /// device's slices can grow while the input rests, and a size fixed when it was
-            /// readied is outgrown before it is ever opened - see `renderBuffer`. Written by
-            /// the main actor before the unit starts and read only by renders after, the same
-            /// handover the converter's reset relies on.
-            nonisolated(unsafe) let buffer: AVAudioPCMBuffer
-            let appending: @Sendable ([Float], HostTime) -> Void
-            /// Already hops to the main actor; the audio thread cannot wait for one.
-            let onFailure: @Sendable (any Error) -> Void
+        struct Press {
+            let rendered: RenderBuffer
+            let delivery: SliceDelivery
         }
 
         init(converter: AudioClip.Converter) {
             self.converter = converter
         }
 
-        func aim(at new: Target?) { target.withLock { $0 = new } }
+        /// Ends whatever press is on the sink, then begins `make`'s. A press is its own stream:
+        /// the resampler starts from nothing rather than carrying the previous press's tail
+        /// into the head of this one, and it is reset only once that press's delivery thread,
+        /// which converts with it, has ended. [LAW:one-source-of-truth]
+        func begin(_ make: () throws -> Press) rethrows {
+            end()
+            converter.reset()
+            let new = try make()
+            press.withLock { $0 = new }
+        }
+
+        /// Lets the press go: what it rendered is handed over, and the converter is free for
+        /// the next.
+        func end() {
+            press.withLock { $0.take() }?.delivery.finish()
+        }
+
+        deinit { end() }
 
         /// What CoreAudio calls on its own IO thread, as the C function pointer the unit
         /// takes. Reaches the sink it was handed the address of, and nothing else.
@@ -81,7 +94,7 @@ final class HALInput: PreparedInput {
         /// the isolation of the context it was formed in: one written in a `@MainActor`
         /// member is inferred main-actor-isolated, and converting that to a C function
         /// pointer leaves a runtime isolation check in the thunk which traps the first time
-        /// CoreAudio calls it - on the audio thread, which is the only thread that ever
+        /// CoreAudio calls it - on the IO thread, which is the only thread that ever
         /// calls it. A press died on its first buffer and the crash named this closure.
         /// Nothing about a render is the main actor's, and this is where the type says so
         /// rather than leaving it to where the lines happen to sit.
@@ -91,49 +104,68 @@ final class HALInput: PreparedInput {
                 .render(flags: flags, timeStamp: timeStamp, bus: bus, frames: frames)
         }
 
-        /// One device buffer: rendered into our own memory, converted to pipeline
-        /// samples, and handed over stamped with the capture time of its first sample.
+        /// One device slice: rendered into the press's memory and pushed to its delivery,
+        /// stamped as CoreAudio stamped it.
         func render(
             flags: UnsafeMutablePointer<AudioUnitRenderActionFlags>,
             timeStamp: UnsafePointer<AudioTimeStamp>,
             bus: UInt32,
             frames: UInt32
         ) -> OSStatus {
-            guard let unit, let target = target.withLock({ $0 }) else { return noErr }
-            let buffer = target.buffer
-            // A device that asks for more than the buffer holds would overrun it; refusing is
-            // the loud version of that. The buffer holds the largest slice the device offered
-            // when the press opened, so what reaches this is a device whose range grew during
-            // the press. [LAW:no-silent-failure]
-            guard frames <= buffer.frameCapacity else {
-                target.onFailure(AudioHardwareError.overlongSlice(frames: Int(frames), capacity: Int(buffer.frameCapacity)))
-                return kAudio_ParamError
+            press.withLockIfAvailable { press -> OSStatus in
+                guard let unit, let press else { return noErr }
+                // A device that asks for more than the buffer holds would overrun it; refusing
+                // is the loud version of that. The buffer holds the largest slice the device
+                // offered when the press opened, so what reaches this is a device whose range
+                // grew during the press. [LAW:no-silent-failure]
+                guard Int(frames) <= press.rendered.frameCapacity else {
+                    press.delivery.deliver(.overlongSlice(frames: Int(frames), capacity: press.rendered.frameCapacity))
+                    return kAudio_ParamError
+                }
+                press.rendered.offer(Int(frames))
+                let status = AudioUnitRender(unit, flags, timeStamp, bus, frames, press.rendered.list.unsafeMutablePointer)
+                guard status == noErr else {
+                    press.delivery.deliver(.renderFailed(status))
+                    return status
+                }
+                press.delivery.deliver(press.rendered.list, frames: Int(frames), stamp: timeStamp.pointee)
+                return noErr
+            } ?? noErr
+        }
+    }
+
+    /// What a render fills: one non-interleaved float buffer per channel, in memory this owns
+    /// rather than an `AVAudioPCMBuffer`'s. That one's buffer list is an Objective-C property
+    /// that recomputes every byte size from the frame length each time it is read, which is
+    /// both a message send on the IO thread and the trap that once had every press's first
+    /// render refused with -50: sizes written into the list were overwritten by the next read.
+    private final class RenderBuffer: @unchecked Sendable {
+        let list: UnsafeMutableAudioBufferListPointer
+        let frameCapacity: Int
+        private let storage: [UnsafeMutablePointer<Float>]
+
+        init(channels: Int, frames: Int) {
+            list = AudioBufferList.allocate(maximumBuffers: channels)
+            frameCapacity = frames
+            storage = (0..<channels).map { _ in
+                let channel = UnsafeMutablePointer<Float>.allocate(capacity: frames)
+                channel.initialize(repeating: 0, count: frames)
+                return channel
             }
-            // How much of the buffer this render may fill, said before the call rather than
-            // after it - which is the whole of it. Every `mDataByteSize` in the buffer list
-            // is derived from `frameLength` at each access, so writing those byte sizes
-            // directly wrote over values the next access recomputed: the list handed to the
-            // render said zero bytes were available and the unit refused it with -50, on
-            // the first buffer of every press. [LAW:one-source-of-truth] The length is the
-            // fact and the byte sizes are its derivation, so the length is what gets set.
-            buffer.frameLength = frames
-            let status = AudioUnitRender(unit, flags, timeStamp, bus, frames, buffer.mutableAudioBufferList)
-            guard status == noErr else {
-                target.onFailure(AudioHardwareError.renderFailed(status))
-                return status
+        }
+
+        /// Points each buffer at its channel and says how much of it the next render may
+        /// fill. [LAW:one-source-of-truth] The list is derived from the storage and the frame
+        /// count on every render, so nothing a previous render left in it is read.
+        func offer(_ frames: Int) {
+            for (index, channel) in zip(list.indices, storage) {
+                list[index] = AudioBuffer(mNumberChannels: 1, mDataByteSize: UInt32(frames * MemoryLayout<Float>.size), mData: channel)
             }
-            do {
-                // Parsed before the buffer is converted, not alongside it: arguments
-                // evaluate left to right, so converting first would feed this buffer into
-                // the resampler and then throw the output away when the stamp turns out to
-                // be unplaceable - leaving the filter primed by audio nobody has, and a
-                // seam in the middle of the press. [LAW:parse-dont-validate]
-                let captured = try HostTime(timeStamp.pointee)
-                target.appending(try converter.convert(buffer), captured)
-            } catch {
-                target.onFailure(error)
-            }
-            return noErr
+        }
+
+        deinit {
+            storage.forEach { $0.deallocate() }
+            free(list.unsafeMutablePointer)
         }
     }
 
@@ -334,7 +366,9 @@ final class HALInput: PreparedInput {
             self.watches = registered
         }
 
-        /// A buffer that holds the largest slice the device can hand this unit.
+        /// What a press renders into and hands its audio over through: a buffer that holds the
+        /// largest slice the device can hand this unit, and a ring with room for `backlog` of
+        /// slices on their way to the pipeline.
         ///
         /// Sized by the device rather than by the unit, and at the press rather than at the
         /// preparation, because both of the other answers were measured wrong on this Mac for
@@ -345,12 +379,16 @@ final class HALInput: PreparedInput {
         /// CoreAudio's schedule rather than this one's - read straight after the move it
         /// answered the old size on some runs and the new one on others. [LAW:no-ambient-temporal-coupling]
         /// The device's own range bounds every size it can be moved to, so no move of the size
-        /// can outgrow it and nothing has to have caught up for it to be true.
+        /// can outgrow it and nothing has to have caught up for it to be true. Its smallest
+        /// size is what bounds how many slices the ring's frames can be split into.
         ///
         /// Allocated on every open rather than kept and grown, so there is no earlier size for
         /// this to be compared with. [LAW:one-source-of-truth] What that adds to a press was
         /// measured the same day: negligible beside what the open itself costs.
-        func renderBuffer() throws -> AVAudioPCMBuffer {
+        func press(
+            appending: @escaping @Sendable ([Float], HostTime) -> Void,
+            onFailure: @escaping @Sendable (any Error) -> Void
+        ) throws -> Sink.Press {
             var range = AudioValueRange(mMinimum: 0, mMaximum: 0)
             var size = UInt32(MemoryLayout<AudioValueRange>.size)
             var address = AudioObjectPropertyAddress(
@@ -362,10 +400,20 @@ final class HALInput: PreparedInput {
                 AudioObjectGetPropertyData(device, &address, 0, nil, &size, &range),
                 AudioHardwareError.inputUnavailable
             )
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(range.mMaximum)) else {
-                throw AudioClipError.bufferAllocationFailed
-            }
-            return buffer
+            let slice = Int(range.mMaximum)
+            let frames = max(2 * slice, Int(format.sampleRate * HALInput.backlog))
+            let channels = Int(format.channelCount)
+            return Sink.Press(
+                rendered: RenderBuffer(channels: channels, frames: slice),
+                delivery: try SliceDelivery(
+                    SliceRing(channels: channels, frames: frames, entries: frames / max(Int(range.mMinimum), 1) + 1),
+                    slice: slice,
+                    format: format,
+                    converter: sink.converter,
+                    appending: appending,
+                    onFailure: onFailure
+                )
+            )
         }
 
         /// Gives the device back and leaves the unit prepared, so the next press opens it at
@@ -374,7 +422,7 @@ final class HALInput: PreparedInput {
         /// [LAW:single-enforcer] Every way a press stops comes through here, including the
         /// one an `open()` that failed partway takes.
         ///
-        /// Both steps are idempotent - stopping a stopped unit and clearing a cleared target do
+        /// Both steps are idempotent - stopping a stopped unit and ending a sink with no press do
         /// nothing - so this needs no flag saying whether the device is open. It had one, and
         /// because it was set only after a successful start, it made this a no-op on exactly the
         /// path that had something to unwind. [LAW:polishing-by-subtraction]
@@ -384,9 +432,9 @@ final class HALInput: PreparedInput {
         /// unwatched.
         func close() -> Bool {
             let stopped = AudioOutputUnitStop(unit)
-            // After the stop, so a render already in flight still has somewhere to put the
-            // audio it holds rather than dropping it on the floor.
-            sink.aim(at: nil)
+            // After the stop, so what the last render pushed is handed over before the delivery
+            // ends rather than dropped on the floor.
+            sink.end()
             // [LAW:parse-dont-validate] The border `init`'s guard stands on, walked the other
             // way: that one proves reaching a microphone took no device, this one proves
             // letting go gave it back.
@@ -474,17 +522,14 @@ final class HALInput: PreparedInput {
         presses += 1
         let press = presses
         do {
-            reached.sink.aim(at: Sink.Target(
-                buffer: try reached.renderBuffer(),
-                appending: appending,
-                // The audio thread cannot wait for the main actor, so the report is posted
-                // rather than made. [LAW:no-ambient-temporal-coupling]
-                onFailure: { error in Task { @MainActor in onFailure(error) } }
-            ))
-            // A press is its own stream: the device was closed between this open and the
-            // last, so the resampler starts from nothing rather than carrying the previous
-            // press's tail into the head of this one. [LAW:one-source-of-truth]
-            reached.sink.converter.reset()
+            try reached.sink.begin {
+                try reached.press(
+                    appending: appending,
+                    // The delivery thread does not wait for the main actor, so the report is
+                    // posted rather than made. [LAW:no-ambient-temporal-coupling]
+                    onFailure: { error in Task { @MainActor in onFailure(error) } }
+                )
+            }
             try AudioHardwareError.check(AudioOutputUnitStart(reached.unit), AudioHardwareError.inputUnavailable)
         } catch {
             endPress(press, on: reached)
@@ -692,4 +737,9 @@ final class HALInput: PreparedInput {
     }
 
     private nonisolated static let inputBus: UInt32 = 1
+
+    /// How far a press's delivery thread may fall behind the device before audio is dropped.
+    /// It waits on nothing longer than the main actor copying one session out of the ring, so
+    /// this is far more than it needs, and it costs memory only while a press is open.
+    private nonisolated static let backlog: TimeInterval = 2
 }

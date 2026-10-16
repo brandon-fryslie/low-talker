@@ -9,9 +9,9 @@ extension AudioClip {
     /// realtime session hold one apiece.
     ///
     /// Calls are serialized by the caller. Not Sendable: it holds AVFoundation objects
-    /// the macOS 15 SDK does not mark Sendable, so the render callback's sink holds it
-    /// as `nonisolated(unsafe)`, converting on the audio thread while the unit runs and
-    /// resetting on the main actor only while it is stopped.
+    /// the macOS 15 SDK does not mark Sendable, so the microphone holds it as
+    /// `nonisolated(unsafe)`, converting on a press's delivery thread while the press runs
+    /// and resetting on the main actor only once that thread has ended.
     public final class Converter {
         /// The most the converter has been seen to ask for at once; a smaller piece
         /// would only mean more asks.

@@ -25,9 +25,10 @@ public typealias Disposal = @MainActor () -> Void
 @MainActor
 public protocol PreparedInput {
     /// Opens the device. Every buffer it captures arrives at `appending` as pipeline
-    /// samples with the host time its first sample was captured at, on the audio thread,
-    /// and `onFailure` reports on the main actor when one could not be converted or
-    /// placed in time. Throws when the device cannot feed the pipeline - including when
+    /// samples with the host time its first sample was captured at, on a thread of the
+    /// press's own - never CoreAudio's IO thread, which has a deadline to keep - and
+    /// `onFailure` reports on the main actor when one could not be converted or placed in
+    /// time. Throws when the device cannot feed the pipeline - including when
     /// there was nothing to prepare, which is the one moment that matters and the one place
     /// every caller already answers it. [LAW:single-enforcer]
     ///
@@ -132,6 +133,9 @@ public enum AudioHardwareError: Error, Equatable, CustomStringConvertible {
     case renderFailed(OSStatus)
     /// The device asked to hand over more audio at once than it offered when the press opened.
     case overlongSlice(frames: Int, capacity: Int)
+    /// The thread handing a press's audio over fell so far behind the device that the ring
+    /// between them filled, and slices were dropped rather than make the IO thread wait.
+    case deliveryFellBehind(dropped: Int)
 
     public var description: String {
         switch self {
@@ -146,6 +150,7 @@ public enum AudioHardwareError: Error, Equatable, CustomStringConvertible {
         case .runningStateUnreadable(let status): "CoreAudio would not say whether the input device is running (status \(status))"
         case .renderFailed(let status): "the input device refused to hand over a buffer it had announced (status \(status))"
         case .overlongSlice(let frames, let capacity): "the input device asked to hand over \(frames) frames at once, past the \(capacity) it offered when the press opened"
+        case .deliveryFellBehind(let dropped): "the microphone's audio was handed over too slowly to keep up with the device, and \(dropped) of its buffers were lost"
         }
     }
 
