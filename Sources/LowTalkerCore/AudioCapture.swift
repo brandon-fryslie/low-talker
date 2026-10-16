@@ -49,10 +49,10 @@ import Synchronization
 /// than assumed: `endSession` reads the stretch between the key going down and the first
 /// sample anything captured, and a press missing more of it than `warmUpAllowance` comes
 /// back partial instead of whole. Two things reach that door - the first press in a
-/// process, which pays a cold launch, and a key-down the tap delivered late, which pays
-/// whatever was ahead of it. Both are speech the speaker addressed to a shut microphone,
-/// and a press that says so is one they can repeat; a sentence quietly missing its front
-/// is not. [LAW:no-silent-failure]
+/// process, which pays a cold launch, and a key-down the input method delivered late,
+/// which pays whatever was ahead of it. Both are speech the speaker addressed to a shut
+/// microphone, and a press that says so is one they can repeat; a sentence quietly
+/// missing its front is not. [LAW:no-silent-failure]
 ///
 /// The engine is disposable and the ring is not. A microphone is prepared against one
 /// device and cannot be re-pointed at another, so a device change launches a new engine
@@ -88,8 +88,8 @@ public final class AudioCapture {
     }
 
     /// An engine on the input device of its moment. The generation is what this engine's
-    /// tap carries with a failure, so a failure from a replaced engine is recognized as
-    /// stale (a counter, because a replaced engine's address can be reused).
+    /// render callback carries with a failure, so a failure from a replaced engine is
+    /// recognized as stale (a counter, because a replaced engine's address can be reused).
     private struct Live {
         let dispose: Disposal
         let generation: Int
@@ -153,11 +153,11 @@ public final class AudioCapture {
         /// running, and positions advance only on capture, so the audio on either side
         /// of the break is spliced together with no seam in the samples to find it by.
         var continuousSince = 0
-        /// The generation whose buffers this stream is the audio of. An engine's tap can
-        /// deliver once more after `dispose()` returns, and that buffer belongs to a press
-        /// the speaker has already let go of; appending it would move the positions the
-        /// next press begins from. Read on the tap's queue, which cannot ask the main
-        /// actor, so the answer lives here beside the samples it admits.
+        /// The generation whose buffers this stream is the audio of. An engine's render
+        /// callback can deliver once more after `dispose()` returns, and that buffer belongs
+        /// to a press the speaker has already let go of; appending it would move the
+        /// positions the next press begins from. Read on the audio thread, which cannot ask
+        /// the main actor, so the answer lives here beside the samples it admits.
         /// [LAW:no-ambient-temporal-coupling]
         var accepting: Int?
         /// When the first sample delivered since the open session began was captured, and
@@ -176,7 +176,7 @@ public final class AudioCapture {
         var feed: AsyncStream<AudioClip>.Continuation?
     }
 
-    /// The stream behind a lock, shared between the tap's queue and the main actor.
+    /// The stream behind a lock, shared between the audio thread and the main actor.
     private final class Shared: Sendable {
         let stream: Mutex<Stream>
         init(_ stream: Stream) { self.stream = Mutex(stream) }
@@ -310,7 +310,7 @@ public final class AudioCapture {
         guard !started.sessionIsOpen else {
             preconditionFailure("a session began while one was open; a press is one session")
         }
-        // Cleared before any tap is installed, so the first buffer delivered after the key
+        // Cleared before any input opens, so the first buffer delivered after the key
         // is the one that dates this session's head. Cleared here and not in `launch()`
         // because a mid-session replacement launches too, and its first buffer dates its
         // own audio rather than the moment this session's microphone opened.
@@ -557,13 +557,14 @@ public final class AudioCapture {
         return true
     }
 
-    /// Retires an engine: the stream stops accepting what it delivers, and then the tap
-    /// comes down. Every path that lets an engine go comes through here, because one that
-    /// retired an engine without telling the stream would leave a disposed tap a buffer's
-    /// reach into the audio the next press begins from. [LAW:single-enforcer]
+    /// Retires an engine: the stream stops accepting what it delivers, and then its input
+    /// closes. Every path that lets an engine go comes through here, because one that
+    /// retired an engine without telling the stream would leave a closed input's render
+    /// callback a buffer's reach into the audio the next press begins from.
+    /// [LAW:single-enforcer]
     ///
-    /// [LAW:no-ambient-temporal-coupling] The order is the whole of it. Tearing the tap
-    /// down first leaves a window in which a buffer already on its way can take the lock
+    /// [LAW:no-ambient-temporal-coupling] The order is the whole of it. Closing the input
+    /// first leaves a window in which a buffer already on its way can take the lock
     /// before the clearing does, read the generation it was formed for, and be admitted -
     /// so the guard would hold only as often as it won a race. Clearing first closes it
     /// from both sides: nothing sets `accepting` again until the next `launch()`, so a
@@ -697,7 +698,7 @@ public final class AudioCapture {
             )
             return Live(dispose: dispose, generation: generation)
         } catch {
-            // Nothing took over, so nothing resumed: no tap was installed and no buffer
+            // Nothing took over, so nothing resumed: no input opened and no buffer
             // can have landed. A mark left standing forward of the last engine's audio
             // would tell the session that ends here it was spliced where capture in fact
             // simply stopped, which is a different sentence and a false one.
@@ -864,9 +865,10 @@ public final class AudioCapture {
     /// A failure from an engine a device change has since replaced is stale: the
     /// engine it came from is gone and the one running is healthy.
     ///
-    /// [LAW:no-ambient-temporal-coupling] The tap's failure arrives asynchronously, so the
-    /// engine it is about is resolved by generation rather than trusted by arrival - a
-    /// replaced engine's late failure would otherwise fail the one that took over from it.
+    /// [LAW:no-ambient-temporal-coupling] The render callback's failure arrives
+    /// asynchronously, so the engine it is about is resolved by generation rather than
+    /// trusted by arrival - a replaced engine's late failure would otherwise fail the one
+    /// that took over from it.
     private func fail(_ error: any Error, from generation: Int) {
         guard case .started(var started) = phase,
               case .running(let live) = started.engine,

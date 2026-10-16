@@ -77,7 +77,7 @@ public struct InputMethodModifiers: ModifierFeed {
             heard(told.confirm(session: session, at: time))
         }
 
-        /// [LAW:dataflow-not-control-flow] The session is read for as long as the tap is
+        /// [LAW:dataflow-not-control-flow] The session is read for as long as the feed is
         /// open and something is held, derived from those two facts wherever either changes,
         /// so there is no starting or stopping of it to get out of step with them.
         ///
