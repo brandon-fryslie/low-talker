@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Writes the Homebrew cask for a release into a checkout of promptctl/homebrew-tap: cask/low-talker.rb
+# with the release's version and the sha256 of its offline package filled in. Committing and
+# pushing the tap is the caller's.
+#
+#   scripts/update-cask <tap checkout> <version>      # version as in the tag v<version>
+#
+# The sha256 is the one GitHub recorded for the asset when it was uploaded, so it is the hash
+# of the package brew will fetch.
+set -euo pipefail
+
+usage="usage: scripts/update-cask <tap checkout> <version>"
+tap=${1:?$usage}
+version=${2:?$usage}
+body=$(dirname "$0")/../cask/low-talker.rb
+
+digest=$(gh release view "v$version" --repo promptctl/low-talker --json assets \
+  --jq '.assets[] | select(.name == "LowTalker-offline.pkg") | .digest')
+sha256=${digest#sha256:}
+[[ $sha256 =~ ^[0-9a-f]{64}$ ]] || { echo "update-cask: v$version has no LowTalker-offline.pkg with a sha256 digest (got '$digest')" >&2; exit 1; }
+
+mkdir -p "$tap/Casks"
+sed -e "s/^  version \"@VERSION@\"\$/  version \"$version\"/" \
+  -e "s/^  sha256 \"@SHA256@\"\$/  sha256 \"$sha256\"/" "$body" >"$tap/Casks/low-talker.rb"
+# Only those two lines are filled in, so an @-word anywhere else would reach every install as written.
+if grep -n '@VERSION@\|@SHA256@' "$tap/Casks/low-talker.rb" >&2; then
+  echo "update-cask: the @-words above are outside the version and sha256 lines of $body" >&2
+  exit 1
+fi
+echo "update-cask: $tap/Casks/low-talker.rb is $version, sha256 $sha256"

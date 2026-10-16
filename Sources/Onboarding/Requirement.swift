@@ -156,19 +156,19 @@ public extension Requirement {
     }
 }
 
-// MARK: - the vocabulary README keeps a copy of
+// MARK: - the vocabulary docs/engineering.md keeps a copy of
 
 public extension Requirement {
     /// Every reading every row can take, each paired with the row it belongs to.
     ///
-    /// README.md lists these for a reader following the runbook by hand. It cannot read a
+    /// docs/engineering.md lists these for a reader following the runbook by hand. It cannot read a
     /// Swift enum, so it keeps a copy per row, and `RequirementTests` holds
     /// each copy to it. Derived from the same functions the rows themselves are built from
     /// rather than written out a second time, so a reading added to a row reaches every
     /// reader that quotes the list. [LAW:one-source-of-truth]
     ///
     /// `unreadable`'s reading is in none of them: it belongs to no row's own vocabulary,
-    /// being the one thing every row says when the machine could not be read, and README
+    /// being the one thing every row says when the machine could not be read, and docs/engineering.md
     /// describes it once as exactly that.
     static var readings: [(row: Row, reading: String)] {
         let answers: [MicrophoneAuthorization.Withheld?] = [nil] + MicrophoneAuthorization.Withheld.allCases

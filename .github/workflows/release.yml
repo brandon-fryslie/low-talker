@@ -47,6 +47,24 @@ jobs:
           done
           [ "${#missing[@]}" -eq 0 ] || { echo "::error::repository secrets not set: ${missing[*]}; scripts/release-secrets sets them" >&2; exit 1; }
 
+      # The tap's cask names one version and its sha256, so each release moves it, or `brew
+      # upgrade` never sees the release. The cask is moved by starting a workflow in
+      # promptctl/homebrew-tap with a token of the promptctl tap App, which is installed on
+      # that repository alone with Actions: write, so the token can start the tap's workflows
+      # and nothing else. TAP_APP_CLIENT_ID is a repository variable and TAP_APP_PRIVATE_KEY
+      # a repository secret. This token is minted only to prove the App answers, before
+      # anything is built, so a missing or wrong App fails the release while nothing is
+      # published yet; the one the last step uses is minted there, since a token lasts an
+      # hour and this job may run for two.
+      - name: Check the tap's App answers
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.TAP_APP_CLIENT_ID }}
+          private-key: ${{ secrets.TAP_APP_PRIVATE_KEY }}
+          owner: promptctl
+          repositories: homebrew-tap
+          permission-actions: write
+
       # SHA-pinned, as in ci.yml: third-party code in a job that holds the signing keys.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -196,3 +214,43 @@ jobs:
             shasum -a 256 "${pkgs[@]}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: The tap's token
+        id: tap
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.TAP_APP_CLIENT_ID }}
+          private-key: ${{ secrets.TAP_APP_PRIVATE_KEY }}
+          owner: promptctl
+          repositories: homebrew-tap
+          permission-actions: write
+
+      # The tap's low-talker workflow (cask.yml here) is the one writer of the cask, with the
+      # tap's own token; this starts it and waits until the cask is at this release. The cask
+      # is the verdict, not the run: a run the tap's concurrency group cancelled leaves the
+      # cask to the run that replaced it. The release is published by now, so if this fails,
+      # `gh workflow run low-talker.yaml --repo promptctl/homebrew-tap` moves the cask without
+      # re-running this job.
+      - name: The tap's cask is at this release
+        env:
+          GH_TOKEN: ${{ steps.tap.outputs.token }}
+          READ_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          trap '[ $? -eq 0 ] || echo "::error::$TAG is published; move the cask with \`gh workflow run low-talker.yaml --repo promptctl/homebrew-tap\` rather than re-running this job"' EXIT
+          run=$(gh api --method POST repos/promptctl/homebrew-tap/actions/workflows/low-talker.yaml/dispatches -f ref=main -F return_run_details=true \
+            --jq '.workflow_run_id // error("the dispatch named no run")')
+          url=https://github.com/promptctl/homebrew-tap/actions/runs/$run
+          echo "moving the cask in $url"
+          while :; do
+            fields=$(gh run view "$run" --repo promptctl/homebrew-tap --json status,conclusion --jq '"\(.status) \(.conclusion)"')
+            read -r status conclusion <<<"$fields"
+            was=$(GH_TOKEN=$READ_TOKEN gh api -H 'Accept: application/vnd.github.raw' repos/promptctl/homebrew-tap/contents/Casks/low-talker.rb | sed -n 's/^  version "\(.*\)"$/\1/p')
+            [ "$was" = "${TAG#v}" ] && break
+            [ "$status" != completed ] || [ "$conclusion" = cancelled ] \
+              || { echo "::error::the tap's run ended $conclusion and left the cask at $was: $url"; exit 1; }
+            [ "$SECONDS" -lt 600 ] || { echo "::error::after ${SECONDS}s the cask is at $was and the tap's run is $status $conclusion: $url"; exit 1; }
+            sleep 10
+          done
+          echo "the tap's cask is low-talker $was; run $url" | tee -a "$GITHUB_STEP_SUMMARY"
