@@ -224,17 +224,37 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
     }
 }
 
-/// Whether the words an insert failed on could be at a cursor anyway: handed to an app that
-/// had not taken them yet, or sent with no answer to say what became of them. Offering such
-/// words again is the one way to type them twice. Any other failure came before a client
-/// held them - a refusal, a channel that failed before the send, a requirement this end could
-/// not write - and the words are nowhere. [LAW:one-source-of-truth] `Words` says it for the
-/// channel; this says it for every failure an `Inserter` throws.
-public func wordsMayHaveLanded(after failure: any Error) -> Bool {
-    switch failure {
-    case is NotYetTaken: true
-    case let unreachable as Unreachable: unreachable.words == .mayHaveLanded
-    default: false
+/// Why an insert's words are not at the cursor: everything an `Inserter` throws.
+///
+/// [LAW:types-are-the-program] A closed set, so whoever holds one has every way an insert
+/// fails in front of it, and a new way is a new case the compiler walks every reader to.
+public enum InsertFailure: Error, Equatable, Sendable, CustomStringConvertible {
+    case refused(Refusal)
+    case notYetTaken(NotYetTaken)
+    case unreachable(Unreachable)
+    /// This end could not write down who may answer, so it asked nobody.
+    case answererUnreadable(PeerIdentity.Unreadable)
+
+    public var description: String {
+        switch self {
+        case .refused(let refusal): "\(refusal)"
+        case .notYetTaken(let notYetTaken): "\(notYetTaken)"
+        case .unreachable(let unreachable): "\(unreachable)"
+        case .answererUnreadable(let unreadable): "WARNING: The app could not say which input method may answer it: \(unreadable). Your dictation was not sent."
+        }
+    }
+
+    /// Whether the words could be at a cursor anyway: handed to an app that had not taken
+    /// them yet, or sent with no answer to say what became of them. Offering such words
+    /// again is the one way to type them twice. Every other failure came before a client held
+    /// them, and the words are nowhere. [LAW:one-source-of-truth] `Words` says it for the
+    /// channel; this says it for every failure an `Inserter` throws.
+    public var wordsMayHaveLanded: Bool {
+        switch self {
+        case .notYetTaken: true
+        case .unreachable(let unreachable): unreachable.words == .mayHaveLanded
+        case .refused, .answererUnreadable: false
+        }
     }
 }
 

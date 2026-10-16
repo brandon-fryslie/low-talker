@@ -16,8 +16,6 @@ import Testing
     /// names one is asked on a thread of the executor's choosing rather than on this actor.
     nonisolated static let textEdit = BundleID(rawValue: "com.apple.TextEdit")
     nonisolated static let slack = BundleID(rawValue: "com.tinyspeck.slackmacgap")
-    /// A port nothing is on: every case that names one here is a channel that failed.
-    nonisolated static let port = "ai.promptctl.low-talker.test.insert"
 
     /// An input method that answers however the case needs and remembers what it was asked.
     ///
@@ -26,10 +24,10 @@ import Testing
     /// own, which is the whole reason the executor can ask from the main actor at all.
     private final class AnInputMethod: Inserter, @unchecked Sendable {
         private let lock = NSLock()
-        private let answering: @Sendable (String) throws -> Inserted
+        private let answering: @Sendable (String) throws(InsertFailure) -> Inserted
         private var asked: [(text: String, destination: Destination)] = []
 
-        init(_ answering: @escaping @Sendable (String) throws -> Inserted) {
+        init(_ answering: @escaping @Sendable (String) throws(InsertFailure) -> Inserted) {
             self.answering = answering
         }
 
@@ -41,7 +39,7 @@ import Testing
             lock.withLock { asked.map(\.destination) }
         }
 
-        func insert(_ text: String, into destination: Destination) throws -> Inserted {
+        func insert(_ text: String, into destination: Destination) throws(InsertFailure) -> Inserted {
             lock.withLock { asked.append((text, destination)) }
             return try answering(text)
         }
@@ -96,51 +94,16 @@ import Testing
         #expect(inputMethod.texts.isEmpty)
     }
 
-    /// Every refusal is thrown by its own name with nothing performed: the words are not at
-    /// the cursor, and nothing puts them anywhere else. Over every case, so a refusal added
-    /// later is covered by the compiler rather than by whoever remembers this file.
-    @Test(arguments: Refusal.allCases)
-    func aRefusalIsThrownByName(refusal: Refusal) async throws {
-        let inputMethod = AnInputMethod { _ in throw refusal }
-        let thrown = try await #require(throws: Refusal.self) {
+    /// Every way an insert fails is thrown as it is, with nothing performed: the words are not
+    /// at the cursor, and nothing puts them anywhere else.
+    @Test(arguments: failedInserts)
+    func aFailedInsertIsThrownAsItIs(failed: FailedInsert) async throws {
+        let inputMethod = AnInputMethod { _ throws(InsertFailure) in throw failed.failure }
+        let thrown = try await #require(throws: InsertFailure.self) {
             try await Executor(insertingThrough: inputMethod)
                 .insert(Transcript(typed: "héllo there"), following: nil, since: .keyUp(.now))
         }
 
-        #expect(thrown == refusal)
-    }
-
-    /// Words an app has not taken yet are thrown by that name, never as a refusal: they
-    /// may still land, and nothing here sends them again.
-    @Test func wordsNotYetTakenAreThrownByName() async throws {
-        let late = NotYetTaken(characters: 11, into: "com.apple.TextEdit")
-        let inputMethod = AnInputMethod { _ in throw late }
-        let thrown = try await #require(throws: NotYetTaken.self) {
-            try await Executor(insertingThrough: inputMethod)
-                .insert(Transcript(typed: "héllo there"), following: nil, since: .keyUp(.now))
-        }
-
-        #expect(thrown == late)
-    }
-
-    /// Every way the channel fails is thrown the same way, by its own name.
-    @Test(arguments: [
-        Unreachable.nothingIsListening(port: Self.port),
-        .requestWasNotTaken(port: Self.port, after: .seconds(2)),
-        .answerDidNotArrive(port: Self.port, after: .seconds(2)),
-        .didNotSayWhoItIs(port: Self.port, after: .seconds(2)),
-        .answerWasAbandoned(port: Self.port),
-        .answeredByAStranger(port: Self.port, pid: 42, because: .someoneElse(.adHoc(cdhash: "00")), required: .signed(identifier: "x", certificate: "00"), words: .notSent),
-        .failed(port: Self.port, status: -1, words: .mayHaveLanded),
-        .answerWasNotReadable(port: Self.port, bytes: 42, words: .mayHaveLanded),
-    ])
-    func aChannelThatFailsIsThrownByName(why: Unreachable) async throws {
-        let inputMethod = AnInputMethod { _ in throw why }
-        let thrown = try await #require(throws: Unreachable.self) {
-            try await Executor(insertingThrough: inputMethod)
-                .insert(Transcript(typed: "héllo there"), following: nil, since: .keyUp(.now))
-        }
-
-        #expect(thrown == why)
+        #expect(thrown == failed.failure)
     }
 }

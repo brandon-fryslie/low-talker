@@ -17,8 +17,9 @@ import TestProbes
         let turns = EngineTurns()
         let runs = Count()
         let served = Task {
-            try await turns.decode(as: .served) {
-                if runs.add() == 1 { try await Task.sleep(for: .seconds(600)) }
+            try await turns.decode(as: .served) { () async throws(TranscriptionFailure) in
+                if runs.add() == 1 { try? await Task.sleep(for: .seconds(600)) }
+                guard !Task.isCancelled else { throw .cancelled }
                 return "heard"
             }
         }
@@ -64,21 +65,24 @@ import TestProbes
         let turns = EngineTurns()
         let runs = Count()
         let running = Task {
-            try await turns.decode(as: .served) {
+            try await turns.decode(as: .served) { () async throws(TranscriptionFailure) in
                 _ = runs.add()
-                try await Task.sleep(for: .seconds(600))
+                try? await Task.sleep(for: .seconds(600))
+                throw .cancelled
             }
         }
         #expect(try await Self.soon { turns.reading.decoding == .served })
         running.cancel()
-        await #expect(throws: CancellationError.self) { try await running.value }
+        let runningEnded = await #expect(throws: TranscriptionFailure.self) { try await running.value }
+        if case .cancelled? = runningEnded {} else { Issue.record("the running decode ended on \(String(describing: runningEnded)), not cancelled") }
         #expect(runs.now == 1)
 
         let hold = turns.hold()
         let waiting = Task { try await turns.decode(as: .served) { _ = runs.add() } }
         #expect(try await Self.soon { turns.reading.waiting == 1 })
         waiting.cancel()
-        await #expect(throws: CancellationError.self) { try await waiting.value }
+        let waitingEnded = await #expect(throws: TranscriptionFailure.self) { try await waiting.value }
+        if case .cancelled? = waitingEnded {} else { Issue.record("the waiting decode ended on \(String(describing: waitingEnded)), not cancelled") }
         #expect(turns.reading.waiting == 0)
         hold.release()
         #expect(runs.now == 1)

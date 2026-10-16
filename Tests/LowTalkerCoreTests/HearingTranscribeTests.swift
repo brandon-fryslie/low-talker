@@ -50,12 +50,14 @@ import Testing
     /// silence that comes back empty.
     @Test func aSilentHoldMakesNoPassAndIsRefused() async {
         var passes: [Hearing.Pass] = []
-        await #expect(throws: UtteranceError.nothingSpoken(peak: 0.001)) {
+        let refusal = await #expect(throws: TranscriptionFailure.self) {
             (passes, _, _) = try await Self.transcribe { feed, _ in
                 feed.yield(Self.quiet(2))
                 feed.finish()
             }
         }
+        guard case .nothingSpoken(let peak)? = refusal else { Issue.record("refused as \(String(describing: refusal))"); return }
+        #expect(peak == 0.001)
         #expect(passes.isEmpty)
     }
 

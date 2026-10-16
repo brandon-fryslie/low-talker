@@ -95,7 +95,7 @@ private func update(_ input: [String: Any]) -> [String: Any] {
     /// An engine failure fails its item, not the session: no `error` event, which Pipecat
     /// would take as fatal.
     @Test func anEngineFailureFailsTheItemAndNotTheSession() async throws {
-        let running = try await Running.start(.ready(Stub(.failure(StubFailure()))))
+        let running = try await Running.start(.ready(Stub(.failure(.engine(StubFailure())))))
         defer { running.server.stop() }
         var client = Client(running)
         try await client.append(seconds: 0.5)
@@ -527,7 +527,7 @@ private struct Starting: Transcriber {
         _ audio: some AsyncSequence<AudioClip, Never> & Sendable,
         expecting vocabulary: Vocabulary,
         partial: @escaping @Sendable (Partial) -> Void
-    ) async throws -> Transcript {
+    ) async throws(TranscriptionFailure) -> Transcript {
         started.yield()
         return try await stub.transcribe(audio, expecting: vocabulary, partial: partial)
     }

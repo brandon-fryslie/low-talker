@@ -107,7 +107,7 @@ final class FakeTranscriber: Transcriber {
     private let reading: @Sendable ([Float]) -> Transcript
     private let confirming: @Sendable ([Float]) -> Transcript
     private let repunctuating: @Sendable ([Float]) -> Int
-    private let answer: @Sendable (AudioClip) async throws -> Transcript
+    private let answer: @Sendable (AudioClip) async throws(TranscriptionFailure) -> Transcript
 
     /// `reading` is what a pass makes of the audio so far and `confirming` the words two
     /// passes have agreed on, which the answer has to begin with, and `repunctuating` how
@@ -117,7 +117,7 @@ final class FakeTranscriber: Transcriber {
         reading: @escaping @Sendable ([Float]) -> Transcript = { _ in Transcript(typed: "") },
         confirming: @escaping @Sendable ([Float]) -> Transcript = { _ in Transcript(typed: "") },
         repunctuating: @escaping @Sendable ([Float]) -> Int = { _ in 0 },
-        _ answer: @escaping @Sendable (AudioClip) async throws -> Transcript
+        _ answer: @escaping @Sendable (AudioClip) async throws(TranscriptionFailure) -> Transcript
     ) {
         self.reading = reading
         self.confirming = confirming
@@ -130,7 +130,7 @@ final class FakeTranscriber: Transcriber {
     /// The audio of the utterance being heard, as far as it has arrived and been read.
     var hearing: [Float] { arrived.withLock { $0 } }
 
-    func transcribe(_ audio: some AsyncSequence<AudioClip, Never> & Sendable, expecting vocabulary: Vocabulary, partial: @escaping @Sendable (Partial) -> Void) async throws -> Transcript {
+    func transcribe(_ audio: some AsyncSequence<AudioClip, Never> & Sendable, expecting vocabulary: Vocabulary, partial: @escaping @Sendable (Partial) -> Void) async throws(TranscriptionFailure) -> Transcript {
         var samples: [Float] = []
         for await clip in audio {
             samples += clip.samples
@@ -155,7 +155,7 @@ final class FakeInputMethod: Inserter, Sendable {
     private struct State {
         var inserted: [String] = []
         var into = "com.apple.TextEdit"
-        var refusal: (any Error)?
+        var refusal: InsertFailure?
         var gate: DispatchSemaphore?
         var holding = 0
     }
@@ -170,7 +170,7 @@ final class FakeInputMethod: Inserter, Sendable {
     /// The app the next inserts say they reached.
     func reaching(_ app: BundleID) { state.withLock { $0.into = app.rawValue } }
     /// Every insert from now on is refused with `refusal`, or none is when it is nil.
-    func refusing(_ refusal: (any Error)?) { state.withLock { $0.refusal = refusal } }
+    func refusing(_ refusal: InsertFailure?) { state.withLock { $0.refusal = refusal } }
     /// Every insert from now on waits until `letGo`, the way a real one waits for the app to
     /// answer - held at a gate rather than for a duration. [LAW:no-ambient-temporal-coupling]
     func hold() { state.withLock { $0.gate = DispatchSemaphore(value: 0) } }
@@ -183,15 +183,15 @@ final class FakeInputMethod: Inserter, Sendable {
         gate?.signal()
     }
 
-    func insert(_ text: String, into destination: Destination) throws -> Inserted {
+    func insert(_ text: String, into destination: Destination) throws(InsertFailure) -> Inserted {
         if let gate = state.withLock({ $0.gate }) {
             state.withLock { $0.holding += 1 }
             gate.wait()
             state.withLock { $0.holding -= 1 }
         }
-        return try state.withLock { state in
+        return try state.withLock { state throws(InsertFailure) in
             if let refusal = state.refusal { throw refusal }
-            guard destination.admits(state.into) else { throw Refusal.dictationIsInAnotherApp }
+            guard destination.admits(state.into) else { throw .refused(.dictationIsInAnotherApp) }
             state.inserted.append(text)
             return Inserted(characters: text.count, into: state.into)
         }

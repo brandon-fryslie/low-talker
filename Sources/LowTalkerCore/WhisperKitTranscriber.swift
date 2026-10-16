@@ -78,17 +78,19 @@ public struct WhisperKitTranscriber: Transcriber {
         _ audio: some AsyncSequence<AudioClip, Never> & Sendable,
         expecting vocabulary: Vocabulary,
         partial: @escaping @Sendable (Partial) -> Void
-    ) async throws -> Transcript {
+    ) async throws(TranscriptionFailure) -> Transcript {
         let pipeline = pipeline
         // The vocabulary is encoded once and refused, if it must be, before any
         // audio is taken in, so a hold never gets as far as the gate with a prompt
         // the engine cannot carry.
-        let prompt = try await turns.decode(as: caller) { try pipeline.prompt(for: vocabulary) }
+        let prompt = try await turns.decode(as: caller) { () throws(TranscriptionFailure) in
+            do throws(VocabularyError) { return try pipeline.prompt(for: vocabulary) } catch { throw .vocabulary(error) }
+        }
         // [LAW:composability] The passes are Hearing's to run; this engine is one
         // decode of what a pass asks for, and its floor and prefix length are the
         // facts it hands over.
-        return try await Hearing.transcribe(audio, margin: Pipeline.margin, context: Pipeline.contextWords, pass: { pass in
-            try await turns.decode(as: caller) { try await pipeline.hear(pass.samples, from: pass.cut, saying: pass.saying, told: prompt) }
+        return try await Hearing.transcribe(audio, margin: Pipeline.margin, context: Pipeline.contextWords, pass: { pass async throws(TranscriptionFailure) in
+            try await turns.decode(as: caller) { () async throws(TranscriptionFailure) in try await pipeline.hear(pass.samples, from: pass.cut, saying: pass.saying, told: prompt) }
         }, partial: partial)
     }
 
@@ -194,11 +196,11 @@ public struct WhisperKitTranscriber: Transcriber {
         /// decoder does. Every prompt token also takes one of the decoder steps a
         /// window has (`Constants.maxTokenContext` less one, prefill included), so a
         /// long vocabulary leaves a 30 s window fewer words to read.
-        func prompt(for vocabulary: Vocabulary) throws -> [Int] {
+        func prompt(for vocabulary: Vocabulary) throws(VocabularyError) -> [Int] {
             let tokens = tokenizer.encode(text: vocabulary.whisperPrompt).filter { $0 < tokenizer.specialTokens.specialTokenBegin }
             let limit = PromptOffsetSegmentSeeker.promptTokenLimit
             guard tokens.count <= limit else {
-                throw VocabularyError.tooLong(tokens: tokens.count, limit: limit)
+                throw .tooLong(tokens: tokens.count, limit: limit)
             }
             return tokens
         }
@@ -208,13 +210,25 @@ public struct WhisperKitTranscriber: Transcriber {
         /// before the utterance. Times are from the utterance's start, and the
         /// prefix's words come back first, timed over their own audio. Samples short
         /// of the engine's floor are padded out to it; see `window(_:from:)`.
-        func hear(_ samples: [Float], from cut: Int, saying prefix: String, told prompt: [Int]) async throws -> [Transcript.Word] {
+        ///
+        /// [LAW:parse-dont-validate] The border with WhisperKit: what its library throws is
+        /// its own, and what its reading cannot become is ours, each named once here.
+        func hear(_ samples: [Float], from cut: Int, saying prefix: String, told prompt: [Int]) async throws(TranscriptionFailure) -> [Transcript.Word] {
             var options = Self.decodeOptions
             options.clipTimestamps = [Float(AudioClip.duration(for: cut))]
             options.promptTokens = prompt
             options.prefixTokens = tokenizer.encode(text: prefix)
-            let results = try await whisperKit.transcribe(audioArray: Self.window(samples, from: cut), decodeOptions: options)
-            return try Transcript(whisperKit: results.flatMap(\.segments)).words
+            let results: [TranscriptionResult]
+            do {
+                results = try await whisperKit.transcribe(audioArray: Self.window(samples, from: cut), decodeOptions: options)
+            } catch {
+                throw .engine(error)
+            }
+            do throws(WhisperKitTranscriberError) {
+                return try Transcript(whisperKit: results.flatMap(\.segments)).words
+            } catch {
+                throw .unreadable(error)
+            }
         }
     }
 }
@@ -266,19 +280,21 @@ extension Transcript {
     /// that does not fit is refused loudly rather than clamped, including a segment
     /// whose speech has no words to carry it: the words are the transcript, so speech
     /// with no words would simply vanish.
-    public init(whisperKit segments: [TranscriptionSegment]) throws {
-        self.init(words: try segments.flatMap { segment in
-            let words = segment.words ?? []
-            guard !words.isEmpty || !segment.text.contains(where: { !$0.isWhitespace }) else {
-                throw WhisperKitTranscriberError.speechWithoutWords(text: segment.text)
+    public init(whisperKit segments: [TranscriptionSegment]) throws(WhisperKitTranscriberError) {
+        var words: [Word] = []
+        for segment in segments {
+            let timings = segment.words ?? []
+            guard !timings.isEmpty || !segment.text.contains(where: { !$0.isWhitespace }) else {
+                throw .speechWithoutWords(text: segment.text)
             }
-            return try words.map(Word.init(whisperKit:))
-        })
+            for timing in timings { words.append(try Word(whisperKit: timing)) }
+        }
+        self.init(words: words)
     }
 }
 
 extension Transcript.Word {
-    public init(whisperKit timing: WordTiming) throws {
+    public init(whisperKit timing: WordTiming) throws(WhisperKitTranscriberError) {
         guard let confidence = Confidence(exactly: Double(timing.probability)) else {
             throw WhisperKitTranscriberError.probabilityOutsideUnitInterval(timing)
         }

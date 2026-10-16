@@ -69,7 +69,7 @@ public struct Executor {
     /// goes to the cursor in front. [LAW:one-source-of-truth] Derived here from what landed,
     /// the one record of where that was.
     @discardableResult
-    public func insert(_ transcript: Transcript, following last: Performed?, since: Since) async throws -> Performed? {
+    public func insert(_ transcript: Transcript, following last: Performed?, since: Since) async throws(InsertFailure) -> Performed? {
         guard !transcript.isBlank else { return nil }
         let destination = last.map { Destination.app($0.into.rawValue) } ?? .cursorInFront
         // Awaited, so the round trip runs on a thread of its own: this is the main actor, and

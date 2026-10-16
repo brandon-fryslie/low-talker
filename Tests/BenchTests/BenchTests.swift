@@ -20,11 +20,11 @@ private final class ScriptedEar: Transcriber {
         _ audio: some AsyncSequence<AudioClip, Never> & Sendable,
         expecting vocabulary: Vocabulary,
         partial: @escaping @Sendable (Partial) -> Void
-    ) async throws -> Transcript {
+    ) async throws(TranscriptionFailure) -> Transcript {
         expected.withLock { $0.append(vocabulary) }
         for await _ in audio {}
         await gate.wait()
-        try Task.checkCancellation()
+        guard !Task.isCancelled else { throw .cancelled }
         return Transcript(typed: "hello world")
     }
 }

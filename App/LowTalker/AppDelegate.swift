@@ -270,7 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             await previous.hotkey.stopAndDeliver()
             // A refused wait is reported and the rebuild still made: a loop that cannot be
             // replaced would be the worse failure of the two. [LAW:no-silent-failure]
-            do { try await previous.dictation.finish() } catch { report(.failure(error)) }
+            do throws(SerialQueueError) { try await previous.dictation.finish() } catch { report(.failure(Dictation.Failed(error))) }
         }
         // [LAW:no-ambient-temporal-coupling] The input method is made ready before the hotkey
         // goes up, so no press is heard that has nowhere to go yet, and the one status write
@@ -288,9 +288,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             capture: capture,
             // A press asks the bench first: while a run holds the Neural Engine, the press is
             // refused and says why, so neither is measured against the other.
-            transcriber: { [unowned self] in
-                try benchRuns.admitPress()
-                return try await engine.value
+            transcriber: { [unowned self] () async throws(EngineUnavailable) in
+                do {
+                    try benchRuns.admitPress()
+                    return try await engine.value
+                } catch {
+                    throw EngineUnavailable(error)
+                }
             },
             turns: turns,
             // The words cross to the input method, which commits them at the
@@ -625,7 +629,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             capture.stop()
             // A refused wait is reported and the quit still granted: an app that cannot
             // be quit would be the worse failure of the two. [LAW:no-silent-failure]
-            do { try await listening?.dictation.finish() } catch { report(.failure(error)) }
+            do throws(SerialQueueError) { try await listening?.dictation.finish() } catch { report(.failure(Dictation.Failed(error))) }
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
@@ -674,19 +678,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// The session's own line; each insert's key-up-to-acknowledged time is the
     /// executor's line beside it, under its own category. The words are private: they
     /// are what the user dictated.
-    private func report(_ outcome: Result<Dictation.Session, any Error>) {
+    private func report(_ outcome: Result<Dictation.Session, Dictation.Failed>) {
         switch outcome {
         case .success(let session):
             sessions.notice("\(session.description, privacy: .public): \(session.transcript.text, privacy: .private)")
-        case .failure(let error):
+        case .failure(let failed):
             // [LAW:no-silent-failure] The words went nowhere, or only some of them did, so the
             // menu says why.
-            lastFailure = failureLine(error)
-            // A failure that only states facts is logged in full, so a dictation that did
-            // not happen is as readable here as one that did. One that can carry the words
-            // the user dictated is withheld, and the log says it was. [LAW:nothing-unseen]
-            let account = (error as? any WordFree).map { "\($0)" } ?? "withheld, it can carry words you dictated"
-            sessions.error("session failed: \(String(describing: type(of: error)), privacy: .public) — \(account, privacy: .public)")
+            lastFailure = failureLine(failed.failure)
+            // [LAW:nothing-unseen] A dictation that did not happen is as readable here as one
+            // that did: the facts in the clear and any words it carries private, as its type
+            // declares them.
+            let account = failed.failure.account
+            switch account.dictated {
+            case nil:
+                sessions.error("session failed: \(failed.kind, privacy: .public) — \(account.facts, privacy: .public)")
+            case let dictated?:
+                sessions.error("session failed: \(failed.kind, privacy: .public) — \(account.facts, privacy: .public); dictated: \(dictated, privacy: .private)")
+            }
         }
     }
 
@@ -828,9 +837,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 struct BundleCarriesNoModel: Error, CustomStringConvertible {
     var description: String {
         "this build carries no model in Contents/Resources/\(ModelStore.carriedResourceName); "
-            + "it was built without one. Build it with `make app`, which puts the model in."
+            + "it was built without one. Build it with `make app`, which puts the model in"
     }
 }
-
-/// The refusal says only that a run is going, never a word anyone dictated.
-extension BenchmarkRunning: @retroactive WordFree {}

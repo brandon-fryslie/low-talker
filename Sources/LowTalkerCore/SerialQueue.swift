@@ -32,14 +32,17 @@ public final class SerialQueue: Sendable {
     /// but cannot yet be seen to hold it. [LAW:no-ambient-temporal-coupling]
     ///
     /// What the operation holds is let go of on the actor that submitted it.
+    ///
+    /// The operation does not throw: what it can fail with is part of what it hands back, so
+    /// the only failure here is the queue's own refusal. [LAW:types-are-the-program]
     @discardableResult
     public func submit<T: Sendable>(
         isolation: isolated (any Actor)? = #isolation,
-        _ operation: @escaping @Sendable () async throws -> T
-    ) throws -> Task<T, any Error> {
+        _ operation: @escaping @Sendable () async -> T
+    ) throws(SerialQueueError) -> Task<T, Never> {
         let id = ObjectIdentifier(self)
         // [LAW:no-silent-failure] The alternative is a hang with no diagnostics.
-        guard !Self.enclosing.contains(id) else { throw SerialQueueError.reentrantWait }
+        guard !Self.enclosing.contains(id) else { throw .reentrantWait }
         return tail.withLock { tail in
             let earlier = tail
             let task = Task {
@@ -47,7 +50,7 @@ public final class SerialQueue: Sendable {
                 // and ends there, which is where a task lets go of its closure.
                 _ = isolation
                 await earlier?.value
-                return try await Self.$enclosing.withValue(Self.enclosing.union([id])) { try await operation() }
+                return await Self.$enclosing.withValue(Self.enclosing.union([id])) { await operation() }
             }
             // Only the order matters to the next submission; this one's outcome goes to
             // whoever holds the task.
@@ -61,7 +64,9 @@ public final class SerialQueue: Sendable {
         isolation: isolated (any Actor)? = #isolation,
         _ operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
-        try await submit(operation).value
+        try await submit { () async -> Result<T, any Error> in
+            do { return .success(try await operation()) } catch { return .failure(error) }
+        }.value.get()
     }
 
     /// Returns once every operation submitted before this call has finished, however it
@@ -71,11 +76,11 @@ public final class SerialQueue: Sendable {
     /// [LAW:no-ambient-temporal-coupling] The queue owns the order, so it owns the
     /// question of when the ordered work is done; a caller that timed a sleep against it
     /// instead would be betting on how long the work takes.
-    public func drain() async throws {
+    public func drain() async throws(SerialQueueError) {
         // [LAW:single-enforcer] The same refusal `submit` makes, read off the same set:
         // from inside an operation the tail is that operation, so the wait would never
         // return.
-        guard !Self.enclosing.contains(ObjectIdentifier(self)) else { throw SerialQueueError.reentrantWait }
+        guard !Self.enclosing.contains(ObjectIdentifier(self)) else { throw .reentrantWait }
         await tail.withLock { $0 }?.value
     }
 }

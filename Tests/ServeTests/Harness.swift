@@ -12,9 +12,9 @@ import Testing
 /// it refuses as nothing spoken, as the engine does, and noise it hears its words in doubtfully.
 final class Stub: Transcriber {
     let heard = Mutex<[(seconds: TimeInterval, vocabulary: Vocabulary, cancelled: Bool)]>([])
-    let answer: Result<Transcript, any Error>
+    let answer: Result<Transcript, TranscriptionFailure>
 
-    init(_ answer: Result<Transcript, any Error> = .success(Transcript(typed: " Hello world, this is LowTalker."))) {
+    init(_ answer: Result<Transcript, TranscriptionFailure> = .success(Transcript(typed: " Hello world, this is LowTalker."))) {
         self.answer = answer
     }
 
@@ -22,7 +22,7 @@ final class Stub: Transcriber {
         _ audio: some AsyncSequence<AudioClip, Never> & Sendable,
         expecting vocabulary: Vocabulary,
         partial: @escaping @Sendable (Partial) -> Void
-    ) async throws -> Transcript {
+    ) async throws(TranscriptionFailure) -> Transcript {
         let words = (try? answer.get())?.words ?? []
         var seconds: TimeInterval = 0
         var loudest: Float = 0
@@ -39,7 +39,7 @@ final class Stub: Transcriber {
             partial(Partial(confirmed: Transcript(words: Array(words.prefix(confirmed))), tentative: Transcript(words: []), repunctuated: 0))
         }
         heard.withLock { $0.append((seconds, vocabulary, Task.isCancelled)) }
-        guard loudest >= Utterance.audible else { throw UtteranceError.nothingSpoken(peak: loudest) }
+        guard loudest >= Utterance.audible else { throw .nothingSpoken(peak: loudest) }
         let transcript = try answer.get()
         // White noise changes sign on about half its samples, speech and a tone on far fewer.
         // Noise is read as the engine reads a primed hallucination over it: words, barely believed.
@@ -59,10 +59,10 @@ struct Turning: Transcriber {
         _ audio: some AsyncSequence<AudioClip, Never> & Sendable,
         expecting vocabulary: Vocabulary,
         partial: @escaping @Sendable (Partial) -> Void
-    ) async throws -> Transcript {
+    ) async throws(TranscriptionFailure) -> Transcript {
         var clip: [Float] = []
         for await chunk in audio { clip += chunk.samples }
-        return try await turns.decode(as: .served) { [clip] in
+        return try await turns.decode(as: .served) { [clip] () async throws(TranscriptionFailure) in
             try await Stub().transcribe(AudioClip(samples: clip), expecting: vocabulary)
         }
     }
@@ -79,7 +79,7 @@ final class Gated: Transcriber {
         _ audio: some AsyncSequence<AudioClip, Never> & Sendable,
         expecting vocabulary: Vocabulary,
         partial: @escaping @Sendable (Partial) -> Void
-    ) async throws -> Transcript {
+    ) async throws(TranscriptionFailure) -> Transcript {
         started.withLock { $0.append(answered.withLock { $0 }) }
         await gate.value
         defer { answered.withLock { $0 += 1 } }

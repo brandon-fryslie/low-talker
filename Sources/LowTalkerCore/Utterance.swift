@@ -128,12 +128,12 @@ actor Utterance {
     /// [LAW:parse-dont-validate] An utterance no clip of which reached the floor is
     /// refused here, with its loudest peak: an empty transcript would not say
     /// whether nothing was said or the audio was too soft to be a speaker.
-    func fill(from audio: some AsyncSequence<AudioClip, Never> & Sendable) async throws {
+    func fill(from audio: some AsyncSequence<AudioClip, Never> & Sendable) async throws(TranscriptionFailure) {
         for await clip in audio {
             append(clip)
         }
         end()
-        guard spoken != nil else { throw UtteranceError.nothingSpoken(peak: loudest) }
+        guard spoken != nil else { throw .nothingSpoken(peak: loudest) }
     }
 
     /// How much audio the speech so far is worth a pass over: none until a clip
@@ -207,20 +207,4 @@ struct Timeline: Sendable {
     }
 
     private typealias Word = Transcript.Word
-}
-
-/// [LAW:no-silent-failure] The one way an utterance yields no transcript: named, with
-/// the measurement that decided it, so a quiet file or a silent hold is never decoded
-/// into words Whisper read into the quiet. What the caller answers it with is the
-/// caller's: the transcription server answers it as nothing said.
-public enum UtteranceError: Error, Equatable, CustomStringConvertible {
-    /// No clip reached the audible floor; `peak` is the loudest sample heard.
-    case nothingSpoken(peak: Float)
-
-    public var description: String {
-        switch self {
-        case .nothingSpoken(let peak):
-            "nothing spoken: the loudest sample was \(peak), under the audible floor \(Utterance.audible)"
-        }
-    }
 }
