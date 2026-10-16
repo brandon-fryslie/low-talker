@@ -3,7 +3,7 @@ import LowTalkerCore
 import Testing
 
 /// A 440 Hz tone rendered at 48 kHz stereo, the shape a typical microphone hands
-/// the tap. The contract is that the pipeline sees one continuous 16 kHz tone no
+/// over. The contract is that the pipeline sees one continuous 16 kHz tone no
 /// matter how the source was chunked.
 @Suite struct AudioClipConverterTests {
     /// Computed, not stored: the macOS 15 SDK does not mark AVAudioFormat Sendable.
@@ -40,8 +40,8 @@ import Testing
         return total / Double(window.count)
     }
 
-    /// Every chunk size a tap or a file loader hands over, including the 100 ms tap
-    /// buffers that are larger than one converter ask: no chunking loses samples,
+    /// Chunk sizes from a device's 10 ms slice to a whole second, including the ones
+    /// larger than one converter ask: no chunking loses samples,
     /// holds them back for a later call, or leaves a seam in the tone.
     @Test(arguments: [480, 4_096, 4_410, 4_800, 48_000])
     func chunkingIsInaudible(chunk: Int) throws {

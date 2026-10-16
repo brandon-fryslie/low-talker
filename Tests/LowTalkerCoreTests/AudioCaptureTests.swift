@@ -483,7 +483,7 @@ private struct Authorized: MicrophoneAuthority {
         #expect(capture.atRest == nil)
     }
 
-    /// A key-down the tap delivered late is the press `unopened` exists to catch, and it is
+    /// A key-down the input method delivered late is the press `unopened` exists to catch, and it is
     /// not one here. A held engine's buffers run continuously, so the next one to arrive
     /// after the key was already being captured when the key went down - its stamp is a
     /// full second older than the press - and the words said during that lateness are in
@@ -1450,7 +1450,7 @@ private struct Authorized: MicrophoneAuthority {
 
     /// A replaced engine's late failure says nothing about the engine now running, and neither
     /// does a let-go input's late staleness. Both watches outlive what they were formed for -
-    /// the tap's failure arrives asynchronously, and the device listeners behind `onStale` can
+    /// the render callback's failure arrives asynchronously, and the device listeners behind `onStale` can
     /// have posted before their input was let go and arrive after - so each callback carries
     /// the generation it belongs to and is matched rather than trusted. Acting on the second
     /// one here would give up an engine running healthily on the input that took over.

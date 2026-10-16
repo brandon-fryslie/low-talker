@@ -5,15 +5,16 @@ extension AudioClip {
     ///
     /// One stream at a time: the resampler carries its state between calls so a
     /// chunk boundary is inaudible, `drain` releases the tail of a stream read to its
-    /// end, and `reset` begins another. The microphone tap and the file loader are the
-    /// two streams; nothing else resamples.
+    /// end, and `reset` begins another. The microphone, the file loader and each
+    /// realtime session hold one apiece.
     ///
     /// Calls are serialized by the caller. Not Sendable: it holds AVFoundation objects
-    /// the macOS 15 SDK does not mark Sendable, so the tap captures it as
-    /// `nonisolated(unsafe)` and is its only caller.
+    /// the macOS 15 SDK does not mark Sendable, so the render callback's sink holds it
+    /// as `nonisolated(unsafe)`, converting on the audio thread while the unit runs and
+    /// resetting on the main actor only while it is stopped.
     public final class Converter {
-        /// The most the converter has been seen to ask for at once, so a tap buffer
-        /// takes one or two asks; a smaller size would only mean more asks.
+        /// The most the converter has been seen to ask for at once; a smaller piece
+        /// would only mean more asks.
         public static let pieceFrames: AVAudioFrameCount = 4_096
         private let converter: AVAudioConverter
         /// What the converter is handed per ask, in the source format.
@@ -63,7 +64,7 @@ extension AudioClip {
 
         private func pull(_ input: AVAudioPCMBuffer?, then exhausted: AVAudioConverterInputStatus) throws -> [Float] {
             // The converter asks for a packet count per ask and holds any surplus it is
-            // handed until the next call; handed a whole 100 ms tap buffer, it returns
+            // handed until the next call; handed a whole 100 ms buffer, it returns
             // up to 90 ms of it late. Serving each ask no more than it asked for, from a
             // cursor over the input, leaves nothing held: every call returns all of its
             // input, and only the resampler's few-sample tail waits for `drain`.

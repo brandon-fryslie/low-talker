@@ -40,7 +40,7 @@ extension KeyChord {
 /// as the key comes up. The chord that began a press owns it: keys added during a
 /// hold change nothing, and the press ends when any key of its chord comes up.
 ///
-/// [LAW:effects-at-boundaries] A value with no clock and no tap. Time comes in on
+/// [LAW:effects-at-boundaries] A value with no clock and no feed. Time comes in on
 /// each event, so a test drives it with timestamps of its choosing.
 public struct HotkeyDetector: Sendable {
     public enum Transition: Hashable, Sendable {
