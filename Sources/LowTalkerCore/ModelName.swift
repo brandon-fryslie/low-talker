@@ -39,7 +39,7 @@ public struct ModelName: RawRepresentable, Hashable, Codable, Sendable, Expressi
     /// on an M2 Max: it heard every bench fixture exactly as the plain 626 MB
     /// variant did and decoded each one sooner, while the distilled models misheard
     /// proper nouns and the small models misheard whole phrases. The numbers are in
-    /// the README under "The latency harness".
+    /// docs/engineering.md under "The latency harness".
     public static let `default`: ModelName = "large-v3-v20240930_turbo_632MB"
 }
 

@@ -25,7 +25,7 @@ private let repository = URL(fileURLWithPath: #filePath)
         #expect(off.step?.contains(GuidedSetup.title) == true)
     }
 
-    // MARK: - the vocabulary README keeps a copy of
+    // MARK: - the vocabulary docs/engineering.md keeps a copy of
 
     /// Each row's readings in the table are the ones the row prints. [LAW:one-source-of-truth]
     @Test func eachRowsReadingsAreTheOnesItPrints() {
@@ -35,7 +35,7 @@ private let repository = URL(fileURLWithPath: #filePath)
     }
 
     /// Every row is in the table, and no row's readings are borrowed from another's. A
-    /// gap here is invisible to the check that reads it: README would be held to the rows
+    /// gap here is invisible to the check that reads it: the doc would be held to the rows
     /// that happened to be listed and silently unheld on the rest.
     @Test func everyRowHasReadingsOfItsOwnInTheTable() {
         for row in Requirement.Row.allCases {
@@ -44,19 +44,19 @@ private let repository = URL(fileURLWithPath: #filePath)
         #expect(Requirement.readings.count == Requirement.Row.allCases.reduce(0) { $0 + Self.readings(for: $1).count })
     }
 
-    /// README lists each row's readings for a reader following the runbook by hand, under
+    /// docs/engineering.md lists each row's readings for a reader following the runbook by hand, under
     /// "So the <row>'s row reads one of", one "- `reading`" bullet each. Compared as sets
-    /// both ways, so a reading added to the code and one left in README after the code
+    /// both ways, so a reading added to the code and one left in the doc after the code
     /// dropped it both fail. [LAW:one-source-of-truth]
     @Test(arguments: Requirement.Row.allCases)
-    func readmeListsEveryReadingOfTheRowAndNoOther(row: Requirement.Row) throws {
-        let readme = try String(contentsOf: repository.appending(path: "README.md"), encoding: .utf8)
-        let lines = readme.components(separatedBy: "\n")
+    func engineeringDocListsEveryReadingOfTheRowAndNoOther(row: Requirement.Row) throws {
+        let doc = try String(contentsOf: repository.appending(path: "docs/engineering.md"), encoding: .utf8)
+        let lines = doc.components(separatedBy: "\n")
         let lead = "So the \(row.rawValue.lowercased())'s row reads one of"
-        let start = try #require(lines.firstIndex { $0.hasPrefix(lead) }, "README.md has no line beginning \"\(lead)\"")
+        let start = try #require(lines.firstIndex { $0.hasPrefix(lead) }, "docs/engineering.md has no line beginning \"\(lead)\"")
         let bullets = lines[(start + 1)...].drop { $0.isEmpty }.prefix { $0.hasPrefix("- `") }
         let quoted = bullets.map { $0.dropFirst(3).prefix { $0 != "`" } }.map(String.init)
-        #expect(Set(quoted) == Set(Self.readings(for: row)), "README.md's list for \(row.rawValue) is not the code's")
+        #expect(Set(quoted) == Set(Self.readings(for: row)), "docs/engineering.md's list for \(row.rawValue) is not the code's")
     }
 
     // MARK: - the list
