@@ -30,12 +30,17 @@ import Testing
 
     static func push(_ ring: SliceRing, from first: Int, frames: Int, at ticks: UInt64) {
         let buffer = slice(from: first, frames: frames)
-        ring.push(UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList), frames: frames, stamp: stamp(ticks))
+        // The list points into the buffer, which ARC may release after its last use.
+        withExtendedLifetime(buffer) {
+            ring.push(UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList), frames: frames, stamp: stamp(ticks))
+        }
     }
 
     static func deliver(_ delivery: SliceDelivery, from first: Int, frames: Int, at stamp: AudioTimeStamp) {
         let buffer = slice(from: first, frames: frames)
-        delivery.deliver(UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList), frames: frames, stamp: stamp)
+        withExtendedLifetime(buffer) {
+            delivery.deliver(UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList), frames: frames, stamp: stamp)
+        }
     }
 
     /// The next entry as a slice's stamp and samples, or nil when it is anything else.
