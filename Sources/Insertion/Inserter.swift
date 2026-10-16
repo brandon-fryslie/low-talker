@@ -11,10 +11,9 @@ import DarwinCalls
 /// methods or macOS - the caller's question is "did these words land", and that question
 /// outlives whatever carries it.
 public protocol Inserter: Sendable {
-    /// Inserts `text` at the cursor `destination` admits, or throws why it did not: a `Refusal` when the input
-    /// method looked and would not, `NotYetTaken` when the app has not taken them yet, and
-    /// otherwise whatever stopped the question reaching it, which the channel below names
-    /// in its own types.
+    /// Inserts `text` at the cursor `destination` admits, or throws why it did not: refused
+    /// when the input method looked and would not, not yet taken when the app has not taken
+    /// them, and otherwise whatever stopped the question reaching it.
     ///
     /// **Blocking, and not to be called on the main actor or from a task.** The one that
     /// crosses to the input method holds its thread in the kernel for up to its timeout, so
@@ -23,7 +22,7 @@ public protocol Inserter: Sendable {
     /// Said here rather than at the one implementation because this is the seam
     /// low-input-method-s71.b26's executor consumes, and the obligation belongs to whatever
     /// satisfies it. [LAW:no-ambient-temporal-coupling]
-    func insert(_ text: String, into destination: Destination) throws -> Inserted
+    func insert(_ text: String, into destination: Destination) throws(InsertFailure) -> Inserted
 }
 
 public extension Inserter {
@@ -44,10 +43,10 @@ public extension Inserter {
     /// words did not land when they may have - the one conflation this module exists to
     /// prevent. What bounds the wait is the timeout, which is also the bound the answer
     /// names. [LAW:no-silent-failure]
-    func insert(_ text: String, into destination: Destination) async throws -> Inserted {
-        try await withCheckedThrowingContinuation { continuation in
-            Thread { continuation.resume(with: Result { try insert(text, into: destination) }) }.start()
-        }
+    func insert(_ text: String, into destination: Destination) async throws(InsertFailure) -> Inserted {
+        try await withCheckedContinuation { continuation in
+            Thread { continuation.resume(returning: Result { () throws(InsertFailure) in try insert(text, into: destination) }) }.start()
+        }.get()
     }
 }
 
@@ -100,51 +99,58 @@ public struct InputMethodInserter: Inserter {
         self.answerer = answerer
     }
 
-    public func insert(_ text: String, into destination: Destination) throws -> Inserted {
-        let answerer = try answerer.get()
+    public func insert(_ text: String, into destination: Destination) throws(InsertFailure) -> Inserted {
+        let answerer: PeerIdentity
+        do throws(PeerIdentity.Unreadable) { answerer = try self.answerer.get() } catch { throw .answererUnreadable(error) }
         var remote = mach_port_t()
         // [LAW:parse-dont-validate] The boundary: past here there is a port or a thrown
         // reason, never a maybe-port that later code has to keep asking about.
         guard lt_bootstrap_look_up(portName, &remote) == KERN_SUCCESS else {
-            throw Unreachable.nothingIsListening(port: portName)
+            throw .unreachable(.nothingIsListening(port: portName))
         }
         defer { mach_port_deallocate(mach_task_self_, remote) }
         let reply: ReceiveRight
-        do throws(ReceiveRight.NotAllocated) { reply = try ReceiveRight(sendable: false) } catch { throw Unreachable.failed(port: portName, status: error.status, words: .notSent) }
+        do throws(ReceiveRight.NotAllocated) { reply = try ReceiveRight(sendable: false) } catch { throw .unreachable(.failed(port: portName, status: error.status, words: .notSent)) }
         let phase = timeout / 4
         // Who holds the name is asked before a word is said to it. A name anyone can compute
         // is a name anyone can register first, and checking only the answer to the words
         // would be checking after the dictation had already gone to whoever that was. The
         // receive right the greeting is answered from is the one the words go to, and only
         // its holder can move it, so the process that answered is the process that hears.
-        let greeting = try roundTrip(
-            Data(), id: Wire.greeting, to: remote, answeredOn: reply, by: answerer, within: phase, once: .notSent,
-            unanswered: .didNotSayWhoItIs(port: portName, after: phase),
-            // Dropped unanswered before any words went, which is a far end not answering.
-            abandoned: .nothingIsListening(port: portName))
+        let greeting: Mach.Received
+        do throws(Unreachable) {
+            greeting = try roundTrip(
+                Data(), id: Wire.greeting, to: remote, answeredOn: reply, by: answerer, within: phase, once: .notSent,
+                unanswered: .didNotSayWhoItIs(port: portName, after: phase),
+                // Dropped unanswered before any words went, which is a far end not answering.
+                abandoned: .nothingIsListening(port: portName))
+        } catch { throw .unreachable(error) }
         // An empty greeting is the input method saying it will listen; anything else is its
         // refusal to, which is thrown by name like any other.
         if let said = greeting.payload, !said.isEmpty {
             guard case .refused(let refusal)? = Wire.answer(of: said) else {
-                throw Unreachable.answerWasNotReadable(port: portName, bytes: said.count, words: .notSent)
+                throw .unreachable(.answerWasNotReadable(port: portName, bytes: said.count, words: .notSent))
             }
-            throw refusal
+            throw .refused(refusal)
         }
-        let received = try roundTrip(
-            Wire.request(InsertRequest(text, into: destination)), id: Wire.insert, to: remote, answeredOn: reply, by: answerer, within: phase, once: .mayHaveLanded,
-            unanswered: .answerDidNotArrive(port: portName, after: phase),
-            abandoned: .answerWasAbandoned(port: portName))
+        let received: Mach.Received
+        do throws(Unreachable) {
+            received = try roundTrip(
+                Wire.request(InsertRequest(text, into: destination)), id: Wire.insert, to: remote, answeredOn: reply, by: answerer, within: phase, once: .mayHaveLanded,
+                unanswered: .answerDidNotArrive(port: portName, after: phase),
+                abandoned: .answerWasAbandoned(port: portName))
+        } catch { throw .unreachable(error) }
         let data = received.payload ?? Data()
         guard let answer = Wire.answer(of: data) else {
-            throw Unreachable.answerWasNotReadable(port: portName, bytes: data.count, words: .mayHaveLanded)
+            throw .unreachable(.answerWasNotReadable(port: portName, bytes: data.count, words: .mayHaveLanded))
         }
         // [LAW:parse-dont-validate] The wire's sum ends here: past this line a refusal or
         // words not yet taken is a failure thrown like the others, and a caller holds words
         // inserted or nothing.
         switch answer {
         case .inserted(let characters, let into): return Inserted(characters: characters, into: into)
-        case .refused(let refusal): throw refusal
-        case .notYetTaken(let characters, let into): throw NotYetTaken(characters: characters, into: into)
+        case .refused(let refusal): throw .refused(refusal)
+        case .notYetTaken(let characters, let into): throw .notYetTaken(NotYetTaken(characters: characters, into: into))
         }
     }
 
@@ -157,7 +163,7 @@ public struct InputMethodInserter: Inserter {
     private func roundTrip(
         _ payload: Data, id: mach_msg_id_t, to remote: mach_port_t, answeredOn reply: ReceiveRight,
         by answerer: PeerIdentity, within phase: Duration, once words: Words, unanswered: Unreachable, abandoned: Unreachable
-    ) throws -> Mach.Received {
+    ) throws(Unreachable) -> Mach.Received {
         let sent = Mach.send(
             payload, id: id, to: remote, disposition: mach_msg_type_name_t(MACH_MSG_TYPE_COPY_SEND),
             replyTo: reply.port, timeout: phase)

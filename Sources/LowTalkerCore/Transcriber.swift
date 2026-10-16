@@ -17,7 +17,8 @@ public protocol Transcriber: Sendable {
     /// biases every reading of it.
     ///
     /// [LAW:types-are-the-program] One final and any number of partials: the final
-    /// is the return value, so a caller cannot miss it or receive two.
+    /// is the return value, so a caller cannot miss it or receive two. Words heard leave
+    /// only that way, never inside what it throws, so a log may carry a failure whole.
     func transcribe(
         _ audio: some AsyncSequence<AudioClip, Never> & Sendable,
         expecting vocabulary: Vocabulary,

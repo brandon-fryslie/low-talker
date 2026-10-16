@@ -233,7 +233,7 @@ private struct Boom: Error {}
         }
         try await queue.drain()
         #expect(finished.raised)
-        try await submitted.value
+        await submitted.value
     }
 
     /// What an operation holds is let go of on the actor that submitted it. `Dictation`
@@ -251,7 +251,7 @@ private struct Boom: Error {}
     /// Submitted from a call of its own, so nothing but the operation still holds `held`
     /// once the call returns.
     @MainActor
-    private static func submitHolding(_ held: Held, to queue: SerialQueue) throws -> Task<Void, any Error> {
+    private static func submitHolding(_ held: Held, to queue: SerialQueue) throws -> Task<Void, Never> {
         try queue.submit { _ = held }
     }
 

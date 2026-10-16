@@ -80,9 +80,9 @@ public final class Hold {
     /// and stands in for a warning before it, which told the person the same thing.
     ///
     /// The person reads the warning, and the app logs it, so it is word-free whatever failed.
-    func failed(_ words: Transcript, with failure: any Error) {
-        let warning = (failure as? any WordFree).map { "\($0)" } ?? "WARNING: The insert failed on \(type(of: failure)). Your dictation was not inserted."
-        held = wordsMayHaveLanded(after: failure)
+    func failed(_ words: Transcript, with failure: InsertFailure) {
+        let warning = failure.publicAccount
+        held = failure.wordsMayHaveLanded
             ? .unaccounted(warning: warning)
             : .unplaced(offering(words), warning: warning, unaccounted: held?.standing)
     }

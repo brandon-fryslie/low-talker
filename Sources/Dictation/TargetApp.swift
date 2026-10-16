@@ -7,9 +7,9 @@ import LowTalkerCore
 public enum TargetApp {
     /// [LAW:one-source-of-truth] Which app is in front is macOS's to say, so it is read here
     /// rather than remembered anywhere.
-    public static func frontmost() throws -> BundleID {
-        guard let app = NSWorkspace.shared.frontmostApplication else { throw FrontmostUnknown.noFrontmostApp }
-        guard let id = app.bundleIdentifier else { throw FrontmostUnknown.withoutBundleID(pid: app.processIdentifier) }
+    public static func frontmost() throws(FrontmostUnknown) -> BundleID {
+        guard let app = NSWorkspace.shared.frontmostApplication else { throw .noFrontmostApp }
+        guard let id = app.bundleIdentifier else { throw .withoutBundleID(pid: app.processIdentifier) }
         return BundleID(rawValue: id)
     }
 }

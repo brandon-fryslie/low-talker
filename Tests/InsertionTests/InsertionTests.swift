@@ -167,7 +167,7 @@ private let anEditor = "com.example.editor"
         let name = aPortNobodyElseUses()
         let port = try hostInsertion(name: name) { _ in .refused(.noClientHasFocus) }
 
-        await #expect(throws: Refusal.noClientHasFocus) { try await inserter(name).insert("hello", into: .cursorInFront) }
+        await #expect(throws: InsertFailure.refused(.noClientHasFocus)) { try await inserter(name).insert("hello", into: .cursorInFront) }
         withExtendedLifetime(port) {}
     }
 
@@ -177,7 +177,7 @@ private let anEditor = "com.example.editor"
         let name = aPortNobodyElseUses()
         let port = try hostInsertion(name: name) { .notYetTaken(characters: $0.text.count, into: anEditor) }
 
-        await #expect(throws: NotYetTaken(characters: 5, into: anEditor)) { try await inserter(name).insert("hello", into: .cursorInFront) }
+        await #expect(throws: InsertFailure.notYetTaken(NotYetTaken(characters: 5, into: anEditor))) { try await inserter(name).insert("hello", into: .cursorInFront) }
         withExtendedLifetime(port) {}
     }
 
@@ -292,7 +292,7 @@ private let anEditor = "com.example.editor"
         let us = try OwnProcess.identity()
         let elsewhere = PeerIdentity.adHoc(cdhash: String(repeating: "0", count: 40))
         let asking = InputMethodInserter(portName: name, timeout: aBudgetTheRunnerCannotSpend, answerer: .success(elsewhere))
-        await #expect(throws: Unreachable.answeredByAStranger(port: name, pid: getpid(), because: .someoneElse(us), required: elsewhere, words: .notSent)) {
+        await #expect(throws: InsertFailure.unreachable(.answeredByAStranger(port: name, pid: getpid(), because: .someoneElse(us), required: elsewhere, words: .notSent))) {
             try await asking.insert("hello", into: .cursorInFront)
         }
         #expect(seen.text == nil)
@@ -303,7 +303,7 @@ private let anEditor = "com.example.editor"
     /// sending to whoever answers.
     @Test func anInserterThatCannotNameItsInputMethodSaysSo() async {
         let asking = InputMethodInserter(portName: aPortNobodyElseUses(), timeout: .seconds(1), answerer: .failure(.noCertificate))
-        await #expect(throws: PeerIdentity.Unreadable.noCertificate) { try await asking.insert("hello", into: .cursorInFront) }
+        await #expect(throws: InsertFailure.answererUnreadable(.noCertificate)) { try await asking.insert("hello", into: .cursorInFront) }
     }
 }
 
@@ -360,7 +360,7 @@ private let anEditor = "com.example.editor"
 @Suite struct UnreachableTests {
     @Test func nothingListeningIsSaidByName() async {
         let name = aPortNobodyElseUses()
-        await #expect(throws: Unreachable.nothingIsListening(port: name)) {
+        await #expect(throws: InsertFailure.unreachable(.nothingIsListening(port: name))) {
             try await inserter(name, timeout: .seconds(1)).insert("hello", into: .cursorInFront)
         }
     }
@@ -400,7 +400,7 @@ private let anEditor = "com.example.editor"
         }
         #expect(filled, "the queue behind the port never filled, so no send timeout can be asked for")
 
-        await #expect(throws: Unreachable.requestWasNotTaken(port: name, after: budget / 4)) {
+        await #expect(throws: InsertFailure.unreachable(.requestWasNotTaken(port: name, after: budget / 4))) {
             try await inserter(name, timeout: budget).insert("hello", into: .cursorInFront)
         }
         withExtendedLifetime(port) {}
@@ -450,7 +450,7 @@ private let anEditor = "com.example.editor"
         // otherwise fail it in the greeting. The five seconds this case does spend are the
         // last receive, which is the wait under test.
         let timeout = Duration.seconds(20)
-        await #expect(throws: Unreachable.answerDidNotArrive(port: name, after: timeout / 4)) {
+        await #expect(throws: InsertFailure.unreachable(.answerDidNotArrive(port: name, after: timeout / 4))) {
             try await inserter(name, timeout: timeout).insert("hello", into: .cursorInFront)
         }
         withExtendedLifetime(port) {}
@@ -466,7 +466,7 @@ private let anEditor = "com.example.editor"
         }
 
         let timeout = Duration.seconds(4)
-        await #expect(throws: Unreachable.didNotSayWhoItIs(port: name, after: timeout / 4)) {
+        await #expect(throws: InsertFailure.unreachable(.didNotSayWhoItIs(port: name, after: timeout / 4))) {
             try await inserter(name, timeout: timeout).insert("hello", into: .cursorInFront)
         }
         withExtendedLifetime(port) {}
@@ -485,7 +485,7 @@ private let anEditor = "com.example.editor"
             words.discardReply()
         }.start()
 
-        await #expect(throws: Unreachable.answerWasAbandoned(port: name)) {
+        await #expect(throws: InsertFailure.unreachable(.answerWasAbandoned(port: name))) {
             try await inserter(name).insert("hello", into: .cursorInFront)
         }
         withExtendedLifetime(right) {}
@@ -502,7 +502,7 @@ private let anEditor = "com.example.editor"
             $0.id == garbled ? Data("nonsense".utf8) : Data()
         }
 
-        await #expect(throws: Unreachable.answerWasNotReadable(port: name, bytes: 8, words: words)) {
+        await #expect(throws: InsertFailure.unreachable(.answerWasNotReadable(port: name, bytes: 8, words: words))) {
             try await inserter(name).insert("hello", into: .cursorInFront)
         }
         withExtendedLifetime(port) {}

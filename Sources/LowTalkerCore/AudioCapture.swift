@@ -305,7 +305,7 @@ public final class AudioCapture {
     /// speech no engine can be started in time for, and a press that quietly began after
     /// the words it was pressed for is the one failure this whole path exists to refuse.
     /// [LAW:no-silent-failure]
-    public func beginSession(at moment: HostTime, preRoll: TimeInterval = AudioSession.defaultPreRoll) throws -> AudioSession {
+    public func beginSession(at moment: HostTime, preRoll: TimeInterval = AudioSession.defaultPreRoll) throws(NoMicrophone) -> AudioSession {
         guard case .started(var started) = phase else { throw NoMicrophone.stopped }
         guard !started.sessionIsOpen else {
             preconditionFailure("a session began while one was open; a press is one session")
