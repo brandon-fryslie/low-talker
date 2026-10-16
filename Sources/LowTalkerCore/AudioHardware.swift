@@ -186,22 +186,18 @@ public struct SystemAudioHardware: AudioHardware {
     }
 
     public func watchDefaultInput(_ onChange: @escaping @MainActor () -> Void) throws -> Disposal {
-        let address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultInputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        let system = AudioObjectID(kAudioObjectSystemObject)
-        // Delivered on the main queue, which is the main actor.
-        let listener: AudioObjectPropertyListenerBlock = { _, _ in MainActor.assumeIsolated { onChange() } }
-        var adding = address
-        try AudioHardwareError.check(
-            AudioObjectAddPropertyListenerBlock(system, &adding, .main, listener),
-            AudioHardwareError.defaultInputWatchFailed
+        let remove = try listen(
+            to: AudioObjectPropertyAddress(
+                mSelector: kAudioHardwarePropertyDefaultInputDevice,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            ),
+            on: AudioObjectID(kAudioObjectSystemObject),
+            refused: AudioHardwareError.defaultInputWatchFailed,
+            onChange
         )
         return {
-            var removing = address
-            let status = AudioObjectRemovePropertyListenerBlock(system, &removing, .main, listener)
+            let status = remove()
             precondition(status == noErr, "CoreAudio refused to remove the default input listener it added (status \(status))")
         }
     }

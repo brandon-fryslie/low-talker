@@ -51,6 +51,7 @@ let package = Package(
                 // The app's end of the hotkey port, which the input method tells the modifier
                 // keys to.
                 "Insertion",
+                "CoreAudioCalls",
                 .product(name: "WhisperKit", package: "argmax-oss-swift"),
                 .product(name: "TOMLKit", package: "TOMLKit"),
             ]
@@ -102,6 +103,11 @@ let package = Package(
         // and the kernel's code signing call, each passed through by a line of C and nothing
         // more.
         .target(name: "DarwinCalls"),
+        // CoreAudio's listener block calls, passed through by a line of C each so the block
+        // a listener is removed with is the block it was added with. Its own target rather
+        // than DarwinCalls', which the input method links and which should not bring
+        // CoreAudio with it.
+        .target(name: "CoreAudioCalls"),
         // The one lock every call into Text Input Sources takes, since the API aborts the
         // process when two threads meet inside it.
         .target(name: "TextInputSources"),
