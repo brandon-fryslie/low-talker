@@ -260,7 +260,7 @@ let insertFailures: [InsertFailure] = Refusal.allCases.map { InsertFailure(error
         #expect(failureLine(stopped) == "\(Refusal.cursorIsInAnotherApp) 1 words of your dictation were inserted before it; the rest were not.")
         #expect("\(stopped)".hasSuffix("1 words of your dictation were inserted before it; the rest were not."))
         #expect(rig.inputMethod.inserted == ["hello"])
-        #expect(rig.hold.held == Held(words: Transcript(typed: " there friend"), warning: "\(Refusal.cursorIsInAnotherApp)"))
+        #expect(rig.hold.held == .unplaced(Transcript(typed: " there friend"), warning: "\(Refusal.cursorIsInAnotherApp)"))
     }
 
     /// The person moves to another app with a text client while the press is open - the
@@ -790,13 +790,14 @@ let insertFailures: [InsertFailure] = Refusal.allCases.map { InsertFailure(error
         rig.inputMethod.refusing(failure.error)
         rig.hold()
         #expect(try #require(await rig.report().failure as? PressStopped).landed == 0)
-        let kept = failure.mayHaveLanded ? Transcript(words: []) : Transcript(typed: "hello there")
-        #expect(rig.hold.held == Held(words: kept, warning: "\(failure.error)"))
+        let kept: Held = failure.mayHaveLanded
+            ? .unaccounted(warning: "\(failure.error)") : .unplaced(Transcript(typed: "hello there"), warning: "\(failure.error)")
+        #expect(rig.hold.held == kept)
         rig.inputMethod.refusing(nil)
         rig.dictation.cursorArrived()
         try await rig.dictation.finish()
         #expect(rig.inputMethod.inserted == (failure.mayHaveLanded ? [] : ["hello there"]))
-        #expect(rig.hold.held == (failure.mayHaveLanded ? Held(words: kept, warning: "\(failure.error)") : nil))
+        #expect(rig.hold.held == (failure.mayHaveLanded ? kept : nil))
         rig.hold.dismiss()
         #expect(rig.hold.held == nil)
     }
@@ -828,7 +829,73 @@ let insertFailures: [InsertFailure] = Refusal.allCases.map { InsertFailure(error
         rig.dictation.cursorArrived()
         try await rig.dictation.finish()
         #expect(rig.inputMethod.inserted.isEmpty)
-        #expect(rig.shown.held == [Held(words: Transcript(typed: "a"), warning: "\(Refusal.noClientHasFocus)"), nil])
+        #expect(rig.shown.held == [.unplaced(Transcript(typed: "a"), warning: "\(Refusal.noClientHasFocus)"), nil])
+    }
+
+    /// Words dismissed while an insert carrying them is on its way stay dismissed when that
+    /// insert fails: only its own words are held.
+    @Test func wordsDismissedDuringAFailingInsertStayDismissed() async throws {
+        let rig = try Rig(hearing: FakeTranscriber { clip in Transcript(typed: clip.samples == [1, 2, 3] ? "a" : " b") })
+        rig.inputMethod.refusing(Refusal.noClientHasFocus)
+        rig.hold()
+        _ = await rig.report()
+        rig.inputMethod.hold()
+        rig.hold(speaking: [4])
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.inputMethod.holding == 1 })
+        rig.hold.dismiss()
+        rig.inputMethod.letGo()
+        _ = await rig.report()
+        #expect(rig.hold.held == .unplaced(Transcript(typed: " b"), warning: "\(Refusal.noClientHasFocus)"))
+    }
+
+    /// Words that may have landed are not accounted for by a later insert that lands: the
+    /// warning stands until the person dismisses it.
+    @Test func aLaterLandingLeavesWordsThatMayHaveLandedUnaccounted() async throws {
+        let engine = FakeTranscriber(confirming: { samples in
+            Transcript(typed: samples.count >= 4 ? "hello there" : samples.count >= 2 ? "hello" : "")
+        }) { _ in Transcript(typed: "hello there friend") }
+        let rig = try Rig(hearing: engine)
+        let notYetTaken = NotYetTaken(characters: 5, into: "com.apple.TextEdit")
+        rig.inputMethod.refusing(notYetTaken)
+        rig.dictation.press(.began(Rig.rightOption, at: rig.now))
+        rig.speak([1, 2])
+        #expect(try await holds(within: .seconds(10), askingEvery: .milliseconds(2)) { rig.hold.held != nil })
+        rig.inputMethod.refusing(nil)
+        rig.speak([3, 4])
+        rig.keyUp()
+        _ = try await rig.session()
+        #expect(rig.inputMethod.inserted == [" there", " friend"])
+        #expect(rig.hold.held == .unaccounted(warning: "\(notYetTaken)"))
+    }
+
+    /// A cursor that arrives while a press is open is offered what is held once that press
+    /// ends, when the press placed nothing of its own.
+    @Test func aCursorArrivingDuringAPressThatLapsesIsOfferedTheHeldWordsAfterIt() async throws {
+        let rig = try Rig(hearing: FakeTranscriber { _ in Transcript(typed: "a") })
+        rig.inputMethod.refusing(Refusal.noClientHasFocus)
+        rig.hold()
+        _ = await rig.report()
+        rig.inputMethod.refusing(nil)
+        rig.dictation.press(.began(Rig.rightOption, at: rig.now))
+        rig.dictation.cursorArrived()
+        rig.dictation.press(.ended(Rig.rightOption, .lapsed))
+        #expect(await rig.report().failure is PressLapsed)
+        try await rig.dictation.finish()
+        #expect(rig.inputMethod.inserted == ["a"])
+        #expect(rig.hold.held == nil)
+    }
+
+    /// A failure that is not word-free is named by its type on the panel and in the log, which
+    /// is public: what it says could carry the words.
+    @Test func aFailureThatCouldCarryWordsIsHeldUnderItsTypeName() async throws {
+        struct Carrying: Error { let words = "hello there" }
+        let rig = try Rig(hearing: FakeTranscriber { _ in Transcript(typed: "hello there") })
+        rig.inputMethod.refusing(Carrying())
+        rig.hold()
+        _ = await rig.report()
+        let warning = try #require(rig.hold.held?.warning)
+        #expect(warning.contains("Carrying"))
+        #expect(!warning.contains("hello"))
     }
 
     /// The hold is the app's, not the loop's: a loop rebuilt over a new config offers what

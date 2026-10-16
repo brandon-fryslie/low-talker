@@ -317,6 +317,8 @@ public final class Dictation {
     private var shown: Activity = .idle
     /// Presses ended and not yet reported.
     private var unreported = 0
+    /// When a cursor last arrived while the open press was down, for the offer queued behind it.
+    private var arrivedDuringPress: ContinuousClock.Instant?
     /// The decode of the latest press, which the next press's decode waits out before it
     /// takes the engine. Nil until the first press.
     private var latestDecode: Task<Decoded, Never>?
@@ -489,6 +491,8 @@ public final class Dictation {
                 if case .success(let heard) = heard { heard.decode.cancel() }
                 settle(.failure(error))
             }
+            arrivedDuringPress.map(offer(since:))
+            arrivedDuringPress = nil
         }
     }
 
@@ -536,8 +540,8 @@ public final class Dictation {
     /// queue, so the words land after every press before it and before every press after it.
     ///
     /// [LAW:no-silent-failure] An insert that fails leaves its words held and the press
-    /// listening, and what it was told is what this returns, unless a later insert landed
-    /// them after all.
+    /// listening, and what it was told is what this returns, unless a later insert landed.
+    /// Words that one could not account for stay the hold's to warn of.
     private func commit(_ streaming: Streaming) async -> (any Error)? {
         var unplaced: (any Error)?
         for await _ in streaming.wakes {
@@ -564,17 +568,26 @@ public final class Dictation {
             performed.map { _ in hold.landed() }
             return Placed(performed: performed, words: performed.map { _ in offered.words.count } ?? 0)
         } catch {
-            hold.failed(offered, with: error)
+            hold.failed(words, with: error)
             throw error
         }
     }
 
-    /// A cursor was given focus, and what is held is offered to it. Only while no press is
-    /// open or on its way: those place what is held ahead of their own words and into the
-    /// app those go to, and an offer made now could land between them.
+    /// A cursor was given focus, and what is held is offered to it, in its turn on the queue.
+    /// An open press has its commits on the queue and not yet what key-up inserts, so an offer
+    /// queued now could land between them: one that arrives then is queued behind the press's
+    /// key-up, whose own insert carries what is held, so the offer is for a press that ends
+    /// placing nothing.
     public func cursorArrived() {
-        guard case .up = press, unreported == 0 else { return }
         let arrived = ContinuousClock.now
+        switch press {
+        case .down: arrivedDuringPress = arrived
+        case .up, .refused: offer(since: arrived)
+        }
+    }
+
+    /// Offers what is held to the cursor in front.
+    private func offer(since arrived: ContinuousClock.Instant) {
         do {
             try sessions.submit {
                 // A failure is the hold's to show, and `place` has told it.

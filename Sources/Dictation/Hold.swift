@@ -1,18 +1,31 @@
 import Insertion
 import LowTalkerCore
 
-/// Words no cursor took, and what the latest try to place them was told.
-public struct Held: Sendable, Equatable {
-    /// The words at no cursor, in the order they were said. Empty after a failure that handed
-    /// them to an app that may yet take them: those are not offered again, since that is the
-    /// one way to type them twice.
-    public let words: Transcript
-    /// What the latest insert was told, as the person reads it.
-    public let warning: String
+/// What no cursor took, and what the latest try to place it was told.
+///
+/// [LAW:types-are-the-program] Two cases because a landing settles one and not the other.
+public enum Held: Sendable, Equatable {
+    /// Words at no cursor, in the order they were said, which the next insert carries ahead
+    /// of its own.
+    case unplaced(Transcript, warning: String)
+    /// Words handed to an app that may yet take them, or sent with no answer to say what became
+    /// of them. They are not offered again, since that is the one way to type them twice, and
+    /// no later insert says what became of them, so the warning stands until the person
+    /// dismisses it.
+    case unaccounted(warning: String)
 
-    public init(words: Transcript, warning: String) {
-        self.words = words
-        self.warning = warning
+    /// The words the next insert carries.
+    public var words: Transcript {
+        switch self {
+        case .unplaced(let words, _): words
+        case .unaccounted: Transcript(words: [])
+        }
+    }
+
+    public var warning: String {
+        switch self {
+        case .unplaced(_, let warning), .unaccounted(let warning): warning
+        }
     }
 }
 
@@ -44,14 +57,21 @@ public final class Hold {
         Transcript(words: (held?.words.words ?? []) + words.words)
     }
 
-    /// An insert carrying what was held landed.
+    /// An insert carrying what was held landed, which says nothing of words unaccounted for.
     func landed() {
-        held = nil
+        held = switch held {
+        case .unplaced, nil: nil
+        case .unaccounted: held
+        }
     }
 
-    /// An insert of `offered` failed with `failure`: its words are held, unless the failure
-    /// says they may have landed after all.
-    func failed(_ offered: Transcript, with failure: any Error) {
-        held = Held(words: wordsMayHaveLanded(after: failure) ? Transcript(words: []) : offered, warning: "\(failure)")
+    /// An insert of what is held and then `words` failed with `failure`. What is held is read
+    /// now, not when the insert was offered, so words the person dismissed while it was on its
+    /// way stay dismissed. [LAW:one-source-of-truth]
+    ///
+    /// The person reads the warning, and the app logs it, so it is word-free whatever failed.
+    func failed(_ words: Transcript, with failure: any Error) {
+        let warning = (failure as? any WordFree).map { "\($0)" } ?? "WARNING: The insert failed on \(type(of: failure)). Your dictation was not inserted."
+        held = wordsMayHaveLanded(after: failure) ? .unaccounted(warning: warning) : .unplaced(offering(words), warning: warning)
     }
 }
