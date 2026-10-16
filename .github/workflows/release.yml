@@ -88,18 +88,18 @@ jobs:
           keychain=$(scripts/runner-keychain release)
           echo "RELEASE_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
 
-      # The certificates were issued by Apple's first Developer ID intermediate, which the
-      # runner image does not carry, and a signature has to chain through it. Pinned by hash,
-      # since it is fetched on every run.
+      # The certificates were issued by Apple's G2 Developer ID intermediate, which macOS does
+      # not carry, and a signature has to chain through it. Pinned by hash, since it is fetched
+      # on every run.
       - name: Import the Developer ID identities
         env:
           DEVELOPER_ID_P12: ${{ secrets.DEVELOPER_ID_P12 }}
           DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
         run: |
           set -euo pipefail
-          intermediate="$RUNNER_TEMP/DeveloperIDCA.cer"
-          curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDCA.cer -o "$intermediate"
-          echo "7afc9d01a62f03a2de9637936d4afe68090d2de18d03f29c88cfb0b1ba63587f  $intermediate" | shasum -a 256 -c -
+          intermediate="$RUNNER_TEMP/DeveloperIDG2CA.cer"
+          curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o "$intermediate"
+          echo "f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a  $intermediate" | shasum -a 256 -c -
           security import "$intermediate" -k "$RELEASE_KEYCHAIN"
           p12="$RUNNER_TEMP/developer-id.p12"
           base64 -D <<<"$DEVELOPER_ID_P12" > "$p12"
