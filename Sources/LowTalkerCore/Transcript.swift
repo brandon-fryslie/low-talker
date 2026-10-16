@@ -44,6 +44,22 @@ public struct Transcript: Hashable, Codable, Sendable {
         !text.contains { !$0.isWhitespace }
     }
 
+    /// The text with the fewest of the oldest words dropped behind an ellipsis that leave the
+    /// rest fitting, as a line truncated at its head shows it but at whole words. The newest
+    /// word stays even when it fits alone nowhere, since it is the one being watched.
+    public func truncatingHead(toFit fits: (String) -> Bool) -> String {
+        // The first word shown carries the space the engine put before it, which a line has no use for.
+        let from = { (first: Int) in String(Transcript(words: Array(words[first...])).text.drop(while: \.isWhitespace)) }
+        guard words.count > 1, !fits(from(0)) else { return from(0) }
+        // Binary search, since dropping more words never makes the rest harder to fit.
+        var (fewest, most) = (1, words.count - 1)
+        while fewest < most {
+            let dropped = (fewest + most) / 2
+            if fits("…" + from(dropped)) { most = dropped } else { fewest = dropped + 1 }
+        }
+        return "…" + from(fewest)
+    }
+
     public struct Word: Hashable, Codable, Sendable {
         public let text: String
         /// Seconds from the start of the clip. A ClosedRange makes an end before a
