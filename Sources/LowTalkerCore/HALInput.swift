@@ -632,25 +632,16 @@ final class HALInput: PreparedInput {
     /// input alive past the last reference to it - with its unit, and with `deinit` never
     /// reached to give either back.
     nonisolated static func watch(_ device: AudioObjectID, _ selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope, _ onChange: @escaping @MainActor () -> Void) throws -> @Sendable () -> Void {
-        let address = AudioObjectPropertyAddress(
-            mSelector: selector,
-            mScope: scope,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        // Sendable because the removal below can run on the readying queue, where an input
-        // replaced mid-readying is let go of. The block only ever runs on the main queue.
-        let listener: @Sendable @convention(block) (UInt32, UnsafePointer<AudioObjectPropertyAddress>) -> Void = { _, _ in
-            MainActor.assumeIsolated { onChange() }
-        }
-        var adding = address
-        try AudioHardwareError.check(
-            AudioObjectAddPropertyListenerBlock(device, &adding, .main, listener),
-            AudioHardwareError.deviceWatchFailed
+        let remove = try listen(
+            to: AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain),
+            on: device,
+            refused: AudioHardwareError.deviceWatchFailed,
+            onChange
         )
         return {
-            var removing = address
-            let status = AudioObjectRemovePropertyListenerBlock(device, &removing, .main, listener)
-            // The two statuses tolerated here were read off this Mac for
+            let status = remove()
+            // Removal is matched on the block the listener was added with, which `listen`
+            // keeps. The two statuses tolerated here were read off this Mac for
             // low-privacy-o1z.pr2. A device destroyed under a live listener does not take
             // the listener with it: removing one answers `noErr`, as does removing the same
             // block twice and removing one that was never added. `kAudioHardwareBadObjectError`
