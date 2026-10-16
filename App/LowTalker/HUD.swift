@@ -17,6 +17,11 @@ import LowTalkerCore
 @MainActor
 final class HUD {
     private static let width: CGFloat = 440
+    /// The width the lines wrap to, inside the face's margins.
+    private static let lineWidth = width - 32
+    /// At most this many lines of what was heard. Past them the oldest words give way, since the
+    /// newest are the ones the person is watching.
+    private static let heardLines = 4
     private static let cornerRadius: CGFloat = 12
     /// The side of the circle's panel, which is centred on the circle.
     private static let circleSide: CGFloat = 24
@@ -101,18 +106,23 @@ final class HUD {
         let warning = NSTextField(wrappingLabelWithString: "")
         warning.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
         warning.textColor = .systemOrange
-        warning.preferredMaxLayoutWidth = HUD.width - 32
+        warning.preferredMaxLayoutWidth = HUD.lineWidth
         return warning
     }()
 
-    /// One line, cut at its head: the newest words are the ones the person is watching.
+    /// What was heard, wrapped to the panel's width.
     private let heard: NSTextField = {
-        let heard = NSTextField(labelWithString: "")
+        let heard = NSTextField(wrappingLabelWithString: "")
         heard.font = .systemFont(ofSize: NSFont.systemFontSize + 2)
-        heard.lineBreakMode = .byTruncatingHead
-        heard.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        heard.preferredMaxLayoutWidth = HUD.lineWidth
         return heard
     }()
+
+    /// Lays text out as `heard` does, away from the panel, so measuring never shows on it.
+    private lazy var measure = heard.cell!.copy() as! NSCell
+
+    /// How tall `heardLines` lines of what was heard stand.
+    private lazy var heardHeight = height(Array(repeating: "…", count: Self.heardLines).joined(separator: "\n"))
 
     private lazy var close: Dismiss = {
         let close = Dismiss { [unowned self] in dismiss() }
@@ -153,8 +163,7 @@ final class HUD {
         }
         warning.attributedStringValue = warned
         warning.isHidden = held == nil
-        // The first word carries the space the engine put before it, which a line has no use for.
-        heard.stringValue = String(words.text.drop(while: \.isWhitespace))
+        heard.stringValue = words.truncatingHead { height($0) <= heardHeight }
         // A press with nothing read yet shows only its state, rather than an empty line.
         heard.isHidden = words.isBlank
         // With no display attached there is nowhere for the panel to be.
@@ -172,6 +181,12 @@ final class HUD {
         case nil: corner.orderOut(nil)
         case .some: corner.orderFrontRegardless()
         }
+    }
+
+    /// How tall this text stands, wrapped as what was heard is.
+    private func height(_ text: String) -> CGFloat {
+        measure.stringValue = text
+        return measure.cellSize(forBounds: NSRect(x: 0, y: 0, width: Self.lineWidth, height: .greatestFiniteMagnitude)).height
     }
 }
 
