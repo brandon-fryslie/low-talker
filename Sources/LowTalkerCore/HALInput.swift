@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreAudio
+import Synchronization
 
 /// The microphone, reached through CoreAudio's HAL audio unit.
 ///
@@ -44,21 +45,19 @@ final class HALInput: PreparedInput {
     /// the unit is stopped before it is let go. [LAW:no-ambient-temporal-coupling]
     ///
     /// The IO thread renders under a hard deadline, so what it does here is render into memory
-    /// the press allocated and copy the slice into the press's ring - no allocation, and no lock
-    /// anything else can hold. Converting and handing over is `SliceDelivery`'s, on a thread of
-    /// its own.
+    /// the press allocated and copy the slice into the press's ring - no allocation, and no
+    /// waiting on a lock. Converting and handing over is `SliceDelivery`'s, on a thread of its
+    /// own.
     private final class Sink: @unchecked Sendable {
-        /// Touched on the delivery thread while a press runs, and by the main actor only while
-        /// the unit is stopped and the last press's delivery has finished, which is where
-        /// `open()` resets it for the press it is about to begin.
+        /// The delivery thread's while a press runs, and the main actor's in `begin` once the
+        /// last press's delivery has finished.
         nonisolated(unsafe) let converter: AudioClip.Converter
         nonisolated(unsafe) var unit: AudioUnit?
-        /// The press the unit is rendering for, and nil between presses. Written by the main
-        /// actor only while the unit is stopped - before `AudioOutputUnitStart` and after
-        /// `AudioOutputUnitStop`, which returns with the IO thread quiesced - so a render never
-        /// reads it while it changes, and reading it takes no lock.
-        /// [LAW:no-ambient-temporal-coupling] The start and the stop are the handover.
-        nonisolated(unsafe) var press: Press?
+        /// The press the unit is rendering for, and nil between presses. A render only ever
+        /// tries this lock, and renders nothing when the main actor holds it to begin or end a
+        /// press. So a press is never let go under a render - not even one a stop that failed
+        /// left running - and the IO thread never waits. [LAW:no-ambient-temporal-coupling]
+        private let press = Mutex<Press?>(nil)
 
         struct Press {
             let rendered: RenderBuffer
@@ -69,15 +68,23 @@ final class HALInput: PreparedInput {
             self.converter = converter
         }
 
-        /// Lets the press go once the unit has stopped: what it rendered is handed over, and
-        /// the converter is free for the next.
-        func end() {
-            press?.delivery.finish()
-            press = nil
+        /// Ends whatever press is on the sink, then begins `make`'s. A press is its own stream:
+        /// the resampler starts from nothing rather than carrying the previous press's tail
+        /// into the head of this one, and it is reset only once that press's delivery thread,
+        /// which converts with it, has ended. [LAW:one-source-of-truth]
+        func begin(_ make: () throws -> Press) rethrows {
+            end()
+            converter.reset()
+            let new = try make()
+            press.withLock { $0 = new }
         }
 
-        /// A sink let go with a press still on it is one whose unit `discard` has already
-        /// stopped, so its delivery thread is ended rather than left waiting.
+        /// Lets the press go: what it rendered is handed over, and the converter is free for
+        /// the next.
+        func end() {
+            press.withLock { $0.take() }?.delivery.finish()
+        }
+
         deinit { end() }
 
         /// What CoreAudio calls on its own IO thread, as the C function pointer the unit
@@ -105,23 +112,25 @@ final class HALInput: PreparedInput {
             bus: UInt32,
             frames: UInt32
         ) -> OSStatus {
-            guard let unit, let press else { return noErr }
-            // A device that asks for more than the buffer holds would overrun it; refusing is
-            // the loud version of that. The buffer holds the largest slice the device offered
-            // when the press opened, so what reaches this is a device whose range grew during
-            // the press. [LAW:no-silent-failure]
-            guard Int(frames) <= press.rendered.frameCapacity else {
-                press.delivery.deliver(.overlongSlice(frames: Int(frames), capacity: press.rendered.frameCapacity))
-                return kAudio_ParamError
-            }
-            press.rendered.offer(Int(frames))
-            let status = AudioUnitRender(unit, flags, timeStamp, bus, frames, press.rendered.list.unsafeMutablePointer)
-            guard status == noErr else {
-                press.delivery.deliver(.renderFailed(status))
-                return status
-            }
-            press.delivery.deliver(press.rendered.list, frames: Int(frames), stamp: timeStamp.pointee)
-            return noErr
+            press.withLockIfAvailable { press -> OSStatus in
+                guard let unit, let press else { return noErr }
+                // A device that asks for more than the buffer holds would overrun it; refusing
+                // is the loud version of that. The buffer holds the largest slice the device
+                // offered when the press opened, so what reaches this is a device whose range
+                // grew during the press. [LAW:no-silent-failure]
+                guard Int(frames) <= press.rendered.frameCapacity else {
+                    press.delivery.deliver(.overlongSlice(frames: Int(frames), capacity: press.rendered.frameCapacity))
+                    return kAudio_ParamError
+                }
+                press.rendered.offer(Int(frames))
+                let status = AudioUnitRender(unit, flags, timeStamp, bus, frames, press.rendered.list.unsafeMutablePointer)
+                guard status == noErr else {
+                    press.delivery.deliver(.renderFailed(status))
+                    return status
+                }
+                press.delivery.deliver(press.rendered.list, frames: Int(frames), stamp: timeStamp.pointee)
+                return noErr
+            } ?? noErr
         }
     }
 
@@ -423,8 +432,8 @@ final class HALInput: PreparedInput {
         /// unwatched.
         func close() -> Bool {
             let stopped = AudioOutputUnitStop(unit)
-            // After the stop, which returns with the IO thread quiesced, so what the last render
-            // pushed is handed over before the delivery ends rather than dropped on the floor.
+            // After the stop, so what the last render pushed is handed over before the delivery
+            // ends rather than dropped on the floor.
             sink.end()
             // [LAW:parse-dont-validate] The border `init`'s guard stands on, walked the other
             // way: that one proves reaching a microphone took no device, this one proves
@@ -513,17 +522,14 @@ final class HALInput: PreparedInput {
         presses += 1
         let press = presses
         do {
-            // A press is its own stream: the device was closed between this open and the
-            // last, so the resampler starts from nothing rather than carrying the previous
-            // press's tail into the head of this one. [LAW:one-source-of-truth] Reset before
-            // the press is made, since its delivery thread is the converter's from then on.
-            reached.sink.converter.reset()
-            reached.sink.press = try reached.press(
-                appending: appending,
-                // The delivery thread does not wait for the main actor, so the report is
-                // posted rather than made. [LAW:no-ambient-temporal-coupling]
-                onFailure: { error in Task { @MainActor in onFailure(error) } }
-            )
+            try reached.sink.begin {
+                try reached.press(
+                    appending: appending,
+                    // The delivery thread does not wait for the main actor, so the report is
+                    // posted rather than made. [LAW:no-ambient-temporal-coupling]
+                    onFailure: { error in Task { @MainActor in onFailure(error) } }
+                )
+            }
             try AudioHardwareError.check(AudioOutputUnitStart(reached.unit), AudioHardwareError.inputUnavailable)
         } catch {
             endPress(press, on: reached)

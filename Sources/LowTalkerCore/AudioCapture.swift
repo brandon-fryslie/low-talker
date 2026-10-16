@@ -153,10 +153,10 @@ public final class AudioCapture {
         /// running, and positions advance only on capture, so the audio on either side
         /// of the break is spliced together with no seam in the samples to find it by.
         var continuousSince = 0
-        /// The generation whose buffers this stream is the audio of. A render already under
-        /// way when `dispose()` begins still delivers its buffer, and that buffer belongs
-        /// to a press the speaker has already let go of; appending it would move the
-        /// positions the next press begins from. Read on the input's delivery thread, which
+        /// The generation whose buffers this stream is the audio of. Whatever the input has
+        /// not finished handing over when `dispose()` begins still arrives, closing the input
+        /// hands over the rest, and all of it belongs to a press the speaker has already let
+        /// go of; appending it would move the positions the next press begins from. Read on the input's delivery thread, which
         /// does not ask the main actor, so the answer lives here beside the samples it admits.
         /// [LAW:no-ambient-temporal-coupling]
         var accepting: Int?
