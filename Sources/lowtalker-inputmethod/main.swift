@@ -117,20 +117,20 @@ let insertions: InsertionPort? = {
     }
 }()
 
-/// Every change of the modifier keys, told to this installation's app, which hears its
-/// hotkey from them when that is how it was asked to hear it. Off the main thread, which is
-/// where the keys are handled, and waiting on nothing: a change the app did not take is
-/// corrected by the next, since each carries the whole state.
+/// Every notice, told to this installation's app: the changes of the modifier keys it hears
+/// its hotkey from, and the cursors that arrive. Off the main thread, which is where the keys
+/// are handled, and waiting on nothing: a change the app did not take is corrected by the
+/// next, since each carries the whole state.
 ///
-/// Said in the log when how the telling fares changes, and not on every change: the app not
-/// listening is the ordinary state of an app hearing its hotkey some other way, and a line
-/// per modifier key pressed would bury everything else here. Every key still passes through
-/// whatever this says. [LAW:no-silent-failure]
+/// Said in the log when how the telling fares changes, and not on every notice: the app not
+/// listening is the ordinary state of an app that is not running, and a line per modifier key
+/// pressed would bury everything else here. Every key still passes through whatever this
+/// says. [LAW:no-silent-failure]
 let tellingTheApp = Task.detached {
-    let sender = ModifierSender()
-    var fared: ModifierSender.Told?
-    for await held in ModifierChanges.shared.changes {
-        let told = sender.tell(held)
+    let sender = NoticeSender()
+    var fared: NoticeSender.Told?
+    for await notice in Notices.shared.notices {
+        let told = sender.tell(notice)
         if told != fared { logger.log(level: told.isFault ? .error : .default, "\(told.description, privacy: .public)") }
         fared = told
     }

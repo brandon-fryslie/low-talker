@@ -6,15 +6,15 @@ import Testing
 
 /// What the hotkey port did, in the order it did it, for a case to wait on.
 private enum Arrival: Equatable {
-    case heard(HeldModifiers)
+    case heard(Notice)
     case told(String)
 }
 
 /// The app's end of the hotkey port on `name`, hearing `senders`, with everything it does
 /// arriving on the stream it hands back.
-private func hostModifiers(name: String, senders: PeerIdentity) throws -> (port: ModifierPort, arrivals: AsyncStream<Arrival>) {
+private func hostNotices(name: String, senders: PeerIdentity) throws -> (port: NoticePort, arrivals: AsyncStream<Arrival>) {
     let (arrivals, continuation) = AsyncStream<Arrival>.makeStream()
-    let port = try ModifierPort(
+    let port = try NoticePort(
         portName: name, senders: senders, queue: DispatchQueue(label: name),
         told: { continuation.yield(.told($0.description)) }, heard: { continuation.yield(.heard($0)) })
     return (port, arrivals)
@@ -28,7 +28,7 @@ private let rightOptionHeld = HeldModifiers(flags: 0x80140, uptimeNanoseconds: 1
 /// Both ends run in this process, which the port is told to hear: the check that matters is
 /// that a sender it was not told to hear is not heard, and that is a different sender, not a
 /// different process. [LAW:behavior-not-structure]
-@Suite struct ModifierPortTests {
+@Suite struct NoticePortTests {
     /// The session sets the secondary-Fn bit while an arrow key is down, and an arrow key is
     /// not Fn; the Fn key down with nothing else is Fn. Every other bit is the session's.
     /// The log line says what was held whenever that is not the session's flags as given.
@@ -65,13 +65,27 @@ private let rightOptionHeld = HeldModifiers(flags: 0x80140, uptimeNanoseconds: 1
 
     @Test(.timeLimit(.minutes(1))) func changesAreHeardWholeAndInTheOrderTold() async throws {
         let name = aPortNobodyElseUses()
-        let (port, arrivals) = try hostModifiers(name: name, senders: try OwnProcess.identity())
+        let (port, arrivals) = try hostNotices(name: name, senders: try OwnProcess.identity())
         let told = (0..<3).map { HeldModifiers(flags: UInt64(0x100 | $0 << 6), uptimeNanoseconds: UInt64($0)) }
-        let sender = ModifierSender(portName: name)
-        #expect(told.map(sender.tell) == Array(repeating: .told, count: 3))
+        let sender = NoticeSender(portName: name)
+        #expect(told.map { sender.tell(.modifiersMoved($0)) } == Array(repeating: .told, count: 3))
+        var arrived: [Arrival] = []
+        for await arrival in arrivals.prefix(3) { arrived.append(arrival) }
+        #expect(arrived == told.map { .heard(.modifiersMoved($0)) })
+        withExtendedLifetime(port) {}
+    }
+
+    /// A cursor arriving crosses between the changes around it, in the order told, and a
+    /// cursor arrival carrying bytes is not one.
+    @Test(.timeLimit(.minutes(1))) func aCursorArrivingIsHeardInItsPlace() async throws {
+        let name = aPortNobodyElseUses()
+        let (port, arrivals) = try hostNotices(name: name, senders: try OwnProcess.identity())
+        let told: [Notice] = [.modifiersMoved(rightOptionHeld), .cursorArrived, .modifiersMoved(HeldModifiers(flags: 0x100, uptimeNanoseconds: 2))]
+        #expect(told.map(NoticeSender(portName: name).tell) == Array(repeating: .told, count: 3))
         var arrived: [Arrival] = []
         for await arrival in arrivals.prefix(3) { arrived.append(arrival) }
         #expect(arrived == told.map(Arrival.heard))
+        #expect(Wire.notice(id: Wire.cursorArrived, payload: Data([1])) == nil)
         withExtendedLifetime(port) {}
     }
 
@@ -80,13 +94,13 @@ private let rightOptionHeld = HeldModifiers(flags: 0x80140, uptimeNanoseconds: 1
     @Test(.timeLimit(.minutes(1))) func aSenderThatIsNotTheInputMethodIsNotHeard() async throws {
         let name = aPortNobodyElseUses()
         let someoneElse = PeerIdentity.signed(identifier: "ai.promptctl.low-talker.test.inputmethod", certificate: String(repeating: "0", count: 40))
-        let (port, arrivals) = try hostModifiers(name: name, senders: someoneElse)
-        #expect(ModifierSender(portName: name).tell(rightOptionHeld) == .told)
+        let (port, arrivals) = try hostNotices(name: name, senders: someoneElse)
+        #expect(NoticeSender(portName: name).tell(.modifiersMoved(rightOptionHeld)) == .told)
         guard case .told(let said)? = await arrivals.first(where: { _ in true }) else {
             Issue.record("the port heard a sender it was not told to hear")
             return
         }
-        #expect(said.contains("ignored modifier keys told by pid \(getpid())"))
+        #expect(said.contains("ignored a notice told by pid \(getpid())"))
         #expect(said.contains(someoneElse.description))
         withExtendedLifetime(port) {}
     }
@@ -94,7 +108,7 @@ private let rightOptionHeld = HeldModifiers(flags: 0x80140, uptimeNanoseconds: 1
     /// Bytes that are not held modifiers are said, not dropped.
     @Test(.timeLimit(.minutes(1))) func aMessageThatIsNotHeldModifiersIsSaidSo() async throws {
         let name = aPortNobodyElseUses()
-        let (port, arrivals) = try hostModifiers(name: name, senders: try OwnProcess.identity())
+        let (port, arrivals) = try hostNotices(name: name, senders: try OwnProcess.identity())
         var remote = mach_port_t()
         try #require(lt_bootstrap_look_up(name, &remote) == KERN_SUCCESS)
         defer { mach_port_deallocate(mach_task_self_, remote) }
@@ -102,13 +116,13 @@ private let rightOptionHeld = HeldModifiers(flags: 0x80140, uptimeNanoseconds: 1
             Data("not modifiers".utf8), id: Wire.modifiers, to: remote, disposition: mach_msg_type_name_t(MACH_MSG_TYPE_COPY_SEND),
             replyTo: Mach.noPort, timeout: aBudgetTheRunnerCannotSpend)
         try #require(sent == MACH_MSG_SUCCESS)
-        #expect(await arrivals.first(where: { _ in true }) == .told(ModifierPort.Event.notUnderstood(id: Wire.modifiers, bytes: 13).description))
+        #expect(await arrivals.first(where: { _ in true }) == .told(NoticePort.Event.notUnderstood(id: Wire.modifiers, bytes: 13).description))
         withExtendedLifetime(port) {}
     }
 
     @Test func aChangeWithNobodyListeningSaysSo() {
         let name = aPortNobodyElseUses()
-        #expect(ModifierSender(portName: name).tell(rightOptionHeld) == .nobodyIsListening(port: name))
+        #expect(NoticeSender(portName: name).tell(.modifiersMoved(rightOptionHeld)) == .nobodyIsListening(port: name))
     }
 
     /// The app hosts the name again each time it rebuilds its hotkey, straight after letting
@@ -117,7 +131,7 @@ private let rightOptionHeld = HeldModifiers(flags: 0x80140, uptimeNanoseconds: 1
     @Test func aReleasedPortsNameCanBeHostedAgainAtOnce() throws {
         let name = aPortNobodyElseUses()
         for _ in 0..<50 {
-            _ = try hostModifiers(name: name, senders: try OwnProcess.identity())
+            _ = try hostNotices(name: name, senders: try OwnProcess.identity())
         }
     }
 }

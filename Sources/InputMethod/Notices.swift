@@ -2,14 +2,15 @@ import Foundation
 import Insertion
 import os
 
-/// Every change of the modifier keys a controller is handed, as the keys held once it
-/// happened: what this process tells the app, so the app hears a chord of modifiers alone
-/// with nothing granted to it.
+/// What this process tells the app, in the order it happened: every change of the modifier
+/// keys a controller is handed, as the keys held once it happened, so the app hears a chord of
+/// modifiers alone with nothing granted to it; and every cursor a controller is given focus in,
+/// so the app can offer words no cursor took to the one that just arrived.
 ///
 /// [LAW:no-shared-mutable-globals] Shared for `FocusedClient`'s reason: `IMKServer` builds
 /// controllers out of a class name, so there is no constructor of ours to hand a sender to.
-/// It is one stream with one writer's door, `moved(at:reading:)`, and one reader, the
-/// process's entry point, which does the sending.
+/// It is one stream with two writers' doors, `moved(at:reading:)` and `cursorArrived()`, and
+/// one reader, the process's entry point, which does the sending.
 ///
 /// The state the controller hands it is read from the window server's session rather than
 /// off the event, because
@@ -21,18 +22,18 @@ import os
 /// hears states, and a state is true whichever event it follows. It is dated by the session's
 /// last change for the same reason, since the event's stamp would put a release the reading
 /// already shows back at the earlier event, and turn a hold into a tap.
-public final class ModifierChanges: Sendable {
-    public static let shared = ModifierChanges()
+public final class Notices: Sendable {
+    public static let shared = Notices()
 
-    /// Each change, in the order the controllers were handed them. The newest are kept if
-    /// the reader falls behind, since each carries the whole state and the latest is the one
-    /// that is true. [LAW:no-ambient-temporal-coupling]
-    public let changes: AsyncStream<HeldModifiers>
-    private let continuation: AsyncStream<HeldModifiers>.Continuation
+    /// Each notice, in the order the controllers were handed them. The newest are kept if
+    /// the reader falls behind, since each change carries the whole state and the latest is
+    /// the one that is true. [LAW:no-ambient-temporal-coupling]
+    public let notices: AsyncStream<Notice>
+    private let continuation: AsyncStream<Notice>.Continuation
     private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "lowtalker-inputmethod", category: "modifiers")
 
     private init() {
-        (changes, continuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(64))
+        (notices, continuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(64))
     }
 
     /// A controller was handed a change of the modifier keys stamped `timestamp` seconds
@@ -43,6 +44,12 @@ public final class ModifierChanges: Sendable {
         // The event's stamp is here and nowhere else, so a reading that ran ahead of its event
         // shows as the gap between it and the reading's date.
         log.info("modifiers moved at \(timestamp, privacy: .public): \(reading, privacy: .public)")
-        continuation.yield(HeldModifiers(reading))
+        continuation.yield(.modifiersMoved(HeldModifiers(reading)))
+    }
+
+    /// A controller was given focus in a cursor that can take words, in `application`.
+    public func cursorArrived(in application: String) {
+        log.info("a cursor arrived in \(application, privacy: .public)")
+        continuation.yield(.cursorArrived)
     }
 }

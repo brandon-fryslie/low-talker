@@ -52,8 +52,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var hotkeyStatus = ""
     /// What the loop is doing with presses, which the icon shows over the engine's readiness.
     private var activity: Dictation.Activity = .idle
-    /// The loop's activity again, floating over the app being dictated into.
-    private let hud = HUD()
+    /// The loop's activity again, floating over the app being dictated into, with the words
+    /// no cursor took.
+    private lazy var hud: HUD = HUD { [unowned self] in hold.dismiss() }
+    /// The words no cursor took, for the life of the app: a loop rebuilt over a new config
+    /// keeps offering them.
+    private lazy var hold: Hold = Hold { [unowned self] held in
+        hud.show(activity, held: held)
+        // [LAW:nothing-unseen] Counted, never the words themselves: they are what the user dictated.
+        sessions.notice("held: \(held.map { "\($0.words.words.count) words, \($0.warning)" } ?? "nothing", privacy: .public)")
+    }
 
     /// When this process began, which every readout of the engine's wait counts from.
     private let launched = ContinuousClock.now
@@ -77,7 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func show(_ activity: Dictation.Activity) {
         self.activity = activity
         drawStatusIcon()
-        hud.show(activity)
+        hud.show(activity, held: hold.held)
         sessions.info("activity: \(String(describing: activity), privacy: .public)")
     }
 
@@ -273,7 +281,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // `comeUp` reads the config before it adopts and adopts nothing on a config it cannot
         // read, so a loop is only ever built over one that was read.
         guard case .success(let config) = config else { preconditionFailure("a loop is adopted only once the config has been read") }
-        let hotkey = Hotkey(listeningFor: config)
+        // The input method tells each cursor it is given focus in, and the loop listening then
+        // offers it what is held.
+        let hotkey = Hotkey(listeningFor: config) { [unowned self] in listening?.dictation.cursorArrived() }
         let dictation = Dictation(
             capture: capture,
             // A press asks the bench first: while a run holds the Neural Engine, the press is
@@ -286,6 +296,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // The words cross to the input method, which commits them at the
             // cursor through the text input system.
             executor: Executor(insertingThrough: InputMethodInserter()),
+            hold: hold,
             report: { [unowned self] in report($0) },
             showing: { [unowned self] in show($0) }
         )

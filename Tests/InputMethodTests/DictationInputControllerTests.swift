@@ -70,7 +70,7 @@ import Testing
         let held = SessionModifiers.read().flags
         #expect(controller.handle(event, client: nil) == false, "Right Option was claimed by the input method")
         let handled = UInt64((ProcessInfo.processInfo.systemUptime * 1_000_000_000).rounded())
-        let told = await ModifierChanges.shared.changes.first { @Sendable in $0.flags == held }
+        let told = await Notices.shared.notices.compactMap(\.held).first { @Sendable in $0.flags == held }
         #expect(try #require(told).uptimeNanoseconds <= handled, "told as changed after it was read")
     }
 
@@ -80,9 +80,15 @@ import Testing
     /// be heard as a tap.
     @Test(.timeLimit(.minutes(1))) func aReadingAheadOfItsEventIsDatedByTheChangeItShows() async {
         let shiftAloneSinceTheRelease = SessionModifiers(session: 0x20102, fnKeyDown: false, changedAt: 7_000.4)
-        ModifierChanges.shared.moved(at: 7_000.1, reading: shiftAloneSinceTheRelease)
-        let told = await ModifierChanges.shared.changes.first { @Sendable in $0.flags == 0x20102 }
+        Notices.shared.moved(at: 7_000.1, reading: shiftAloneSinceTheRelease)
+        let told = await Notices.shared.notices.compactMap(\.held).first { @Sendable in $0.flags == 0x20102 }
         #expect(told?.uptimeNanoseconds == 7_000_400_000_000)
+    }
+
+    /// A cursor given focus is told to the app, which offers it words no cursor took.
+    @Test(.timeLimit(.minutes(1))) func aCursorArrivingIsTold() async {
+        Notices.shared.cursorArrived(in: "com.apple.TextEdit")
+        #expect(await Notices.shared.notices.first { @Sendable in $0 == .cursorArrived } != nil)
     }
 
     /// A call carrying no event, which IMK makes, is handed back rather than trapping and
@@ -108,5 +114,13 @@ import Testing
     /// after any build succeeded. [LAW:one-source-of-truth]
     @Test func theControllerAnswersToTheNameThePlistNames() {
         #expect(NSStringFromClass(DictationInputController.self) == "DictationInputController")
+    }
+}
+
+private extension Notice {
+    /// The modifier keys a notice carries, when it is a change of them.
+    var held: HeldModifiers? {
+        guard case .modifiersMoved(let held) = self else { return nil }
+        return held
     }
 }

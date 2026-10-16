@@ -212,13 +212,38 @@ public enum Unreachable: Error, Equatable, Sendable, CustomStringConvertible {
             "WARNING: The input method on \(port) answered \(bytes) bytes that are not an answer. \(words)"
         }
     }
+
+    /// Where the words were when the channel failed: carried by the cases that can fail on
+    /// either side of the send, and fixed by the phase for the rest.
+    public var words: Words {
+        switch self {
+        case .nothingIsListening, .requestWasNotTaken, .didNotSayWhoItIs: .notSent
+        case .answerDidNotArrive, .answerWasAbandoned: .mayHaveLanded
+        case let .answeredByAStranger(_, _, _, _, words), let .failed(_, _, words), let .answerWasNotReadable(_, _, words): words
+        }
+    }
+}
+
+/// Whether the words an insert failed on could be at a cursor anyway: handed to an app that
+/// had not taken them yet, or sent with no answer to say what became of them. Offering such
+/// words again is the one way to type them twice. Any other failure came before a client
+/// held them - a refusal, a channel that failed before the send, a requirement this end could
+/// not write - and the words are nowhere. [LAW:one-source-of-truth] `Words` says it for the
+/// channel; this says it for every failure an `Inserter` throws.
+public func wordsMayHaveLanded(after failure: any Error) -> Bool {
+    switch failure {
+    case is NotYetTaken: true
+    case let unreachable as Unreachable: unreachable.words == .mayHaveLanded
+    default: false
+    }
 }
 
 /// The wire, which is the one place either half turns a value into bytes or back.
 ///
-/// Three messages cross it, told apart by their Mach id: the greeting, empty, which the input
+/// Four messages cross it, told apart by their Mach id: the greeting, empty, which the input
 /// method answers empty once it has admitted the sender; the words; and, the other way, the
-/// modifier keys the input method was just handed, which nobody answers.
+/// notices: the modifier keys the input method was just handed, and, empty, a cursor it was
+/// just given focus in, neither of which anybody answers.
 /// [LAW:single-enforcer]
 ///
 /// The request and the answer are both values with more than one field, so both cross as
@@ -229,6 +254,7 @@ enum Wire {
     static let greeting: mach_msg_id_t = 1
     static let insert: mach_msg_id_t = 2
     static let modifiers: mach_msg_id_t = 3
+    static let cursorArrived: mach_msg_id_t = 4
 
     /// The first byte of every request, and one no UTF-8 text contains. An input method built
     /// when a request was its bare text, still running past an install, reads this as bytes
@@ -260,6 +286,23 @@ enum Wire {
     /// on the one machine.
     static func modifiers(_ held: HeldModifiers) -> Data {
         withUnsafeBytes(of: (held.flags, held.uptimeNanoseconds)) { Data($0) }
+    }
+
+    static func notice(_ notice: Notice) -> (id: mach_msg_id_t, payload: Data) {
+        switch notice {
+        case .modifiersMoved(let held): (modifiers, modifiers(held))
+        case .cursorArrived: (cursorArrived, Data())
+        }
+    }
+
+    /// [LAW:parse-dont-validate] A notice or nothing at all. A cursor arrival carries nothing,
+    /// so one carrying anything is not one.
+    static func notice(id: mach_msg_id_t, payload: Data?) -> Notice? {
+        switch id {
+        case modifiers: payload.flatMap(heldModifiers(of:)).map(Notice.modifiersMoved)
+        case cursorArrived: (payload ?? Data()).isEmpty ? .cursorArrived : nil
+        default: nil
+        }
     }
 
     /// [LAW:parse-dont-validate] Held modifiers or nothing at all: bytes of any other length

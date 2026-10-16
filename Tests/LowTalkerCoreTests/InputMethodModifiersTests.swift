@@ -174,6 +174,18 @@ private let twoKeys = KeyChord(modifiers: .rightOption, .rightCommand)
         #expect(pressAndRelease[1].time - pressAndRelease[0].time >= .milliseconds(200))
     }
 
+    /// A cursor arriving is passed on while the feed is open, and not once it has stopped.
+    @MainActor @Test func aCursorArrivingIsPassedOnOnlyWhileTheFeedIsOpen() {
+        let installed = InputMethodModifiers.Installed<Void>(told: ToldModifiers(held: []), hearing: DispatchQueue(label: #function),
+                                                             session: { [] })
+        var arrivals = 0
+        installed.open = ((), { _ in })
+        installed.heard(cursorArrivedTo: { arrivals += 1 })
+        installed.open = nil
+        installed.heard(cursorArrivedTo: { arrivals += 1 })
+        #expect(arrivals == 1)
+    }
+
     @Test func aStateThatChangedNothingIsNoKeys() {
         #expect(KeyEvent.moves(from: [.rightOption], to: [.rightOption], at: at(0)).isEmpty)
     }

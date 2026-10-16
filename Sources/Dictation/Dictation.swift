@@ -188,7 +188,8 @@ public final class Dictation {
         /// While the key is down, audio the capture already knows is missing stops the
         /// commits: what is confirmed from then on reads a fragment, and key-up reports the
         /// loss with the words that landed before it. From key-up on, how the press ended
-        /// says. [LAW:no-silent-failure]
+        /// says. [LAW:no-silent-failure] An insert that fails stops nothing: its words are
+        /// held, and the next run carries them.
         @MainActor func take() -> Run {
             let missing = state.withLock { state -> (@MainActor @Sendable () -> CapturedAudio.Loss?)? in
                 switch state.ended {
@@ -215,11 +216,11 @@ public final class Dictation {
             state.withLock { $0.cursor.advance(through: transcript.words) }
         }
 
-        /// A run landed at the cursor.
-        func landed(_ run: Run, as performed: Executor.Performed?) {
+        /// An insert landed at the cursor, carrying `placed.words`.
+        func landed(_ placed: Placed) {
             state.withLock { state in
-                if let performed { state.performed.append(performed) }
-                state.words += run.words.words.count
+                if let performed = placed.performed { state.performed.append(performed) }
+                state.words += placed.words
             }
         }
 
@@ -258,6 +259,13 @@ public final class Dictation {
         let displaced: EngineHold.Displaced
     }
 
+    /// One insert the loop made: what was done, and how many words it carried, the held
+    /// ones included.
+    private struct Placed: Sendable {
+        let performed: Executor.Performed?
+        let words: Int
+    }
+
     /// What key-down left for key-up: the marks on the ring, the app in front, the decode
     /// already hearing the press and the commits already queued behind it, or the reason
     /// there was nothing to insert into. [LAW:types-are-the-program] One value rather than
@@ -273,7 +281,7 @@ public final class Dictation {
         let into: BundleID
         let decode: Task<Decoded, Never>
         let streaming: Streaming
-        /// What stopped the commits, when something did.
+        /// What the latest failed insert of the commits was told, when none after it landed.
         let committing: Task<(any Error)?, any Error>
     }
 
@@ -300,6 +308,7 @@ public final class Dictation {
     private let transcriber: @Sendable @MainActor () async throws -> any Transcriber
     private let turns: EngineTurns
     private let executor: Executor
+    private let hold: Hold
     private let frontmost: @Sendable @MainActor () throws -> BundleID
     private let report: @Sendable @MainActor (Result<Session, any Error>) -> Void
     private let showing: @Sendable @MainActor (Activity) -> Void
@@ -315,7 +324,8 @@ public final class Dictation {
 
     /// `transcriber` is awaited per session, so a press that comes while the model is
     /// still loading waits for it and inserts when it lands: loading is not a state
-    /// this loop has. `turns` is the engine's owner, which every press holds from key-down
+    /// this loop has. `hold` keeps the words no cursor took, and every insert carries them
+    /// ahead of its own. `turns` is the engine's owner, which every press holds from key-down
     /// until its transcript is out, so served callers wait for the speaker rather than the
     /// speaker for them. [LAW:dataflow-not-control-flow] `report` hears every session's
     /// outcome on the main actor, in the order the presses came. `showing` hears the loop's
@@ -326,6 +336,7 @@ public final class Dictation {
         transcriber: @escaping @Sendable @MainActor () async throws -> any Transcriber,
         turns: EngineTurns,
         executor: Executor,
+        hold: Hold,
         frontmost: @escaping @Sendable @MainActor () throws -> BundleID = TargetApp.frontmost,
         report: @escaping @Sendable @MainActor (Result<Session, any Error>) -> Void,
         showing: @escaping @Sendable @MainActor (Activity) -> Void
@@ -334,6 +345,7 @@ public final class Dictation {
         self.transcriber = transcriber
         self.turns = turns
         self.executor = executor
+        self.hold = hold
         self.frontmost = frontmost
         self.report = report
         self.showing = showing
@@ -523,20 +535,55 @@ public final class Dictation {
     /// decode is over or the press stops committing. Runs in the press's turn on the
     /// queue, so the words land after every press before it and before every press after it.
     ///
-    /// [LAW:no-silent-failure] An insert that fails stops the commits for the rest of the
-    /// press, and is what this returns: the words after it go nowhere else.
+    /// [LAW:no-silent-failure] An insert that fails leaves its words held and the press
+    /// listening, and what it was told is what this returns, unless a later insert landed
+    /// them after all.
     private func commit(_ streaming: Streaming) async -> (any Error)? {
+        var unplaced: (any Error)?
         for await _ in streaming.wakes {
             let run = streaming.take()
             do {
-                streaming.landed(run, as: try await executor.insert(run.words, following: streaming.landed.performed.last, since: run.since))
+                let placed = try await place(run.words, following: streaming.landed.performed.last, since: run.since)
+                streaming.landed(placed)
+                unplaced = placed.performed == nil ? unplaced : nil
             } catch {
-                streaming.stop()
-                // A run is one insert, so none of it was done, and what stopped it is the cause.
-                return error
+                unplaced = error
             }
         }
-        return nil
+        return unplaced
+    }
+
+    /// Inserts what is held, then `words`, as one insert. [LAW:single-enforcer] Every insert
+    /// the loop makes passes through here, so held words land ahead of every word said after
+    /// them, and a failed insert's words are held rather than lost. Throws as the executor does.
+    private func place(_ words: Transcript, following last: Executor.Performed?, since: Executor.Since) async throws -> Placed {
+        let offered = hold.offering(words)
+        do {
+            let performed = try await executor.insert(offered, following: last, since: since)
+            // An insert of nothing is no proof a cursor takes words, so a warning stands.
+            performed.map { _ in hold.landed() }
+            return Placed(performed: performed, words: performed.map { _ in offered.words.count } ?? 0)
+        } catch {
+            hold.failed(offered, with: error)
+            throw error
+        }
+    }
+
+    /// A cursor was given focus, and what is held is offered to it. Only while no press is
+    /// open or on its way: those place what is held ahead of their own words and into the
+    /// app those go to, and an offer made now could land between them.
+    public func cursorArrived() {
+        guard case .up = press, unreported == 0 else { return }
+        let arrived = ContinuousClock.now
+        do {
+            try sessions.submit {
+                // A failure is the hold's to show, and `place` has told it.
+                _ = try? await self.place(Transcript(words: []), following: nil, since: .cursorArrived(arrived))
+            }
+        } catch {
+            // The queue refuses only a wait from inside itself, which the main actor is not.
+            preconditionFailure("a cursor's arrival could not be queued: \(error)")
+        }
     }
 
     /// Waits for the press's commits and its decode, then inserts what was heard
@@ -545,24 +592,26 @@ public final class Dictation {
     /// the model to load.
     private func hear(_ heard: Result<Heard, any Error>) async throws -> Session {
         let heard = try heard.get()
-        let stopped = try await heard.committing.value
+        let unplaced = try await heard.committing.value
         let landed = heard.streaming.landed
-        // [LAW:no-silent-failure] The report names what stopped the press's words first: a
-        // refused commit came before whatever the key-up found.
-        if let stopped { throw PressStopped(landed: landed.words, cause: stopped) }
         let context: Context
         let keyUp: ContinuousClock.Instant
         let delivery: Duration
-        switch heard.ending {
-        case .released(let released, let up, let late): (context, keyUp, delivery) = (released, up, late)
-        case .lapsed(let chord): throw PressLapsed(chord: chord, landed: landed.words)
-        case .lost(let chord, let lost): throw SpeechLost(chord: chord, lost: lost, landed: landed.words)
+        switch (heard.ending, unplaced) {
+        case (.released(let released, let up, let late), _): (context, keyUp, delivery) = (released, up, late)
+        // [LAW:no-silent-failure] The report names what left the press's words unplaced
+        // first: a refused commit came before whatever the key-up found.
+        case (.lapsed, let unplaced?), (.lost, let unplaced?): throw PressStopped(landed: landed.words, cause: unplaced)
+        case (.lapsed(let chord), nil): throw PressLapsed(chord: chord, landed: landed.words)
+        case (.lost(let chord, let lost), nil): throw SpeechLost(chord: chord, lost: lost, landed: landed.words)
         }
         do {
             let decoded = await heard.decode.value
             let transcript = try decoded.transcript.get()
-            let performed = try await executor.insert(heard.streaming.rest(of: transcript), following: landed.performed.last, since: .keyUp(keyUp))
-            return Session(context: context, transcript: transcript, duringPress: heard.duringPress, keyUpToTranscript: decoded.at - keyUp, keyUpDelivery: delivery, displaced: decoded.displaced, performed: landed.performed + [performed].compactMap { $0 })
+            let placed = try await place(heard.streaming.rest(of: transcript), following: landed.performed.last, since: .keyUp(keyUp))
+            // A rest of nothing leaves what the commits could not place where it was.
+            if placed.performed == nil, let unplaced { throw unplaced }
+            return Session(context: context, transcript: transcript, duringPress: heard.duringPress, keyUpToTranscript: decoded.at - keyUp, keyUpDelivery: delivery, displaced: decoded.displaced, performed: landed.performed + [placed.performed].compactMap { $0 })
         } catch {
             // [LAW:no-silent-failure] Whatever stopped the press, the report says how many of
             // its words are already at the cursor.
@@ -612,8 +661,8 @@ public struct SpeechLost: WordFree {
 }
 
 /// A press that stopped after it began: an insert refused, the engine failed, or what was
-/// left at key-up would not go in. The words before it are at the cursor, and the rest of
-/// the press went nowhere. [LAW:no-silent-failure]
+/// left at key-up would not go in. The words before it are at the cursor, and the ones an
+/// insert failed on are held until a cursor takes them. [LAW:no-silent-failure]
 ///
 /// Word-free whatever stopped it: a cause that could carry words is named by its type.
 public struct PressStopped: WordFree {

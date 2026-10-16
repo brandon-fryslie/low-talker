@@ -32,7 +32,7 @@ public final class DictationInputController: IMKInputController {
         Int(NSEvent.EventTypeMask.flagsChanged.rawValue)
     }
 
-    /// Every event, declined, and each one told to `ModifierChanges` as a change of the
+    /// Every event, declined, and each one told to `Notices` as a change of the
     /// modifier keys: `recognizedEvents` asks for nothing else. The signature is
     /// `IMKInputController`'s; returning false is how it says "not mine", which is the whole
     /// behaviour this controller has toward keys - low-input-method-s71.31s added insertion
@@ -47,7 +47,7 @@ public final class DictationInputController: IMKInputController {
     /// activate trapped on the implicitly unwrapped event the inherited signature has). Such a
     /// call changed no key, so it tells nothing: the next change carries the whole state.
     override public func handle(_ event: NSEvent?, client sender: Any!) -> Bool {
-        event.map { ModifierChanges.shared.moved(at: $0.timestamp, reading: .read(after: $0.timestamp)) }
+        event.map { Notices.shared.moved(at: $0.timestamp, reading: .read(after: $0.timestamp)) }
         return false
     }
 
@@ -82,6 +82,8 @@ public final class DictationInputController: IMKInputController {
             let arriving = client.flatMap(Client.init)
             controller.cursor = arriving ?? controller.cursor
             arriving.map(FocusedClient.shared.took)
+            // Told after it is taken, so words the app offers in answer find it in front.
+            arriving.map { Notices.shared.cursorArrived(in: $0.application) }
         }
     }
 
